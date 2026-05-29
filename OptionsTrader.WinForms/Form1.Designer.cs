@@ -1,38 +1,59 @@
-﻿namespace OptionsTrader.WinForms;
+namespace OptionsTrader.WinForms;
 
 partial class Form1
 {
-    /// <summary>
-    ///  Required designer variable.
-    /// </summary>
     private System.ComponentModel.IContainer components = null;
 
-    /// <summary>
-    ///  Clean up any resources being used.
-    /// </summary>
-    /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
     protected override void Dispose(bool disposing)
     {
         if (disposing && (components != null))
-        {
             components.Dispose();
-        }
         base.Dispose(disposing);
     }
 
     #region Windows Form Designer generated code
 
-    /// <summary>
-    ///  Required method for Designer support - do not modify
-    ///  the contents of this method with the code editor.
-    /// </summary>
     private void InitializeComponent()
     {
-        components = new System.ComponentModel.Container();
+        tabControl = new TabControl();
+        tabOptions = new TabPage();
+        tabSettings = new TabPage();
+
+        tabControl.SuspendLayout();
+        SuspendLayout();
+
+        // tabControl
+        tabControl.Controls.Add(tabOptions);
+        tabControl.Controls.Add(tabSettings);
+        tabControl.Dock = DockStyle.Fill;
+        tabControl.Name = "tabControl";
+        tabControl.SelectedIndex = 0;
+
+        // tabOptions
+        tabOptions.Name = "tabOptions";
+        tabOptions.Padding = new Padding(8);
+        tabOptions.Text = "Options Data";
+
+        // tabSettings
+        tabSettings.Name = "tabSettings";
+        tabSettings.Padding = new Padding(8);
+        tabSettings.Text = "Settings";
+
+        // Form1
+        AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(800, 450);
-        Text = "Form1";
+        ClientSize = new Size(1024, 600);
+        Controls.Add(tabControl);
+        Name = "Form1";
+        Text = "Options Trader";
+
+        tabControl.ResumeLayout(false);
+        ResumeLayout(false);
     }
 
     #endregion
+
+    private TabControl tabControl;
+    private TabPage tabOptions;
+    private TabPage tabSettings;
 }
