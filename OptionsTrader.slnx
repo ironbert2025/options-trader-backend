@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="OptionsTrader.API/OptionsTrader.API.csproj" />
+  <Project Path="OptionsTrader.Application/OptionsTrader.Application.csproj" />
+  <Project Path="OptionsTrader.Domain/OptionsTrader.Domain.csproj" />
+  <Project Path="OptionsTrader.Infrastructure/OptionsTrader.Infrastructure.csproj" />
+  <Project Path="OptionsTrader.WinForms/OptionsTrader.WinForms.csproj" />
+</Solution>

@@ -1,0 +1,16 @@
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\bin\Debug\net8.0\OptionsTrader.Application.deps.json
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\bin\Debug\net8.0\OptionsTrader.Application.dll
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\bin\Debug\net8.0\OptionsTrader.Application.pdb
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\bin\Debug\net8.0\OptionsTrader.Domain.dll
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\bin\Debug\net8.0\OptionsTrader.Domain.pdb
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsTrader.Application.csproj.AssemblyReference.cache
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsTrader.Application.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsTrader.Application.AssemblyInfoInputs.cache
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsTrader.Application.AssemblyInfo.cs
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsTrader.Application.csproj.CoreCompileInputs.cache
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsTrader.Application.sourcelink.json
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsT.6D19C113.Up2Date
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsTrader.Application.dll
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\refint\OptionsTrader.Application.dll
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\OptionsTrader.Application.pdb
+C:\Users\aldor\source\repos\options-trader-backend\OptionsTrader.Application\obj\Debug\net8.0\ref\OptionsTrader.Application.dll

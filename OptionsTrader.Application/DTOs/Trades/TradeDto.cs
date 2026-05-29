@@ -1,0 +1,19 @@
+using OptionsTrader.Application.DTOs.Screenshots;
+using OptionsTrader.Domain.Enums;
+
+namespace OptionsTrader.Application.DTOs.Trades;
+
+public class TradeDto
+{
+    public int Id { get; set; }
+    public string Symbol { get; set; } = string.Empty;
+    public OptionType OptionType { get; set; }
+    public decimal StrikePrice { get; set; }
+    public decimal SpotPrice { get; set; }
+    public DateOnly ExpirationDate { get; set; }
+    public decimal EntryPrice { get; set; }
+    public decimal? ExitPrice { get; set; }
+    public DateOnly TradeDate { get; set; }
+    public BrokerName Broker { get; set; }
+    public IEnumerable<ScreenshotDto> Screenshots { get; set; } = [];
+}

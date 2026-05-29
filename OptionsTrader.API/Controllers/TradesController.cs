@@ -1,0 +1,28 @@
+using Microsoft.AspNetCore.Mvc;
+using OptionsTrader.Application.DTOs.Trades;
+using OptionsTrader.Application.Services;
+
+namespace OptionsTrader.API.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class TradesController(TradeService tradeService) : ControllerBase
+{
+    [HttpGet]
+    public async Task<IActionResult> GetAll() =>
+        Ok(await tradeService.GetAllAsync());
+
+    [HttpGet("{id:int}")]
+    public async Task<IActionResult> GetById(int id)
+    {
+        var trade = await tradeService.GetByIdAsync(id);
+        return trade is null ? NotFound() : Ok(trade);
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create(CreateTradeDto dto)
+    {
+        var trade = await tradeService.CreateAsync(dto);
+        return CreatedAtAction(nameof(GetById), new { id = trade.Id }, trade);
+    }
+}
