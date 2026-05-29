@@ -1,0 +1,29 @@
+# Build outputs
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# App settings with secrets (keep appsettings.json, ignore overrides with real credentials)
+appsettings.Production.json
+appsettings.Local.json
+
+# OS
+Thumbs.db
+.DS_Store
