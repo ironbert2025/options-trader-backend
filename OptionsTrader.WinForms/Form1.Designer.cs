@@ -181,7 +181,7 @@ partial class Form1
         grpTarget.Controls.Add(rbTarget10);
         grpTarget.Controls.Add(rbTarget35);
         grpTarget.Controls.Add(rbTarget100);
-        grpTarget.Location = new Point(175, 122);
+        grpTarget.Location = new Point(8, 237);
         grpTarget.Name = "grpTarget";
         grpTarget.Size = new Size(155, 105);
         grpTarget.TabStop = false;
