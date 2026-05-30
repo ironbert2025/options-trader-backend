@@ -150,7 +150,7 @@ partial class Form1
         grpPositionSize.Controls.Add(rbPosition25);
         grpPositionSize.Controls.Add(rbPosition5);
         grpPositionSize.Controls.Add(rbPosition10);
-        grpPositionSize.Location = new Point(8, 122);
+        grpPositionSize.Location = new Point(525, 8);
         grpPositionSize.Name = "grpPositionSize";
         grpPositionSize.Size = new Size(155, 105);
         grpPositionSize.TabStop = false;
@@ -181,7 +181,7 @@ partial class Form1
         grpTarget.Controls.Add(rbTarget10);
         grpTarget.Controls.Add(rbTarget35);
         grpTarget.Controls.Add(rbTarget100);
-        grpTarget.Location = new Point(8, 237);
+        grpTarget.Location = new Point(525, 122);
         grpTarget.Name = "grpTarget";
         grpTarget.Size = new Size(155, 105);
         grpTarget.TabStop = false;
