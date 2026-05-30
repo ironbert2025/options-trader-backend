@@ -18,8 +18,13 @@ partial class Form1
         tabControl = new TabControl();
         tabOptions = new TabPage();
         tabSettings = new TabPage();
+        grpBroker = new GroupBox();
+        rbSchwab = new RadioButton();
+        rbIBKR = new RadioButton();
+        rbETrade = new RadioButton();
 
         tabControl.SuspendLayout();
+        grpBroker.SuspendLayout();
         SuspendLayout();
 
         // tabControl
@@ -35,9 +40,41 @@ partial class Form1
         tabOptions.Text = "Options Data";
 
         // tabSettings
+        tabSettings.Controls.Add(grpBroker);
         tabSettings.Name = "tabSettings";
         tabSettings.Padding = new Padding(8);
         tabSettings.Text = "Settings";
+
+        // grpBroker
+        grpBroker.Controls.Add(rbSchwab);
+        grpBroker.Controls.Add(rbIBKR);
+        grpBroker.Controls.Add(rbETrade);
+        grpBroker.Location = new Point(8, 8);
+        grpBroker.Name = "grpBroker";
+        grpBroker.Size = new Size(280, 110);
+        grpBroker.TabStop = false;
+        grpBroker.Text = "Broker";
+
+        // rbSchwab
+        rbSchwab.Location = new Point(12, 24);
+        rbSchwab.Name = "rbSchwab";
+        rbSchwab.Size = new Size(240, 20);
+        rbSchwab.Text = "Charles Schwab";
+        rbSchwab.CheckedChanged += BrokerRadioButton_CheckedChanged;
+
+        // rbIBKR
+        rbIBKR.Location = new Point(12, 50);
+        rbIBKR.Name = "rbIBKR";
+        rbIBKR.Size = new Size(240, 20);
+        rbIBKR.Text = "Interactive Broker";
+        rbIBKR.CheckedChanged += BrokerRadioButton_CheckedChanged;
+
+        // rbETrade
+        rbETrade.Location = new Point(12, 76);
+        rbETrade.Name = "rbETrade";
+        rbETrade.Size = new Size(240, 20);
+        rbETrade.Text = "ETrade";
+        rbETrade.CheckedChanged += BrokerRadioButton_CheckedChanged;
 
         // Form1
         AutoScaleDimensions = new SizeF(7F, 15F);
@@ -48,6 +85,8 @@ partial class Form1
         Text = "Options Trader";
 
         tabControl.ResumeLayout(false);
+        grpBroker.ResumeLayout(false);
+        grpBroker.PerformLayout();
         ResumeLayout(false);
     }
 
@@ -56,4 +95,8 @@ partial class Form1
     private TabControl tabControl;
     private TabPage tabOptions;
     private TabPage tabSettings;
+    private GroupBox grpBroker;
+    private RadioButton rbSchwab;
+    private RadioButton rbIBKR;
+    private RadioButton rbETrade;
 }
