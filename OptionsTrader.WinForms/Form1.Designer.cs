@@ -91,7 +91,7 @@ partial class Form1
         grpTickers.Controls.Add(btnSaveTickers);
         grpTickers.Location = new Point(175, 8);
         grpTickers.Name = "grpTickers";
-        grpTickers.Size = new Size(340, 155);
+        grpTickers.Size = new Size(340, 168);
         grpTickers.TabStop = false;
         grpTickers.Text = "Tickers";
 
@@ -128,9 +128,9 @@ partial class Form1
         colExpDate.Width = 90;
 
         // btnSaveTickers
-        btnSaveTickers.Location = new Point(250, 135);
+        btnSaveTickers.Location = new Point(250, 138);
         btnSaveTickers.Name = "btnSaveTickers";
-        btnSaveTickers.Size = new Size(80, 15);
+        btnSaveTickers.Size = new Size(80, 23);
         btnSaveTickers.Text = "Save";
         btnSaveTickers.Click += BtnSaveTickers_Click;
 
