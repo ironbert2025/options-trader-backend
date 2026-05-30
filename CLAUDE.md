@@ -100,3 +100,18 @@ Domain Entity → DTO (Application layer) → API → Swagger → NSwag → Type
 - The developer is beginner-level in Angular/TypeScript — keep frontend explanations step-by-step and relate concepts to C# equivalents where helpful
 - WinForms is preferred over WPF; Angular is preferred over React
 - NSwag auto-generates TypeScript interfaces and Angular services from the Swagger spec after any DTO change — always run `nswag run nswag.json` after modifying DTOs
+
+## Workflow for New Features
+
+Every time the user requests adding a feature:
+1. Create a new branch with the format `feature/feature-name`
+2. Checkout to that branch before writing any code
+3. Work on the feature in that branch
+4. When done, inform the user of the created branch name
+
+## Branch Naming Rules
+
+- Use the format: `feature/short-description-in-kebab-case`
+- Never write code directly on `main` or `master`
+- Always confirm the branch name before starting
+
