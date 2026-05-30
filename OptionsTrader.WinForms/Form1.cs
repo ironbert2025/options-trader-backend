@@ -7,6 +7,8 @@ public partial class Form1 : Form
         InitializeComponent();
         LoadBrokerSelection();
         LoadTickers();
+        LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
+        LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
     }
 
     private void LoadBrokerSelection()
@@ -24,16 +26,48 @@ public partial class Form1 : Form
         }
     }
 
+    private static void LoadRadioSelection(GroupBox group, string saved)
+    {
+        var match = group.Controls
+            .OfType<RadioButton>()
+            .FirstOrDefault(rb => rb.Text == saved);
+
+        if (match != null)
+        {
+            match.Checked = true;
+            match.ForeColor = Color.Green;
+            match.Font = new Font(match.Font, FontStyle.Bold);
+        }
+    }
+
     private void BrokerRadioButton_CheckedChanged(object? sender, EventArgs e)
     {
-        foreach (var rb in grpBroker.Controls.OfType<RadioButton>())
+        ApplyRadioStyle(grpBroker);
+        if (sender is RadioButton { Checked: true } selected)
+            BrokerSettingsStore.Save(selected.Text);
+    }
+
+    private void PositionSizeRadioButton_CheckedChanged(object? sender, EventArgs e)
+    {
+        ApplyRadioStyle(grpPositionSize);
+        if (sender is RadioButton { Checked: true } selected)
+            PositionSizeSettingsStore.Save(selected.Text);
+    }
+
+    private void TargetRadioButton_CheckedChanged(object? sender, EventArgs e)
+    {
+        ApplyRadioStyle(grpTarget);
+        if (sender is RadioButton { Checked: true } selected)
+            TargetSettingsStore.Save(selected.Text);
+    }
+
+    private static void ApplyRadioStyle(GroupBox group)
+    {
+        foreach (var rb in group.Controls.OfType<RadioButton>())
         {
             rb.ForeColor = rb.Checked ? Color.Green : SystemColors.ControlText;
             rb.Font = new Font(rb.Font, rb.Checked ? FontStyle.Bold : FontStyle.Regular);
         }
-
-        if (sender is RadioButton { Checked: true } selected)
-            BrokerSettingsStore.Save(selected.Text);
     }
 
     private void LoadTickers()
