@@ -152,28 +152,28 @@ partial class Form1
         grpPositionSize.Controls.Add(rbPosition10);
         grpPositionSize.Location = new Point(525, 8);
         grpPositionSize.Name = "grpPositionSize";
-        grpPositionSize.Size = new Size(155, 105);
+        grpPositionSize.Size = new Size(110, 105);
         grpPositionSize.TabStop = false;
         grpPositionSize.Text = "Position Size (%)";
 
         // rbPosition25
         rbPosition25.Location = new Point(12, 22);
         rbPosition25.Name = "rbPosition25";
-        rbPosition25.Size = new Size(135, 20);
+        rbPosition25.Size = new Size(90, 20);
         rbPosition25.Text = "2.5";
         rbPosition25.CheckedChanged += PositionSizeRadioButton_CheckedChanged;
 
         // rbPosition5
         rbPosition5.Location = new Point(12, 46);
         rbPosition5.Name = "rbPosition5";
-        rbPosition5.Size = new Size(135, 20);
+        rbPosition5.Size = new Size(90, 20);
         rbPosition5.Text = "5";
         rbPosition5.CheckedChanged += PositionSizeRadioButton_CheckedChanged;
 
         // rbPosition10
         rbPosition10.Location = new Point(12, 70);
         rbPosition10.Name = "rbPosition10";
-        rbPosition10.Size = new Size(135, 20);
+        rbPosition10.Size = new Size(90, 20);
         rbPosition10.Text = "10";
         rbPosition10.CheckedChanged += PositionSizeRadioButton_CheckedChanged;
 
@@ -183,28 +183,28 @@ partial class Form1
         grpTarget.Controls.Add(rbTarget100);
         grpTarget.Location = new Point(690, 8);
         grpTarget.Name = "grpTarget";
-        grpTarget.Size = new Size(155, 105);
+        grpTarget.Size = new Size(110, 105);
         grpTarget.TabStop = false;
         grpTarget.Text = "Target (%)";
 
         // rbTarget10
         rbTarget10.Location = new Point(12, 22);
         rbTarget10.Name = "rbTarget10";
-        rbTarget10.Size = new Size(135, 20);
+        rbTarget10.Size = new Size(90, 20);
         rbTarget10.Text = "10";
         rbTarget10.CheckedChanged += TargetRadioButton_CheckedChanged;
 
         // rbTarget35
         rbTarget35.Location = new Point(12, 46);
         rbTarget35.Name = "rbTarget35";
-        rbTarget35.Size = new Size(135, 20);
+        rbTarget35.Size = new Size(90, 20);
         rbTarget35.Text = "35";
         rbTarget35.CheckedChanged += TargetRadioButton_CheckedChanged;
 
         // rbTarget100
         rbTarget100.Location = new Point(12, 70);
         rbTarget100.Name = "rbTarget100";
-        rbTarget100.Size = new Size(135, 20);
+        rbTarget100.Size = new Size(90, 20);
         rbTarget100.Text = "100";
         rbTarget100.CheckedChanged += TargetRadioButton_CheckedChanged;
 
