@@ -51,7 +51,7 @@ partial class Form1
         grpBroker.Controls.Add(rbETrade);
         grpBroker.Location = new Point(8, 8);
         grpBroker.Name = "grpBroker";
-        grpBroker.Size = new Size(175, 95);
+        grpBroker.Size = new Size(175, 105);
         grpBroker.TabStop = false;
         grpBroker.Text = "Broker";
 
