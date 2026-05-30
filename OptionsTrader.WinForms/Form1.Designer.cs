@@ -51,28 +51,28 @@ partial class Form1
         grpBroker.Controls.Add(rbETrade);
         grpBroker.Location = new Point(8, 8);
         grpBroker.Name = "grpBroker";
-        grpBroker.Size = new Size(175, 105);
+        grpBroker.Size = new Size(155, 105);
         grpBroker.TabStop = false;
         grpBroker.Text = "Broker";
 
         // rbSchwab
         rbSchwab.Location = new Point(12, 22);
         rbSchwab.Name = "rbSchwab";
-        rbSchwab.Size = new Size(155, 20);
+        rbSchwab.Size = new Size(135, 20);
         rbSchwab.Text = "Charles Schwab";
         rbSchwab.CheckedChanged += BrokerRadioButton_CheckedChanged;
 
         // rbIBKR
         rbIBKR.Location = new Point(12, 46);
         rbIBKR.Name = "rbIBKR";
-        rbIBKR.Size = new Size(155, 20);
+        rbIBKR.Size = new Size(135, 20);
         rbIBKR.Text = "Interactive Broker";
         rbIBKR.CheckedChanged += BrokerRadioButton_CheckedChanged;
 
         // rbETrade
         rbETrade.Location = new Point(12, 70);
         rbETrade.Name = "rbETrade";
-        rbETrade.Size = new Size(155, 20);
+        rbETrade.Size = new Size(135, 20);
         rbETrade.Text = "ETrade";
         rbETrade.CheckedChanged += BrokerRadioButton_CheckedChanged;
 
