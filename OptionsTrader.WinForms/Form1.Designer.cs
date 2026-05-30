@@ -22,9 +22,18 @@ partial class Form1
         rbSchwab = new RadioButton();
         rbIBKR = new RadioButton();
         rbETrade = new RadioButton();
+        grpTickers = new GroupBox();
+        dgvTickers = new DataGridView();
+        colSymbol = new DataGridViewTextBoxColumn();
+        colLow = new DataGridViewTextBoxColumn();
+        colHigh = new DataGridViewTextBoxColumn();
+        colExpDate = new DataGridViewTextBoxColumn();
+        btnSaveTickers = new Button();
 
         tabControl.SuspendLayout();
         grpBroker.SuspendLayout();
+        grpTickers.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)dgvTickers).BeginInit();
         SuspendLayout();
 
         // tabControl
@@ -41,6 +50,7 @@ partial class Form1
 
         // tabSettings
         tabSettings.Controls.Add(grpBroker);
+        tabSettings.Controls.Add(grpTickers);
         tabSettings.Name = "tabSettings";
         tabSettings.Padding = new Padding(8);
         tabSettings.Text = "Settings";
@@ -76,6 +86,54 @@ partial class Form1
         rbETrade.Text = "ETrade";
         rbETrade.CheckedChanged += BrokerRadioButton_CheckedChanged;
 
+        // grpTickers
+        grpTickers.Controls.Add(dgvTickers);
+        grpTickers.Controls.Add(btnSaveTickers);
+        grpTickers.Location = new Point(175, 8);
+        grpTickers.Name = "grpTickers";
+        grpTickers.Size = new Size(340, 155);
+        grpTickers.TabStop = false;
+        grpTickers.Text = "Tickers";
+
+        // dgvTickers
+        dgvTickers.AllowUserToAddRows = false;
+        dgvTickers.AllowUserToDeleteRows = false;
+        dgvTickers.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        dgvTickers.Columns.AddRange(colSymbol, colLow, colHigh, colExpDate);
+        dgvTickers.Location = new Point(8, 20);
+        dgvTickers.Name = "dgvTickers";
+        dgvTickers.RowHeadersVisible = false;
+        dgvTickers.RowTemplate.Height = 22;
+        dgvTickers.Size = new Size(318, 112);
+        dgvTickers.ScrollBars = ScrollBars.None;
+
+        // colSymbol
+        colSymbol.HeaderText = "Symbol";
+        colSymbol.Name = "colSymbol";
+        colSymbol.Width = 80;
+
+        // colLow
+        colLow.HeaderText = "Low";
+        colLow.Name = "colLow";
+        colLow.Width = 74;
+
+        // colHigh
+        colHigh.HeaderText = "High";
+        colHigh.Name = "colHigh";
+        colHigh.Width = 74;
+
+        // colExpDate
+        colExpDate.HeaderText = "ExpDate";
+        colExpDate.Name = "colExpDate";
+        colExpDate.Width = 90;
+
+        // btnSaveTickers
+        btnSaveTickers.Location = new Point(250, 135);
+        btnSaveTickers.Name = "btnSaveTickers";
+        btnSaveTickers.Size = new Size(80, 15);
+        btnSaveTickers.Text = "Save";
+        btnSaveTickers.Click += BtnSaveTickers_Click;
+
         // Form1
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
@@ -87,6 +145,8 @@ partial class Form1
         tabControl.ResumeLayout(false);
         grpBroker.ResumeLayout(false);
         grpBroker.PerformLayout();
+        grpTickers.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)dgvTickers).EndInit();
         ResumeLayout(false);
     }
 
@@ -99,4 +159,11 @@ partial class Form1
     private RadioButton rbSchwab;
     private RadioButton rbIBKR;
     private RadioButton rbETrade;
+    private GroupBox grpTickers;
+    private DataGridView dgvTickers;
+    private DataGridViewTextBoxColumn colSymbol;
+    private DataGridViewTextBoxColumn colLow;
+    private DataGridViewTextBoxColumn colHigh;
+    private DataGridViewTextBoxColumn colExpDate;
+    private Button btnSaveTickers;
 }

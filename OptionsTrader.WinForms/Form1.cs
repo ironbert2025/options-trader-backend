@@ -6,6 +6,7 @@ public partial class Form1 : Form
     {
         InitializeComponent();
         LoadBrokerSelection();
+        LoadTickers();
     }
 
     private void LoadBrokerSelection()
@@ -33,5 +34,33 @@ public partial class Form1 : Form
 
         if (sender is RadioButton { Checked: true } selected)
             BrokerSettingsStore.Save(selected.Text);
+    }
+
+    private void LoadTickers()
+    {
+        var tickers = TickerSettingsStore.Load();
+
+        dgvTickers.Rows.Clear();
+        for (int i = 0; i < 4; i++)
+        {
+            if (i < tickers.Count)
+                dgvTickers.Rows.Add(tickers[i].Symbol, tickers[i].Low, tickers[i].High, tickers[i].ExpDate);
+            else
+                dgvTickers.Rows.Add(string.Empty, string.Empty, string.Empty, string.Empty);
+        }
+    }
+
+    private void BtnSaveTickers_Click(object? sender, EventArgs e)
+    {
+        var tickers = dgvTickers.Rows
+            .Cast<DataGridViewRow>()
+            .Select(r => new TickerEntry(
+                r.Cells["colSymbol"].Value?.ToString() ?? string.Empty,
+                r.Cells["colLow"].Value?.ToString() ?? string.Empty,
+                r.Cells["colHigh"].Value?.ToString() ?? string.Empty,
+                r.Cells["colExpDate"].Value?.ToString() ?? string.Empty))
+            .ToList();
+
+        TickerSettingsStore.Save(tickers);
     }
 }
