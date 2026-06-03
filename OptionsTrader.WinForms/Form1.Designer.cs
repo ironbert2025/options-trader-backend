@@ -28,6 +28,9 @@ partial class Form1
         colQAsk = new DataGridViewTextBoxColumn();
         colQExpDate = new DataGridViewTextBoxColumn();
         btnFetchQuotes = new Button();
+        grpBalance = new GroupBox();
+        txtBalance = new TextBox();
+        lblPositionAmount = new Label();
         grpBroker = new GroupBox();
         rbSchwab = new RadioButton();
         rbIBKR = new RadioButton();
@@ -56,6 +59,7 @@ partial class Form1
 
         tabControl.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).BeginInit();
+        grpBalance.SuspendLayout();
         grpBroker.SuspendLayout();
         grpTickers.SuspendLayout();
         grpPositionSize.SuspendLayout();
@@ -80,6 +84,7 @@ partial class Form1
         // tabQuotes
         tabQuotes.Controls.Add(dgvQuotes);
         tabQuotes.Controls.Add(btnFetchQuotes);
+        tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Name = "tabQuotes";
         tabQuotes.Padding = new Padding(8);
         tabQuotes.Text = "Quotes";
@@ -89,12 +94,12 @@ partial class Form1
         dgvQuotes.AllowUserToDeleteRows = false;
         dgvQuotes.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
         dgvQuotes.Columns.AddRange(colQType, colQSymbol, colQSpot, colQStrike, colQBid, colQAsk, colQExpDate);
-        dgvQuotes.Location = new Point(8, 40);
+        dgvQuotes.Location = new Point(8, 84);
         dgvQuotes.Name = "dgvQuotes";
         dgvQuotes.ReadOnly = true;
         dgvQuotes.RowHeadersVisible = false;
         dgvQuotes.RowTemplate.Height = 22;
-        dgvQuotes.Size = new Size(1000, 520);
+        dgvQuotes.Size = new Size(1000, 476);
         dgvQuotes.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
 
         // colQType
@@ -132,8 +137,31 @@ partial class Form1
         colQExpDate.Name = "colQExpDate";
         colQExpDate.Width = 100;
 
+        // grpBalance
+        grpBalance.Controls.Add(txtBalance);
+        grpBalance.Controls.Add(lblPositionAmount);
+        grpBalance.Location = new Point(8, 8);
+        grpBalance.Name = "grpBalance";
+        grpBalance.Size = new Size(160, 68);
+        grpBalance.TabStop = false;
+        grpBalance.Text = "Balance";
+
+        // txtBalance
+        txtBalance.Location = new Point(8, 20);
+        txtBalance.Name = "txtBalance";
+        txtBalance.Size = new Size(144, 23);
+        txtBalance.TextAlign = HorizontalAlignment.Right;
+        txtBalance.TextChanged += TxtBalance_TextChanged;
+
+        // lblPositionAmount
+        lblPositionAmount.Location = new Point(8, 48);
+        lblPositionAmount.Name = "lblPositionAmount";
+        lblPositionAmount.Size = new Size(144, 16);
+        lblPositionAmount.Font = new Font(lblPositionAmount.Font ?? SystemFonts.DefaultFont, FontStyle.Bold);
+        lblPositionAmount.Text = string.Empty;
+
         // btnFetchQuotes
-        btnFetchQuotes.Location = new Point(8, 8);
+        btnFetchQuotes.Location = new Point(180, 22);
         btnFetchQuotes.Name = "btnFetchQuotes";
         btnFetchQuotes.Size = new Size(120, 26);
         btnFetchQuotes.Text = "Fetch Quotes";
@@ -342,6 +370,8 @@ partial class Form1
 
         tabControl.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).EndInit();
+        grpBalance.ResumeLayout(false);
+        grpBalance.PerformLayout();
         grpBroker.ResumeLayout(false);
         grpBroker.PerformLayout();
         grpTickers.ResumeLayout(false);
@@ -370,6 +400,9 @@ partial class Form1
     private DataGridViewTextBoxColumn colQAsk;
     private DataGridViewTextBoxColumn colQExpDate;
     private Button btnFetchQuotes;
+    private GroupBox grpBalance;
+    private TextBox txtBalance;
+    private Label lblPositionAmount;
     private GroupBox grpBroker;
     private RadioButton rbSchwab;
     private RadioButton rbIBKR;

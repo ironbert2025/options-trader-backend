@@ -15,6 +15,7 @@ public partial class Form1 : Form
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
         LoadSchwabCredentials();
+        LoadBalance();
     }
 
     private void LoadBrokerSelection()
@@ -88,6 +89,34 @@ public partial class Form1 : Form
             else
                 dgvTickers.Rows.Add(string.Empty, string.Empty, string.Empty, string.Empty);
         }
+    }
+
+    private void LoadBalance()
+    {
+        var balance = BalanceStore.Load();
+        txtBalance.Text = balance > 0 ? balance.ToString("F0") : string.Empty;
+        UpdatePositionAmount();
+    }
+
+    private void TxtBalance_TextChanged(object? sender, EventArgs e)
+    {
+        UpdatePositionAmount();
+        if (decimal.TryParse(txtBalance.Text, out var balance))
+            BalanceStore.Save(balance);
+    }
+
+    private void UpdatePositionAmount()
+    {
+        var positionSizeStr = PositionSizeSettingsStore.Load();
+        if (!decimal.TryParse(txtBalance.Text, out var balance) ||
+            !decimal.TryParse(positionSizeStr, out var positionPct))
+        {
+            lblPositionAmount.Text = string.Empty;
+            return;
+        }
+
+        var amount = balance * positionPct / 100m;
+        lblPositionAmount.Text = $"{positionPct}%: {amount:F2}";
     }
 
     private void LoadSchwabCredentials()
