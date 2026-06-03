@@ -149,8 +149,8 @@ partial class Form1
         // txtBalance
         txtBalance.Location = new Point(8, 20);
         txtBalance.Name = "txtBalance";
-        txtBalance.Size = new Size(144, 23);
-        txtBalance.TextAlign = HorizontalAlignment.Right;
+        txtBalance.Size = new Size(72, 23);
+        txtBalance.TextAlign = HorizontalAlignment.Left;
         txtBalance.TextChanged += TxtBalance_TextChanged;
 
         // lblPositionAmount
