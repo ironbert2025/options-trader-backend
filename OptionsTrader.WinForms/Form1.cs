@@ -203,11 +203,7 @@ public partial class Form1 : Form
             return;
         }
 
-        if (!DateOnly.TryParse(_selectedTicker.ExpDate, out var expDate))
-        {
-            MessageBox.Show($"Invalid expiration date for {_selectedTicker.Symbol}.", "Invalid Date", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
+        var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
 
         btnFetchQuotes.Enabled = false;
         dgvQuotes.Rows.Clear();
