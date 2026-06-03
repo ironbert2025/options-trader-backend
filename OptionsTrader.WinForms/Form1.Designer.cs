@@ -17,7 +17,17 @@ partial class Form1
     {
         tabControl = new TabControl();
         tabOptions = new TabPage();
+        tabQuotes = new TabPage();
         tabSettings = new TabPage();
+        dgvQuotes = new DataGridView();
+        colQType = new DataGridViewTextBoxColumn();
+        colQSymbol = new DataGridViewTextBoxColumn();
+        colQSpot = new DataGridViewTextBoxColumn();
+        colQStrike = new DataGridViewTextBoxColumn();
+        colQBid = new DataGridViewTextBoxColumn();
+        colQAsk = new DataGridViewTextBoxColumn();
+        colQExpDate = new DataGridViewTextBoxColumn();
+        btnFetchQuotes = new Button();
         grpBroker = new GroupBox();
         rbSchwab = new RadioButton();
         rbIBKR = new RadioButton();
@@ -37,17 +47,26 @@ partial class Form1
         rbTarget10 = new RadioButton();
         rbTarget35 = new RadioButton();
         rbTarget100 = new RadioButton();
+        grpSchwabCredentials = new GroupBox();
+        lblApiKey = new Label();
+        txtApiKey = new TextBox();
+        lblApiSecret = new Label();
+        txtApiSecret = new TextBox();
+        btnSaveCredentials = new Button();
 
         tabControl.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)dgvQuotes).BeginInit();
         grpBroker.SuspendLayout();
         grpTickers.SuspendLayout();
         grpPositionSize.SuspendLayout();
         grpTarget.SuspendLayout();
+        grpSchwabCredentials.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvTickers).BeginInit();
         SuspendLayout();
 
         // tabControl
         tabControl.Controls.Add(tabOptions);
+        tabControl.Controls.Add(tabQuotes);
         tabControl.Controls.Add(tabSettings);
         tabControl.Dock = DockStyle.Fill;
         tabControl.Name = "tabControl";
@@ -58,11 +77,74 @@ partial class Form1
         tabOptions.Padding = new Padding(8);
         tabOptions.Text = "Options Data";
 
+        // tabQuotes
+        tabQuotes.Controls.Add(dgvQuotes);
+        tabQuotes.Controls.Add(btnFetchQuotes);
+        tabQuotes.Name = "tabQuotes";
+        tabQuotes.Padding = new Padding(8);
+        tabQuotes.Text = "Quotes";
+
+        // dgvQuotes
+        dgvQuotes.AllowUserToAddRows = false;
+        dgvQuotes.AllowUserToDeleteRows = false;
+        dgvQuotes.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        dgvQuotes.Columns.AddRange(colQType, colQSymbol, colQSpot, colQStrike, colQBid, colQAsk, colQExpDate);
+        dgvQuotes.Location = new Point(8, 40);
+        dgvQuotes.Name = "dgvQuotes";
+        dgvQuotes.ReadOnly = true;
+        dgvQuotes.RowHeadersVisible = false;
+        dgvQuotes.RowTemplate.Height = 22;
+        dgvQuotes.Size = new Size(1000, 520);
+        dgvQuotes.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+
+        // colQType
+        colQType.HeaderText = "Type";
+        colQType.Name = "colQType";
+        colQType.Width = 60;
+
+        // colQSymbol
+        colQSymbol.HeaderText = "Symbol";
+        colQSymbol.Name = "colQSymbol";
+        colQSymbol.Width = 80;
+
+        // colQSpot
+        colQSpot.HeaderText = "Spot Price";
+        colQSpot.Name = "colQSpot";
+        colQSpot.Width = 90;
+
+        // colQStrike
+        colQStrike.HeaderText = "Strike";
+        colQStrike.Name = "colQStrike";
+        colQStrike.Width = 80;
+
+        // colQBid
+        colQBid.HeaderText = "Bid";
+        colQBid.Name = "colQBid";
+        colQBid.Width = 80;
+
+        // colQAsk
+        colQAsk.HeaderText = "Ask";
+        colQAsk.Name = "colQAsk";
+        colQAsk.Width = 80;
+
+        // colQExpDate
+        colQExpDate.HeaderText = "Expiration";
+        colQExpDate.Name = "colQExpDate";
+        colQExpDate.Width = 100;
+
+        // btnFetchQuotes
+        btnFetchQuotes.Location = new Point(8, 8);
+        btnFetchQuotes.Name = "btnFetchQuotes";
+        btnFetchQuotes.Size = new Size(120, 26);
+        btnFetchQuotes.Text = "Fetch Quotes";
+        btnFetchQuotes.Click += BtnFetchQuotes_Click;
+
         // tabSettings
         tabSettings.Controls.Add(grpBroker);
         tabSettings.Controls.Add(grpTickers);
         tabSettings.Controls.Add(grpPositionSize);
         tabSettings.Controls.Add(grpTarget);
+        tabSettings.Controls.Add(grpSchwabCredentials);
         tabSettings.Name = "tabSettings";
         tabSettings.Padding = new Padding(8);
         tabSettings.Text = "Settings";
@@ -208,6 +290,48 @@ partial class Form1
         rbTarget100.Text = "100";
         rbTarget100.CheckedChanged += TargetRadioButton_CheckedChanged;
 
+        // grpSchwabCredentials — below grpBroker on the left column
+        grpSchwabCredentials.Controls.Add(lblApiKey);
+        grpSchwabCredentials.Controls.Add(txtApiKey);
+        grpSchwabCredentials.Controls.Add(lblApiSecret);
+        grpSchwabCredentials.Controls.Add(txtApiSecret);
+        grpSchwabCredentials.Controls.Add(btnSaveCredentials);
+        grpSchwabCredentials.Location = new Point(8, 180);
+        grpSchwabCredentials.Name = "grpSchwabCredentials";
+        grpSchwabCredentials.Size = new Size(507, 105);
+        grpSchwabCredentials.TabStop = false;
+        grpSchwabCredentials.Text = "Schwab Credentials";
+
+        // lblApiKey
+        lblApiKey.Location = new Point(12, 24);
+        lblApiKey.Name = "lblApiKey";
+        lblApiKey.Size = new Size(65, 20);
+        lblApiKey.Text = "API Key:";
+
+        // txtApiKey
+        txtApiKey.Location = new Point(80, 22);
+        txtApiKey.Name = "txtApiKey";
+        txtApiKey.Size = new Size(410, 23);
+
+        // lblApiSecret
+        lblApiSecret.Location = new Point(12, 54);
+        lblApiSecret.Name = "lblApiSecret";
+        lblApiSecret.Size = new Size(65, 20);
+        lblApiSecret.Text = "API Secret:";
+
+        // txtApiSecret
+        txtApiSecret.Location = new Point(80, 52);
+        txtApiSecret.Name = "txtApiSecret";
+        txtApiSecret.Size = new Size(410, 23);
+        txtApiSecret.UseSystemPasswordChar = true;
+
+        // btnSaveCredentials
+        btnSaveCredentials.Location = new Point(415, 76);
+        btnSaveCredentials.Name = "btnSaveCredentials";
+        btnSaveCredentials.Size = new Size(80, 23);
+        btnSaveCredentials.Text = "Save";
+        btnSaveCredentials.Click += BtnSaveCredentials_Click;
+
         // Form1
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
@@ -217,6 +341,7 @@ partial class Form1
         Text = "Options Trader";
 
         tabControl.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)dgvQuotes).EndInit();
         grpBroker.ResumeLayout(false);
         grpBroker.PerformLayout();
         grpTickers.ResumeLayout(false);
@@ -224,6 +349,8 @@ partial class Form1
         grpPositionSize.PerformLayout();
         grpTarget.ResumeLayout(false);
         grpTarget.PerformLayout();
+        grpSchwabCredentials.ResumeLayout(false);
+        grpSchwabCredentials.PerformLayout();
         ((System.ComponentModel.ISupportInitialize)dgvTickers).EndInit();
         ResumeLayout(false);
     }
@@ -232,7 +359,17 @@ partial class Form1
 
     private TabControl tabControl;
     private TabPage tabOptions;
+    private TabPage tabQuotes;
     private TabPage tabSettings;
+    private DataGridView dgvQuotes;
+    private DataGridViewTextBoxColumn colQType;
+    private DataGridViewTextBoxColumn colQSymbol;
+    private DataGridViewTextBoxColumn colQSpot;
+    private DataGridViewTextBoxColumn colQStrike;
+    private DataGridViewTextBoxColumn colQBid;
+    private DataGridViewTextBoxColumn colQAsk;
+    private DataGridViewTextBoxColumn colQExpDate;
+    private Button btnFetchQuotes;
     private GroupBox grpBroker;
     private RadioButton rbSchwab;
     private RadioButton rbIBKR;
@@ -252,4 +389,10 @@ partial class Form1
     private RadioButton rbTarget10;
     private RadioButton rbTarget35;
     private RadioButton rbTarget100;
+    private GroupBox grpSchwabCredentials;
+    private Label lblApiKey;
+    private TextBox txtApiKey;
+    private Label lblApiSecret;
+    private TextBox txtApiSecret;
+    private Button btnSaveCredentials;
 }

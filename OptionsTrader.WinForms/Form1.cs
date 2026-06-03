@@ -1,7 +1,12 @@
+using OptionsTrader.Infrastructure.Schwab;
+
 namespace OptionsTrader.WinForms;
 
 public partial class Form1 : Form
 {
+    private readonly SchwabAuthService _schwabAuth = new(new HttpClient());
+    private readonly HttpClient _marketHttpClient = new();
+
     public Form1()
     {
         InitializeComponent();
@@ -9,6 +14,7 @@ public partial class Form1 : Form
         LoadTickers();
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
+        LoadSchwabCredentials();
     }
 
     private void LoadBrokerSelection()
@@ -81,6 +87,72 @@ public partial class Form1 : Form
                 dgvTickers.Rows.Add(tickers[i].Symbol, tickers[i].Low, tickers[i].High, tickers[i].ExpDate);
             else
                 dgvTickers.Rows.Add(string.Empty, string.Empty, string.Empty, string.Empty);
+        }
+    }
+
+    private void LoadSchwabCredentials()
+    {
+        var creds = SchwabCredentialsStore.Load();
+        txtApiKey.Text = creds.ApiKey;
+        txtApiSecret.Text = creds.ApiSecret;
+    }
+
+    private void BtnSaveCredentials_Click(object? sender, EventArgs e)
+    {
+        var creds = new SchwabCredentials(txtApiKey.Text.Trim(), txtApiSecret.Text.Trim());
+        SchwabCredentialsStore.Save(creds);
+        MessageBox.Show("Credentials saved.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
+    {
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var tickers = TickerSettingsStore.Load();
+        if (tickers.Count == 0)
+        {
+            MessageBox.Show("No tickers configured in Settings.", "No Tickers", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        btnFetchQuotes.Enabled = false;
+        dgvQuotes.Rows.Clear();
+
+        try
+        {
+            var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
+
+            foreach (var ticker in tickers.Where(t => !string.IsNullOrEmpty(t.Symbol)))
+            {
+                if (!DateOnly.TryParse(ticker.ExpDate, out var expDate)) continue;
+
+                var quotes = await service.GetOptionsChainAsync(ticker.Symbol, expDate);
+
+                foreach (var q in quotes)
+                {
+                    dgvQuotes.Rows.Add(
+                        q.OptionType.ToString(),
+                        q.Symbol,
+                        q.SpotPrice.ToString("F2"),
+                        q.StrikePrice.ToString("F2"),
+                        q.Bid.ToString("F2"),
+                        q.Ask.ToString("F2"),
+                        q.ExpirationDate.ToString("yyyy-MM-dd"));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Error fetching quotes: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            btnFetchQuotes.Enabled = true;
         }
     }
 
