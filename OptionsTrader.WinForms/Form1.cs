@@ -6,6 +6,9 @@ public partial class Form1 : Form
 {
     private readonly SchwabAuthService _schwabAuth = new(new HttpClient());
     private readonly HttpClient _marketHttpClient = new();
+    private System.Windows.Forms.Timer? _pollingTimer;
+    private System.Windows.Forms.Timer? _marketOpenTimer;
+    private bool _isPolling;
 
     private TickerEntry? _selectedTicker;
 
@@ -188,6 +191,149 @@ public partial class Form1 : Form
         lblCredentialsSaved.Visible = true;
     }
 
+    private void BtnStartPolling_Click(object? sender, EventArgs e)
+    {
+        if (_isPolling)
+        {
+            StopPolling();
+            return;
+        }
+
+        if (_selectedTicker == null)
+        {
+            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _isPolling = true;
+        btnStartPolling.Text = "Stop Polling";
+        btnStartPolling.BackColor = Color.DarkRed;
+
+        if (MarketHours.IsOpen)
+        {
+            StartPollingTimer();
+        }
+        else
+        {
+            // Wait until market opens
+            var msUntilOpen = MarketHours.MillisecondsUntilOpen;
+            _marketOpenTimer = new System.Windows.Forms.Timer { Interval = (int)Math.Min(msUntilOpen, int.MaxValue) };
+            _marketOpenTimer.Tick += (s, e) =>
+            {
+                _marketOpenTimer.Stop();
+                _marketOpenTimer.Dispose();
+                _marketOpenTimer = null;
+                if (_isPolling) StartPollingTimer();
+            };
+            _marketOpenTimer.Start();
+        }
+    }
+
+    private void StartPollingTimer()
+    {
+        // Fetch immediately then every 6 seconds
+        _ = FetchAndUpdateQuotesAsync();
+
+        _pollingTimer = new System.Windows.Forms.Timer { Interval = 6000 };
+        _pollingTimer.Tick += async (s, e) =>
+        {
+            if (!MarketHours.IsOpen)
+            {
+                StopPolling();
+                return;
+            }
+            await FetchAndUpdateQuotesAsync();
+        };
+        _pollingTimer.Start();
+    }
+
+    private void StopPolling()
+    {
+        _isPolling = false;
+        _pollingTimer?.Stop();
+        _pollingTimer?.Dispose();
+        _pollingTimer = null;
+        _marketOpenTimer?.Stop();
+        _marketOpenTimer?.Dispose();
+        _marketOpenTimer = null;
+        btnStartPolling.Text = "Start Polling";
+        btnStartPolling.BackColor = Color.DarkGreen;
+    }
+
+    private async Task FetchAndUpdateQuotesAsync()
+    {
+        if (_selectedTicker == null) return;
+
+        var creds = SchwabCredentialsStore.Load();
+        var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
+        lblExpDate.Text = $"ExpDate: {expDate:yyyy-MM-dd}";
+        lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
+
+        try
+        {
+            var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
+            var quotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
+
+            if (dgvQuotes.Rows.Count == 0)
+            {
+                // First load — populate all rows
+                dgvQuotes.Rows.Clear();
+                foreach (var q in quotes)
+                {
+                    dgvQuotes.Rows.Add(
+                        q.OptionType.ToString(),
+                        q.Symbol,
+                        q.SpotPrice.ToString("F2"),
+                        q.StrikePrice.ToString("F2"),
+                        q.Bid.ToString("F2"),
+                        q.Ask.ToString("F2"),
+                        q.ExpirationDate.ToString("yyyy-MM-dd"));
+                }
+            }
+            else
+            {
+                // Subsequent loads — update SpotPrice, Bid, Ask matched by OptionType + StrikePrice
+                var quoteMap = quotes.ToDictionary(
+                    q => (q.OptionType.ToString(), q.StrikePrice));
+
+                foreach (DataGridViewRow row in dgvQuotes.Rows)
+                {
+                    var type   = row.Cells["colQType"].Value?.ToString() ?? string.Empty;
+                    var strike = decimal.TryParse(row.Cells["colQStrike"].Value?.ToString(), out var s) ? s : -1m;
+                    var key    = (type, strike);
+
+                    if (quoteMap.TryGetValue(key, out var q))
+                    {
+                        row.Cells["colQSpot"].Value = q.SpotPrice.ToString("F2");
+                        row.Cells["colQBid"].Value  = q.Bid.ToString("F2");
+                        row.Cells["colQAsk"].Value  = q.Ask.ToString("F2");
+                    }
+                }
+            }
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            // 429 — pause polling 60 seconds then resume
+            _pollingTimer?.Stop();
+            lblLastUpdate.Text = "Rate limited — resuming in 60s...";
+            await Task.Delay(60000);
+            if (_isPolling) _pollingTimer?.Start();
+        }
+        catch (Exception ex)
+        {
+            // Other errors — stop polling
+            StopPolling();
+            MessageBox.Show($"Polling stopped due to error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
     {
         if (_selectedTicker == null)
@@ -204,6 +350,8 @@ public partial class Form1 : Form
         }
 
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
+        lblExpDate.Text = $"ExpDate: {expDate:yyyy-MM-dd}";
+        lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
 
         btnFetchQuotes.Enabled = false;
         dgvQuotes.Rows.Clear();
