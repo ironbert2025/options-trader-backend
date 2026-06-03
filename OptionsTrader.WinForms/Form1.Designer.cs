@@ -26,6 +26,9 @@ partial class Form1
         colQAsk = new DataGridViewTextBoxColumn();
         colQExpDate = new DataGridViewTextBoxColumn();
         btnFetchQuotes = new Button();
+        btnStartPolling = new Button();
+        lblExpDate = new Label();
+        lblLastUpdate = new Label();
         grpBalance = new GroupBox();
         txtBalance = new TextBox();
         lblPositionAmount = new Label();
@@ -87,6 +90,9 @@ partial class Form1
         // 
         tabQuotes.Controls.Add(dgvQuotes);
         tabQuotes.Controls.Add(btnFetchQuotes);
+        tabQuotes.Controls.Add(btnStartPolling);
+        tabQuotes.Controls.Add(lblExpDate);
+        tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Controls.Add(grpTickerButtons);
         tabQuotes.Location = new Point(4, 24);
@@ -170,14 +176,44 @@ partial class Form1
         flpTickers.Padding = new Padding(4);
         flpTickers.Size = new Size(354, 46);
         //
+        // btnStartPolling
+        //
+        btnStartPolling.Location = new Point(500, 22);
+        btnStartPolling.Name = "btnStartPolling";
+        btnStartPolling.Size = new Size(120, 26);
+        btnStartPolling.TabIndex = 3;
+        btnStartPolling.Text = "Start Polling";
+        btnStartPolling.BackColor = Color.DarkGreen;
+        btnStartPolling.ForeColor = Color.White;
+        btnStartPolling.FlatStyle = FlatStyle.Flat;
+        btnStartPolling.Click += BtnStartPolling_Click;
+        //
         // btnFetchQuotes
         //
-        btnFetchQuotes.Location = new Point(500, 22);
+        btnFetchQuotes.Location = new Point(630, 22);
         btnFetchQuotes.Name = "btnFetchQuotes";
         btnFetchQuotes.Size = new Size(120, 26);
         btnFetchQuotes.TabIndex = 1;
         btnFetchQuotes.Text = "Fetch Quotes";
         btnFetchQuotes.Click += BtnFetchQuotes_Click;
+        //
+        // lblExpDate
+        //
+        lblExpDate.AutoSize = true;
+        lblExpDate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        lblExpDate.ForeColor = Color.DarkGoldenrod;
+        lblExpDate.Location = new Point(500, 54);
+        lblExpDate.Name = "lblExpDate";
+        lblExpDate.Text = string.Empty;
+        //
+        // lblLastUpdate
+        //
+        lblLastUpdate.AutoSize = true;
+        lblLastUpdate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        lblLastUpdate.ForeColor = Color.DarkGoldenrod;
+        lblLastUpdate.Location = new Point(630, 54);
+        lblLastUpdate.Name = "lblLastUpdate";
+        lblLastUpdate.Text = string.Empty;
         // 
         // grpBalance
         // 
@@ -499,6 +535,9 @@ partial class Form1
     private DataGridViewTextBoxColumn colQAsk;
     private DataGridViewTextBoxColumn colQExpDate;
     private Button btnFetchQuotes;
+    private Button btnStartPolling;
+    private Label lblExpDate;
+    private Label lblLastUpdate;
     private GroupBox grpBalance;
     private TextBox txtBalance;
     private Label lblPositionAmount;
