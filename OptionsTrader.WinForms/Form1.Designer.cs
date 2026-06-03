@@ -30,6 +30,8 @@ partial class Form1
         grpBalance = new GroupBox();
         txtBalance = new TextBox();
         lblPositionAmount = new Label();
+        grpTickerButtons = new GroupBox();
+        flpTickers = new FlowLayoutPanel();
         tabSettings = new TabPage();
         grpBroker = new GroupBox();
         rbSchwab = new RadioButton();
@@ -60,6 +62,7 @@ partial class Form1
         tabQuotes.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).BeginInit();
         grpBalance.SuspendLayout();
+        grpTickerButtons.SuspendLayout();
         tabSettings.SuspendLayout();
         grpBroker.SuspendLayout();
         grpTickers.SuspendLayout();
@@ -95,6 +98,7 @@ partial class Form1
         tabQuotes.Controls.Add(dgvQuotes);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(grpBalance);
+        tabQuotes.Controls.Add(grpTickerButtons);
         tabQuotes.Location = new Point(4, 24);
         tabQuotes.Name = "tabQuotes";
         tabQuotes.Padding = new Padding(8);
@@ -109,12 +113,12 @@ partial class Form1
         dgvQuotes.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         dgvQuotes.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
         dgvQuotes.Columns.AddRange(new DataGridViewColumn[] { colQType, colQSymbol, colQSpot, colQStrike, colQBid, colQAsk, colQExpDate });
-        dgvQuotes.Location = new Point(8, 148);
+        dgvQuotes.Location = new Point(8, 84);
         dgvQuotes.Name = "dgvQuotes";
         dgvQuotes.ReadOnly = true;
         dgvQuotes.RowHeadersVisible = false;
         dgvQuotes.RowTemplate.Height = 22;
-        dgvQuotes.Size = new Size(1000, 412);
+        dgvQuotes.Size = new Size(1000, 476);
         dgvQuotes.TabIndex = 0;
         // 
         // colQType
@@ -159,9 +163,26 @@ partial class Form1
         colQExpDate.Name = "colQExpDate";
         colQExpDate.ReadOnly = true;
         // 
+        // grpTickerButtons
+        //
+        grpTickerButtons.Controls.Add(flpTickers);
+        grpTickerButtons.Location = new Point(128, 4);
+        grpTickerButtons.Name = "grpTickerButtons";
+        grpTickerButtons.Size = new Size(360, 68);
+        grpTickerButtons.TabStop = false;
+        grpTickerButtons.Text = "Tickers";
+        //
+        // flpTickers
+        //
+        flpTickers.Dock = DockStyle.Fill;
+        flpTickers.Location = new Point(3, 19);
+        flpTickers.Name = "flpTickers";
+        flpTickers.Padding = new Padding(4);
+        flpTickers.Size = new Size(354, 46);
+        //
         // btnFetchQuotes
-        // 
-        btnFetchQuotes.Location = new Point(526, 11);
+        //
+        btnFetchQuotes.Location = new Point(500, 22);
         btnFetchQuotes.Name = "btnFetchQuotes";
         btnFetchQuotes.Size = new Size(120, 26);
         btnFetchQuotes.TabIndex = 1;
@@ -451,6 +472,7 @@ partial class Form1
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).EndInit();
         grpBalance.ResumeLayout(false);
         grpBalance.PerformLayout();
+        grpTickerButtons.ResumeLayout(false);
         tabSettings.ResumeLayout(false);
         grpBroker.ResumeLayout(false);
         grpTickers.ResumeLayout(false);
@@ -480,6 +502,8 @@ partial class Form1
     private GroupBox grpBalance;
     private TextBox txtBalance;
     private Label lblPositionAmount;
+    private GroupBox grpTickerButtons;
+    private FlowLayoutPanel flpTickers;
     private GroupBox grpBroker;
     private RadioButton rbSchwab;
     private RadioButton rbIBKR;
