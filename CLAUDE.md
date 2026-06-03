@@ -135,6 +135,11 @@ Every time the user requests adding a feature:
 - Only commit when the user asks or when it makes sense to close a feature step.
 - The user handles push and PR creation on GitHub.
 
+## Build Rules
+
+- **Always run `dotnet build` after every code change** — no need to ask for permission.
+- If the app is running and the build fails due to locked files, ask the user to close it first.
+
 ## Branch Naming Rules
 
 - Use the format: `feature/short-description-in-kebab-case`

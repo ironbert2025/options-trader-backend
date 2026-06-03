@@ -116,7 +116,7 @@ public partial class Form1 : Form
         }
 
         var amount = balance * positionPct / 100m;
-        lblPositionAmount.Text = $"{positionPct}%: {amount:F2}";
+        lblPositionAmount.Text = $"{positionPct}% : {amount:F0}";
     }
 
     private void LoadSchwabCredentials()

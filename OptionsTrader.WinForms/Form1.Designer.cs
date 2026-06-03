@@ -142,7 +142,7 @@ partial class Form1
         grpBalance.Controls.Add(lblPositionAmount);
         grpBalance.Location = new Point(8, 8);
         grpBalance.Name = "grpBalance";
-        grpBalance.Size = new Size(160, 68);
+        grpBalance.Size = new Size(100, 68);
         grpBalance.TabStop = false;
         grpBalance.Text = "Balance";
 
