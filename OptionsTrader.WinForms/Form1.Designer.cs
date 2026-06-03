@@ -16,7 +16,6 @@ partial class Form1
     private void InitializeComponent()
     {
         tabControl = new TabControl();
-        tabOptions = new TabPage();
         tabQuotes = new TabPage();
         dgvQuotes = new DataGridView();
         colQType = new DataGridViewTextBoxColumn();
@@ -74,7 +73,6 @@ partial class Form1
         // 
         // tabControl
         // 
-        tabControl.Controls.Add(tabOptions);
         tabControl.Controls.Add(tabQuotes);
         tabControl.Controls.Add(tabSettings);
         tabControl.Dock = DockStyle.Fill;
@@ -83,15 +81,6 @@ partial class Form1
         tabControl.SelectedIndex = 0;
         tabControl.Size = new Size(1024, 600);
         tabControl.TabIndex = 0;
-        // 
-        // tabOptions
-        // 
-        tabOptions.Location = new Point(4, 24);
-        tabOptions.Name = "tabOptions";
-        tabOptions.Padding = new Padding(8);
-        tabOptions.Size = new Size(1016, 572);
-        tabOptions.TabIndex = 0;
-        tabOptions.Text = "Options Data";
         // 
         // tabQuotes
         // 
@@ -104,7 +93,7 @@ partial class Form1
         tabQuotes.Padding = new Padding(8);
         tabQuotes.Size = new Size(1016, 572);
         tabQuotes.TabIndex = 1;
-        tabQuotes.Text = "Quotes";
+        tabQuotes.Text = "Options Quotes";
         // 
         // dgvQuotes
         // 
@@ -487,7 +476,6 @@ partial class Form1
     #endregion
 
     private TabControl tabControl;
-    private TabPage tabOptions;
     private TabPage tabQuotes;
     private TabPage tabSettings;
     private DataGridView dgvQuotes;
