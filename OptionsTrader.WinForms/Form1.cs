@@ -166,15 +166,26 @@ public partial class Form1 : Form
     private void LoadSchwabCredentials()
     {
         var creds = SchwabCredentialsStore.Load();
-        txtApiKey.Text = creds.ApiKey;
-        txtApiSecret.Text = creds.ApiSecret;
+        var hasCreds = !string.IsNullOrEmpty(creds.ApiKey) && !string.IsNullOrEmpty(creds.ApiSecret);
+        lblCredentialsSaved.Visible = hasCreds;
+        // Leave textboxes empty — only used when entering new credentials
     }
 
     private void BtnSaveCredentials_Click(object? sender, EventArgs e)
     {
-        var creds = new SchwabCredentials(txtApiKey.Text.Trim(), txtApiSecret.Text.Trim());
-        SchwabCredentialsStore.Save(creds);
-        MessageBox.Show("Credentials saved.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        var key = txtApiKey.Text.Trim();
+        var secret = txtApiSecret.Text.Trim();
+
+        if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(secret))
+        {
+            MessageBox.Show("Please enter both API Key and API Secret.", "Missing Fields", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        SchwabCredentialsStore.Save(new SchwabCredentials(key, secret));
+        txtApiKey.Clear();
+        txtApiSecret.Clear();
+        lblCredentialsSaved.Visible = true;
     }
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
