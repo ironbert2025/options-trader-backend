@@ -157,7 +157,7 @@ partial class Form1
         lblPositionAmount.Location = new Point(8, 48);
         lblPositionAmount.Name = "lblPositionAmount";
         lblPositionAmount.Size = new Size(144, 16);
-        lblPositionAmount.Font = new Font(lblPositionAmount.Font ?? SystemFonts.DefaultFont, FontStyle.Bold);
+        lblPositionAmount.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblPositionAmount.Text = string.Empty;
 
         // btnFetchQuotes
