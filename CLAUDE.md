@@ -129,6 +129,12 @@ Every time the user requests adding a feature:
 3. Work on the feature in that branch
 4. When done, inform the user of the created branch name
 
+## Git Rules
+
+- **Never run `git push` unless the user explicitly asks for it.**
+- Only commit when the user asks or when it makes sense to close a feature step.
+- The user handles push and PR creation on GitHub.
+
 ## Branch Naming Rules
 
 - Use the format: `feature/short-description-in-kebab-case`
