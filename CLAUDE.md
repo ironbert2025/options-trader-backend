@@ -88,11 +88,31 @@ Domain Entity → DTO (Application layer) → API → Swagger → NSwag → Type
 - The Angular frontend is **read-only** (no trade execution)
 - JWT Bearer tokens for authentication
 
+## Schwab Integration
+
+The WinForms app communicates **directly** with Schwab API for market data — it does NOT go through the ASP.NET Core API. The ASP.NET Core API is only used to save trades and screenshots to the database/S3.
+
+**Auth:** OAuth2 via `SchwabAuthService` (`Infrastructure/Schwab/`) — obtains and caches a 30-minute access token using `ApiKey` + `ApiSecret` stored locally via `SchwabCredentialsStore`.
+
+**Options quotes:** `SchwabMarketDataService` calls `GET /marketdata/v1/chains` and parses `callExpDateMap` / `putExpDateMap` into `OptionQuoteDto` objects.
+
+**OptionQuoteDto fields:** `Symbol`, `OptionType` (Call/Put), `SpotPrice`, `StrikePrice`, `Bid`, `Ask`, `ExpirationDate`.
+
+**WinForms Quotes tab:** Shows a `DataGridView` with fetched options quotes. Has a Balance GroupBox (top-left) where the user enters their account balance — it auto-calculates the position size amount using the Position Size % from Settings (e.g. 5% of $6000 = $300.00). Balance is persisted via `BalanceStore`.
+
+**Local settings stores** (all persist to `%AppData%\OptionsTrader\`):
+- `SchwabCredentialsStore` — ApiKey, ApiSecret
+- `BalanceStore` — account balance (decimal)
+- `BrokerSettingsStore` — selected broker name
+- `TickerSettingsStore` — list of tickers with Low, High, ExpDate
+- `PositionSizeSettingsStore` — selected position size %
+- `TargetSettingsStore` — selected target %
+
 ## Infrastructure
 
 - **Database:** SQL Server on AWS RDS — use EF Core migrations
 - **Screenshots:** AWS S3
-- **Real-time quotes:** Polling the Schwab API (WebSockets deferred)
+- **Real-time quotes:** Polling the Schwab API directly from WinForms (WebSockets deferred)
 - Develop locally first, then deploy API to AWS EC2
 
 ## Development Notes
@@ -108,6 +128,17 @@ Every time the user requests adding a feature:
 2. Checkout to that branch before writing any code
 3. Work on the feature in that branch
 4. When done, inform the user of the created branch name
+
+## Git Rules
+
+- **Never run `git push` unless the user explicitly asks for it.**
+- Only commit when the user asks or when it makes sense to close a feature step.
+- The user handles push and PR creation on GitHub.
+
+## Build Rules
+
+- **Always run `dotnet build` after every code change** — no need to ask for permission.
+- If the app is running and the build fails due to locked files, ask the user to close it first.
 
 ## Branch Naming Rules
 
