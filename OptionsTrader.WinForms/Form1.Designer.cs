@@ -57,6 +57,7 @@ partial class Form1
         lblApiSecret = new Label();
         txtApiSecret = new TextBox();
         btnSaveCredentials = new Button();
+        lblCredentialsSaved = new Label();
         tabControl.SuspendLayout();
         tabQuotes.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).BeginInit();
@@ -401,9 +402,10 @@ partial class Form1
         grpSchwabCredentials.Controls.Add(lblApiSecret);
         grpSchwabCredentials.Controls.Add(txtApiSecret);
         grpSchwabCredentials.Controls.Add(btnSaveCredentials);
+        grpSchwabCredentials.Controls.Add(lblCredentialsSaved);
         grpSchwabCredentials.Location = new Point(8, 180);
         grpSchwabCredentials.Name = "grpSchwabCredentials";
-        grpSchwabCredentials.Size = new Size(507, 105);
+        grpSchwabCredentials.Size = new Size(507, 125);
         grpSchwabCredentials.TabIndex = 4;
         grpSchwabCredentials.TabStop = false;
         grpSchwabCredentials.Text = "Schwab Credentials";
@@ -447,6 +449,16 @@ partial class Form1
         btnSaveCredentials.TabIndex = 4;
         btnSaveCredentials.Text = "Save";
         btnSaveCredentials.Click += BtnSaveCredentials_Click;
+        //
+        // lblCredentialsSaved
+        //
+        lblCredentialsSaved.AutoSize = true;
+        lblCredentialsSaved.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        lblCredentialsSaved.ForeColor = Color.Green;
+        lblCredentialsSaved.Location = new Point(12, 102);
+        lblCredentialsSaved.Name = "lblCredentialsSaved";
+        lblCredentialsSaved.Text = "Credentials Saved";
+        lblCredentialsSaved.Visible = false;
         // 
         // Form1
         // 
@@ -517,4 +529,5 @@ partial class Form1
     private Label lblApiSecret;
     private TextBox txtApiSecret;
     private Button btnSaveCredentials;
+    private Label lblCredentialsSaved;
 }
