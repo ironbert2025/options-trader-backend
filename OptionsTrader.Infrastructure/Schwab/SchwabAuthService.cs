@@ -38,7 +38,10 @@ public class SchwabAuthService
         var doc = JsonDocument.Parse(json);
 
         _accessToken = doc.RootElement.GetProperty("access_token").GetString()!;
-        var expiresIn = doc.RootElement.GetProperty("expires_in").GetInt32();
+        var expiresInProp = doc.RootElement.GetProperty("expires_in");
+        var expiresIn = expiresInProp.ValueKind == JsonValueKind.String
+            ? int.Parse(expiresInProp.GetString()!)
+            : expiresInProp.GetInt32();
         _tokenExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn - 30);
 
         return _accessToken;
