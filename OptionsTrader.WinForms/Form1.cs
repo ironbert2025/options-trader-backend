@@ -7,6 +7,8 @@ public partial class Form1 : Form
     private readonly SchwabAuthService _schwabAuth = new(new HttpClient());
     private readonly HttpClient _marketHttpClient = new();
 
+    private TickerEntry? _selectedTicker;
+
     public Form1()
     {
         InitializeComponent();
@@ -16,6 +18,7 @@ public partial class Form1 : Form
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
         LoadSchwabCredentials();
         LoadBalance();
+        LoadTickerButtons();
     }
 
     private void LoadBrokerSelection()
@@ -91,6 +94,47 @@ public partial class Form1 : Form
         }
     }
 
+    private void LoadTickerButtons()
+    {
+        flpTickers.Controls.Clear();
+        _selectedTicker = null;
+
+        var tickers = TickerSettingsStore.Load()
+            .Where(t => !string.IsNullOrWhiteSpace(t.Symbol))
+            .ToList();
+
+        foreach (var ticker in tickers)
+        {
+            var btn = new Button
+            {
+                Text = ticker.Symbol,
+                Size = new Size(60, 30),
+                Tag = ticker,
+                BackColor = SystemColors.Control
+            };
+            btn.Click += TickerButton_Click;
+            flpTickers.Controls.Add(btn);
+        }
+    }
+
+    private void TickerButton_Click(object? sender, EventArgs e)
+    {
+        if (sender is not Button clicked) return;
+
+        foreach (var btn in flpTickers.Controls.OfType<Button>())
+        {
+            btn.BackColor = SystemColors.Control;
+            btn.ForeColor = SystemColors.ControlText;
+            btn.Font = new Font(btn.Font, FontStyle.Regular);
+        }
+
+        clicked.BackColor = Color.SteelBlue;
+        clicked.ForeColor = Color.White;
+        clicked.Font = new Font(clicked.Font, FontStyle.Bold);
+
+        _selectedTicker = clicked.Tag as TickerEntry;
+    }
+
     private void LoadBalance()
     {
         var balance = BalanceStore.Load();
@@ -135,6 +179,12 @@ public partial class Form1 : Form
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
     {
+        if (_selectedTicker == null)
+        {
+            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         var creds = SchwabCredentialsStore.Load();
         if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
         {
@@ -142,10 +192,9 @@ public partial class Form1 : Form
             return;
         }
 
-        var tickers = TickerSettingsStore.Load();
-        if (tickers.Count == 0)
+        if (!DateOnly.TryParse(_selectedTicker.ExpDate, out var expDate))
         {
-            MessageBox.Show("No tickers configured in Settings.", "No Tickers", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show($"Invalid expiration date for {_selectedTicker.Symbol}.", "Invalid Date", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -155,24 +204,18 @@ public partial class Form1 : Form
         try
         {
             var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
+            var quotes = await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate);
 
-            foreach (var ticker in tickers.Where(t => !string.IsNullOrEmpty(t.Symbol)))
+            foreach (var q in quotes)
             {
-                if (!DateOnly.TryParse(ticker.ExpDate, out var expDate)) continue;
-
-                var quotes = await service.GetOptionsChainAsync(ticker.Symbol, expDate);
-
-                foreach (var q in quotes)
-                {
-                    dgvQuotes.Rows.Add(
-                        q.OptionType.ToString(),
-                        q.Symbol,
-                        q.SpotPrice.ToString("F2"),
-                        q.StrikePrice.ToString("F2"),
-                        q.Bid.ToString("F2"),
-                        q.Ask.ToString("F2"),
-                        q.ExpirationDate.ToString("yyyy-MM-dd"));
-                }
+                dgvQuotes.Rows.Add(
+                    q.OptionType.ToString(),
+                    q.Symbol,
+                    q.SpotPrice.ToString("F2"),
+                    q.StrikePrice.ToString("F2"),
+                    q.Bid.ToString("F2"),
+                    q.Ask.ToString("F2"),
+                    q.ExpirationDate.ToString("yyyy-MM-dd"));
             }
         }
         catch (Exception ex)
