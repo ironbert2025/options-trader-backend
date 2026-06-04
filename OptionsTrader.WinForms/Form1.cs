@@ -301,37 +301,41 @@ public partial class Form1 : Form
                 .OrderBy(q => q.StrikePrice)
                 .ToList();
 
+            // Calculate position size
+            var positionSize = GetPositionSize();
+
             if (dgvQuotes.Rows.Count == 0)
             {
                 // First load — one row per CALL, then one row per PUT
                 foreach (var call in otmCalls)
                 {
-                    var sprd = (call.Ask - call.Bid).ToString("F2");
+                    var sprd      = (call.Ask - call.Bid).ToString("F2");
+                    var contracts = CalcContracts(positionSize, call.Ask);
                     dgvQuotes.Rows.Add(
                         _selectedTicker.Symbol, rangeText,
                         sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
                         call.StrikePrice.ToString("F2"),
                         string.Empty, string.Empty, string.Empty,
-                        string.Empty, string.Empty);
-                    // Tag row as CALL
+                        contracts, string.Empty);
                     dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
                 }
 
                 foreach (var put in otmPuts)
                 {
-                    var sprd = (put.Ask - put.Bid).ToString("F2");
+                    var sprd      = (put.Ask - put.Bid).ToString("F2");
+                    var contracts = CalcContracts(positionSize, put.Ask);
                     dgvQuotes.Rows.Add(
                         _selectedTicker.Symbol, rangeText,
                         string.Empty, string.Empty, string.Empty,
                         put.StrikePrice.ToString("F2"),
                         put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
-                        string.Empty, string.Empty);
+                        contracts, string.Empty);
                     dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "PUT";
                 }
             }
             else
             {
-                // Subsequent loads — update Bid/Ask/Sprd by strike and type
+                // Subsequent loads — update Bid/Ask/Sprd and Contracts by strike and type
                 var callMap = otmCalls.ToDictionary(q => q.StrikePrice);
                 var putMap  = otmPuts.ToDictionary(q => q.StrikePrice);
 
@@ -345,12 +349,14 @@ public partial class Form1 : Form
                         row.Cells["colCallBid"].Value  = call.Bid.ToString("F2");
                         row.Cells["colCallAsk"].Value  = call.Ask.ToString("F2");
                         row.Cells["colCallSprd"].Value = (call.Ask - call.Bid).ToString("F2");
+                        row.Cells["colContracts"].Value = CalcContracts(positionSize, call.Ask);
                     }
                     else if (rowType == "PUT" && putMap.TryGetValue(strike, out var put))
                     {
                         row.Cells["colPutBid"].Value  = put.Bid.ToString("F2");
                         row.Cells["colPutAsk"].Value  = put.Ask.ToString("F2");
                         row.Cells["colPutSprd"].Value = (put.Ask - put.Bid).ToString("F2");
+                        row.Cells["colContracts"].Value = CalcContracts(positionSize, put.Ask);
                     }
                 }
             }
@@ -410,6 +416,20 @@ public partial class Form1 : Form
         {
             btnFetchQuotes.Enabled = true;
         }
+    }
+
+    private decimal GetPositionSize()
+    {
+        var balance = BalanceStore.Load();
+        if (!decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct)) return 0;
+        return balance * pct / 100m;
+    }
+
+    private static string CalcContracts(decimal positionSize, decimal ask)
+    {
+        if (ask <= 0 || positionSize <= 0) return string.Empty;
+        var contracts = Math.Round(positionSize / (ask * 100));
+        return contracts > 0 ? contracts.ToString("F0") : string.Empty;
     }
 
     private void BtnSaveTickers_Click(object? sender, EventArgs e)
