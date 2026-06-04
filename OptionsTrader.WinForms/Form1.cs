@@ -401,6 +401,42 @@ public partial class Form1 : Form
         }
     }
 
+    private void DgvQuotes_CellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        var row = dgvQuotes.Rows[e.RowIndex];
+
+        var callSprdCol = dgvQuotes.Columns["colCallSprd"].Index;
+        var putSprdCol  = dgvQuotes.Columns["colPutSprd"].Index;
+        var callBidCol  = dgvQuotes.Columns["colCallBid"].Index;
+        var putBidCol   = dgvQuotes.Columns["colPutBid"].Index;
+
+        // Sprd columns: bold + red
+        if (e.ColumnIndex == callSprdCol || e.ColumnIndex == putSprdCol)
+        {
+            e.CellStyle.ForeColor = Color.Red;
+            e.CellStyle.Font = new Font(dgvQuotes.Font, FontStyle.Bold);
+        }
+
+        // Call Sprd <= 2 → Call Bid background green
+        if (e.ColumnIndex == callBidCol)
+        {
+            if (decimal.TryParse(row.Cells["colCallSprd"].Value?.ToString(), out var callSprd) && callSprd <= 2)
+                e.CellStyle.BackColor = Color.LightGreen;
+            else
+                e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
+        }
+
+        // Put Sprd <= 2 → Put Bid background green
+        if (e.ColumnIndex == putBidCol)
+        {
+            if (decimal.TryParse(row.Cells["colPutSprd"].Value?.ToString(), out var putSprd) && putSprd <= 2)
+                e.CellStyle.BackColor = Color.LightGreen;
+            else
+                e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
+        }
+    }
+
     private void DgvQuotes_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
@@ -443,7 +479,13 @@ public partial class Form1 : Form
             string.Empty, "Close");
 
         // Store entry time on the row tag for duration calc
-        dgvTrades.Rows[dgvTrades.Rows.Count - 1].Tag = DateTime.Now;
+        var newRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
+        newRow.Tag = DateTime.Now;
+
+        // Color static cells
+        newRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
+        newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+        newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
 
         // Logger
         var level = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
@@ -525,7 +567,8 @@ public partial class Form1 : Form
             var pnl        = Math.Round((currentBid - entryPrice) * contracts * 100, 2);
             var pnlPct     = entryPrice > 0 ? Math.Round((currentBid - entryPrice) / entryPrice * 100, 1) : 0;
 
-            row.Cells["colTradeCBid"].Value      = currentBid.ToString("F2");
+            row.Cells["colTradeCBid"].Value                  = currentBid.ToString("F2");
+            row.Cells["colTradeCBid"].Style.ForeColor        = Color.Orange;
             row.Cells["colTradePnL"].Value        = pnl.ToString("F2");
             row.Cells["colTradePnLPercent"].Value = pnlPct.ToString("F1");
 
