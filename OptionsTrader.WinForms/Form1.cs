@@ -205,7 +205,7 @@ public partial class Form1 : Form
 
     private void BtnStartPolling_Click(object? sender, EventArgs e)
     {
-        if (_isPolling)
+            if (_isPolling)
         {
             StopPolling();
             return;
@@ -299,20 +299,33 @@ public partial class Form1 : Form
             decimal.TryParse(_selectedTicker.High, out var rangeHigh);
             var rangeText = $"{_selectedTicker.Low} - {_selectedTicker.High}";
 
-            // Filter OTM options within range
-            // CALLs: descending (farthest from spot first) → Level N..1
+            // Level lookup: rank among ALL OTM strikes (before range filter)
+            var allOtmCallStrikes = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && !q.InTheMoney)
+                .OrderBy(q => q.StrikePrice)   // ascending = closest first
+                .Select(q => q.StrikePrice)
+                .ToList();
+
+            var allOtmPutStrikes = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && !q.InTheMoney)
+                .OrderByDescending(q => q.StrikePrice)  // descending = closest first
+                .Select(q => q.StrikePrice)
+                .ToList();
+
+            // Filter OTM options within range (range = Ask price Low-High)
+            // CALLs: descending (farthest from spot first)
             var otmCalls = allQuotes
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
                          && !q.InTheMoney
-                         && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
+                         && q.Ask >= rangeLow && q.Ask <= rangeHigh)
                 .OrderByDescending(q => q.StrikePrice)
                 .ToList();
 
-            // PUTs: descending (closest to spot first) → Level 1..N
+            // PUTs: descending (closest to spot first)
             var otmPuts = allQuotes
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
                          && !q.InTheMoney
-                         && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
+                         && q.Ask >= rangeLow && q.Ask <= rangeHigh)
                 .OrderByDescending(q => q.StrikePrice)
                 .ToList();
 
@@ -322,32 +335,34 @@ public partial class Form1 : Form
             if (dgvQuotes.Rows.Count == 0)
             {
                 // First load — one row per CALL (descending), then one row per PUT (descending)
-                // CALL Level: count - index (farthest=N, closest=1)
                 for (int i = 0; i < otmCalls.Count; i++)
                 {
                     var call      = otmCalls[i];
-                    var sprd      = (call.Ask - call.Bid).ToString("F2");
+                    var sprd      = FormatSprd(call.Ask - call.Bid);
                     var contracts = CalcContracts(positionSize, call.Ask);
-                    var level     = (otmCalls.Count - i).ToString();
+                    var levelIdx  = allOtmCallStrikes.IndexOf(call.StrikePrice);
+                    var level     = (levelIdx + 1).ToString();
                     dgvQuotes.Rows.Add(
                         _selectedTicker.Symbol, rangeText,
                         sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
+                        call.SpotPrice.ToString("F2"),
                         call.StrikePrice.ToString("F2"),
                         string.Empty, string.Empty, string.Empty,
                         contracts, level);
                     dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
                 }
 
-                // PUT Level: index + 1 (closest=1, farthest=N)
                 for (int i = 0; i < otmPuts.Count; i++)
                 {
                     var put       = otmPuts[i];
-                    var sprd      = (put.Ask - put.Bid).ToString("F2");
+                    var sprd      = FormatSprd(put.Ask - put.Bid);
                     var contracts = CalcContracts(positionSize, put.Ask);
-                    var level     = (i + 1).ToString();
+                    var levelIdx  = allOtmPutStrikes.IndexOf(put.StrikePrice);
+                    var level     = (levelIdx + 1).ToString();
                     dgvQuotes.Rows.Add(
                         _selectedTicker.Symbol, rangeText,
                         string.Empty, string.Empty, string.Empty,
+                        put.SpotPrice.ToString("F2"),
                         put.StrikePrice.ToString("F2"),
                         put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
                         contracts, level);
@@ -372,16 +387,18 @@ public partial class Form1 : Form
 
                     if (rowType == "CALL" && callMap.TryGetValue(strike, out var call))
                     {
-                        row.Cells["colCallBid"].Value  = call.Bid.ToString("F2");
-                        row.Cells["colCallAsk"].Value  = call.Ask.ToString("F2");
-                        row.Cells["colCallSprd"].Value = (call.Ask - call.Bid).ToString("F2");
+                        row.Cells["colSpotPrice"].Value = call.SpotPrice.ToString("F2");
+                        row.Cells["colCallBid"].Value   = call.Bid.ToString("F2");
+                        row.Cells["colCallAsk"].Value   = call.Ask.ToString("F2");
+                        row.Cells["colCallSprd"].Value  = FormatSprd(call.Ask - call.Bid);
                         row.Cells["colContracts"].Value = CalcContracts(positionSize, call.Ask);
                     }
                     else if (rowType == "PUT" && putMap.TryGetValue(strike, out var put))
                     {
-                        row.Cells["colPutBid"].Value  = put.Bid.ToString("F2");
-                        row.Cells["colPutAsk"].Value  = put.Ask.ToString("F2");
-                        row.Cells["colPutSprd"].Value = (put.Ask - put.Bid).ToString("F2");
+                        row.Cells["colSpotPrice"].Value = put.SpotPrice.ToString("F2");
+                        row.Cells["colPutBid"].Value    = put.Bid.ToString("F2");
+                        row.Cells["colPutAsk"].Value    = put.Ask.ToString("F2");
+                        row.Cells["colPutSprd"].Value   = FormatSprd(put.Ask - put.Bid);
                         row.Cells["colContracts"].Value = CalcContracts(positionSize, put.Ask);
                     }
                 }
@@ -410,11 +427,20 @@ public partial class Form1 : Form
         var putSprdCol  = dgvQuotes.Columns["colPutSprd"].Index;
         var callBidCol  = dgvQuotes.Columns["colCallBid"].Index;
         var putBidCol   = dgvQuotes.Columns["colPutBid"].Index;
+        var callAskCol  = dgvQuotes.Columns["colCallAsk"].Index;
+        var putAskCol   = dgvQuotes.Columns["colPutAsk"].Index;
 
         // Sprd columns: bold + red
         if (e.ColumnIndex == callSprdCol || e.ColumnIndex == putSprdCol)
         {
             e.CellStyle.ForeColor = Color.Red;
+            e.CellStyle.Font = new Font(dgvQuotes.Font, FontStyle.Bold);
+        }
+
+        // Ask columns: bold + dark green
+        if (e.ColumnIndex == callAskCol || e.ColumnIndex == putAskCol)
+        {
+            e.CellStyle.ForeColor = Color.DarkGreen;
             e.CellStyle.Font = new Font(dgvQuotes.Font, FontStyle.Bold);
         }
 
@@ -619,6 +645,17 @@ public partial class Form1 : Form
         var balance = BalanceStore.Load();
         if (!decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct)) return 0;
         return balance * pct / 100m;
+    }
+
+    /// Formats spread: removes "0." prefix and leading zeros.
+    /// 0.01 → "1", 0.05 → "5", 0.10 → "10", 1.00 → "100"
+    private static string FormatSprd(decimal value)
+    {
+        // Round to 2 decimals first to avoid floating point issues (e.g. 0.36-0.35 = 0.009999...)
+        var rounded = Math.Round(value, 2);
+        var digits  = rounded.ToString("F2").Replace(".", ""); // "001", "005", "010", "100"
+        var trimmed = digits.TrimStart('0');
+        return string.IsNullOrEmpty(trimmed) ? "0" : trimmed;
     }
 
     private static string CalcContracts(decimal positionSize, decimal ask)
