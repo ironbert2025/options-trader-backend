@@ -287,18 +287,20 @@ public partial class Form1 : Form
             var rangeText = $"{_selectedTicker.Low} - {_selectedTicker.High}";
 
             // Filter OTM options within range
+            // CALLs: descending (farthest from spot first) → Level N..1
             var otmCalls = allQuotes
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
                          && !q.InTheMoney
                          && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
-                .OrderBy(q => q.StrikePrice)
+                .OrderByDescending(q => q.StrikePrice)
                 .ToList();
 
+            // PUTs: descending (closest to spot first) → Level 1..N
             var otmPuts = allQuotes
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
                          && !q.InTheMoney
                          && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
-                .OrderBy(q => q.StrikePrice)
+                .OrderByDescending(q => q.StrikePrice)
                 .ToList();
 
             // Calculate position size
@@ -306,30 +308,36 @@ public partial class Form1 : Form
 
             if (dgvQuotes.Rows.Count == 0)
             {
-                // First load — one row per CALL, then one row per PUT
-                foreach (var call in otmCalls)
+                // First load — one row per CALL (descending), then one row per PUT (descending)
+                // CALL Level: count - index (farthest=N, closest=1)
+                for (int i = 0; i < otmCalls.Count; i++)
                 {
+                    var call      = otmCalls[i];
                     var sprd      = (call.Ask - call.Bid).ToString("F2");
                     var contracts = CalcContracts(positionSize, call.Ask);
+                    var level     = (otmCalls.Count - i).ToString();
                     dgvQuotes.Rows.Add(
                         _selectedTicker.Symbol, rangeText,
                         sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
                         call.StrikePrice.ToString("F2"),
                         string.Empty, string.Empty, string.Empty,
-                        contracts, string.Empty);
+                        contracts, level);
                     dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
                 }
 
-                foreach (var put in otmPuts)
+                // PUT Level: index + 1 (closest=1, farthest=N)
+                for (int i = 0; i < otmPuts.Count; i++)
                 {
+                    var put       = otmPuts[i];
                     var sprd      = (put.Ask - put.Bid).ToString("F2");
                     var contracts = CalcContracts(positionSize, put.Ask);
+                    var level     = (i + 1).ToString();
                     dgvQuotes.Rows.Add(
                         _selectedTicker.Symbol, rangeText,
                         string.Empty, string.Empty, string.Empty,
                         put.StrikePrice.ToString("F2"),
                         put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
-                        contracts, string.Empty);
+                        contracts, level);
                     dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "PUT";
                 }
             }
