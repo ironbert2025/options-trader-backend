@@ -479,7 +479,13 @@ public partial class Form1 : Form
             string.Empty, "Close");
 
         // Store entry time on the row tag for duration calc
-        dgvTrades.Rows[dgvTrades.Rows.Count - 1].Tag = DateTime.Now;
+        var newRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
+        newRow.Tag = DateTime.Now;
+
+        // Color static cells
+        newRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
+        newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+        newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
 
         // Logger
         var level = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
@@ -561,7 +567,8 @@ public partial class Form1 : Form
             var pnl        = Math.Round((currentBid - entryPrice) * contracts * 100, 2);
             var pnlPct     = entryPrice > 0 ? Math.Round((currentBid - entryPrice) / entryPrice * 100, 1) : 0;
 
-            row.Cells["colTradeCBid"].Value      = currentBid.ToString("F2");
+            row.Cells["colTradeCBid"].Value                  = currentBid.ToString("F2");
+            row.Cells["colTradeCBid"].Style.ForeColor        = Color.Orange;
             row.Cells["colTradePnL"].Value        = pnl.ToString("F2");
             row.Cells["colTradePnLPercent"].Value = pnlPct.ToString("F1");
 
