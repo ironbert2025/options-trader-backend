@@ -401,6 +401,42 @@ public partial class Form1 : Form
         }
     }
 
+    private void DgvQuotes_CellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        var row = dgvQuotes.Rows[e.RowIndex];
+
+        var callSprdCol = dgvQuotes.Columns["colCallSprd"].Index;
+        var putSprdCol  = dgvQuotes.Columns["colPutSprd"].Index;
+        var callBidCol  = dgvQuotes.Columns["colCallBid"].Index;
+        var putBidCol   = dgvQuotes.Columns["colPutBid"].Index;
+
+        // Sprd columns: bold + red
+        if (e.ColumnIndex == callSprdCol || e.ColumnIndex == putSprdCol)
+        {
+            e.CellStyle.ForeColor = Color.Red;
+            e.CellStyle.Font = new Font(dgvQuotes.Font, FontStyle.Bold);
+        }
+
+        // Call Sprd <= 2 → Call Bid background green
+        if (e.ColumnIndex == callBidCol)
+        {
+            if (decimal.TryParse(row.Cells["colCallSprd"].Value?.ToString(), out var callSprd) && callSprd <= 2)
+                e.CellStyle.BackColor = Color.LightGreen;
+            else
+                e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
+        }
+
+        // Put Sprd <= 2 → Put Bid background green
+        if (e.ColumnIndex == putBidCol)
+        {
+            if (decimal.TryParse(row.Cells["colPutSprd"].Value?.ToString(), out var putSprd) && putSprd <= 2)
+                e.CellStyle.BackColor = Color.LightGreen;
+            else
+                e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
+        }
+    }
+
     private void DgvQuotes_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;

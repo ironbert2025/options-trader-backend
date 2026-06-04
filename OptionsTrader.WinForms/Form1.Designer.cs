@@ -302,6 +302,7 @@ partial class Form1
         dgvQuotes.Size = new Size(994, 175);
         dgvQuotes.TabIndex = 0;
         dgvQuotes.CellClick += DgvQuotes_CellClick;
+        dgvQuotes.CellFormatting += DgvQuotes_CellFormatting;
         // 
         // colSymbolQ
         // 
