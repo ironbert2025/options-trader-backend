@@ -32,6 +32,26 @@ partial class Form1
         lblCallHeader = new Label();
         lblPutHeader = new Label();
         chkStopAt11 = new CheckBox();
+        grpTrade = new GroupBox();
+        rbNoTrade = new RadioButton();
+        rbTrade = new RadioButton();
+        rbTradeTarget = new RadioButton();
+        grpTrades = new GroupBox();
+        dgvTrades = new DataGridView();
+        colTradeTime = new DataGridViewTextBoxColumn();
+        colTradeType = new DataGridViewTextBoxColumn();
+        colTradeStrike = new DataGridViewTextBoxColumn();
+        colTradeBid = new DataGridViewTextBoxColumn();
+        colTradeAsk = new DataGridViewTextBoxColumn();
+        colTradeContracts = new DataGridViewTextBoxColumn();
+        colTradeEntryPrice = new DataGridViewTextBoxColumn();
+        colTradeCBid = new DataGridViewTextBoxColumn();
+        colTradeTBid = new DataGridViewTextBoxColumn();
+        colTradePnL = new DataGridViewTextBoxColumn();
+        colTradePnLPercent = new DataGridViewTextBoxColumn();
+        colTradePnLTarget = new DataGridViewTextBoxColumn();
+        colTradeExitTime = new DataGridViewTextBoxColumn();
+        colTradeClose = new DataGridViewButtonColumn();
         btnFetchQuotes = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
@@ -72,6 +92,9 @@ partial class Form1
         tabQuotes.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).BeginInit();
         grpBalance.SuspendLayout();
+        grpTrade.SuspendLayout();
+        grpTrades.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)dgvTrades).BeginInit();
         grpTickerButtons.SuspendLayout();
         tabSettings.SuspendLayout();
         grpBroker.SuspendLayout();
@@ -105,6 +128,8 @@ partial class Form1
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Controls.Add(grpTickerButtons);
+        tabQuotes.Controls.Add(grpTrade);
+        tabQuotes.Controls.Add(grpTrades);
         tabQuotes.Location = new Point(4, 24);
         tabQuotes.Name = "tabQuotes";
         tabQuotes.Padding = new Padding(8);
@@ -144,7 +169,7 @@ partial class Form1
         dgvQuotes.Name = "dgvQuotes";
         dgvQuotes.RowHeadersVisible = false;
         dgvQuotes.RowTemplate.Height = 22;
-        dgvQuotes.Size = new Size(1000, 450);
+        dgvQuotes.Size = new Size(1000, 265);
         dgvQuotes.TabIndex = 0;
         dgvQuotes.CellClick += DgvQuotes_CellClick;
         //
@@ -269,7 +294,94 @@ partial class Form1
         lblLastUpdate.Location = new Point(630, 54);
         lblLastUpdate.Name = "lblLastUpdate";
         lblLastUpdate.Text = string.Empty;
-        // 
+        //
+        // grpTrade
+        //
+        grpTrade.Controls.Add(rbNoTrade);
+        grpTrade.Controls.Add(rbTrade);
+        grpTrade.Controls.Add(rbTradeTarget);
+        grpTrade.Location = new Point(760, 4);
+        grpTrade.Name = "grpTrade";
+        grpTrade.Size = new Size(130, 90);
+        grpTrade.TabStop = false;
+        grpTrade.Text = "Trade";
+        //
+        // rbNoTrade
+        rbNoTrade.Checked = true;
+        rbNoTrade.ForeColor = Color.DarkOrange;
+        rbNoTrade.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        rbNoTrade.Location = new Point(12, 22);
+        rbNoTrade.Name = "rbNoTrade";
+        rbNoTrade.Size = new Size(80, 20);
+        rbNoTrade.Text = "No Trade";
+        rbNoTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
+        // rbTrade
+        rbTrade.Location = new Point(12, 44);
+        rbTrade.Name = "rbTrade";
+        rbTrade.Size = new Size(80, 20);
+        rbTrade.Text = "Trade";
+        rbTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
+        // rbTradeTarget
+        rbTradeTarget.Location = new Point(12, 66);
+        rbTradeTarget.Name = "rbTradeTarget";
+        rbTradeTarget.Size = new Size(100, 20);
+        rbTradeTarget.Text = "Trade-Target";
+        rbTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
+        //
+        // grpTrades
+        //
+        grpTrades.Controls.Add(dgvTrades);
+        grpTrades.Location = new Point(8, 385);
+        grpTrades.Name = "grpTrades";
+        grpTrades.Size = new Size(1000, 175);
+        grpTrades.TabStop = false;
+        grpTrades.Text = "Trades";
+        //
+        // dgvTrades
+        //
+        dgvTrades.AllowUserToAddRows = false;
+        dgvTrades.AllowUserToDeleteRows = false;
+        dgvTrades.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        dgvTrades.Columns.AddRange(new DataGridViewColumn[] {
+            colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk,
+            colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid,
+            colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose });
+        dgvTrades.Dock = DockStyle.Fill;
+        dgvTrades.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        dgvTrades.Name = "dgvTrades";
+        dgvTrades.RowHeadersVisible = false;
+        dgvTrades.RowTemplate.Height = 22;
+        dgvTrades.CellClick += DgvTrades_CellClick;
+        //
+        // colTradeTime
+        colTradeTime.HeaderText = "Time"; colTradeTime.Name = "colTradeTime"; colTradeTime.ReadOnly = true; colTradeTime.Width = 70;
+        // colTradeType
+        colTradeType.HeaderText = "Type"; colTradeType.Name = "colTradeType"; colTradeType.ReadOnly = true; colTradeType.Width = 50;
+        // colTradeStrike
+        colTradeStrike.HeaderText = "StrikePrice"; colTradeStrike.Name = "colTradeStrike"; colTradeStrike.ReadOnly = true; colTradeStrike.Width = 80;
+        // colTradeBid
+        colTradeBid.HeaderText = "Bid"; colTradeBid.Name = "colTradeBid"; colTradeBid.ReadOnly = true; colTradeBid.Width = 55;
+        // colTradeAsk
+        colTradeAsk.HeaderText = "Ask"; colTradeAsk.Name = "colTradeAsk"; colTradeAsk.ReadOnly = true; colTradeAsk.Width = 55;
+        // colTradeContracts
+        colTradeContracts.HeaderText = "Contracts"; colTradeContracts.Name = "colTradeContracts"; colTradeContracts.ReadOnly = true; colTradeContracts.Width = 70;
+        // colTradeEntryPrice
+        colTradeEntryPrice.HeaderText = "EntryPrice"; colTradeEntryPrice.Name = "colTradeEntryPrice"; colTradeEntryPrice.ReadOnly = true; colTradeEntryPrice.Width = 80;
+        // colTradeCBid
+        colTradeCBid.HeaderText = "C_Bid"; colTradeCBid.Name = "colTradeCBid"; colTradeCBid.ReadOnly = true; colTradeCBid.Width = 55;
+        // colTradeTBid
+        colTradeTBid.HeaderText = "T_Bid"; colTradeTBid.Name = "colTradeTBid"; colTradeTBid.ReadOnly = true; colTradeTBid.Width = 55;
+        // colTradePnL
+        colTradePnL.HeaderText = "PnL"; colTradePnL.Name = "colTradePnL"; colTradePnL.ReadOnly = true; colTradePnL.Width = 60;
+        // colTradePnLPercent
+        colTradePnLPercent.HeaderText = "PnL_Percent"; colTradePnLPercent.Name = "colTradePnLPercent"; colTradePnLPercent.ReadOnly = true; colTradePnLPercent.Width = 80;
+        // colTradePnLTarget
+        colTradePnLTarget.HeaderText = "PnL_Target"; colTradePnLTarget.Name = "colTradePnLTarget"; colTradePnLTarget.ReadOnly = true; colTradePnLTarget.Width = 75;
+        // colTradeExitTime
+        colTradeExitTime.HeaderText = "ExitTime"; colTradeExitTime.Name = "colTradeExitTime"; colTradeExitTime.ReadOnly = true; colTradeExitTime.Width = 70;
+        // colTradeClose
+        colTradeClose.HeaderText = "Close"; colTradeClose.Name = "colTradeClose"; colTradeClose.Width = 65; colTradeClose.FlatStyle = FlatStyle.Flat;
+        //
         // grpBalance
         // 
         grpBalance.Controls.Add(txtBalance);
@@ -563,6 +675,10 @@ partial class Form1
         tabQuotes.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).EndInit();
         grpBalance.ResumeLayout(false);
+        grpTrade.ResumeLayout(false);
+        grpTrade.PerformLayout();
+        grpTrades.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)dgvTrades).EndInit();
         grpBalance.PerformLayout();
         grpTickerButtons.ResumeLayout(false);
         tabSettings.ResumeLayout(false);
@@ -596,6 +712,26 @@ partial class Form1
     private Label lblCallHeader;
     private Label lblPutHeader;
     private CheckBox chkStopAt11;
+    private GroupBox grpTrade;
+    private RadioButton rbNoTrade;
+    private RadioButton rbTrade;
+    private RadioButton rbTradeTarget;
+    private GroupBox grpTrades;
+    private DataGridView dgvTrades;
+    private DataGridViewTextBoxColumn colTradeTime;
+    private DataGridViewTextBoxColumn colTradeType;
+    private DataGridViewTextBoxColumn colTradeStrike;
+    private DataGridViewTextBoxColumn colTradeBid;
+    private DataGridViewTextBoxColumn colTradeAsk;
+    private DataGridViewTextBoxColumn colTradeContracts;
+    private DataGridViewTextBoxColumn colTradeEntryPrice;
+    private DataGridViewTextBoxColumn colTradeCBid;
+    private DataGridViewTextBoxColumn colTradeTBid;
+    private DataGridViewTextBoxColumn colTradePnL;
+    private DataGridViewTextBoxColumn colTradePnLPercent;
+    private DataGridViewTextBoxColumn colTradePnLTarget;
+    private DataGridViewTextBoxColumn colTradeExitTime;
+    private DataGridViewButtonColumn colTradeClose;
     private Button btnFetchQuotes;
     private Button btnStartPolling;
     private Label lblExpDate;
