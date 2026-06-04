@@ -9,6 +9,9 @@ namespace OptionsTrader.Infrastructure.Schwab;
 public class SchwabMarketDataService : ISchwabMarketDataService
 {
     private const string BaseUrl = "https://api.schwabapi.com/marketdata/v1/chains";
+    private const int StrikePriceCount = 40; // 20 calls + 20 puts
+
+    private static readonly string DumpFolder = @"C:\Dumps";
 
     private readonly HttpClient _httpClient;
     private readonly SchwabAuthService _authService;
@@ -27,7 +30,7 @@ public class SchwabMarketDataService : ISchwabMarketDataService
     {
         var token = await _authService.GetAccessTokenAsync(_apiKey, _apiSecret);
         var expirationStr = expiration.ToString("yyyy-MM-dd");
-        var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={expirationStr}&toDate={expirationStr}";
+        var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={expirationStr}&toDate={expirationStr}&strikeCount={StrikePriceCount}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -36,6 +39,12 @@ public class SchwabMarketDataService : ISchwabMarketDataService
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync();
+
+        // Debug dump
+        Directory.CreateDirectory(DumpFolder);
+        var dumpFile = Path.Combine(DumpFolder, $"{symbol}_{expiration:yyyyMMdd}_{DateTime.Now:HHmmss}.json");
+        await File.WriteAllTextAsync(dumpFile, json);
+
         return ParseOptionsChain(json, symbol);
     }
 

@@ -42,6 +42,7 @@ partial class Form1
         colCallSprd = new DataGridViewTextBoxColumn();
         colCallBid = new DataGridViewTextBoxColumn();
         colCallAsk = new DataGridViewTextBoxColumn();
+        colSpotPrice = new DataGridViewTextBoxColumn();
         colStrikePrice = new DataGridViewButtonColumn();
         colPutBid = new DataGridViewTextBoxColumn();
         colPutAsk = new DataGridViewTextBoxColumn();
@@ -294,7 +295,7 @@ partial class Form1
         dgvQuotes.AllowUserToDeleteRows = false;
         dgvQuotes.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         dgvQuotes.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        dgvQuotes.Columns.AddRange(new DataGridViewColumn[] { colSymbolQ, colRange, colCallSprd, colCallBid, colCallAsk, colStrikePrice, colPutBid, colPutAsk, colPutSprd, colContracts, colLevel });
+        dgvQuotes.Columns.AddRange(new DataGridViewColumn[] { colSymbolQ, colRange, colCallSprd, colCallBid, colCallAsk, colSpotPrice, colStrikePrice, colPutBid, colPutAsk, colPutSprd, colContracts, colLevel });
         dgvQuotes.Location = new Point(3, 20);
         dgvQuotes.Name = "dgvQuotes";
         dgvQuotes.RowHeadersVisible = false;
@@ -342,9 +343,16 @@ partial class Form1
         // colStrikePrice
         // 
         colStrikePrice.FlatStyle = FlatStyle.Flat;
+        colSpotPrice.HeaderText = "SpotPrice";
+        colSpotPrice.Name = "colSpotPrice";
+        colSpotPrice.ReadOnly = true;
+        colSpotPrice.Width = 75;
+        //
         colStrikePrice.HeaderText = "StrikePrice";
         colStrikePrice.Name = "colStrikePrice";
         colStrikePrice.Width = 80;
+        colStrikePrice.FlatStyle = FlatStyle.Standard;
+        colStrikePrice.UseColumnTextForButtonValue = false;
         // 
         // colPutBid
         // 
@@ -842,6 +850,7 @@ partial class Form1
     private DataGridViewTextBoxColumn colCallSprd;
     private DataGridViewTextBoxColumn colCallBid;
     private DataGridViewTextBoxColumn colCallAsk;
+    private DataGridViewTextBoxColumn colSpotPrice;
     private DataGridViewButtonColumn colStrikePrice;
     private DataGridViewTextBoxColumn colPutBid;
     private DataGridViewTextBoxColumn colPutAsk;
