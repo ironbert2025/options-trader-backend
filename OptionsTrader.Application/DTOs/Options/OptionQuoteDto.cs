@@ -11,4 +11,5 @@ public class OptionQuoteDto
     public decimal Bid { get; set; }
     public decimal Ask { get; set; }
     public DateOnly ExpirationDate { get; set; }
+    public bool InTheMoney { get; set; }
 }

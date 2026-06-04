@@ -82,7 +82,8 @@ public class SchwabMarketDataService : ISchwabMarketDataService
                         StrikePrice = contract.GetProperty("strikePrice").GetDecimal(),
                         Bid = contract.GetProperty("bid").GetDecimal(),
                         Ask = contract.GetProperty("ask").GetDecimal(),
-                        ExpirationDate = expiration
+                        ExpirationDate = expiration,
+                        InTheMoney = contract.TryGetProperty("inTheMoney", out var itm) && itm.GetBoolean()
                     };
                 }
             }

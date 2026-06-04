@@ -286,59 +286,67 @@ public partial class Form1 : Form
             decimal.TryParse(_selectedTicker.High, out var rangeHigh);
             var rangeText = $"{_selectedTicker.Low} - {_selectedTicker.High}";
 
-            // Filter strikes within range and group by strike
-            var callMap = allQuotes
+            // Filter OTM options within range
+            var otmCalls = allQuotes
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
+                         && !q.InTheMoney
                          && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
-                .ToDictionary(q => q.StrikePrice);
+                .OrderBy(q => q.StrikePrice)
+                .ToList();
 
-            var putMap = allQuotes
+            var otmPuts = allQuotes
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
+                         && !q.InTheMoney
                          && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
-                .ToDictionary(q => q.StrikePrice);
-
-            var strikes = callMap.Keys.Union(putMap.Keys).OrderBy(s => s).ToList();
+                .OrderBy(q => q.StrikePrice)
+                .ToList();
 
             if (dgvQuotes.Rows.Count == 0)
             {
-                // First load — populate all rows
-                foreach (var strike in strikes)
+                // First load — one row per CALL, then one row per PUT
+                foreach (var call in otmCalls)
                 {
-                    var call = callMap.GetValueOrDefault(strike);
-                    var put  = putMap.GetValueOrDefault(strike);
-
-                    var callSprd = call != null ? (call.Ask - call.Bid).ToString("F2") : string.Empty;
-                    var putSprd  = put  != null ? (put.Ask  - put.Bid).ToString("F2")  : string.Empty;
-
+                    var sprd = (call.Ask - call.Bid).ToString("F2");
                     dgvQuotes.Rows.Add(
-                        _selectedTicker.Symbol,
-                        rangeText,
-                        callSprd,
-                        call?.Bid.ToString("F2") ?? string.Empty,
-                        call?.Ask.ToString("F2") ?? string.Empty,
-                        strike.ToString("F2"),
-                        put?.Bid.ToString("F2")  ?? string.Empty,
-                        put?.Ask.ToString("F2")  ?? string.Empty,
-                        putSprd,
-                        string.Empty,  // Contracts
-                        string.Empty); // Level
+                        _selectedTicker.Symbol, rangeText,
+                        sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
+                        call.StrikePrice.ToString("F2"),
+                        string.Empty, string.Empty, string.Empty,
+                        string.Empty, string.Empty);
+                    // Tag row as CALL
+                    dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
+                }
+
+                foreach (var put in otmPuts)
+                {
+                    var sprd = (put.Ask - put.Bid).ToString("F2");
+                    dgvQuotes.Rows.Add(
+                        _selectedTicker.Symbol, rangeText,
+                        string.Empty, string.Empty, string.Empty,
+                        put.StrikePrice.ToString("F2"),
+                        put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
+                        string.Empty, string.Empty);
+                    dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "PUT";
                 }
             }
             else
             {
-                // Subsequent loads — update only Bid/Ask/Sprd columns matched by StrikePrice
+                // Subsequent loads — update Bid/Ask/Sprd by strike and type
+                var callMap = otmCalls.ToDictionary(q => q.StrikePrice);
+                var putMap  = otmPuts.ToDictionary(q => q.StrikePrice);
+
                 foreach (DataGridViewRow row in dgvQuotes.Rows)
                 {
                     if (!decimal.TryParse(row.Cells["colStrikePrice"].Value?.ToString(), out var strike)) continue;
+                    var rowType = row.Tag?.ToString();
 
-                    if (callMap.TryGetValue(strike, out var call))
+                    if (rowType == "CALL" && callMap.TryGetValue(strike, out var call))
                     {
                         row.Cells["colCallBid"].Value  = call.Bid.ToString("F2");
                         row.Cells["colCallAsk"].Value  = call.Ask.ToString("F2");
                         row.Cells["colCallSprd"].Value = (call.Ask - call.Bid).ToString("F2");
                     }
-
-                    if (putMap.TryGetValue(strike, out var put))
+                    else if (rowType == "PUT" && putMap.TryGetValue(strike, out var put))
                     {
                         row.Cells["colPutBid"].Value  = put.Bid.ToString("F2");
                         row.Cells["colPutAsk"].Value  = put.Ask.ToString("F2");
