@@ -279,48 +279,98 @@ public partial class Form1 : Form
         try
         {
             var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
-            var quotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
+            var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
+
+            // Parse range from ticker settings
+            decimal.TryParse(_selectedTicker.Low,  out var rangeLow);
+            decimal.TryParse(_selectedTicker.High, out var rangeHigh);
+            var rangeText = $"{_selectedTicker.Low} - {_selectedTicker.High}";
+
+            // Filter OTM options within range
+            // CALLs: descending (farthest from spot first) → Level N..1
+            var otmCalls = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
+                         && !q.InTheMoney
+                         && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
+                .OrderByDescending(q => q.StrikePrice)
+                .ToList();
+
+            // PUTs: descending (closest to spot first) → Level 1..N
+            var otmPuts = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
+                         && !q.InTheMoney
+                         && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
+                .OrderByDescending(q => q.StrikePrice)
+                .ToList();
+
+            // Calculate position size
+            var positionSize = GetPositionSize();
 
             if (dgvQuotes.Rows.Count == 0)
             {
-                // First load — populate all rows
-                dgvQuotes.Rows.Clear();
-                foreach (var q in quotes)
+                // First load — one row per CALL (descending), then one row per PUT (descending)
+                // CALL Level: count - index (farthest=N, closest=1)
+                for (int i = 0; i < otmCalls.Count; i++)
                 {
+                    var call      = otmCalls[i];
+                    var sprd      = (call.Ask - call.Bid).ToString("F2");
+                    var contracts = CalcContracts(positionSize, call.Ask);
+                    var level     = (otmCalls.Count - i).ToString();
                     dgvQuotes.Rows.Add(
-                        q.OptionType.ToString(),
-                        q.Symbol,
-                        q.SpotPrice.ToString("F2"),
-                        q.StrikePrice.ToString("F2"),
-                        q.Bid.ToString("F2"),
-                        q.Ask.ToString("F2"),
-                        q.ExpirationDate.ToString("yyyy-MM-dd"));
+                        _selectedTicker.Symbol, rangeText,
+                        sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
+                        call.StrikePrice.ToString("F2"),
+                        string.Empty, string.Empty, string.Empty,
+                        contracts, level);
+                    dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
+                }
+
+                // PUT Level: index + 1 (closest=1, farthest=N)
+                for (int i = 0; i < otmPuts.Count; i++)
+                {
+                    var put       = otmPuts[i];
+                    var sprd      = (put.Ask - put.Bid).ToString("F2");
+                    var contracts = CalcContracts(positionSize, put.Ask);
+                    var level     = (i + 1).ToString();
+                    dgvQuotes.Rows.Add(
+                        _selectedTicker.Symbol, rangeText,
+                        string.Empty, string.Empty, string.Empty,
+                        put.StrikePrice.ToString("F2"),
+                        put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
+                        contracts, level);
+                    dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "PUT";
                 }
             }
             else
             {
-                // Subsequent loads — update SpotPrice, Bid, Ask matched by OptionType + StrikePrice
-                var quoteMap = quotes.ToDictionary(
-                    q => (q.OptionType.ToString(), q.StrikePrice));
+                // Subsequent loads — update Bid/Ask/Sprd and Contracts by strike and type
+                var callMap = otmCalls.ToDictionary(q => q.StrikePrice);
+                var putMap  = otmPuts.ToDictionary(q => q.StrikePrice);
 
                 foreach (DataGridViewRow row in dgvQuotes.Rows)
                 {
-                    var type   = row.Cells["colQType"].Value?.ToString() ?? string.Empty;
-                    var strike = decimal.TryParse(row.Cells["colQStrike"].Value?.ToString(), out var s) ? s : -1m;
-                    var key    = (type, strike);
+                    if (!decimal.TryParse(row.Cells["colStrikePrice"].Value?.ToString(), out var strike)) continue;
+                    var rowType = row.Tag?.ToString();
 
-                    if (quoteMap.TryGetValue(key, out var q))
+                    if (rowType == "CALL" && callMap.TryGetValue(strike, out var call))
                     {
-                        row.Cells["colQSpot"].Value = q.SpotPrice.ToString("F2");
-                        row.Cells["colQBid"].Value  = q.Bid.ToString("F2");
-                        row.Cells["colQAsk"].Value  = q.Ask.ToString("F2");
+                        row.Cells["colCallBid"].Value  = call.Bid.ToString("F2");
+                        row.Cells["colCallAsk"].Value  = call.Ask.ToString("F2");
+                        row.Cells["colCallSprd"].Value = (call.Ask - call.Bid).ToString("F2");
+                        row.Cells["colContracts"].Value = CalcContracts(positionSize, call.Ask);
+                    }
+                    else if (rowType == "PUT" && putMap.TryGetValue(strike, out var put))
+                    {
+                        row.Cells["colPutBid"].Value  = put.Bid.ToString("F2");
+                        row.Cells["colPutAsk"].Value  = put.Ask.ToString("F2");
+                        row.Cells["colPutSprd"].Value = (put.Ask - put.Bid).ToString("F2");
+                        row.Cells["colContracts"].Value = CalcContracts(positionSize, put.Ask);
                     }
                 }
             }
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
-            // 429 — pause polling 60 seconds then resume
             _pollingTimer?.Stop();
             lblLastUpdate.Text = "Rate limited — resuming in 60s...";
             await Task.Delay(60000);
@@ -328,10 +378,16 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            // Other errors — stop polling
             StopPolling();
             MessageBox.Show($"Polling stopped due to error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void DgvQuotes_CellClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
+        var strike = dgvQuotes.Rows[e.RowIndex].Cells["colStrikePrice"].Value?.ToString();
+        // StrikePrice button clicked — functionality to be added later
     }
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
@@ -358,20 +414,7 @@ public partial class Form1 : Form
 
         try
         {
-            var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
-            var quotes = await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate);
-
-            foreach (var q in quotes)
-            {
-                dgvQuotes.Rows.Add(
-                    q.OptionType.ToString(),
-                    q.Symbol,
-                    q.SpotPrice.ToString("F2"),
-                    q.StrikePrice.ToString("F2"),
-                    q.Bid.ToString("F2"),
-                    q.Ask.ToString("F2"),
-                    q.ExpirationDate.ToString("yyyy-MM-dd"));
-            }
+            await FetchAndUpdateQuotesAsync();
         }
         catch (Exception ex)
         {
@@ -381,6 +424,20 @@ public partial class Form1 : Form
         {
             btnFetchQuotes.Enabled = true;
         }
+    }
+
+    private decimal GetPositionSize()
+    {
+        var balance = BalanceStore.Load();
+        if (!decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct)) return 0;
+        return balance * pct / 100m;
+    }
+
+    private static string CalcContracts(decimal positionSize, decimal ask)
+    {
+        if (ask <= 0 || positionSize <= 0) return string.Empty;
+        var contracts = Math.Round(positionSize / (ask * 100));
+        return contracts > 0 ? contracts.ToString("F0") : string.Empty;
     }
 
     private void BtnSaveTickers_Click(object? sender, EventArgs e)

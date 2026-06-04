@@ -18,13 +18,20 @@ partial class Form1
         tabControl = new TabControl();
         tabQuotes = new TabPage();
         dgvQuotes = new DataGridView();
-        colQType = new DataGridViewTextBoxColumn();
-        colQSymbol = new DataGridViewTextBoxColumn();
-        colQSpot = new DataGridViewTextBoxColumn();
-        colQStrike = new DataGridViewTextBoxColumn();
-        colQBid = new DataGridViewTextBoxColumn();
-        colQAsk = new DataGridViewTextBoxColumn();
-        colQExpDate = new DataGridViewTextBoxColumn();
+        colSymbolQ = new DataGridViewTextBoxColumn();
+        colRange = new DataGridViewTextBoxColumn();
+        colCallSprd = new DataGridViewTextBoxColumn();
+        colCallBid = new DataGridViewTextBoxColumn();
+        colCallAsk = new DataGridViewTextBoxColumn();
+        colStrikePrice = new DataGridViewButtonColumn();
+        colPutBid = new DataGridViewTextBoxColumn();
+        colPutAsk = new DataGridViewTextBoxColumn();
+        colPutSprd = new DataGridViewTextBoxColumn();
+        colContracts = new DataGridViewTextBoxColumn();
+        colLevel = new DataGridViewTextBoxColumn();
+        lblCallHeader = new Label();
+        lblPutHeader = new Label();
+        chkStopAt11 = new CheckBox();
         btnFetchQuotes = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
@@ -89,6 +96,9 @@ partial class Form1
         // tabQuotes
         // 
         tabQuotes.Controls.Add(dgvQuotes);
+        tabQuotes.Controls.Add(lblCallHeader);
+        tabQuotes.Controls.Add(lblPutHeader);
+        tabQuotes.Controls.Add(chkStopAt11);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblExpDate);
@@ -102,62 +112,107 @@ partial class Form1
         tabQuotes.TabIndex = 1;
         tabQuotes.Text = "Options Quotes";
         // 
+        // lblCallHeader
+        lblCallHeader.AutoSize = true;
+        lblCallHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+        lblCallHeader.ForeColor = Color.Green;
+        lblCallHeader.Location = new Point(130, 90);
+        lblCallHeader.Name = "lblCallHeader";
+        lblCallHeader.Text = "CALL";
+        //
+        // lblPutHeader
+        lblPutHeader.AutoSize = true;
+        lblPutHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+        lblPutHeader.ForeColor = Color.Red;
+        lblPutHeader.Location = new Point(620, 90);
+        lblPutHeader.Name = "lblPutHeader";
+        lblPutHeader.Text = "PUT";
+        //
+        // chkStopAt11
+        chkStopAt11.AutoSize = true;
+        chkStopAt11.Location = new Point(860, 90);
+        chkStopAt11.Name = "chkStopAt11";
+        chkStopAt11.Text = "Stop at 11:00 AM";
+        //
         // dgvQuotes
-        // 
+        //
         dgvQuotes.AllowUserToAddRows = false;
         dgvQuotes.AllowUserToDeleteRows = false;
-        dgvQuotes.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         dgvQuotes.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        dgvQuotes.Columns.AddRange(new DataGridViewColumn[] { colQType, colQSymbol, colQSpot, colQStrike, colQBid, colQAsk, colQExpDate });
-        dgvQuotes.Location = new Point(8, 84);
+        dgvQuotes.Columns.AddRange(new DataGridViewColumn[] { colSymbolQ, colRange, colCallSprd, colCallBid, colCallAsk, colStrikePrice, colPutBid, colPutAsk, colPutSprd, colContracts, colLevel });
+        dgvQuotes.Location = new Point(8, 110);
         dgvQuotes.Name = "dgvQuotes";
-        dgvQuotes.ReadOnly = true;
         dgvQuotes.RowHeadersVisible = false;
         dgvQuotes.RowTemplate.Height = 22;
-        dgvQuotes.Size = new Size(1000, 476);
+        dgvQuotes.Size = new Size(1000, 450);
         dgvQuotes.TabIndex = 0;
-        // 
-        // colQType
-        // 
-        colQType.HeaderText = "Type";
-        colQType.Name = "colQType";
-        colQType.ReadOnly = true;
-        // 
-        // colQSymbol
-        // 
-        colQSymbol.HeaderText = "Symbol";
-        colQSymbol.Name = "colQSymbol";
-        colQSymbol.ReadOnly = true;
-        // 
-        // colQSpot
-        // 
-        colQSpot.HeaderText = "Spot Price";
-        colQSpot.Name = "colQSpot";
-        colQSpot.ReadOnly = true;
-        // 
-        // colQStrike
-        // 
-        colQStrike.HeaderText = "Strike";
-        colQStrike.Name = "colQStrike";
-        colQStrike.ReadOnly = true;
-        // 
-        // colQBid
-        // 
-        colQBid.HeaderText = "Bid";
-        colQBid.Name = "colQBid";
-        colQBid.ReadOnly = true;
-        // 
-        // colQAsk
-        // 
-        colQAsk.HeaderText = "Ask";
-        colQAsk.Name = "colQAsk";
-        colQAsk.ReadOnly = true;
-        // 
-        // colQExpDate
-        // 
-        colQExpDate.HeaderText = "Expiration";
-        colQExpDate.Name = "colQExpDate";
-        colQExpDate.ReadOnly = true;
+        dgvQuotes.CellClick += DgvQuotes_CellClick;
+        //
+        // colSymbolQ
+        colSymbolQ.HeaderText = "Symbol";
+        colSymbolQ.Name = "colSymbolQ";
+        colSymbolQ.ReadOnly = true;
+        colSymbolQ.Width = 70;
+        //
+        // colRange
+        colRange.HeaderText = "Range";
+        colRange.Name = "colRange";
+        colRange.ReadOnly = true;
+        colRange.Width = 80;
+        //
+        // colCallSprd
+        colCallSprd.HeaderText = "Sprd";
+        colCallSprd.Name = "colCallSprd";
+        colCallSprd.ReadOnly = true;
+        colCallSprd.Width = 55;
+        //
+        // colCallBid
+        colCallBid.HeaderText = "Bid";
+        colCallBid.Name = "colCallBid";
+        colCallBid.ReadOnly = true;
+        colCallBid.Width = 65;
+        //
+        // colCallAsk
+        colCallAsk.HeaderText = "Ask";
+        colCallAsk.Name = "colCallAsk";
+        colCallAsk.ReadOnly = true;
+        colCallAsk.Width = 65;
+        //
+        // colStrikePrice
+        colStrikePrice.HeaderText = "StrikePrice";
+        colStrikePrice.Name = "colStrikePrice";
+        colStrikePrice.Width = 80;
+        colStrikePrice.FlatStyle = FlatStyle.Flat;
+        //
+        // colPutBid
+        colPutBid.HeaderText = "Bid";
+        colPutBid.Name = "colPutBid";
+        colPutBid.ReadOnly = true;
+        colPutBid.Width = 65;
+        //
+        // colPutAsk
+        colPutAsk.HeaderText = "Ask";
+        colPutAsk.Name = "colPutAsk";
+        colPutAsk.ReadOnly = true;
+        colPutAsk.Width = 65;
+        //
+        // colPutSprd
+        colPutSprd.HeaderText = "Sprd";
+        colPutSprd.Name = "colPutSprd";
+        colPutSprd.ReadOnly = true;
+        colPutSprd.Width = 55;
+        //
+        // colContracts
+        colContracts.HeaderText = "Contracts";
+        colContracts.Name = "colContracts";
+        colContracts.ReadOnly = true;
+        colContracts.Width = 75;
+        //
+        // colLevel
+        colLevel.HeaderText = "Level";
+        colLevel.Name = "colLevel";
+        colLevel.ReadOnly = true;
+        colLevel.Width = 60;
         // 
         // grpTickerButtons
         //
@@ -527,13 +582,20 @@ partial class Form1
     private TabPage tabQuotes;
     private TabPage tabSettings;
     private DataGridView dgvQuotes;
-    private DataGridViewTextBoxColumn colQType;
-    private DataGridViewTextBoxColumn colQSymbol;
-    private DataGridViewTextBoxColumn colQSpot;
-    private DataGridViewTextBoxColumn colQStrike;
-    private DataGridViewTextBoxColumn colQBid;
-    private DataGridViewTextBoxColumn colQAsk;
-    private DataGridViewTextBoxColumn colQExpDate;
+    private DataGridViewTextBoxColumn colSymbolQ;
+    private DataGridViewTextBoxColumn colRange;
+    private DataGridViewTextBoxColumn colCallSprd;
+    private DataGridViewTextBoxColumn colCallBid;
+    private DataGridViewTextBoxColumn colCallAsk;
+    private DataGridViewButtonColumn colStrikePrice;
+    private DataGridViewTextBoxColumn colPutBid;
+    private DataGridViewTextBoxColumn colPutAsk;
+    private DataGridViewTextBoxColumn colPutSprd;
+    private DataGridViewTextBoxColumn colContracts;
+    private DataGridViewTextBoxColumn colLevel;
+    private Label lblCallHeader;
+    private Label lblPutHeader;
+    private CheckBox chkStopAt11;
     private Button btnFetchQuotes;
     private Button btnStartPolling;
     private Label lblExpDate;
