@@ -17,25 +17,8 @@ partial class Form1
     {
         tabControl = new TabControl();
         tabQuotes = new TabPage();
-        dgvQuotes = new DataGridView();
-        colSymbolQ = new DataGridViewTextBoxColumn();
-        colRange = new DataGridViewTextBoxColumn();
-        colCallSprd = new DataGridViewTextBoxColumn();
-        colCallBid = new DataGridViewTextBoxColumn();
-        colCallAsk = new DataGridViewTextBoxColumn();
-        colStrikePrice = new DataGridViewButtonColumn();
-        colPutBid = new DataGridViewTextBoxColumn();
-        colPutAsk = new DataGridViewTextBoxColumn();
-        colPutSprd = new DataGridViewTextBoxColumn();
-        colContracts = new DataGridViewTextBoxColumn();
-        colLevel = new DataGridViewTextBoxColumn();
-        lblCallHeader = new Label();
-        lblPutHeader = new Label();
-        chkStopAt11 = new CheckBox();
-        grpTrade = new GroupBox();
-        rbNoTrade = new RadioButton();
-        rbTrade = new RadioButton();
-        rbTradeTarget = new RadioButton();
+        grpLogger = new GroupBox();
+        rtbLogger = new RichTextBox();
         grpTrades = new GroupBox();
         dgvTrades = new DataGridView();
         colTradeTime = new DataGridViewTextBoxColumn();
@@ -52,6 +35,22 @@ partial class Form1
         colTradePnLTarget = new DataGridViewTextBoxColumn();
         colTradeExitTime = new DataGridViewTextBoxColumn();
         colTradeClose = new DataGridViewButtonColumn();
+        grpOptionsChain = new GroupBox();
+        dgvQuotes = new DataGridView();
+        colSymbolQ = new DataGridViewTextBoxColumn();
+        colRange = new DataGridViewTextBoxColumn();
+        colCallSprd = new DataGridViewTextBoxColumn();
+        colCallBid = new DataGridViewTextBoxColumn();
+        colCallAsk = new DataGridViewTextBoxColumn();
+        colStrikePrice = new DataGridViewButtonColumn();
+        colPutBid = new DataGridViewTextBoxColumn();
+        colPutAsk = new DataGridViewTextBoxColumn();
+        colPutSprd = new DataGridViewTextBoxColumn();
+        colContracts = new DataGridViewTextBoxColumn();
+        colLevel = new DataGridViewTextBoxColumn();
+        lblCallHeader = new Label();
+        lblPutHeader = new Label();
+        chkStopAt11 = new CheckBox();
         btnFetchQuotes = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
@@ -61,6 +60,10 @@ partial class Form1
         lblPositionAmount = new Label();
         grpTickerButtons = new GroupBox();
         flpTickers = new FlowLayoutPanel();
+        grpTrade = new GroupBox();
+        rbNoTrade = new RadioButton();
+        rbTrade = new RadioButton();
+        rbTradeTarget = new RadioButton();
         tabSettings = new TabPage();
         grpBroker = new GroupBox();
         rbSchwab = new RadioButton();
@@ -90,12 +93,14 @@ partial class Form1
         lblCredentialsSaved = new Label();
         tabControl.SuspendLayout();
         tabQuotes.SuspendLayout();
-        ((System.ComponentModel.ISupportInitialize)dgvQuotes).BeginInit();
-        grpBalance.SuspendLayout();
-        grpTrade.SuspendLayout();
+        grpLogger.SuspendLayout();
         grpTrades.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvTrades).BeginInit();
+        grpOptionsChain.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)dgvQuotes).BeginInit();
+        grpBalance.SuspendLayout();
         grpTickerButtons.SuspendLayout();
+        grpTrade.SuspendLayout();
         tabSettings.SuspendLayout();
         grpBroker.SuspendLayout();
         grpTickers.SuspendLayout();
@@ -118,10 +123,9 @@ partial class Form1
         // 
         // tabQuotes
         // 
-        tabQuotes.Controls.Add(dgvQuotes);
-        tabQuotes.Controls.Add(lblCallHeader);
-        tabQuotes.Controls.Add(lblPutHeader);
-        tabQuotes.Controls.Add(chkStopAt11);
+        tabQuotes.Controls.Add(grpLogger);
+        tabQuotes.Controls.Add(grpTrades);
+        tabQuotes.Controls.Add(grpOptionsChain);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblExpDate);
@@ -129,7 +133,6 @@ partial class Form1
         tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Controls.Add(grpTickerButtons);
         tabQuotes.Controls.Add(grpTrade);
-        tabQuotes.Controls.Add(grpTrades);
         tabQuotes.Location = new Point(4, 24);
         tabQuotes.Name = "tabQuotes";
         tabQuotes.Padding = new Padding(8);
@@ -137,251 +140,319 @@ partial class Form1
         tabQuotes.TabIndex = 1;
         tabQuotes.Text = "Options Quotes";
         // 
-        // lblCallHeader
-        lblCallHeader.AutoSize = true;
-        lblCallHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
-        lblCallHeader.ForeColor = Color.Green;
-        lblCallHeader.Location = new Point(130, 90);
-        lblCallHeader.Name = "lblCallHeader";
-        lblCallHeader.Text = "CALL";
-        //
-        // lblPutHeader
-        lblPutHeader.AutoSize = true;
-        lblPutHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
-        lblPutHeader.ForeColor = Color.Red;
-        lblPutHeader.Location = new Point(620, 90);
-        lblPutHeader.Name = "lblPutHeader";
-        lblPutHeader.Text = "PUT";
-        //
-        // chkStopAt11
-        chkStopAt11.AutoSize = true;
-        chkStopAt11.Location = new Point(860, 90);
-        chkStopAt11.Name = "chkStopAt11";
-        chkStopAt11.Text = "Stop at 11:00 AM";
-        //
+        // grpLogger
+        // 
+        grpLogger.Controls.Add(rtbLogger);
+        grpLogger.Location = new Point(8, 415);
+        grpLogger.Name = "grpLogger";
+        grpLogger.Size = new Size(1000, 149);
+        grpLogger.TabIndex = 0;
+        grpLogger.TabStop = false;
+        grpLogger.Text = "Logger";
+        // 
+        // rtbLogger
+        // 
+        rtbLogger.BackColor = Color.Black;
+        rtbLogger.Dock = DockStyle.Fill;
+        rtbLogger.Font = new Font("Consolas", 8.5F);
+        rtbLogger.Location = new Point(3, 19);
+        rtbLogger.Name = "rtbLogger";
+        rtbLogger.ReadOnly = true;
+        rtbLogger.ScrollBars = RichTextBoxScrollBars.Vertical;
+        rtbLogger.Size = new Size(994, 127);
+        rtbLogger.TabIndex = 0;
+        rtbLogger.Text = "";
+        rtbLogger.WordWrap = false;
+        // 
+        // grpTrades
+        // 
+        grpTrades.Controls.Add(dgvTrades);
+        grpTrades.Location = new Point(11, 306);
+        grpTrades.Name = "grpTrades";
+        grpTrades.Size = new Size(1000, 90);
+        grpTrades.TabIndex = 1;
+        grpTrades.TabStop = false;
+        grpTrades.Text = "Trades";
+        // 
+        // dgvTrades
+        // 
+        dgvTrades.AllowUserToAddRows = false;
+        dgvTrades.AllowUserToDeleteRows = false;
+        dgvTrades.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        dgvTrades.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        dgvTrades.Columns.AddRange(new DataGridViewColumn[] { colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk, colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid, colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose });
+        dgvTrades.Dock = DockStyle.Fill;
+        dgvTrades.Location = new Point(3, 19);
+        dgvTrades.Name = "dgvTrades";
+        dgvTrades.RowHeadersVisible = false;
+        dgvTrades.RowTemplate.Height = 22;
+        dgvTrades.Size = new Size(994, 68);
+        dgvTrades.TabIndex = 0;
+        dgvTrades.CellClick += DgvTrades_CellClick;
+        // 
+        // colTradeTime
+        // 
+        colTradeTime.HeaderText = "Time";
+        colTradeTime.Name = "colTradeTime";
+        colTradeTime.ReadOnly = true;
+        // 
+        // colTradeType
+        // 
+        colTradeType.HeaderText = "Type";
+        colTradeType.Name = "colTradeType";
+        colTradeType.ReadOnly = true;
+        // 
+        // colTradeStrike
+        // 
+        colTradeStrike.HeaderText = "StrikePrice";
+        colTradeStrike.Name = "colTradeStrike";
+        colTradeStrike.ReadOnly = true;
+        // 
+        // colTradeBid
+        // 
+        colTradeBid.HeaderText = "Bid";
+        colTradeBid.Name = "colTradeBid";
+        colTradeBid.ReadOnly = true;
+        // 
+        // colTradeAsk
+        // 
+        colTradeAsk.HeaderText = "Ask";
+        colTradeAsk.Name = "colTradeAsk";
+        colTradeAsk.ReadOnly = true;
+        // 
+        // colTradeContracts
+        // 
+        colTradeContracts.HeaderText = "Contracts";
+        colTradeContracts.Name = "colTradeContracts";
+        colTradeContracts.ReadOnly = true;
+        // 
+        // colTradeEntryPrice
+        // 
+        colTradeEntryPrice.HeaderText = "EntryPrice";
+        colTradeEntryPrice.Name = "colTradeEntryPrice";
+        colTradeEntryPrice.ReadOnly = true;
+        // 
+        // colTradeCBid
+        // 
+        colTradeCBid.HeaderText = "C_Bid";
+        colTradeCBid.Name = "colTradeCBid";
+        colTradeCBid.ReadOnly = true;
+        // 
+        // colTradeTBid
+        // 
+        colTradeTBid.HeaderText = "T_Bid";
+        colTradeTBid.Name = "colTradeTBid";
+        colTradeTBid.ReadOnly = true;
+        // 
+        // colTradePnL
+        // 
+        colTradePnL.HeaderText = "PnL";
+        colTradePnL.Name = "colTradePnL";
+        colTradePnL.ReadOnly = true;
+        // 
+        // colTradePnLPercent
+        // 
+        colTradePnLPercent.HeaderText = "PnL_Percent";
+        colTradePnLPercent.Name = "colTradePnLPercent";
+        colTradePnLPercent.ReadOnly = true;
+        // 
+        // colTradePnLTarget
+        // 
+        colTradePnLTarget.HeaderText = "PnL_Target";
+        colTradePnLTarget.Name = "colTradePnLTarget";
+        colTradePnLTarget.ReadOnly = true;
+        // 
+        // colTradeExitTime
+        // 
+        colTradeExitTime.HeaderText = "ExitTime";
+        colTradeExitTime.Name = "colTradeExitTime";
+        colTradeExitTime.ReadOnly = true;
+        // 
+        // colTradeClose
+        // 
+        colTradeClose.FlatStyle = FlatStyle.Flat;
+        colTradeClose.HeaderText = "Close";
+        colTradeClose.Name = "colTradeClose";
+        // 
+        // grpOptionsChain
+        // 
+        grpOptionsChain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        grpOptionsChain.Controls.Add(dgvQuotes);
+        grpOptionsChain.Controls.Add(lblCallHeader);
+        grpOptionsChain.Controls.Add(lblPutHeader);
+        grpOptionsChain.Controls.Add(chkStopAt11);
+        grpOptionsChain.Location = new Point(8, 100);
+        grpOptionsChain.Name = "grpOptionsChain";
+        grpOptionsChain.Size = new Size(1000, 200);
+        grpOptionsChain.TabIndex = 2;
+        grpOptionsChain.TabStop = false;
+        grpOptionsChain.Text = "OptionsChain";
+        // 
         // dgvQuotes
-        //
+        // 
         dgvQuotes.AllowUserToAddRows = false;
         dgvQuotes.AllowUserToDeleteRows = false;
+        dgvQuotes.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         dgvQuotes.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
         dgvQuotes.Columns.AddRange(new DataGridViewColumn[] { colSymbolQ, colRange, colCallSprd, colCallBid, colCallAsk, colStrikePrice, colPutBid, colPutAsk, colPutSprd, colContracts, colLevel });
-        dgvQuotes.Location = new Point(8, 110);
+        dgvQuotes.Location = new Point(3, 20);
         dgvQuotes.Name = "dgvQuotes";
         dgvQuotes.RowHeadersVisible = false;
         dgvQuotes.RowTemplate.Height = 22;
-        dgvQuotes.Size = new Size(1000, 265);
+        dgvQuotes.Size = new Size(994, 175);
         dgvQuotes.TabIndex = 0;
         dgvQuotes.CellClick += DgvQuotes_CellClick;
-        //
+        // 
         // colSymbolQ
+        // 
         colSymbolQ.HeaderText = "Symbol";
         colSymbolQ.Name = "colSymbolQ";
         colSymbolQ.ReadOnly = true;
         colSymbolQ.Width = 70;
-        //
+        // 
         // colRange
+        // 
         colRange.HeaderText = "Range";
         colRange.Name = "colRange";
         colRange.ReadOnly = true;
         colRange.Width = 80;
-        //
+        // 
         // colCallSprd
+        // 
         colCallSprd.HeaderText = "Sprd";
         colCallSprd.Name = "colCallSprd";
         colCallSprd.ReadOnly = true;
         colCallSprd.Width = 55;
-        //
+        // 
         // colCallBid
+        // 
         colCallBid.HeaderText = "Bid";
         colCallBid.Name = "colCallBid";
         colCallBid.ReadOnly = true;
         colCallBid.Width = 65;
-        //
+        // 
         // colCallAsk
+        // 
         colCallAsk.HeaderText = "Ask";
         colCallAsk.Name = "colCallAsk";
         colCallAsk.ReadOnly = true;
         colCallAsk.Width = 65;
-        //
+        // 
         // colStrikePrice
+        // 
+        colStrikePrice.FlatStyle = FlatStyle.Flat;
         colStrikePrice.HeaderText = "StrikePrice";
         colStrikePrice.Name = "colStrikePrice";
         colStrikePrice.Width = 80;
-        colStrikePrice.FlatStyle = FlatStyle.Flat;
-        //
+        // 
         // colPutBid
+        // 
         colPutBid.HeaderText = "Bid";
         colPutBid.Name = "colPutBid";
         colPutBid.ReadOnly = true;
         colPutBid.Width = 65;
-        //
+        // 
         // colPutAsk
+        // 
         colPutAsk.HeaderText = "Ask";
         colPutAsk.Name = "colPutAsk";
         colPutAsk.ReadOnly = true;
         colPutAsk.Width = 65;
-        //
+        // 
         // colPutSprd
+        // 
         colPutSprd.HeaderText = "Sprd";
         colPutSprd.Name = "colPutSprd";
         colPutSprd.ReadOnly = true;
         colPutSprd.Width = 55;
-        //
+        // 
         // colContracts
+        // 
         colContracts.HeaderText = "Contracts";
         colContracts.Name = "colContracts";
         colContracts.ReadOnly = true;
         colContracts.Width = 75;
-        //
+        // 
         // colLevel
+        // 
         colLevel.HeaderText = "Level";
         colLevel.Name = "colLevel";
         colLevel.ReadOnly = true;
         colLevel.Width = 60;
         // 
-        // grpTickerButtons
-        //
-        grpTickerButtons.Controls.Add(flpTickers);
-        grpTickerButtons.Location = new Point(128, 4);
-        grpTickerButtons.Name = "grpTickerButtons";
-        grpTickerButtons.Size = new Size(360, 68);
-        grpTickerButtons.TabStop = false;
-        grpTickerButtons.Text = "Tickers";
-        //
-        // flpTickers
-        //
-        flpTickers.Dock = DockStyle.Fill;
-        flpTickers.Location = new Point(3, 19);
-        flpTickers.Name = "flpTickers";
-        flpTickers.Padding = new Padding(4);
-        flpTickers.Size = new Size(354, 46);
-        //
-        // btnStartPolling
-        //
-        btnStartPolling.Location = new Point(500, 22);
-        btnStartPolling.Name = "btnStartPolling";
-        btnStartPolling.Size = new Size(120, 26);
-        btnStartPolling.TabIndex = 3;
-        btnStartPolling.Text = "Start Polling";
-        btnStartPolling.BackColor = Color.DarkGreen;
-        btnStartPolling.ForeColor = Color.White;
-        btnStartPolling.FlatStyle = FlatStyle.Flat;
-        btnStartPolling.Click += BtnStartPolling_Click;
-        //
+        // lblCallHeader
+        // 
+        lblCallHeader.AutoSize = true;
+        lblCallHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+        lblCallHeader.ForeColor = Color.Green;
+        lblCallHeader.Location = new Point(130, 2);
+        lblCallHeader.Name = "lblCallHeader";
+        lblCallHeader.Size = new Size(40, 15);
+        lblCallHeader.TabIndex = 1;
+        lblCallHeader.Text = "CALL";
+        // 
+        // lblPutHeader
+        // 
+        lblPutHeader.AutoSize = true;
+        lblPutHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+        lblPutHeader.ForeColor = Color.Red;
+        lblPutHeader.Location = new Point(620, 2);
+        lblPutHeader.Name = "lblPutHeader";
+        lblPutHeader.Size = new Size(34, 15);
+        lblPutHeader.TabIndex = 2;
+        lblPutHeader.Text = "PUT";
+        // 
+        // chkStopAt11
+        // 
+        chkStopAt11.AutoSize = true;
+        chkStopAt11.Location = new Point(760, 2);
+        chkStopAt11.Name = "chkStopAt11";
+        chkStopAt11.Size = new Size(115, 19);
+        chkStopAt11.TabIndex = 3;
+        chkStopAt11.Text = "Stop at 11:00 AM";
+        // 
         // btnFetchQuotes
-        //
+        // 
         btnFetchQuotes.Location = new Point(630, 22);
         btnFetchQuotes.Name = "btnFetchQuotes";
         btnFetchQuotes.Size = new Size(120, 26);
         btnFetchQuotes.TabIndex = 1;
         btnFetchQuotes.Text = "Fetch Quotes";
         btnFetchQuotes.Click += BtnFetchQuotes_Click;
-        //
+        // 
+        // btnStartPolling
+        // 
+        btnStartPolling.BackColor = Color.DarkGreen;
+        btnStartPolling.FlatStyle = FlatStyle.Flat;
+        btnStartPolling.ForeColor = Color.White;
+        btnStartPolling.Location = new Point(500, 22);
+        btnStartPolling.Name = "btnStartPolling";
+        btnStartPolling.Size = new Size(120, 26);
+        btnStartPolling.TabIndex = 3;
+        btnStartPolling.Text = "Start Polling";
+        btnStartPolling.UseVisualStyleBackColor = false;
+        btnStartPolling.Click += BtnStartPolling_Click;
+        // 
         // lblExpDate
-        //
+        // 
         lblExpDate.AutoSize = true;
         lblExpDate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblExpDate.ForeColor = Color.DarkGoldenrod;
         lblExpDate.Location = new Point(500, 54);
         lblExpDate.Name = "lblExpDate";
-        lblExpDate.Text = string.Empty;
-        //
+        lblExpDate.Size = new Size(0, 13);
+        lblExpDate.TabIndex = 4;
+        // 
         // lblLastUpdate
-        //
+        // 
         lblLastUpdate.AutoSize = true;
         lblLastUpdate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblLastUpdate.ForeColor = Color.DarkGoldenrod;
         lblLastUpdate.Location = new Point(630, 54);
         lblLastUpdate.Name = "lblLastUpdate";
-        lblLastUpdate.Text = string.Empty;
-        //
-        // grpTrade
-        //
-        grpTrade.Controls.Add(rbNoTrade);
-        grpTrade.Controls.Add(rbTrade);
-        grpTrade.Controls.Add(rbTradeTarget);
-        grpTrade.Location = new Point(760, 4);
-        grpTrade.Name = "grpTrade";
-        grpTrade.Size = new Size(130, 90);
-        grpTrade.TabStop = false;
-        grpTrade.Text = "Trade";
-        //
-        // rbNoTrade
-        rbNoTrade.Checked = true;
-        rbNoTrade.ForeColor = Color.DarkOrange;
-        rbNoTrade.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
-        rbNoTrade.Location = new Point(12, 22);
-        rbNoTrade.Name = "rbNoTrade";
-        rbNoTrade.Size = new Size(80, 20);
-        rbNoTrade.Text = "No Trade";
-        rbNoTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
-        // rbTrade
-        rbTrade.Location = new Point(12, 44);
-        rbTrade.Name = "rbTrade";
-        rbTrade.Size = new Size(80, 20);
-        rbTrade.Text = "Trade";
-        rbTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
-        // rbTradeTarget
-        rbTradeTarget.Location = new Point(12, 66);
-        rbTradeTarget.Name = "rbTradeTarget";
-        rbTradeTarget.Size = new Size(100, 20);
-        rbTradeTarget.Text = "Trade-Target";
-        rbTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
-        //
-        // grpTrades
-        //
-        grpTrades.Controls.Add(dgvTrades);
-        grpTrades.Location = new Point(8, 385);
-        grpTrades.Name = "grpTrades";
-        grpTrades.Size = new Size(1000, 175);
-        grpTrades.TabStop = false;
-        grpTrades.Text = "Trades";
-        //
-        // dgvTrades
-        //
-        dgvTrades.AllowUserToAddRows = false;
-        dgvTrades.AllowUserToDeleteRows = false;
-        dgvTrades.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        dgvTrades.Columns.AddRange(new DataGridViewColumn[] {
-            colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk,
-            colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid,
-            colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose });
-        dgvTrades.Dock = DockStyle.Fill;
-        dgvTrades.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-        dgvTrades.Name = "dgvTrades";
-        dgvTrades.RowHeadersVisible = false;
-        dgvTrades.RowTemplate.Height = 22;
-        dgvTrades.CellClick += DgvTrades_CellClick;
-        //
-        // colTradeTime
-        colTradeTime.HeaderText = "Time"; colTradeTime.Name = "colTradeTime"; colTradeTime.ReadOnly = true; colTradeTime.Width = 70;
-        // colTradeType
-        colTradeType.HeaderText = "Type"; colTradeType.Name = "colTradeType"; colTradeType.ReadOnly = true; colTradeType.Width = 50;
-        // colTradeStrike
-        colTradeStrike.HeaderText = "StrikePrice"; colTradeStrike.Name = "colTradeStrike"; colTradeStrike.ReadOnly = true; colTradeStrike.Width = 80;
-        // colTradeBid
-        colTradeBid.HeaderText = "Bid"; colTradeBid.Name = "colTradeBid"; colTradeBid.ReadOnly = true; colTradeBid.Width = 55;
-        // colTradeAsk
-        colTradeAsk.HeaderText = "Ask"; colTradeAsk.Name = "colTradeAsk"; colTradeAsk.ReadOnly = true; colTradeAsk.Width = 55;
-        // colTradeContracts
-        colTradeContracts.HeaderText = "Contracts"; colTradeContracts.Name = "colTradeContracts"; colTradeContracts.ReadOnly = true; colTradeContracts.Width = 70;
-        // colTradeEntryPrice
-        colTradeEntryPrice.HeaderText = "EntryPrice"; colTradeEntryPrice.Name = "colTradeEntryPrice"; colTradeEntryPrice.ReadOnly = true; colTradeEntryPrice.Width = 80;
-        // colTradeCBid
-        colTradeCBid.HeaderText = "C_Bid"; colTradeCBid.Name = "colTradeCBid"; colTradeCBid.ReadOnly = true; colTradeCBid.Width = 55;
-        // colTradeTBid
-        colTradeTBid.HeaderText = "T_Bid"; colTradeTBid.Name = "colTradeTBid"; colTradeTBid.ReadOnly = true; colTradeTBid.Width = 55;
-        // colTradePnL
-        colTradePnL.HeaderText = "PnL"; colTradePnL.Name = "colTradePnL"; colTradePnL.ReadOnly = true; colTradePnL.Width = 60;
-        // colTradePnLPercent
-        colTradePnLPercent.HeaderText = "PnL_Percent"; colTradePnLPercent.Name = "colTradePnLPercent"; colTradePnLPercent.ReadOnly = true; colTradePnLPercent.Width = 80;
-        // colTradePnLTarget
-        colTradePnLTarget.HeaderText = "PnL_Target"; colTradePnLTarget.Name = "colTradePnLTarget"; colTradePnLTarget.ReadOnly = true; colTradePnLTarget.Width = 75;
-        // colTradeExitTime
-        colTradeExitTime.HeaderText = "ExitTime"; colTradeExitTime.Name = "colTradeExitTime"; colTradeExitTime.ReadOnly = true; colTradeExitTime.Width = 70;
-        // colTradeClose
-        colTradeClose.HeaderText = "Close"; colTradeClose.Name = "colTradeClose"; colTradeClose.Width = 65; colTradeClose.FlatStyle = FlatStyle.Flat;
-        //
+        lblLastUpdate.Size = new Size(0, 13);
+        lblLastUpdate.TabIndex = 5;
+        // 
         // grpBalance
         // 
         grpBalance.Controls.Add(txtBalance);
@@ -408,6 +479,68 @@ partial class Form1
         lblPositionAmount.Name = "lblPositionAmount";
         lblPositionAmount.Size = new Size(86, 16);
         lblPositionAmount.TabIndex = 1;
+        // 
+        // grpTickerButtons
+        // 
+        grpTickerButtons.Controls.Add(flpTickers);
+        grpTickerButtons.Location = new Point(128, 4);
+        grpTickerButtons.Name = "grpTickerButtons";
+        grpTickerButtons.Size = new Size(360, 68);
+        grpTickerButtons.TabIndex = 6;
+        grpTickerButtons.TabStop = false;
+        grpTickerButtons.Text = "Tickers";
+        // 
+        // flpTickers
+        // 
+        flpTickers.Dock = DockStyle.Fill;
+        flpTickers.Location = new Point(3, 19);
+        flpTickers.Name = "flpTickers";
+        flpTickers.Padding = new Padding(4);
+        flpTickers.Size = new Size(354, 46);
+        flpTickers.TabIndex = 0;
+        // 
+        // grpTrade
+        // 
+        grpTrade.Controls.Add(rbNoTrade);
+        grpTrade.Controls.Add(rbTrade);
+        grpTrade.Controls.Add(rbTradeTarget);
+        grpTrade.Location = new Point(760, 4);
+        grpTrade.Name = "grpTrade";
+        grpTrade.Size = new Size(130, 90);
+        grpTrade.TabIndex = 7;
+        grpTrade.TabStop = false;
+        grpTrade.Text = "Trade";
+        // 
+        // rbNoTrade
+        // 
+        rbNoTrade.Checked = true;
+        rbNoTrade.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        rbNoTrade.ForeColor = Color.DarkOrange;
+        rbNoTrade.Location = new Point(12, 22);
+        rbNoTrade.Name = "rbNoTrade";
+        rbNoTrade.Size = new Size(80, 20);
+        rbNoTrade.TabIndex = 0;
+        rbNoTrade.TabStop = true;
+        rbNoTrade.Text = "No Trade";
+        rbNoTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
+        // 
+        // rbTrade
+        // 
+        rbTrade.Location = new Point(12, 44);
+        rbTrade.Name = "rbTrade";
+        rbTrade.Size = new Size(80, 20);
+        rbTrade.TabIndex = 1;
+        rbTrade.Text = "Trade";
+        rbTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
+        // 
+        // rbTradeTarget
+        // 
+        rbTradeTarget.Location = new Point(12, 66);
+        rbTradeTarget.Name = "rbTradeTarget";
+        rbTradeTarget.Size = new Size(100, 20);
+        rbTradeTarget.TabIndex = 2;
+        rbTradeTarget.Text = "Trade-Target";
+        rbTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
         // 
         // tabSettings
         // 
@@ -652,14 +785,16 @@ partial class Form1
         btnSaveCredentials.TabIndex = 4;
         btnSaveCredentials.Text = "Save";
         btnSaveCredentials.Click += BtnSaveCredentials_Click;
-        //
+        // 
         // lblCredentialsSaved
-        //
+        // 
         lblCredentialsSaved.AutoSize = true;
         lblCredentialsSaved.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblCredentialsSaved.ForeColor = Color.Green;
         lblCredentialsSaved.Location = new Point(12, 102);
         lblCredentialsSaved.Name = "lblCredentialsSaved";
+        lblCredentialsSaved.Size = new Size(110, 13);
+        lblCredentialsSaved.TabIndex = 5;
         lblCredentialsSaved.Text = "Credentials Saved";
         lblCredentialsSaved.Visible = false;
         // 
@@ -673,14 +808,17 @@ partial class Form1
         Text = "Options Trader";
         tabControl.ResumeLayout(false);
         tabQuotes.ResumeLayout(false);
-        ((System.ComponentModel.ISupportInitialize)dgvQuotes).EndInit();
-        grpBalance.ResumeLayout(false);
-        grpTrade.ResumeLayout(false);
-        grpTrade.PerformLayout();
+        tabQuotes.PerformLayout();
+        grpLogger.ResumeLayout(false);
         grpTrades.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)dgvTrades).EndInit();
+        grpOptionsChain.ResumeLayout(false);
+        grpOptionsChain.PerformLayout();
+        ((System.ComponentModel.ISupportInitialize)dgvQuotes).EndInit();
+        grpBalance.ResumeLayout(false);
         grpBalance.PerformLayout();
         grpTickerButtons.ResumeLayout(false);
+        grpTrade.ResumeLayout(false);
         tabSettings.ResumeLayout(false);
         grpBroker.ResumeLayout(false);
         grpTickers.ResumeLayout(false);
@@ -716,7 +854,10 @@ partial class Form1
     private RadioButton rbNoTrade;
     private RadioButton rbTrade;
     private RadioButton rbTradeTarget;
+    private GroupBox grpOptionsChain;
     private GroupBox grpTrades;
+    private GroupBox grpLogger;
+    private RichTextBox rtbLogger;
     private DataGridView dgvTrades;
     private DataGridViewTextBoxColumn colTradeTime;
     private DataGridViewTextBoxColumn colTradeType;
