@@ -279,48 +279,76 @@ public partial class Form1 : Form
         try
         {
             var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
-            var quotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
+            var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
+
+            // Parse range from ticker settings
+            decimal.TryParse(_selectedTicker.Low,  out var rangeLow);
+            decimal.TryParse(_selectedTicker.High, out var rangeHigh);
+            var rangeText = $"{_selectedTicker.Low} - {_selectedTicker.High}";
+
+            // Filter strikes within range and group by strike
+            var callMap = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
+                         && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
+                .ToDictionary(q => q.StrikePrice);
+
+            var putMap = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
+                         && q.StrikePrice >= rangeLow && q.StrikePrice <= rangeHigh)
+                .ToDictionary(q => q.StrikePrice);
+
+            var strikes = callMap.Keys.Union(putMap.Keys).OrderBy(s => s).ToList();
 
             if (dgvQuotes.Rows.Count == 0)
             {
                 // First load — populate all rows
-                dgvQuotes.Rows.Clear();
-                foreach (var q in quotes)
+                foreach (var strike in strikes)
                 {
+                    var call = callMap.GetValueOrDefault(strike);
+                    var put  = putMap.GetValueOrDefault(strike);
+
+                    var callSprd = call != null ? (call.Ask - call.Bid).ToString("F2") : string.Empty;
+                    var putSprd  = put  != null ? (put.Ask  - put.Bid).ToString("F2")  : string.Empty;
+
                     dgvQuotes.Rows.Add(
-                        q.OptionType.ToString(),
-                        q.Symbol,
-                        q.SpotPrice.ToString("F2"),
-                        q.StrikePrice.ToString("F2"),
-                        q.Bid.ToString("F2"),
-                        q.Ask.ToString("F2"),
-                        q.ExpirationDate.ToString("yyyy-MM-dd"));
+                        _selectedTicker.Symbol,
+                        rangeText,
+                        callSprd,
+                        call?.Bid.ToString("F2") ?? string.Empty,
+                        call?.Ask.ToString("F2") ?? string.Empty,
+                        strike.ToString("F2"),
+                        put?.Bid.ToString("F2")  ?? string.Empty,
+                        put?.Ask.ToString("F2")  ?? string.Empty,
+                        putSprd,
+                        string.Empty,  // Contracts
+                        string.Empty); // Level
                 }
             }
             else
             {
-                // Subsequent loads — update SpotPrice, Bid, Ask matched by OptionType + StrikePrice
-                var quoteMap = quotes.ToDictionary(
-                    q => (q.OptionType.ToString(), q.StrikePrice));
-
+                // Subsequent loads — update only Bid/Ask/Sprd columns matched by StrikePrice
                 foreach (DataGridViewRow row in dgvQuotes.Rows)
                 {
-                    var type   = row.Cells["colQType"].Value?.ToString() ?? string.Empty;
-                    var strike = decimal.TryParse(row.Cells["colQStrike"].Value?.ToString(), out var s) ? s : -1m;
-                    var key    = (type, strike);
+                    if (!decimal.TryParse(row.Cells["colStrikePrice"].Value?.ToString(), out var strike)) continue;
 
-                    if (quoteMap.TryGetValue(key, out var q))
+                    if (callMap.TryGetValue(strike, out var call))
                     {
-                        row.Cells["colQSpot"].Value = q.SpotPrice.ToString("F2");
-                        row.Cells["colQBid"].Value  = q.Bid.ToString("F2");
-                        row.Cells["colQAsk"].Value  = q.Ask.ToString("F2");
+                        row.Cells["colCallBid"].Value  = call.Bid.ToString("F2");
+                        row.Cells["colCallAsk"].Value  = call.Ask.ToString("F2");
+                        row.Cells["colCallSprd"].Value = (call.Ask - call.Bid).ToString("F2");
+                    }
+
+                    if (putMap.TryGetValue(strike, out var put))
+                    {
+                        row.Cells["colPutBid"].Value  = put.Bid.ToString("F2");
+                        row.Cells["colPutAsk"].Value  = put.Ask.ToString("F2");
+                        row.Cells["colPutSprd"].Value = (put.Ask - put.Bid).ToString("F2");
                     }
                 }
             }
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
-            // 429 — pause polling 60 seconds then resume
             _pollingTimer?.Stop();
             lblLastUpdate.Text = "Rate limited — resuming in 60s...";
             await Task.Delay(60000);
@@ -328,10 +356,16 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            // Other errors — stop polling
             StopPolling();
             MessageBox.Show($"Polling stopped due to error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void DgvQuotes_CellClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
+        var strike = dgvQuotes.Rows[e.RowIndex].Cells["colStrikePrice"].Value?.ToString();
+        // StrikePrice button clicked — functionality to be added later
     }
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
@@ -358,20 +392,7 @@ public partial class Form1 : Form
 
         try
         {
-            var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
-            var quotes = await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate);
-
-            foreach (var q in quotes)
-            {
-                dgvQuotes.Rows.Add(
-                    q.OptionType.ToString(),
-                    q.Symbol,
-                    q.SpotPrice.ToString("F2"),
-                    q.StrikePrice.ToString("F2"),
-                    q.Bid.ToString("F2"),
-                    q.Ask.ToString("F2"),
-                    q.ExpirationDate.ToString("yyyy-MM-dd"));
-            }
+            await FetchAndUpdateQuotesAsync();
         }
         catch (Exception ex)
         {
