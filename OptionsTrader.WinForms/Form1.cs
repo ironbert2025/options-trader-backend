@@ -12,6 +12,7 @@ public partial class Form1 : Form
     private bool _isPolling;
 
     private TickerEntry? _selectedTicker;
+    private decimal _lastSpotPrice;
 
     public Form1()
     {
@@ -291,6 +292,7 @@ public partial class Form1 : Form
         {
             var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
             var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
+            _lastSpotPrice = allQuotes.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 
             // Parse range from ticker settings
             decimal.TryParse(_selectedTicker.Low,  out var rangeLow);
@@ -432,33 +434,70 @@ public partial class Form1 : Form
         var tBid     = Math.Round(ask * (1 + targetPct / 100m), 2);
         var entryStr = ask.ToString("F2");
 
+        var now = DateTime.Now.ToString("HH:mm:ss");
         dgvTrades.Rows.Add(
-            DateTime.Now.ToString("HH:mm:ss"),
-            rowType,
-            strike,
-            bid.ToString("F2"),
-            ask.ToString("F2"),
-            contracts,
-            entryStr,          // EntryPrice
-            bid.ToString("F2"), // C_Bid (current)
-            tBid.ToString("F2"), // T_Bid
-            "0.00",            // PnL
-            "0.00",            // PnL_Percent
-            targetPct.ToString("F0"), // PnL_Target
-            string.Empty,      // ExitTime
-            "Close");          // Close button text
+            now, rowType, strike,
+            bid.ToString("F2"), ask.ToString("F2"), contracts,
+            entryStr, bid.ToString("F2"), tBid.ToString("F2"),
+            "0.00", "0.00", targetPct.ToString("F0"),
+            string.Empty, "Close");
+
+        // Store entry time on the row tag for duration calc
+        dgvTrades.Rows[dgvTrades.Rows.Count - 1].Tag = DateTime.Now;
+
+        // Logger
+        var level = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
+        LogLine($"{now} Trade Manual ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
+        LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
+        LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
     }
 
     private void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
         var row = dgvTrades.Rows[e.RowIndex];
-        if (row.Cells["colTradeExitTime"].Value?.ToString() == string.Empty || row.Cells["colTradeExitTime"].Value == null)
-        {
-            row.Cells["colTradeExitTime"].Value = DateTime.Now.ToString("HH:mm:ss");
-            row.Cells["colTradeClose"].Value = "Closed";
-            row.DefaultCellStyle.ForeColor = Color.Gray;
-        }
+        if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return;
+
+        CloseTradeRow(row, "MANUAL");
+    }
+
+    private void CloseTradeRow(DataGridViewRow row, string closeType)
+    {
+        var now      = DateTime.Now;
+        var nowStr   = now.ToString("HH:mm:ss");
+        var type     = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
+        var strike   = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
+        var cBid     = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
+        var pnl      = row.Cells["colTradePnL"].Value?.ToString() ?? string.Empty;
+        var pnlPct   = row.Cells["colTradePnLPercent"].Value?.ToString() ?? string.Empty;
+        var spotPrice = _lastSpotPrice > 0 ? _lastSpotPrice.ToString("F2") : string.Empty;
+
+        // Duration
+        var duration = TimeSpan.Zero;
+        if (row.Tag is DateTime entryTime)
+            duration = now - entryTime;
+
+        row.Cells["colTradeExitTime"].Value = nowStr;
+        row.Cells["colTradeClose"].Value    = "Closed";
+        row.DefaultCellStyle.ForeColor      = Color.Gray;
+
+        // Logger
+        decimal.TryParse(pnl, out var pnlVal);
+        var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
+
+        LogLine(string.Empty, Color.White);
+        LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}", Color.White);
+        LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
+        LogLine($"{nowStr} Duration: {duration:hh\\:mm\\:ss}", Color.White);
+    }
+
+    private void LogLine(string text, Color color)
+    {
+        rtbLogger.SelectionStart  = rtbLogger.TextLength;
+        rtbLogger.SelectionLength = 0;
+        rtbLogger.SelectionColor  = color;
+        rtbLogger.AppendText(text + Environment.NewLine);
+        rtbLogger.ScrollToCaret();
     }
 
     private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
