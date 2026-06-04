@@ -1,3 +1,4 @@
+using OptionsTrader.Application.DTOs.Options;
 using OptionsTrader.Infrastructure.Schwab;
 
 namespace OptionsTrader.WinForms;
@@ -136,6 +137,16 @@ public partial class Form1 : Form
         clicked.Font = new Font(clicked.Font, FontStyle.Bold);
 
         _selectedTicker = clicked.Tag as TickerEntry;
+    }
+
+    private void TradeRadioButton_CheckedChanged(object? sender, EventArgs e)
+    {
+        rbNoTrade.ForeColor = rbNoTrade.Checked ? Color.DarkOrange : SystemColors.ControlText;
+        rbNoTrade.Font = new Font(rbNoTrade.Font, rbNoTrade.Checked ? FontStyle.Bold : FontStyle.Regular);
+        rbTrade.ForeColor = rbTrade.Checked ? Color.Green : SystemColors.ControlText;
+        rbTrade.Font = new Font(rbTrade.Font, rbTrade.Checked ? FontStyle.Bold : FontStyle.Regular);
+        rbTradeTarget.ForeColor = rbTradeTarget.Checked ? Color.Green : SystemColors.ControlText;
+        rbTradeTarget.Font = new Font(rbTradeTarget.Font, rbTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
     }
 
     private void LoadBalance()
@@ -347,6 +358,11 @@ public partial class Form1 : Form
                 var callMap = otmCalls.ToDictionary(q => q.StrikePrice);
                 var putMap  = otmPuts.ToDictionary(q => q.StrikePrice);
 
+                // Update PnL for open trades
+                var callMapForTrades = otmCalls.ToDictionary(q => ("CALL", q.StrikePrice));
+                var putMapForTrades  = otmPuts.ToDictionary(q => ("PUT", q.StrikePrice));
+                UpdateTradesPnL(callMapForTrades, putMapForTrades);
+
                 foreach (DataGridViewRow row in dgvQuotes.Rows)
                 {
                     if (!decimal.TryParse(row.Cells["colStrikePrice"].Value?.ToString(), out var strike)) continue;
@@ -386,8 +402,98 @@ public partial class Form1 : Form
     private void DgvQuotes_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
-        var strike = dgvQuotes.Rows[e.RowIndex].Cells["colStrikePrice"].Value?.ToString();
-        // StrikePrice button clicked — functionality to be added later
+        if (rbNoTrade.Checked)
+            OpenSimulatedTrade(e.RowIndex);
+        // Trade / Trade-Target: real order — coming soon
+    }
+
+    private void OpenSimulatedTrade(int rowIndex)
+    {
+        var row      = dgvQuotes.Rows[rowIndex];
+        var rowType  = row.Tag?.ToString() ?? "CALL";
+        var strike   = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
+        var contracts = row.Cells["colContracts"].Value?.ToString() ?? "0";
+
+        decimal bid, ask;
+        if (rowType == "CALL")
+        {
+            decimal.TryParse(row.Cells["colCallBid"].Value?.ToString(), out bid);
+            decimal.TryParse(row.Cells["colCallAsk"].Value?.ToString(), out ask);
+        }
+        else
+        {
+            decimal.TryParse(row.Cells["colPutBid"].Value?.ToString(), out bid);
+            decimal.TryParse(row.Cells["colPutAsk"].Value?.ToString(), out ask);
+        }
+
+        if (ask <= 0) return;
+
+        decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
+        var tBid     = Math.Round(ask * (1 + targetPct / 100m), 2);
+        var entryStr = ask.ToString("F2");
+
+        dgvTrades.Rows.Add(
+            DateTime.Now.ToString("HH:mm:ss"),
+            rowType,
+            strike,
+            bid.ToString("F2"),
+            ask.ToString("F2"),
+            contracts,
+            entryStr,          // EntryPrice
+            bid.ToString("F2"), // C_Bid (current)
+            tBid.ToString("F2"), // T_Bid
+            "0.00",            // PnL
+            "0.00",            // PnL_Percent
+            targetPct.ToString("F0"), // PnL_Target
+            string.Empty,      // ExitTime
+            "Close");          // Close button text
+    }
+
+    private void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
+        var row = dgvTrades.Rows[e.RowIndex];
+        if (row.Cells["colTradeExitTime"].Value?.ToString() == string.Empty || row.Cells["colTradeExitTime"].Value == null)
+        {
+            row.Cells["colTradeExitTime"].Value = DateTime.Now.ToString("HH:mm:ss");
+            row.Cells["colTradeClose"].Value = "Closed";
+            row.DefaultCellStyle.ForeColor = Color.Gray;
+        }
+    }
+
+    private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
+                                  Dictionary<(string, decimal), OptionQuoteDto> putMap)
+    {
+        foreach (DataGridViewRow row in dgvTrades.Rows)
+        {
+            // Skip closed trades
+            if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) continue;
+
+            var type = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
+            if (!decimal.TryParse(row.Cells["colTradeStrike"].Value?.ToString(), out var strike)) continue;
+            if (!decimal.TryParse(row.Cells["colTradeEntryPrice"].Value?.ToString(), out var entryPrice)) continue;
+            if (!decimal.TryParse(row.Cells["colTradeContracts"].Value?.ToString(), out var contracts)) continue;
+
+            var key = (type, strike);
+            decimal currentBid = 0;
+
+            if (type == "CALL" && callMap.TryGetValue(key, out var callQ))
+                currentBid = callQ.Bid;
+            else if (type == "PUT" && putMap.TryGetValue(key, out var putQ))
+                currentBid = putQ.Bid;
+            else continue;
+
+            var pnl        = Math.Round((currentBid - entryPrice) * contracts * 100, 2);
+            var pnlPct     = entryPrice > 0 ? Math.Round((currentBid - entryPrice) / entryPrice * 100, 1) : 0;
+
+            row.Cells["colTradeCBid"].Value      = currentBid.ToString("F2");
+            row.Cells["colTradePnL"].Value        = pnl.ToString("F2");
+            row.Cells["colTradePnLPercent"].Value = pnlPct.ToString("F1");
+
+            // Color PnL
+            row.Cells["colTradePnL"].Style.ForeColor        = pnl >= 0 ? Color.Green : Color.Red;
+            row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
+        }
     }
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
