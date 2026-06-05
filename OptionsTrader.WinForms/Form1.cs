@@ -13,10 +13,12 @@ public partial class Form1 : Form
 
     private TickerEntry? _selectedTicker;
     private decimal _lastSpotPrice;
+    private CsvLogger? _csvLogger;
 
     public Form1()
     {
         InitializeComponent();
+        FormClosing += (s, e) => { _csvLogger?.Dispose(); };
         LoadBrokerSelection();
         LoadTickers();
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
@@ -228,6 +230,14 @@ public partial class Form1 : Form
         btnStartPolling.Text = "Stop Polling";
         btnStartPolling.BackColor = Color.DarkRed;
 
+        // Open CSV logger if enabled
+        if (chkSaveToCsv.Checked && _selectedTicker != null)
+        {
+            var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
+            _csvLogger = new CsvLogger();
+            _csvLogger.Open(_selectedTicker.Symbol, DateOnly.FromDateTime(DateTime.Today), expDate);
+        }
+
         if (MarketHours.IsOpen)
         {
             StartPollingTimer();
@@ -277,6 +287,9 @@ public partial class Form1 : Form
         _marketOpenTimer = null;
         btnStartPolling.Text = "Start Polling";
         btnStartPolling.BackColor = Color.DarkGreen;
+
+        _csvLogger?.Close();
+        _csvLogger = null;
     }
 
     private async Task FetchAndUpdateQuotesAsync()
@@ -293,6 +306,10 @@ public partial class Form1 : Form
             var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
             var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
             _lastSpotPrice = allQuotes.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
+
+            // Append to CSV if logging is enabled
+            if (chkSaveToCsv.Checked)
+                _csvLogger?.AppendRows(allQuotes);
 
             // Parse range from ticker settings
             decimal.TryParse(_selectedTicker.Low,  out var rangeLow);
