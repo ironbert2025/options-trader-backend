@@ -440,6 +440,13 @@ public partial class Form1 : Form
         if (e.RowIndex < 0) return;
         var row = dgvQuotes.Rows[e.RowIndex];
 
+        // StrikePrice button: light gray background only on rows with a value
+        if (e.ColumnIndex == dgvQuotes.Columns["colStrikePrice"].Index)
+        {
+            var val = e.Value?.ToString();
+            e.CellStyle.BackColor = !string.IsNullOrEmpty(val) ? Color.LightGray : dgvQuotes.DefaultCellStyle.BackColor;
+        }
+
         var callSprdCol = dgvQuotes.Columns["colCallSprd"].Index;
         var putSprdCol  = dgvQuotes.Columns["colPutSprd"].Index;
         var callBidCol  = dgvQuotes.Columns["colCallBid"].Index;

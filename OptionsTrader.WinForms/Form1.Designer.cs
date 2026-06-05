@@ -319,28 +319,28 @@ partial class Form1
         colRange.HeaderText = "Range";
         colRange.Name = "colRange";
         colRange.ReadOnly = true;
-        colRange.Width = 80;
+        colRange.Width = 72;
         // 
         // colCallSprd
         // 
         colCallSprd.HeaderText = "Sprd";
         colCallSprd.Name = "colCallSprd";
         colCallSprd.ReadOnly = true;
-        colCallSprd.Width = 55;
+        colCallSprd.Width = 33;
         // 
         // colCallBid
         // 
         colCallBid.HeaderText = "Bid";
         colCallBid.Name = "colCallBid";
         colCallBid.ReadOnly = true;
-        colCallBid.Width = 65;
+        colCallBid.Width = 33;
         // 
         // colCallAsk
         // 
         colCallAsk.HeaderText = "Ask";
         colCallAsk.Name = "colCallAsk";
         colCallAsk.ReadOnly = true;
-        colCallAsk.Width = 65;
+        colCallAsk.Width = 33;
         // 
         // colStrikePrice
         // 
@@ -361,35 +361,35 @@ partial class Form1
         colPutBid.HeaderText = "Bid";
         colPutBid.Name = "colPutBid";
         colPutBid.ReadOnly = true;
-        colPutBid.Width = 65;
+        colPutBid.Width = 33;
         // 
         // colPutAsk
         // 
         colPutAsk.HeaderText = "Ask";
         colPutAsk.Name = "colPutAsk";
         colPutAsk.ReadOnly = true;
-        colPutAsk.Width = 65;
+        colPutAsk.Width = 33;
         // 
         // colPutSprd
         // 
         colPutSprd.HeaderText = "Sprd";
         colPutSprd.Name = "colPutSprd";
         colPutSprd.ReadOnly = true;
-        colPutSprd.Width = 55;
+        colPutSprd.Width = 33;
         // 
         // colContracts
         // 
-        colContracts.HeaderText = "Contracts";
+        colContracts.HeaderText = "Conts";
         colContracts.Name = "colContracts";
         colContracts.ReadOnly = true;
-        colContracts.Width = 75;
+        colContracts.Width = 53;
         // 
         // colLevel
         // 
         colLevel.HeaderText = "Level";
         colLevel.Name = "colLevel";
         colLevel.ReadOnly = true;
-        colLevel.Width = 60;
+        colLevel.Width = 45;
         // 
         // lblCallHeader
         // 
