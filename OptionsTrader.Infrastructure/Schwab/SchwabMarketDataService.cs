@@ -92,7 +92,9 @@ public class SchwabMarketDataService : ISchwabMarketDataService
                         Bid = contract.GetProperty("bid").GetDecimal(),
                         Ask = contract.GetProperty("ask").GetDecimal(),
                         ExpirationDate = expiration,
-                        InTheMoney = contract.TryGetProperty("inTheMoney", out var itm) && itm.GetBoolean()
+                        InTheMoney     = contract.TryGetProperty("inTheMoney", out var itm) && itm.GetBoolean(),
+                        IntrinsicValue = contract.TryGetProperty("intrinsicValue", out var iv)  ? iv.GetDecimal()  : 0m,
+                        ExtrinsicValue = contract.TryGetProperty("extrinsicValue", out var ev)  ? ev.GetDecimal()  : 0m
                     };
                 }
             }

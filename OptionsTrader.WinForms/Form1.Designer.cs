@@ -52,6 +52,7 @@ partial class Form1
         lblCallHeader = new Label();
         lblPutHeader = new Label();
         chkStopAt11 = new CheckBox();
+        chkSaveToCsv = new CheckBox();
         btnFetchQuotes = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
@@ -127,6 +128,7 @@ partial class Form1
         tabQuotes.Controls.Add(grpLogger);
         tabQuotes.Controls.Add(grpTrades);
         tabQuotes.Controls.Add(grpOptionsChain);
+        tabQuotes.Controls.Add(chkSaveToCsv);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblExpDate);
@@ -419,7 +421,17 @@ partial class Form1
         chkStopAt11.Size = new Size(115, 19);
         chkStopAt11.TabIndex = 3;
         chkStopAt11.Text = "Stop at 11:00 AM";
-        // 
+        //
+        // chkSaveToCsv
+        //
+        chkSaveToCsv.AutoSize = true;
+        chkSaveToCsv.Checked = true;
+        chkSaveToCsv.CheckState = CheckState.Checked;
+        chkSaveToCsv.Location = new Point(900, 70);
+        chkSaveToCsv.Size = new Size(100, 19);
+        chkSaveToCsv.Name = "chkSaveToCsv";
+        chkSaveToCsv.Text = "Save to CSV";
+        //
         // btnFetchQuotes
         // 
         btnFetchQuotes.Location = new Point(630, 22);
@@ -860,6 +872,7 @@ partial class Form1
     private Label lblCallHeader;
     private Label lblPutHeader;
     private CheckBox chkStopAt11;
+    private CheckBox chkSaveToCsv;
     private GroupBox grpTrade;
     private RadioButton rbNoTrade;
     private RadioButton rbTrade;
