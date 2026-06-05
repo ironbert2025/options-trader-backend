@@ -427,7 +427,7 @@ partial class Form1
         chkSaveToCsv.AutoSize = true;
         chkSaveToCsv.Checked = true;
         chkSaveToCsv.CheckState = CheckState.Checked;
-        chkSaveToCsv.Location = new Point(760, 100);
+        chkSaveToCsv.Location = new Point(900, 70);
         chkSaveToCsv.Size = new Size(100, 19);
         chkSaveToCsv.Name = "chkSaveToCsv";
         chkSaveToCsv.Text = "Save to CSV";
