@@ -15,7 +15,21 @@ public class TradeRepository(AppDbContext db) : ITradeRepository
     public Task<bool> ExistsForDateAsync(DateOnly date) =>
         db.Trades.AnyAsync(t => t.TradeDate == date);
 
+    public async Task<int> NextDailyTradeNumberAsync(DateOnly date)
+    {
+        var max = await db.Trades
+            .Where(t => t.TradeDate == date)
+            .MaxAsync(t => (int?)t.DailyTradeNumber) ?? 0;
+        return max + 1;
+    }
+
     public async Task AddAsync(Trade trade) => await db.Trades.AddAsync(trade);
+
+    public Task UpdateAsync(Trade trade)
+    {
+        db.Trades.Update(trade);
+        return Task.CompletedTask;
+    }
 
     public Task SaveChangesAsync() => db.SaveChangesAsync();
 }

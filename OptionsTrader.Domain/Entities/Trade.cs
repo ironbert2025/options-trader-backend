@@ -5,6 +5,7 @@ namespace OptionsTrader.Domain.Entities;
 public class Trade
 {
     public int Id { get; set; }
+    public int DailyTradeNumber { get; set; }
     public string Symbol { get; set; } = string.Empty;
     public OptionType OptionType { get; set; }
     public decimal StrikePrice { get; set; }

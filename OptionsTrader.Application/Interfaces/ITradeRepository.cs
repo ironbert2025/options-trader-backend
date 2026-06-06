@@ -7,6 +7,8 @@ public interface ITradeRepository
     Task<Trade?> GetByIdAsync(int id);
     Task<IEnumerable<Trade>> GetAllAsync();
     Task<bool> ExistsForDateAsync(DateOnly date);
+    Task<int> NextDailyTradeNumberAsync(DateOnly date);
     Task AddAsync(Trade trade);
+    Task UpdateAsync(Trade trade);
     Task SaveChangesAsync();
 }

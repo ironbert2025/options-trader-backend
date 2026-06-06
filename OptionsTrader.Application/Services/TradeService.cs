@@ -21,19 +21,20 @@ public class TradeService(ITradeRepository trades)
 
     public async Task<TradeDto> CreateAsync(CreateTradeDto dto)
     {
-        if (await trades.ExistsForDateAsync(DateOnly.FromDateTime(DateTime.Today)))
-            throw new InvalidOperationException("A trade already exists for today.");
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var dailyNumber = await trades.NextDailyTradeNumberAsync(today);
 
         var trade = new Trade
         {
-            Symbol = dto.Symbol,
-            OptionType = dto.OptionType,
-            StrikePrice = dto.StrikePrice,
-            SpotPrice = dto.SpotPrice,
-            ExpirationDate = dto.ExpirationDate,
-            EntryPrice = dto.EntryPrice,
-            TradeDate = DateOnly.FromDateTime(DateTime.Today),
-            Broker = dto.Broker
+            DailyTradeNumber = dailyNumber,
+            Symbol           = dto.Symbol,
+            OptionType       = dto.OptionType,
+            StrikePrice      = dto.StrikePrice,
+            SpotPrice        = dto.SpotPrice,
+            ExpirationDate   = dto.ExpirationDate,
+            EntryPrice       = dto.EntryPrice,
+            TradeDate        = today,
+            Broker           = dto.Broker
         };
 
         await trades.AddAsync(trade);
@@ -41,25 +42,38 @@ public class TradeService(ITradeRepository trades)
         return MapToDto(trade);
     }
 
+    public async Task<TradeDto> CloseAsync(int id, CloseTradeDto dto)
+    {
+        var trade = await trades.GetByIdAsync(id)
+            ?? throw new KeyNotFoundException($"Trade {id} not found.");
+
+        trade.ExitPrice = dto.ExitPrice;
+
+        await trades.UpdateAsync(trade);
+        await trades.SaveChangesAsync();
+        return MapToDto(trade);
+    }
+
     private static TradeDto MapToDto(Trade trade) => new()
     {
-        Id = trade.Id,
-        Symbol = trade.Symbol,
-        OptionType = trade.OptionType,
-        StrikePrice = trade.StrikePrice,
-        SpotPrice = trade.SpotPrice,
-        ExpirationDate = trade.ExpirationDate,
-        EntryPrice = trade.EntryPrice,
-        ExitPrice = trade.ExitPrice,
-        TradeDate = trade.TradeDate,
-        Broker = trade.Broker,
-        Screenshots = trade.Screenshots.Select(s => new ScreenshotDto
+        Id               = trade.Id,
+        DailyTradeNumber = trade.DailyTradeNumber,
+        Symbol           = trade.Symbol,
+        OptionType       = trade.OptionType,
+        StrikePrice      = trade.StrikePrice,
+        SpotPrice        = trade.SpotPrice,
+        ExpirationDate   = trade.ExpirationDate,
+        EntryPrice       = trade.EntryPrice,
+        ExitPrice        = trade.ExitPrice,
+        TradeDate        = trade.TradeDate,
+        Broker           = trade.Broker,
+        Screenshots      = trade.Screenshots.Select(s => new ScreenshotDto
         {
-            Id = s.Id,
-            TradeId = s.TradeId,
-            S3Url = s.S3Url,
+            Id         = s.Id,
+            TradeId    = s.TradeId,
+            S3Url      = s.S3Url,
             CapturedAt = s.CapturedAt,
-            Symbol = s.Symbol
+            Symbol     = s.Symbol
         })
     };
 }

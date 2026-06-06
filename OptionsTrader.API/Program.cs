@@ -1,3 +1,4 @@
+using Amazon.S3;
 using Microsoft.EntityFrameworkCore;
 using OptionsTrader.Application.Interfaces;
 using OptionsTrader.Application.Services;
@@ -17,7 +18,12 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<ITradeRepository, TradeRepository>();
 builder.Services.AddScoped<IScreenshotRepository, ScreenshotRepository>();
 builder.Services.AddScoped<IBrokerSettingRepository, BrokerSettingRepository>();
-builder.Services.AddScoped<IScreenshotStorage, S3ScreenshotStorage>();
+var awsOptions = builder.Configuration.GetAWSOptions();
+builder.Services.AddDefaultAWSOptions(awsOptions);
+builder.Services.AddAWSService<IAmazonS3>();
+var s3Bucket = builder.Configuration["AWS:BucketName"] ?? "options-trader-screenshots";
+builder.Services.AddScoped<IScreenshotStorage>(sp =>
+    new S3ScreenshotStorage(sp.GetRequiredService<IAmazonS3>(), s3Bucket));
 builder.Services.AddScoped<TradeService>();
 builder.Services.AddScoped<ScreenshotService>();
 
