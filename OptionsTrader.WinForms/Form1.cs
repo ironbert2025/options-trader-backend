@@ -542,6 +542,10 @@ public partial class Form1 : Form
         LogLine($"{now} Trade Manual ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
+        System.Windows.Forms.Application.DoEvents();
+
+        var entryPath = CaptureScreenshot(_selectedTicker?.Symbol ?? "UNK", rowType, "entry");
+        LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
     }
 
     private void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
@@ -581,6 +585,28 @@ public partial class Form1 : Form
         LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}", Color.White);
         LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
         LogLine($"{nowStr} Duration: {duration:hh\\:mm\\:ss}", Color.White);
+        System.Windows.Forms.Application.DoEvents();
+
+        var exitPath = CaptureScreenshot(_selectedTicker?.Symbol ?? "UNK", type, "exit");
+        LogLine($"{nowStr} Screenshot: {exitPath}", Color.DimGray);
+    }
+
+    private static string CaptureScreenshot(string symbol, string optionType, string tag)
+    {
+        var folder = Path.Combine(@"C:\Screenshots", DateTime.Now.ToString("yyyyMMdd"));
+        Directory.CreateDirectory(folder);
+
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var fileName  = $"{symbol}_{optionType}_{timestamp}_{tag}.png";
+        var filePath  = Path.Combine(folder, fileName);
+
+        var bounds = Screen.PrimaryScreen!.Bounds;
+        using var bmp = new Bitmap(bounds.Width, bounds.Height);
+        using var g   = Graphics.FromImage(bmp);
+        g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+        bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+
+        return filePath;
     }
 
     private void LogLine(string text, Color color)
