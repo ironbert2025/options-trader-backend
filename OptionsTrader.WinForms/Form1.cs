@@ -14,7 +14,7 @@ public partial class Form1 : Form
     private readonly SchwabAuthService _schwabAuth = new(new HttpClient());
     private readonly HttpClient _marketHttpClient = new();
     private readonly HttpClient _apiHttpClient    = new();
-    private const string ApiBaseUrl = "http://localhost:5000/api";
+    private const string ApiBaseUrl = "http://3.133.58.172:5000/api";
     private System.Windows.Forms.Timer? _pollingTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
     private bool _isPolling;
