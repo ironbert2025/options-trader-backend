@@ -25,4 +25,18 @@ public class TradesController(TradeService tradeService) : ControllerBase
         var trade = await tradeService.CreateAsync(dto);
         return CreatedAtAction(nameof(GetById), new { id = trade.Id }, trade);
     }
+
+    [HttpPatch("{id:int}/close")]
+    public async Task<IActionResult> Close(int id, CloseTradeDto dto)
+    {
+        try
+        {
+            var trade = await tradeService.CloseAsync(id, dto);
+            return Ok(trade);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
 }

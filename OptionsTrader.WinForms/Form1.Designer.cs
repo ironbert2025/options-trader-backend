@@ -93,6 +93,17 @@ partial class Form1
         txtApiSecret = new TextBox();
         btnSaveCredentials = new Button();
         lblCredentialsSaved = new Label();
+        grpAwsSettings = new GroupBox();
+        lblAwsAccessKey = new Label();
+        txtAwsAccessKey = new TextBox();
+        lblAwsSecretKey = new Label();
+        txtAwsSecretKey = new TextBox();
+        lblAwsBucket = new Label();
+        txtAwsBucket = new TextBox();
+        lblAwsRegion = new Label();
+        txtAwsRegion = new TextBox();
+        btnSaveAwsSettings = new Button();
+        lblAwsSaved = new Label();
         tabControl.SuspendLayout();
         tabQuotes.SuspendLayout();
         grpLogger.SuspendLayout();
@@ -110,6 +121,7 @@ partial class Form1
         grpPositionSize.SuspendLayout();
         grpTarget.SuspendLayout();
         grpSchwabCredentials.SuspendLayout();
+        grpAwsSettings.SuspendLayout();
         SuspendLayout();
         // 
         // tabControl
@@ -570,6 +582,7 @@ partial class Form1
         tabSettings.Controls.Add(grpPositionSize);
         tabSettings.Controls.Add(grpTarget);
         tabSettings.Controls.Add(grpSchwabCredentials);
+        tabSettings.Controls.Add(grpAwsSettings);
         tabSettings.Location = new Point(4, 24);
         tabSettings.Name = "tabSettings";
         tabSettings.Padding = new Padding(8);
@@ -818,9 +831,110 @@ partial class Form1
         lblCredentialsSaved.TabIndex = 5;
         lblCredentialsSaved.Text = "Credentials Saved";
         lblCredentialsSaved.Visible = false;
-        // 
+        //
+        // grpAwsSettings
+        //
+        grpAwsSettings.Controls.Add(lblAwsAccessKey);
+        grpAwsSettings.Controls.Add(txtAwsAccessKey);
+        grpAwsSettings.Controls.Add(lblAwsSecretKey);
+        grpAwsSettings.Controls.Add(txtAwsSecretKey);
+        grpAwsSettings.Controls.Add(lblAwsBucket);
+        grpAwsSettings.Controls.Add(txtAwsBucket);
+        grpAwsSettings.Controls.Add(lblAwsRegion);
+        grpAwsSettings.Controls.Add(txtAwsRegion);
+        grpAwsSettings.Controls.Add(btnSaveAwsSettings);
+        grpAwsSettings.Controls.Add(lblAwsSaved);
+        grpAwsSettings.Location = new Point(8, 315);
+        grpAwsSettings.Name = "grpAwsSettings";
+        grpAwsSettings.Size = new Size(507, 155);
+        grpAwsSettings.TabIndex = 5;
+        grpAwsSettings.TabStop = false;
+        grpAwsSettings.Text = "AWS S3 Settings";
+        //
+        // lblAwsAccessKey
+        //
+        lblAwsAccessKey.Location = new Point(12, 24);
+        lblAwsAccessKey.Name = "lblAwsAccessKey";
+        lblAwsAccessKey.Size = new Size(75, 20);
+        lblAwsAccessKey.TabIndex = 0;
+        lblAwsAccessKey.Text = "Access Key:";
+        //
+        // txtAwsAccessKey
+        //
+        txtAwsAccessKey.Location = new Point(90, 22);
+        txtAwsAccessKey.Name = "txtAwsAccessKey";
+        txtAwsAccessKey.Size = new Size(400, 23);
+        txtAwsAccessKey.TabIndex = 1;
+        //
+        // lblAwsSecretKey
+        //
+        lblAwsSecretKey.Location = new Point(12, 54);
+        lblAwsSecretKey.Name = "lblAwsSecretKey";
+        lblAwsSecretKey.Size = new Size(75, 20);
+        lblAwsSecretKey.TabIndex = 2;
+        lblAwsSecretKey.Text = "Secret Key:";
+        //
+        // txtAwsSecretKey
+        //
+        txtAwsSecretKey.Location = new Point(90, 52);
+        txtAwsSecretKey.Name = "txtAwsSecretKey";
+        txtAwsSecretKey.Size = new Size(400, 23);
+        txtAwsSecretKey.TabIndex = 3;
+        txtAwsSecretKey.UseSystemPasswordChar = true;
+        //
+        // lblAwsBucket
+        //
+        lblAwsBucket.Location = new Point(12, 84);
+        lblAwsBucket.Name = "lblAwsBucket";
+        lblAwsBucket.Size = new Size(75, 20);
+        lblAwsBucket.TabIndex = 4;
+        lblAwsBucket.Text = "Bucket:";
+        //
+        // txtAwsBucket
+        //
+        txtAwsBucket.Location = new Point(90, 82);
+        txtAwsBucket.Name = "txtAwsBucket";
+        txtAwsBucket.Size = new Size(190, 23);
+        txtAwsBucket.TabIndex = 5;
+        //
+        // lblAwsRegion
+        //
+        lblAwsRegion.Location = new Point(290, 84);
+        lblAwsRegion.Name = "lblAwsRegion";
+        lblAwsRegion.Size = new Size(50, 20);
+        lblAwsRegion.TabIndex = 6;
+        lblAwsRegion.Text = "Region:";
+        //
+        // txtAwsRegion
+        //
+        txtAwsRegion.Location = new Point(345, 82);
+        txtAwsRegion.Name = "txtAwsRegion";
+        txtAwsRegion.Size = new Size(145, 23);
+        txtAwsRegion.TabIndex = 7;
+        //
+        // btnSaveAwsSettings
+        //
+        btnSaveAwsSettings.Location = new Point(415, 115);
+        btnSaveAwsSettings.Name = "btnSaveAwsSettings";
+        btnSaveAwsSettings.Size = new Size(80, 23);
+        btnSaveAwsSettings.TabIndex = 8;
+        btnSaveAwsSettings.Text = "Save";
+        btnSaveAwsSettings.Click += BtnSaveAwsSettings_Click;
+        //
+        // lblAwsSaved
+        //
+        lblAwsSaved.AutoSize = true;
+        lblAwsSaved.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        lblAwsSaved.ForeColor = Color.Green;
+        lblAwsSaved.Location = new Point(12, 119);
+        lblAwsSaved.Name = "lblAwsSaved";
+        lblAwsSaved.Size = new Size(110, 13);
+        lblAwsSaved.TabIndex = 9;
+        lblAwsSaved.Text = "Settings Saved";
+        lblAwsSaved.Visible = false;
+        //
         // Form1
-        // 
+        //
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
         ClientSize = new Size(1024, 600);
@@ -848,6 +962,8 @@ partial class Form1
         grpTarget.ResumeLayout(false);
         grpSchwabCredentials.ResumeLayout(false);
         grpSchwabCredentials.PerformLayout();
+        grpAwsSettings.ResumeLayout(false);
+        grpAwsSettings.PerformLayout();
         ResumeLayout(false);
     }
 
@@ -931,4 +1047,15 @@ partial class Form1
     private TextBox txtApiSecret;
     private Button btnSaveCredentials;
     private Label lblCredentialsSaved;
+    private GroupBox grpAwsSettings;
+    private Label lblAwsAccessKey;
+    private TextBox txtAwsAccessKey;
+    private Label lblAwsSecretKey;
+    private TextBox txtAwsSecretKey;
+    private Label lblAwsBucket;
+    private TextBox txtAwsBucket;
+    private Label lblAwsRegion;
+    private TextBox txtAwsRegion;
+    private Button btnSaveAwsSettings;
+    private Label lblAwsSaved;
 }

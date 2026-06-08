@@ -1,12 +1,20 @@
+using Amazon.S3;
+using Amazon.S3.Model;
 using OptionsTrader.Application.DTOs.Options;
 using OptionsTrader.Infrastructure.Schwab;
+using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace OptionsTrader.WinForms;
+
+file record TradeRowTag(int TradeId, DateTime EntryTime);
 
 public partial class Form1 : Form
 {
     private readonly SchwabAuthService _schwabAuth = new(new HttpClient());
     private readonly HttpClient _marketHttpClient = new();
+    private readonly HttpClient _apiHttpClient    = new();
+    private const string ApiBaseUrl = "http://3.133.58.172:5000/api";
     private System.Windows.Forms.Timer? _pollingTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
     private bool _isPolling;
@@ -24,6 +32,7 @@ public partial class Form1 : Form
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
         LoadSchwabCredentials();
+        LoadAwsSettings();
         LoadBalance();
         LoadTickerButtons();
     }
@@ -203,6 +212,34 @@ public partial class Form1 : Form
         txtApiKey.Clear();
         txtApiSecret.Clear();
         lblCredentialsSaved.Visible = true;
+    }
+
+    private void LoadAwsSettings()
+    {
+        var aws = AwsSettingsStore.Load();
+        var hasCreds = !string.IsNullOrEmpty(aws.AccessKey);
+        lblAwsSaved.Visible = hasCreds;
+        txtAwsBucket.Text = aws.BucketName;
+        txtAwsRegion.Text = aws.Region;
+    }
+
+    private void BtnSaveAwsSettings_Click(object? sender, EventArgs e)
+    {
+        var accessKey = txtAwsAccessKey.Text.Trim();
+        var secretKey = txtAwsSecretKey.Text.Trim();
+        var bucket    = txtAwsBucket.Text.Trim();
+        var region    = txtAwsRegion.Text.Trim();
+
+        if (string.IsNullOrEmpty(accessKey) || string.IsNullOrEmpty(secretKey))
+        {
+            MessageBox.Show("Please enter Access Key and Secret Key.", "Missing Fields", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        AwsSettingsStore.Save(new AwsSettings(accessKey, secretKey, bucket, region));
+        txtAwsAccessKey.Clear();
+        txtAwsSecretKey.Clear();
+        lblAwsSaved.Visible = true;
     }
 
     private void BtnStartPolling_Click(object? sender, EventArgs e)
@@ -495,12 +532,13 @@ public partial class Form1 : Form
         // Trade / Trade-Target: real order — coming soon
     }
 
-    private void OpenSimulatedTrade(int rowIndex)
+    private async void OpenSimulatedTrade(int rowIndex)
     {
-        var row      = dgvQuotes.Rows[rowIndex];
-        var rowType  = row.Tag?.ToString() ?? "CALL";
-        var strike   = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
+        var row       = dgvQuotes.Rows[rowIndex];
+        var rowType   = row.Tag?.ToString() ?? "CALL";
+        var strike    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
         var contracts = row.Cells["colContracts"].Value?.ToString() ?? "0";
+        var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
         decimal bid, ask;
         if (rowType == "CALL")
@@ -519,8 +557,9 @@ public partial class Form1 : Form
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var tBid     = Math.Round(ask * (1 + targetPct / 100m), 2);
         var entryStr = ask.ToString("F2");
+        var entryTime = DateTime.Now;
+        var now      = entryTime.ToString("HH:mm:ss");
 
-        var now = DateTime.Now.ToString("HH:mm:ss");
         dgvTrades.Rows.Add(
             now, rowType, strike,
             bid.ToString("F2"), ask.ToString("F2"), contracts,
@@ -528,9 +567,7 @@ public partial class Form1 : Form
             "0.00", "0.00", targetPct.ToString("F0"),
             string.Empty, "Close");
 
-        // Store entry time on the row tag for duration calc
         var newRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-        newRow.Tag = DateTime.Now;
 
         // Color static cells
         newRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
@@ -544,34 +581,44 @@ public partial class Form1 : Form
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
         System.Windows.Forms.Application.DoEvents();
 
-        var entryPath = CaptureScreenshot(_selectedTicker?.Symbol ?? "UNK", rowType, "entry");
+        // Save trade to API
+        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask);
+        newRow.Tag = new TradeRowTag(tradeId, entryTime);
+
+        // Screenshot entry
+        var entryPath = CaptureScreenshot(symbol, rowType, "entry");
         LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
+        _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
     }
 
-    private void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
+    private async void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
         var row = dgvTrades.Rows[e.RowIndex];
         if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return;
 
-        CloseTradeRow(row, "MANUAL");
+        await CloseTradeRowAsync(row, "MANUAL");
     }
 
-    private void CloseTradeRow(DataGridViewRow row, string closeType)
+    private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType)
     {
-        var now      = DateTime.Now;
-        var nowStr   = now.ToString("HH:mm:ss");
-        var type     = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
-        var strike   = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
-        var cBid     = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
-        var pnl      = row.Cells["colTradePnL"].Value?.ToString() ?? string.Empty;
-        var pnlPct   = row.Cells["colTradePnLPercent"].Value?.ToString() ?? string.Empty;
+        var now       = DateTime.Now;
+        var nowStr    = now.ToString("HH:mm:ss");
+        var type      = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
+        var strike    = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
+        var cBid      = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
+        var pnl       = row.Cells["colTradePnL"].Value?.ToString() ?? string.Empty;
+        var pnlPct    = row.Cells["colTradePnLPercent"].Value?.ToString() ?? string.Empty;
         var spotPrice = _lastSpotPrice > 0 ? _lastSpotPrice.ToString("F2") : string.Empty;
+        var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
-        // Duration
         var duration = TimeSpan.Zero;
-        if (row.Tag is DateTime entryTime)
-            duration = now - entryTime;
+        int tradeId  = 0;
+        if (row.Tag is TradeRowTag tag)
+        {
+            duration = now - tag.EntryTime;
+            tradeId  = tag.TradeId;
+        }
 
         row.Cells["colTradeExitTime"].Value = nowStr;
         row.Cells["colTradeClose"].Value    = "Closed";
@@ -587,8 +634,17 @@ public partial class Form1 : Form
         LogLine($"{nowStr} Duration: {duration:hh\\:mm\\:ss}", Color.White);
         System.Windows.Forms.Application.DoEvents();
 
-        var exitPath = CaptureScreenshot(_selectedTicker?.Symbol ?? "UNK", type, "exit");
+        // Close trade in API
+        if (tradeId > 0)
+        {
+            decimal.TryParse(cBid, out var exitPrice);
+            await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, duration);
+        }
+
+        // Screenshot exit
+        var exitPath = CaptureScreenshot(symbol, type, "exit");
         LogLine($"{nowStr} Screenshot: {exitPath}", Color.DimGray);
+        _ = UploadScreenshotAsync(exitPath, symbol, type, tradeId, nowStr);
     }
 
     private static string CaptureScreenshot(string symbol, string optionType, string tag)
@@ -607,6 +663,107 @@ public partial class Form1 : Form
         bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
 
         return filePath;
+    }
+
+    private async Task<int> SaveTradeToApiAsync(string symbol, string rowType, string strike, decimal ask)
+    {
+        try
+        {
+            var ticker = _selectedTicker!;
+            var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
+            var optionType = rowType == "CALL"
+                ? OptionsTrader.Domain.Enums.OptionType.Call
+                : OptionsTrader.Domain.Enums.OptionType.Put;
+
+            var payload = new
+            {
+                Symbol         = symbol,
+                OptionType     = (int)optionType,
+                StrikePrice    = decimal.Parse(strike),
+                SpotPrice      = _lastSpotPrice,
+                ExpirationDate = expDate.ToString("yyyy-MM-dd"),
+                EntryPrice     = ask,
+                Broker         = 0
+            };
+
+            var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/trades", payload);
+            var json = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                this.Invoke(() => LogLine($"API Error {(int)response.StatusCode}: {json}", Color.Red));
+                return 0;
+            }
+
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.GetProperty("id").GetInt32();
+        }
+        catch (Exception ex)
+        {
+            this.Invoke(() => LogLine($"API Exception: {ex.Message}", Color.Red));
+            return 0;
+        }
+    }
+
+    private async Task CloseTradeInApiAsync(int tradeId, decimal exitPrice, decimal pnl, TimeSpan duration)
+    {
+        try
+        {
+            var payload = new
+            {
+                ExitPrice  = exitPrice,
+                PnL        = pnl,
+                PnLPercent = 0m,
+                Duration   = duration
+            };
+            await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
+        }
+        catch { }
+    }
+
+    private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr)
+    {
+        try
+        {
+            var aws = AwsSettingsStore.Load();
+            if (string.IsNullOrEmpty(aws.AccessKey)) return;
+
+            var s3Client = new AmazonS3Client(
+                aws.AccessKey, aws.SecretKey,
+                Amazon.RegionEndpoint.GetBySystemName(aws.Region));
+
+            var folder    = DateTime.Now.ToString("yyyyMMdd");
+            var fileName  = Path.GetFileName(localPath);
+            var s3Key     = $"screenshots/{folder}/{fileName}";
+
+            using var stream = File.OpenRead(localPath);
+            await s3Client.PutObjectAsync(new PutObjectRequest
+            {
+                BucketName  = aws.BucketName,
+                Key         = s3Key,
+                InputStream = stream,
+                ContentType = "image/png"
+            });
+
+            var s3Url = $"https://{aws.BucketName}.s3.amazonaws.com/{s3Key}";
+
+            if (tradeId > 0)
+            {
+                var payload = new { TradeId = tradeId, Symbol = symbol, S3Url = s3Url };
+                var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/screenshots", payload);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var err = await response.Content.ReadAsStringAsync();
+                    this.Invoke(() => LogLine($"Screenshot API Error {(int)response.StatusCode}: {err}", Color.Red));
+                }
+            }
+
+            this.Invoke(() => LogLine($"{timeStr} Uploaded: {s3Url}", Color.DimGray));
+        }
+        catch (Exception ex)
+        {
+            this.Invoke(() => LogLine($"{timeStr} S3 upload failed: {ex.Message}", Color.Red));
+        }
     }
 
     private void LogLine(string text, Color color)

@@ -1,3 +1,4 @@
+using Amazon.S3;
 using Microsoft.EntityFrameworkCore;
 using OptionsTrader.Application.Interfaces;
 using OptionsTrader.Application.Services;
@@ -17,7 +18,18 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<ITradeRepository, TradeRepository>();
 builder.Services.AddScoped<IScreenshotRepository, ScreenshotRepository>();
 builder.Services.AddScoped<IBrokerSettingRepository, BrokerSettingRepository>();
-builder.Services.AddScoped<IScreenshotStorage, S3ScreenshotStorage>();
+var awsAccessKey = builder.Configuration["AWS:AccessKey"] ?? string.Empty;
+var awsSecretKey = builder.Configuration["AWS:SecretKey"] ?? string.Empty;
+var awsRegion    = builder.Configuration["AWS:Region"]    ?? "us-east-2";
+var s3Bucket     = builder.Configuration["AWS:BucketName"] ?? "options-trader-screenshots";
+
+var s3Client = new AmazonS3Client(
+    awsAccessKey, awsSecretKey,
+    Amazon.RegionEndpoint.GetBySystemName(awsRegion));
+
+builder.Services.AddSingleton<IAmazonS3>(s3Client);
+builder.Services.AddScoped<IScreenshotStorage>(sp =>
+    new S3ScreenshotStorage(sp.GetRequiredService<IAmazonS3>(), s3Bucket));
 builder.Services.AddScoped<TradeService>();
 builder.Services.AddScoped<ScreenshotService>();
 
@@ -27,6 +39,12 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+}
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();
 }
 
 app.UseHttpsRedirection();
