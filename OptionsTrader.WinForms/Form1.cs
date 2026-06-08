@@ -19,6 +19,12 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _marketOpenTimer;
     private bool _isPolling;
 
+    // Screen coordinates capture state
+    private TextBox? _coordsTarget1;
+    private TextBox? _coordsTarget2;
+    private int      _coordsClickCount;
+    private System.Windows.Forms.Timer? _coordsCaptureTimer;
+
     private TickerEntry? _selectedTicker;
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
@@ -33,6 +39,7 @@ public partial class Form1 : Form
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
         LoadSchwabCredentials();
         LoadAwsSettings();
+        LoadScreenCoords();
         LoadBalance();
         LoadTickerButtons();
     }
@@ -656,13 +663,157 @@ public partial class Form1 : Form
         var fileName  = $"{symbol}_{optionType}_{timestamp}_{tag}.png";
         var filePath  = Path.Combine(folder, fileName);
 
-        var bounds = Screen.PrimaryScreen!.Bounds;
-        using var bmp = new Bitmap(bounds.Width, bounds.Height);
+        var captureRect = GetCaptureRect(symbol);
+        using var bmp = new Bitmap(captureRect.Width, captureRect.Height);
         using var g   = Graphics.FromImage(bmp);
-        g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+        g.CopyFromScreen(new Point(captureRect.X, captureRect.Y), Point.Empty, captureRect.Size);
         bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
 
         return filePath;
+    }
+
+    private static Rectangle GetCaptureRect(string symbol)
+    {
+        var coords = ScreenCoordsStore.Load();
+        TickerCoords? tc = symbol.ToUpperInvariant() switch
+        {
+            "AAPL" => coords.AAPL,
+            "TSLA" => coords.TSLA,
+            "SPY"  => coords.SPY,
+            "QQQ"  => coords.QQQ,
+            _      => null
+        };
+
+        if (tc is not null &&
+            !string.IsNullOrWhiteSpace(tc.Coords1) &&
+            !string.IsNullOrWhiteSpace(tc.Coords2))
+        {
+            var parts1 = tc.Coords1.Split(',');
+            var parts2 = tc.Coords2.Split(',');
+            if (parts1.Length == 2 && parts2.Length == 2 &&
+                int.TryParse(parts1[0].Trim(), out int x1) &&
+                int.TryParse(parts1[1].Trim(), out int y1) &&
+                int.TryParse(parts2[0].Trim(), out int x2) &&
+                int.TryParse(parts2[1].Trim(), out int y2))
+            {
+                int width  = Math.Abs(x2 - x1);
+                int height = Math.Abs(y2 - y1);
+                if (width > 0 && height > 0)
+                    return new Rectangle(Math.Min(x1, x2), Math.Min(y1, y2), width, height);
+            }
+        }
+
+        // Fallback: full primary screen
+        return Screen.PrimaryScreen!.Bounds;
+    }
+
+    private void LoadScreenCoords()
+    {
+        var c = ScreenCoordsStore.Load();
+        txtCoords1AAPL.Text = c.AAPL.Coords1; txtCoords2AAPL.Text = c.AAPL.Coords2;
+        txtCoords1TSLA.Text = c.TSLA.Coords1; txtCoords2TSLA.Text = c.TSLA.Coords2;
+        txtCoords1SPY.Text  = c.SPY.Coords1;  txtCoords2SPY.Text  = c.SPY.Coords2;
+        txtCoords1QQQ.Text  = c.QQQ.Coords1;  txtCoords2QQQ.Text  = c.QQQ.Coords2;
+    }
+
+    private void BtnSaveCoords_Click(object? sender, EventArgs e)
+    {
+        ScreenCoordsStore.Save(new ScreenCoords(
+            new TickerCoords(txtCoords1AAPL.Text, txtCoords2AAPL.Text),
+            new TickerCoords(txtCoords1TSLA.Text, txtCoords2TSLA.Text),
+            new TickerCoords(txtCoords1SPY.Text,  txtCoords2SPY.Text),
+            new TickerCoords(txtCoords1QQQ.Text,  txtCoords2QQQ.Text)));
+
+        MessageBox.Show("Coordinates saved.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void BtnResetCoords_Click(object? sender, EventArgs e)
+    {
+        txtCoords1AAPL.Text = txtCoords2AAPL.Text = string.Empty;
+        txtCoords1TSLA.Text = txtCoords2TSLA.Text = string.Empty;
+        txtCoords1SPY.Text  = txtCoords2SPY.Text  = string.Empty;
+        txtCoords1QQQ.Text  = txtCoords2QQQ.Text  = string.Empty;
+        ScreenCoordsStore.Save(ScreenCoordsStore.Load() with
+        {
+            AAPL = new TickerCoords(string.Empty, string.Empty),
+            TSLA = new TickerCoords(string.Empty, string.Empty),
+            SPY  = new TickerCoords(string.Empty, string.Empty),
+            QQQ  = new TickerCoords(string.Empty, string.Empty)
+        });
+    }
+
+    private void BtnCoords_Click(object? sender, EventArgs e)
+    {
+        if (sender is not Button btn) return;
+
+        // Map button to its two textboxes
+        (TextBox t1, TextBox t2) = btn.Name switch
+        {
+            "btnCoordsAAPL" => (txtCoords1AAPL, txtCoords2AAPL),
+            "btnCoordsTSLA" => (txtCoords1TSLA, txtCoords2TSLA),
+            "btnCoordsSPY"  => (txtCoords1SPY,  txtCoords2SPY),
+            "btnCoordsQQQ"  => (txtCoords1QQQ,  txtCoords2QQQ),
+            _               => (txtCoords1AAPL, txtCoords2AAPL)
+        };
+
+        _coordsTarget1    = t1;
+        _coordsTarget2    = t2;
+        _coordsClickCount = 0;
+
+        // Change cursor to crosshair to indicate capture mode
+        this.Cursor = Cursors.Cross;
+
+        // Poll mouse clicks via timer every 50ms
+        _coordsCaptureTimer?.Stop();
+        _coordsCaptureTimer = new System.Windows.Forms.Timer { Interval = 50 };
+        _coordsCaptureTimer.Tick += CoordsCaptureTick;
+        _coordsCaptureTimer.Start();
+
+        btn.BackColor = Color.Yellow;
+        btn.Text = btn.Text + " ...";
+        _coordsCaptureTimer.Tag = btn;
+    }
+
+    private void CoordsCaptureTick(object? sender, EventArgs e)
+    {
+        if ((Control.MouseButtons & MouseButtons.Left) == 0) return;
+
+        var pos = Control.MousePosition;
+
+        if (_coordsClickCount == 0)
+        {
+            _coordsTarget1!.Text = $"{pos.X},{pos.Y}";
+            _coordsClickCount = 1;
+        }
+        else
+        {
+            _coordsTarget2!.Text = $"{pos.X},{pos.Y}";
+            StopCoordsCapture();
+        }
+
+        // Wait for mouse release before detecting next click
+        while ((Control.MouseButtons & MouseButtons.Left) != 0)
+            System.Windows.Forms.Application.DoEvents();
+    }
+
+    private void StopCoordsCapture()
+    {
+        _coordsCaptureTimer?.Stop();
+        _coordsCaptureTimer = null;
+        this.Cursor = Cursors.Default;
+
+        if (_coordsCaptureTimer?.Tag is Button btn)
+        {
+            btn.BackColor = SystemColors.Control;
+            btn.Text = btn.Text.Replace(" ...", string.Empty);
+        }
+
+        // Reset all buttons appearance
+        foreach (var b in new[] { btnCoordsAAPL, btnCoordsTSLA, btnCoordsSPY, btnCoordsQQQ })
+        {
+            b.BackColor = SystemColors.Control;
+            b.Text = b.Text.Replace(" ...", string.Empty);
+        }
     }
 
     private async Task<int> SaveTradeToApiAsync(string symbol, string rowType, string strike, decimal ask)
