@@ -687,14 +687,20 @@ public partial class Form1 : Form
             };
 
             var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/trades", payload);
-            if (!response.IsSuccessStatusCode) return 0;
-
             var json = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                this.Invoke(() => LogLine($"API Error {(int)response.StatusCode}: {json}", Color.Red));
+                return 0;
+            }
+
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             return doc.RootElement.GetProperty("id").GetInt32();
         }
-        catch
+        catch (Exception ex)
         {
+            this.Invoke(() => LogLine($"API Exception: {ex.Message}", Color.Red));
             return 0;
         }
     }
@@ -744,7 +750,12 @@ public partial class Form1 : Form
             if (tradeId > 0)
             {
                 var payload = new { TradeId = tradeId, Symbol = symbol, S3Url = s3Url };
-                await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/screenshots", payload);
+                var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/screenshots", payload);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var err = await response.Content.ReadAsStringAsync();
+                    this.Invoke(() => LogLine($"Screenshot API Error {(int)response.StatusCode}: {err}", Color.Red));
+                }
             }
 
             this.Invoke(() => LogLine($"{timeStr} Uploaded: {s3Url}", Color.DimGray));

@@ -18,10 +18,16 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<ITradeRepository, TradeRepository>();
 builder.Services.AddScoped<IScreenshotRepository, ScreenshotRepository>();
 builder.Services.AddScoped<IBrokerSettingRepository, BrokerSettingRepository>();
-var awsOptions = builder.Configuration.GetAWSOptions();
-builder.Services.AddDefaultAWSOptions(awsOptions);
-builder.Services.AddAWSService<IAmazonS3>();
-var s3Bucket = builder.Configuration["AWS:BucketName"] ?? "options-trader-screenshots";
+var awsAccessKey = builder.Configuration["AWS:AccessKey"] ?? string.Empty;
+var awsSecretKey = builder.Configuration["AWS:SecretKey"] ?? string.Empty;
+var awsRegion    = builder.Configuration["AWS:Region"]    ?? "us-east-2";
+var s3Bucket     = builder.Configuration["AWS:BucketName"] ?? "options-trader-screenshots";
+
+var s3Client = new AmazonS3Client(
+    awsAccessKey, awsSecretKey,
+    Amazon.RegionEndpoint.GetBySystemName(awsRegion));
+
+builder.Services.AddSingleton<IAmazonS3>(s3Client);
 builder.Services.AddScoped<IScreenshotStorage>(sp =>
     new S3ScreenshotStorage(sp.GetRequiredService<IAmazonS3>(), s3Bucket));
 builder.Services.AddScoped<TradeService>();

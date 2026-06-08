@@ -24,5 +24,9 @@ public class ScreenshotsController(ScreenshotService screenshotService) : Contro
         {
             return BadRequest(ex.Message);
         }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ex.Message);
+        }
     }
 }
