@@ -164,6 +164,79 @@ public partial class Form1 : Form
         clicked.Font = new Font(clicked.Font, FontStyle.Bold);
 
         _selectedTicker = clicked.Tag as TickerEntry;
+
+        RestoreOpenTrades(_selectedTicker?.Symbol ?? string.Empty);
+    }
+
+    private void RestoreOpenTrades(string symbol)
+    {
+        if (string.IsNullOrEmpty(symbol)) return;
+
+        var saved = OpenTradesStore.Load()
+            .Where(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (saved.Count == 0) return;
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        foreach (var t in saved)
+        {
+            // Check if already visible in the Trades DGV (avoid duplicates)
+            bool alreadyShown = dgvTrades.Rows
+                .Cast<DataGridViewRow>()
+                .Any(r => r.Tag is TradeRowTag tag && tag.TradeId == t.TradeId);
+            if (alreadyShown) continue;
+
+            if (t.ExpirationDate < today)
+            {
+                // Expired — close with Bid = 0
+                var entryTime = t.EntryTime;
+                var now       = DateTime.Now;
+                var duration  = now - entryTime;
+                var pnl       = Math.Round((0m - t.EntryPrice) * decimal.Parse(t.Contracts) * 100, 2);
+                var pnlPct    = t.EntryPrice > 0 ? Math.Round(pnl / (t.EntryPrice * decimal.Parse(t.Contracts) * 100) * 100, 1) : 0m;
+
+                dgvTrades.Rows.Add(
+                    t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
+                    string.Empty, t.EntryPrice.ToString("F2"), t.Contracts,
+                    t.EntryPrice.ToString("F2"), "0.00", string.Empty,
+                    pnl.ToString("F2"), pnlPct.ToString("F1"), t.PnlTarget,
+                    now.ToString("HH:mm:ss"), "Closed");
+
+                var expiredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
+                expiredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime);
+                expiredRow.DefaultCellStyle.ForeColor = Color.Gray;
+                expiredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
+
+                LogLine($"{now:HH:mm:ss} Restored EXPIRED trade ({t.OptionType}) Strike: {t.StrikePrice}  Closed with Bid=0  PnL: {pnl:F2}", Color.Gray);
+
+                OpenTradesStore.Remove(t.TradeId);
+                if (t.TradeId > 0)
+                    _ = CloseTradeInApiAsync(t.TradeId, 0m, pnl, duration);
+            }
+            else
+            {
+                // Still valid — restore as open trade
+                decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
+                var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m), 2);
+
+                dgvTrades.Rows.Add(
+                    t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
+                    string.Empty, t.EntryPrice.ToString("F2"), t.Contracts,
+                    t.EntryPrice.ToString("F2"), t.EntryPrice.ToString("F2"), tBid.ToString("F2"),
+                    "0.00", "0.00", t.PnlTarget,
+                    string.Empty, "Close");
+
+                var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime);
+                restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
+                restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+                restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
+
+                LogLine($"{DateTime.Now:HH:mm:ss} Restored open trade ({t.OptionType}) Strike: {t.StrikePrice}  Entry: {t.EntryPrice:F2}  Contracts: {t.Contracts}", Color.Cyan);
+            }
+        }
     }
 
     private void TradeRadioButton_CheckedChanged(object? sender, EventArgs e)
@@ -401,76 +474,44 @@ public partial class Form1 : Form
             // Calculate position size
             var positionSize = GetPositionSize();
 
-            if (dgvQuotes.Rows.Count == 0)
-            {
-                // First load — one row per CALL (descending), then one row per PUT (descending)
-                for (int i = 0; i < otmCalls.Count; i++)
-                {
-                    var call      = otmCalls[i];
-                    var sprd      = FormatSprd(call.Ask - call.Bid);
-                    var contracts = GetContractsValue(call.Ask);
-                    var levelIdx  = allOtmCallStrikes.IndexOf(call.StrikePrice);
-                    var level     = (levelIdx + 1).ToString();
-                    dgvQuotes.Rows.Add(
-                        _selectedTicker.Symbol, rangeText,
-                        sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
-                        call.SpotPrice.ToString("F2"),
-                        call.StrikePrice.ToString("F2"),
-                        string.Empty, string.Empty, string.Empty,
-                        contracts, level);
-                    dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
-                }
+            // Update PnL for open trades before rebuilding
+            var callMapForTrades = otmCalls.ToDictionary(q => ("CALL", q.StrikePrice));
+            var putMapForTrades  = otmPuts.ToDictionary(q => ("PUT", q.StrikePrice));
+            UpdateTradesPnL(callMapForTrades, putMapForTrades);
 
-                for (int i = 0; i < otmPuts.Count; i++)
-                {
-                    var put       = otmPuts[i];
-                    var sprd      = FormatSprd(put.Ask - put.Bid);
-                    var contracts = GetContractsValue(put.Ask);
-                    var levelIdx  = allOtmPutStrikes.IndexOf(put.StrikePrice);
-                    var level     = (levelIdx + 1).ToString();
-                    dgvQuotes.Rows.Add(
-                        _selectedTicker.Symbol, rangeText,
-                        string.Empty, string.Empty, string.Empty,
-                        put.SpotPrice.ToString("F2"),
-                        put.StrikePrice.ToString("F2"),
-                        put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
-                        contracts, level);
-                    dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "PUT";
-                }
+            // Always rebuild rows so strikes that move ITM/OTM are reflected immediately
+            dgvQuotes.Rows.Clear();
+
+            foreach (var call in otmCalls)
+            {
+                var sprd      = FormatSprd(call.Ask - call.Bid);
+                var contracts = GetContractsValue(call.Ask);
+                var levelIdx  = allOtmCallStrikes.IndexOf(call.StrikePrice);
+                var level     = (levelIdx + 1).ToString();
+                dgvQuotes.Rows.Add(
+                    _selectedTicker.Symbol, rangeText,
+                    sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
+                    call.SpotPrice.ToString("F2"),
+                    call.StrikePrice.ToString("F2"),
+                    string.Empty, string.Empty, string.Empty,
+                    contracts, level);
+                dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
             }
-            else
+
+            foreach (var put in otmPuts)
             {
-                // Subsequent loads — update Bid/Ask/Sprd and Contracts by strike and type
-                var callMap = otmCalls.ToDictionary(q => q.StrikePrice);
-                var putMap  = otmPuts.ToDictionary(q => q.StrikePrice);
-
-                // Update PnL for open trades
-                var callMapForTrades = otmCalls.ToDictionary(q => ("CALL", q.StrikePrice));
-                var putMapForTrades  = otmPuts.ToDictionary(q => ("PUT", q.StrikePrice));
-                UpdateTradesPnL(callMapForTrades, putMapForTrades);
-
-                foreach (DataGridViewRow row in dgvQuotes.Rows)
-                {
-                    if (!decimal.TryParse(row.Cells["colStrikePrice"].Value?.ToString(), out var strike)) continue;
-                    var rowType = row.Tag?.ToString();
-
-                    if (rowType == "CALL" && callMap.TryGetValue(strike, out var call))
-                    {
-                        row.Cells["colSpotPrice"].Value = call.SpotPrice.ToString("F2");
-                        row.Cells["colCallBid"].Value   = call.Bid.ToString("F2");
-                        row.Cells["colCallAsk"].Value   = call.Ask.ToString("F2");
-                        row.Cells["colCallSprd"].Value  = FormatSprd(call.Ask - call.Bid);
-                        row.Cells["colContracts"].Value = GetContractsValue(call.Ask);
-                    }
-                    else if (rowType == "PUT" && putMap.TryGetValue(strike, out var put))
-                    {
-                        row.Cells["colSpotPrice"].Value = put.SpotPrice.ToString("F2");
-                        row.Cells["colPutBid"].Value    = put.Bid.ToString("F2");
-                        row.Cells["colPutAsk"].Value    = put.Ask.ToString("F2");
-                        row.Cells["colPutSprd"].Value   = FormatSprd(put.Ask - put.Bid);
-                        row.Cells["colContracts"].Value = GetContractsValue(put.Ask);
-                    }
-                }
+                var sprd      = FormatSprd(put.Ask - put.Bid);
+                var contracts = GetContractsValue(put.Ask);
+                var levelIdx  = allOtmPutStrikes.IndexOf(put.StrikePrice);
+                var level     = (levelIdx + 1).ToString();
+                dgvQuotes.Rows.Add(
+                    _selectedTicker.Symbol, rangeText,
+                    string.Empty, string.Empty, string.Empty,
+                    put.SpotPrice.ToString("F2"),
+                    put.StrikePrice.ToString("F2"),
+                    put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
+                    contracts, level);
+                dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "PUT";
             }
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -626,6 +667,20 @@ public partial class Form1 : Form
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask);
         newRow.Tag = new TradeRowTag(tradeId, entryTime);
 
+        // Persist trade locally so it survives a program restart
+        var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
+        OpenTradesStore.Add(new PersistedTrade(
+            TradeId:        tradeId,
+            Symbol:         symbol,
+            OptionType:     rowType,
+            StrikePrice:    strike,
+            EntryPrice:     ask,
+            Contracts:      contracts,
+            EntryTime:      entryTime,
+            ExpirationDate: expDate,
+            Level:          level,
+            PnlTarget:      targetPct.ToString("F0")));
+
         // Screenshot entry
         var entryPath = CaptureScreenshot(symbol, rowType, "entry");
         LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
@@ -674,6 +729,10 @@ public partial class Form1 : Form
         LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
         LogLine($"{nowStr} Duration: {duration:hh\\:mm\\:ss}", Color.White);
         System.Windows.Forms.Application.DoEvents();
+
+        // Remove from local persistence
+        if (tradeId > 0)
+            OpenTradesStore.Remove(tradeId);
 
         // Close trade in API
         if (tradeId > 0)
