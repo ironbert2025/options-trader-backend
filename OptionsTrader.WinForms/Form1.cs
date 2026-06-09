@@ -484,12 +484,7 @@ public partial class Form1 : Form
         if (e.RowIndex < 0) return;
         var row = dgvQuotes.Rows[e.RowIndex];
 
-        // StrikePrice button: light gray background only on rows with a value
-        if (e.ColumnIndex == dgvQuotes.Columns["colStrikePrice"].Index)
-        {
-            var val = e.Value?.ToString();
-            e.CellStyle.BackColor = !string.IsNullOrEmpty(val) ? Color.LightGray : dgvQuotes.DefaultCellStyle.BackColor;
-        }
+        // StrikePrice coloring is handled in DgvQuotes_CellPainting
 
         var callSprdCol = dgvQuotes.Columns["colCallSprd"].Index;
         var putSprdCol  = dgvQuotes.Columns["colPutSprd"].Index;
@@ -529,6 +524,37 @@ public partial class Form1 : Form
             else
                 e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
         }
+    }
+
+    private void DgvQuotes_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        if (e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
+
+        var val     = e.Value?.ToString();
+        var rowType = dgvQuotes.Rows[e.RowIndex].Tag?.ToString();
+
+        // Paint default background
+        e.PaintBackground(e.ClipBounds, true);
+
+        if (!string.IsNullOrEmpty(val))
+        {
+            var btnColor = rowType == "PUT" ? Color.Red : Color.DarkGreen;
+            var btnRect  = Rectangle.Inflate(e.CellBounds, -3, -3);
+
+            using var fillBrush = new SolidBrush(btnColor);
+            using var borderPen = new Pen(ControlPaint.Dark(btnColor, 0.2f));
+            using var textFont  = new Font(dgvQuotes.Font, FontStyle.Bold);
+
+            e.Graphics!.FillRectangle(fillBrush, btnRect);
+            e.Graphics.DrawRectangle(borderPen, btnRect);
+
+            TextRenderer.DrawText(
+                e.Graphics, val, textFont, btnRect, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+        }
+
+        e.Handled = true;
     }
 
     private void DgvQuotes_CellClick(object? sender, DataGridViewCellEventArgs e)
