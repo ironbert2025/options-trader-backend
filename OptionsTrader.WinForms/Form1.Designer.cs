@@ -66,6 +66,14 @@ partial class Form1
         rbNoTrade = new RadioButton();
         rbTrade = new RadioButton();
         rbTradeTarget = new RadioButton();
+        grpContracts = new GroupBox();
+        rbContracts1 = new RadioButton();
+        rbContracts2 = new RadioButton();
+        rbContracts3 = new RadioButton();
+        rbContracts4 = new RadioButton();
+        rbContracts5 = new RadioButton();
+        rbContracts6 = new RadioButton();
+        rbContractsPositionSize = new RadioButton();
         tabSettings = new TabPage();
         grpBroker = new GroupBox();
         rbSchwab = new RadioButton();
@@ -129,6 +137,7 @@ partial class Form1
         grpBalance.SuspendLayout();
         grpTickerButtons.SuspendLayout();
         grpTrade.SuspendLayout();
+        grpContracts.SuspendLayout();
         tabSettings.SuspendLayout();
         grpBroker.SuspendLayout();
         grpTickers.SuspendLayout();
@@ -164,6 +173,7 @@ partial class Form1
         tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Controls.Add(grpTickerButtons);
         tabQuotes.Controls.Add(grpTrade);
+        tabQuotes.Controls.Add(grpContracts);
         tabQuotes.Location = new Point(4, 24);
         tabQuotes.Name = "tabQuotes";
         tabQuotes.Padding = new Padding(8);
@@ -334,6 +344,7 @@ partial class Form1
         dgvQuotes.TabIndex = 0;
         dgvQuotes.CellClick += DgvQuotes_CellClick;
         dgvQuotes.CellFormatting += DgvQuotes_CellFormatting;
+        dgvQuotes.CellPainting += DgvQuotes_CellPainting;
         // 
         // colSymbolQ
         // 
@@ -351,6 +362,7 @@ partial class Form1
         // 
         // colCallSprd
         // 
+        colCallSprd.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
         colCallSprd.HeaderText = "Sprd";
         colCallSprd.Name = "colCallSprd";
         colCallSprd.ReadOnly = true;
@@ -373,6 +385,7 @@ partial class Form1
         // colStrikePrice
         // 
         colStrikePrice.FlatStyle = FlatStyle.Flat;
+        colSpotPrice.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
         colSpotPrice.HeaderText = "SpotPrice";
         colSpotPrice.Name = "colSpotPrice";
         colSpotPrice.ReadOnly = true;
@@ -400,6 +413,7 @@ partial class Form1
         // 
         // colPutSprd
         // 
+        colPutSprd.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
         colPutSprd.HeaderText = "Sprd";
         colPutSprd.Name = "colPutSprd";
         colPutSprd.ReadOnly = true;
@@ -407,6 +421,7 @@ partial class Form1
         // 
         // colContracts
         // 
+        colContracts.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
         colContracts.HeaderText = "Conts";
         colContracts.Name = "colContracts";
         colContracts.ReadOnly = true;
@@ -414,6 +429,7 @@ partial class Form1
         // 
         // colLevel
         // 
+        colLevel.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
         colLevel.HeaderText = "Level";
         colLevel.Name = "colLevel";
         colLevel.ReadOnly = true;
@@ -424,7 +440,7 @@ partial class Form1
         lblCallHeader.AutoSize = true;
         lblCallHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblCallHeader.ForeColor = Color.Green;
-        lblCallHeader.Location = new Point(130, 2);
+        lblCallHeader.Location = new Point(191, 2);
         lblCallHeader.Name = "lblCallHeader";
         lblCallHeader.Size = new Size(40, 15);
         lblCallHeader.TabIndex = 1;
@@ -435,7 +451,7 @@ partial class Form1
         lblPutHeader.AutoSize = true;
         lblPutHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblPutHeader.ForeColor = Color.Red;
-        lblPutHeader.Location = new Point(620, 2);
+        lblPutHeader.Location = new Point(415, 2);
         lblPutHeader.Name = "lblPutHeader";
         lblPutHeader.Size = new Size(34, 15);
         lblPutHeader.TabIndex = 2;
@@ -455,16 +471,16 @@ partial class Form1
         chkSaveToCsv.AutoSize = true;
         chkSaveToCsv.Checked = true;
         chkSaveToCsv.CheckState = CheckState.Checked;
-        chkSaveToCsv.Location = new Point(900, 70);
+        chkSaveToCsv.Location = new Point(630, 72);
         chkSaveToCsv.Size = new Size(100, 19);
         chkSaveToCsv.Name = "chkSaveToCsv";
         chkSaveToCsv.Text = "Save to CSV";
         //
         // btnFetchQuotes
         // 
-        btnFetchQuotes.Location = new Point(630, 22);
+        btnFetchQuotes.Location = new Point(600, 22);
         btnFetchQuotes.Name = "btnFetchQuotes";
-        btnFetchQuotes.Size = new Size(120, 26);
+        btnFetchQuotes.Size = new Size(100, 26);
         btnFetchQuotes.TabIndex = 1;
         btnFetchQuotes.Text = "Fetch Quotes";
         btnFetchQuotes.Click += BtnFetchQuotes_Click;
@@ -474,9 +490,9 @@ partial class Form1
         btnStartPolling.BackColor = Color.DarkGreen;
         btnStartPolling.FlatStyle = FlatStyle.Flat;
         btnStartPolling.ForeColor = Color.White;
-        btnStartPolling.Location = new Point(500, 22);
+        btnStartPolling.Location = new Point(490, 22);
         btnStartPolling.Name = "btnStartPolling";
-        btnStartPolling.Size = new Size(120, 26);
+        btnStartPolling.Size = new Size(100, 26);
         btnStartPolling.TabIndex = 3;
         btnStartPolling.Text = "Start Polling";
         btnStartPolling.UseVisualStyleBackColor = false;
@@ -555,7 +571,7 @@ partial class Form1
         grpTrade.Controls.Add(rbTradeTarget);
         grpTrade.Location = new Point(760, 4);
         grpTrade.Name = "grpTrade";
-        grpTrade.Size = new Size(130, 90);
+        grpTrade.Size = new Size(110, 90);
         grpTrade.TabIndex = 7;
         grpTrade.TabStop = false;
         grpTrade.Text = "Trade";
@@ -586,11 +602,92 @@ partial class Form1
         // 
         rbTradeTarget.Location = new Point(12, 66);
         rbTradeTarget.Name = "rbTradeTarget";
-        rbTradeTarget.Size = new Size(100, 20);
+        rbTradeTarget.Size = new Size(90, 20);
         rbTradeTarget.TabIndex = 2;
         rbTradeTarget.Text = "Trade-Target";
         rbTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
-        // 
+        //
+        // grpContracts
+        //
+        grpContracts.Controls.Add(rbContracts1);
+        grpContracts.Controls.Add(rbContracts2);
+        grpContracts.Controls.Add(rbContracts3);
+        grpContracts.Controls.Add(rbContracts4);
+        grpContracts.Controls.Add(rbContracts5);
+        grpContracts.Controls.Add(rbContracts6);
+        grpContracts.Controls.Add(rbContractsPositionSize);
+        grpContracts.Location = new Point(878, 4);
+        grpContracts.Name = "grpContracts";
+        grpContracts.Size = new Size(105, 90);
+        grpContracts.TabIndex = 8;
+        grpContracts.TabStop = false;
+        grpContracts.Text = "Contracts";
+        //
+        // rbContracts1
+        //
+        rbContracts1.Checked = true;
+        rbContracts1.Location = new Point(6, 20);
+        rbContracts1.Name = "rbContracts1";
+        rbContracts1.Size = new Size(28, 18);
+        rbContracts1.TabIndex = 0;
+        rbContracts1.TabStop = true;
+        rbContracts1.Text = "1";
+        rbContracts1.CheckedChanged += ContractsRadioButton_CheckedChanged;
+        //
+        // rbContracts2
+        //
+        rbContracts2.Location = new Point(36, 20);
+        rbContracts2.Name = "rbContracts2";
+        rbContracts2.Size = new Size(28, 18);
+        rbContracts2.TabIndex = 1;
+        rbContracts2.Text = "2";
+        rbContracts2.CheckedChanged += ContractsRadioButton_CheckedChanged;
+        //
+        // rbContracts3
+        //
+        rbContracts3.Location = new Point(66, 20);
+        rbContracts3.Name = "rbContracts3";
+        rbContracts3.Size = new Size(28, 18);
+        rbContracts3.TabIndex = 2;
+        rbContracts3.Text = "3";
+        rbContracts3.CheckedChanged += ContractsRadioButton_CheckedChanged;
+        //
+        // rbContracts4
+        //
+        rbContracts4.Location = new Point(6, 42);
+        rbContracts4.Name = "rbContracts4";
+        rbContracts4.Size = new Size(28, 18);
+        rbContracts4.TabIndex = 3;
+        rbContracts4.Text = "4";
+        rbContracts4.CheckedChanged += ContractsRadioButton_CheckedChanged;
+        //
+        // rbContracts5
+        //
+        rbContracts5.Location = new Point(36, 42);
+        rbContracts5.Name = "rbContracts5";
+        rbContracts5.Size = new Size(28, 18);
+        rbContracts5.TabIndex = 4;
+        rbContracts5.Text = "5";
+        rbContracts5.CheckedChanged += ContractsRadioButton_CheckedChanged;
+        //
+        // rbContracts6
+        //
+        rbContracts6.Location = new Point(66, 42);
+        rbContracts6.Name = "rbContracts6";
+        rbContracts6.Size = new Size(28, 18);
+        rbContracts6.TabIndex = 5;
+        rbContracts6.Text = "6";
+        rbContracts6.CheckedChanged += ContractsRadioButton_CheckedChanged;
+        //
+        // rbContractsPositionSize
+        //
+        rbContractsPositionSize.Location = new Point(6, 64);
+        rbContractsPositionSize.Name = "rbContractsPositionSize";
+        rbContractsPositionSize.Size = new Size(93, 18);
+        rbContractsPositionSize.TabIndex = 6;
+        rbContractsPositionSize.Text = "PositionSize";
+        rbContractsPositionSize.CheckedChanged += ContractsRadioButton_CheckedChanged;
+        //
         // tabSettings
         // 
         tabSettings.Controls.Add(grpBroker);
@@ -1076,6 +1173,7 @@ partial class Form1
         grpBalance.PerformLayout();
         grpTickerButtons.ResumeLayout(false);
         grpTrade.ResumeLayout(false);
+        grpContracts.ResumeLayout(false);
         tabSettings.ResumeLayout(false);
         grpBroker.ResumeLayout(false);
         grpTickers.ResumeLayout(false);
@@ -1117,6 +1215,14 @@ partial class Form1
     private RadioButton rbNoTrade;
     private RadioButton rbTrade;
     private RadioButton rbTradeTarget;
+    private GroupBox grpContracts;
+    private RadioButton rbContracts1;
+    private RadioButton rbContracts2;
+    private RadioButton rbContracts3;
+    private RadioButton rbContracts4;
+    private RadioButton rbContracts5;
+    private RadioButton rbContracts6;
+    private RadioButton rbContractsPositionSize;
     private GroupBox grpOptionsChain;
     private GroupBox grpTrades;
     private GroupBox grpLogger;
