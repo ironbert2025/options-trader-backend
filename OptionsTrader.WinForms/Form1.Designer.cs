@@ -425,7 +425,7 @@ partial class Form1
         lblCallHeader.AutoSize = true;
         lblCallHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblCallHeader.ForeColor = Color.Green;
-        lblCallHeader.Location = new Point(130, 2);
+        lblCallHeader.Location = new Point(191, 2);
         lblCallHeader.Name = "lblCallHeader";
         lblCallHeader.Size = new Size(40, 15);
         lblCallHeader.TabIndex = 1;
@@ -436,7 +436,7 @@ partial class Form1
         lblPutHeader.AutoSize = true;
         lblPutHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblPutHeader.ForeColor = Color.Red;
-        lblPutHeader.Location = new Point(620, 2);
+        lblPutHeader.Location = new Point(415, 2);
         lblPutHeader.Name = "lblPutHeader";
         lblPutHeader.Size = new Size(34, 15);
         lblPutHeader.TabIndex = 2;
@@ -456,7 +456,7 @@ partial class Form1
         chkSaveToCsv.AutoSize = true;
         chkSaveToCsv.Checked = true;
         chkSaveToCsv.CheckState = CheckState.Checked;
-        chkSaveToCsv.Location = new Point(900, 70);
+        chkSaveToCsv.Location = new Point(630, 72);
         chkSaveToCsv.Size = new Size(100, 19);
         chkSaveToCsv.Name = "chkSaveToCsv";
         chkSaveToCsv.Text = "Save to CSV";
@@ -556,7 +556,7 @@ partial class Form1
         grpTrade.Controls.Add(rbTradeTarget);
         grpTrade.Location = new Point(760, 4);
         grpTrade.Name = "grpTrade";
-        grpTrade.Size = new Size(130, 90);
+        grpTrade.Size = new Size(110, 90);
         grpTrade.TabIndex = 7;
         grpTrade.TabStop = false;
         grpTrade.Text = "Trade";
@@ -587,7 +587,7 @@ partial class Form1
         // 
         rbTradeTarget.Location = new Point(12, 66);
         rbTradeTarget.Name = "rbTradeTarget";
-        rbTradeTarget.Size = new Size(100, 20);
+        rbTradeTarget.Size = new Size(90, 20);
         rbTradeTarget.TabIndex = 2;
         rbTradeTarget.Text = "Trade-Target";
         rbTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
