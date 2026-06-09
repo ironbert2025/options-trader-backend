@@ -124,16 +124,17 @@ The WinForms app communicates **directly** with Schwab API for market data — i
 ## Workflow for New Features
 
 Every time the user requests adding a feature:
-1. Create a new branch with the format `feature/feature-name`
-2. Checkout to that branch before writing any code
-3. Work on the feature in that branch
-4. When done, inform the user of the created branch name
+1. Run `git checkout main && git pull` before creating the branch.
+2. Create a new branch with the format `feature/feature-name`
+3. Checkout to that branch before writing any code
+4. Work on the feature in that branch
+5. When done, inform the user of the created branch name
 
 ## Git Rules
 
 - **Never run `git push` unless the user explicitly asks for it.**
 - Only commit when the user asks or when it makes sense to close a feature step.
-- The user handles push and PR creation on GitHub.
+- The user handles PR creation and merging on GitHub manually after Claude pushes the branch.
 
 ## Build Rules
 

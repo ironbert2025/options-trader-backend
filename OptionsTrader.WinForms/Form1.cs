@@ -37,6 +37,7 @@ public partial class Form1 : Form
         LoadTickers();
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
+        LoadRadioSelection(grpContracts, ContractsSettingsStore.Load());
         LoadSchwabCredentials();
         LoadAwsSettings();
         LoadScreenCoords();
@@ -92,6 +93,13 @@ public partial class Form1 : Form
         ApplyRadioStyle(grpTarget);
         if (sender is RadioButton { Checked: true } selected)
             TargetSettingsStore.Save(selected.Text);
+    }
+
+    private void ContractsRadioButton_CheckedChanged(object? sender, EventArgs e)
+    {
+        ApplyRadioStyle(grpContracts);
+        if (sender is RadioButton { Checked: true } selected)
+            ContractsSettingsStore.Save(selected.Text);
     }
 
     private static void ApplyRadioStyle(GroupBox group)
@@ -400,7 +408,7 @@ public partial class Form1 : Form
                 {
                     var call      = otmCalls[i];
                     var sprd      = FormatSprd(call.Ask - call.Bid);
-                    var contracts = CalcContracts(positionSize, call.Ask);
+                    var contracts = GetContractsValue(call.Ask);
                     var levelIdx  = allOtmCallStrikes.IndexOf(call.StrikePrice);
                     var level     = (levelIdx + 1).ToString();
                     dgvQuotes.Rows.Add(
@@ -417,7 +425,7 @@ public partial class Form1 : Form
                 {
                     var put       = otmPuts[i];
                     var sprd      = FormatSprd(put.Ask - put.Bid);
-                    var contracts = CalcContracts(positionSize, put.Ask);
+                    var contracts = GetContractsValue(put.Ask);
                     var levelIdx  = allOtmPutStrikes.IndexOf(put.StrikePrice);
                     var level     = (levelIdx + 1).ToString();
                     dgvQuotes.Rows.Add(
@@ -452,7 +460,7 @@ public partial class Form1 : Form
                         row.Cells["colCallBid"].Value   = call.Bid.ToString("F2");
                         row.Cells["colCallAsk"].Value   = call.Ask.ToString("F2");
                         row.Cells["colCallSprd"].Value  = FormatSprd(call.Ask - call.Bid);
-                        row.Cells["colContracts"].Value = CalcContracts(positionSize, call.Ask);
+                        row.Cells["colContracts"].Value = GetContractsValue(call.Ask);
                     }
                     else if (rowType == "PUT" && putMap.TryGetValue(strike, out var put))
                     {
@@ -460,7 +468,7 @@ public partial class Form1 : Form
                         row.Cells["colPutBid"].Value    = put.Bid.ToString("F2");
                         row.Cells["colPutAsk"].Value    = put.Ask.ToString("F2");
                         row.Cells["colPutSprd"].Value   = FormatSprd(put.Ask - put.Bid);
-                        row.Cells["colContracts"].Value = CalcContracts(positionSize, put.Ask);
+                        row.Cells["colContracts"].Value = GetContractsValue(put.Ask);
                     }
                 }
             }
@@ -1047,6 +1055,14 @@ public partial class Form1 : Form
         if (ask <= 0 || positionSize <= 0) return string.Empty;
         var contracts = Math.Round(positionSize / (ask * 100));
         return contracts > 0 ? contracts.ToString("F0") : string.Empty;
+    }
+
+    private string GetContractsValue(decimal ask)
+    {
+        var selected = ContractsSettingsStore.Load();
+        if (selected != "PositionSize" && int.TryParse(selected, out var fixedCount))
+            return fixedCount.ToString();
+        return CalcContracts(GetPositionSize(), ask);
     }
 
     private void BtnSaveTickers_Click(object? sender, EventArgs e)
