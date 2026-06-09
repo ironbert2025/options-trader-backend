@@ -686,6 +686,12 @@ public partial class Form1 : Form
         var exitPath = CaptureScreenshot(symbol, type, "exit");
         LogLine($"{nowStr} Screenshot: {exitPath}", Color.DimGray);
         _ = UploadScreenshotAsync(exitPath, symbol, type, tradeId, nowStr);
+
+        // Screenshot TradeLog (Trades + Logger section of the form)
+        await Task.Delay(100); // let UI settle
+        var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
+        LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
+        _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr);
     }
 
     private static string CaptureScreenshot(string symbol, string optionType, string tag)
@@ -701,6 +707,28 @@ public partial class Form1 : Form
         using var bmp = new Bitmap(captureRect.Width, captureRect.Height);
         using var g   = Graphics.FromImage(bmp);
         g.CopyFromScreen(new Point(captureRect.X, captureRect.Y), Point.Empty, captureRect.Size);
+        bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+
+        return filePath;
+    }
+
+    private string CaptureTradeLogScreenshot(string symbol, string optionType)
+    {
+        var folder = Path.Combine(@"C:\Screenshots", DateTime.Now.ToString("yyyyMMdd"));
+        Directory.CreateDirectory(folder);
+
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var fileName  = $"{symbol}_{optionType}_{timestamp}_TradeLog.png";
+        var filePath  = Path.Combine(folder, fileName);
+
+        // Build bounding rect that covers grpTrades + grpLogger on screen
+        var topLeft     = grpTrades.PointToScreen(Point.Empty);
+        var bottomRight = grpLogger.PointToScreen(new Point(grpLogger.Width, grpLogger.Height));
+        var rect        = Rectangle.FromLTRB(topLeft.X, topLeft.Y, bottomRight.X, bottomRight.Y);
+
+        using var bmp = new Bitmap(rect.Width, rect.Height);
+        using var g   = Graphics.FromImage(bmp);
+        g.CopyFromScreen(rect.Location, Point.Empty, rect.Size);
         bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
 
         return filePath;
