@@ -542,6 +542,7 @@ public partial class Form1 : Form
         var val     = e.Value?.ToString();
         var rowType = dgvQuotes.Rows[e.RowIndex].Tag?.ToString();
 
+        // Paint default background
         e.PaintBackground(e.ClipBounds, true);
 
         if (!string.IsNullOrEmpty(val))
