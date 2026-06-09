@@ -539,7 +539,7 @@ public partial class Form1 : Form
 
         if (!string.IsNullOrEmpty(val))
         {
-            var btnColor = rowType == "PUT" ? Color.IndianRed : Color.MediumSeaGreen;
+            var btnColor = rowType == "PUT" ? Color.Red : Color.DarkGreen;
             var btnRect  = Rectangle.Inflate(e.CellBounds, -3, -3);
 
             using var fillBrush = new SolidBrush(btnColor);
