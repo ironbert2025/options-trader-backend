@@ -2,7 +2,11 @@ using System.Text.Json;
 
 namespace OptionsTrader.WinForms;
 
-public record SchwabTokens(string AccessToken, string RefreshToken, DateTime AccessTokenExpiresAt);
+public record SchwabTokens(
+    string AccessToken,
+    string RefreshToken,
+    DateTime AccessTokenExpiresAt,
+    DateTime RefreshTokenExpiresAt);
 
 public static class SchwabTokenStore
 {

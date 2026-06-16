@@ -19,19 +19,38 @@ public class SchwabMarketDataService : ISchwabMarketDataService
     private readonly string _apiSecret;
 
     private readonly string _refreshToken;
+    private readonly Func<string, DateTime, Task> _onTokenRenewed;
 
-    public SchwabMarketDataService(HttpClient httpClient, SchwabAuthService authService, string apiKey, string apiSecret, string refreshToken)
+    // storedAccessToken and storedExpiresAt come from disk each polling cycle via WinForms
+    private string _storedAccessToken;
+    private DateTime _storedExpiresAt;
+
+    public SchwabMarketDataService(
+        HttpClient httpClient,
+        SchwabAuthService authService,
+        string apiKey,
+        string apiSecret,
+        string refreshToken,
+        string storedAccessToken,
+        DateTime storedExpiresAt,
+        Func<string, DateTime, Task> onTokenRenewed)
     {
-        _httpClient = httpClient;
-        _authService = authService;
-        _apiKey = apiKey;
-        _apiSecret = apiSecret;
-        _refreshToken = refreshToken;
+        _httpClient          = httpClient;
+        _authService         = authService;
+        _apiKey              = apiKey;
+        _apiSecret           = apiSecret;
+        _refreshToken        = refreshToken;
+        _storedAccessToken   = storedAccessToken;
+        _storedExpiresAt     = storedExpiresAt;
+        _onTokenRenewed      = onTokenRenewed;
     }
 
     public async Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly expiration)
     {
-        var token = await _authService.GetAccessTokenAsync(_apiKey, _apiSecret, _refreshToken);
+        var token = await _authService.GetAccessTokenAsync(
+            _apiKey, _apiSecret,
+            _storedAccessToken, _storedExpiresAt,
+            _refreshToken, _onTokenRenewed);
         var expirationStr = expiration.ToString("yyyy-MM-dd");
         var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={expirationStr}&toDate={expirationStr}&strikeCount={StrikePriceCount}&_t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
 

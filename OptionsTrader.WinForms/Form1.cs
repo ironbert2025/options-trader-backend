@@ -283,18 +283,53 @@ public partial class Form1 : Form
         var hasCreds = !string.IsNullOrEmpty(creds.ApiKey) && !string.IsNullOrEmpty(creds.ApiSecret);
         lblCredentialsSaved.Visible = hasCreds;
 
-        // Pre-load cached access token so we don't need a refresh on first request
+        // Wire logger so token events appear in the log panel
+        _schwabAuth.SetLogCallback(msg => Invoke(() => LogLine(msg, Color.Yellow)));
+
         var tokens = SchwabTokenStore.Load();
         if (tokens != null && !string.IsNullOrEmpty(tokens.AccessToken))
         {
-            _schwabAuth.LoadFromStore(tokens.AccessToken, tokens.AccessTokenExpiresAt);
-            lblTokenStatus.Text = "Token loaded";
+            lblTokenStatus.Text = $"Token OK — expires {tokens.AccessTokenExpiresAt.ToLocalTime():HH:mm:ss}";
             lblTokenStatus.ForeColor = Color.Green;
+
+            // Only the first ticker instance checks refresh token expiry
+            CheckRefreshTokenExpiry(tokens);
         }
         else
         {
             lblTokenStatus.Text = "No token — click Login";
             lblTokenStatus.ForeColor = Color.OrangeRed;
+        }
+    }
+
+    private bool IsPrimaryTickerInstance()
+    {
+        var tickers = TickerSettingsStore.Load();
+        if (tickers.Count == 0 || _selectedTicker == null) return false;
+        return tickers[0].Symbol == _selectedTicker.Symbol;
+    }
+
+    private void CheckRefreshTokenExpiry(SchwabTokens tokens)
+    {
+        // Only the primary (first) ticker instance shows this warning
+        if (!IsPrimaryTickerInstance()) return;
+
+        var today    = DateTime.Today;
+        var isMonday = today.DayOfWeek == DayOfWeek.Monday;
+        var expiresLocal = tokens.RefreshTokenExpiresAt.ToLocalTime();
+        var daysLeft = (expiresLocal.Date - today).TotalDays;
+
+        if (daysLeft <= 1)
+        {
+            var msg = $"{DateTime.Now:HH:mm:ss} [Token] ⚠ REFRESH TOKEN expires {expiresLocal:yyyy-MM-dd} — click Login before 9:30 AM to renew!";
+            LogLine(msg, Color.OrangeRed);
+            lblTokenStatus.Text = "Refresh token expiring — Login needed!";
+            lblTokenStatus.ForeColor = Color.OrangeRed;
+        }
+        else if (isMonday && daysLeft <= 3)
+        {
+            var msg = $"{DateTime.Now:HH:mm:ss} [Token] Refresh token expires in {(int)daysLeft} days ({expiresLocal:yyyy-MM-dd})";
+            LogLine(msg, Color.Orange);
         }
     }
 
@@ -356,8 +391,13 @@ public partial class Form1 : Form
             var (accessToken, refreshToken, expiresIn) = await _schwabAuth.ExchangeCodeAsync(
                 creds.ApiKey, creds.ApiSecret, code, "https://127.0.0.1");
 
-            var tokens = new SchwabTokens(accessToken, refreshToken, DateTime.UtcNow.AddSeconds(expiresIn - 30));
+            var tokens = new SchwabTokens(
+                accessToken,
+                refreshToken,
+                DateTime.UtcNow.AddSeconds(expiresIn - 30),
+                DateTime.UtcNow.AddDays(7));
             SchwabTokenStore.Save(tokens);
+            LogLine($"{DateTime.Now:HH:mm:ss} [Token] Refresh token saved — valid until {DateTime.Now.AddDays(7):yyyy-MM-dd}", Color.Yellow);
 
             txtResponse.Text = string.Empty;
             lblTokenStatus.Text = "Token saved successfully";
@@ -513,9 +553,31 @@ public partial class Form1 : Form
 
         try
         {
-            var tokens = SchwabTokenStore.Load();
-            var refreshToken = tokens?.RefreshToken ?? string.Empty;
-            var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret, refreshToken);
+            var tokens           = SchwabTokenStore.Load();
+            var refreshToken     = tokens?.RefreshToken ?? string.Empty;
+            var storedAccess     = tokens?.AccessToken ?? string.Empty;
+            var storedExpiresAt  = tokens?.AccessTokenExpiresAt ?? DateTime.MinValue;
+
+            async Task OnTokenRenewed(string newAccess, DateTime newExpires)
+            {
+                var current = SchwabTokenStore.Load();
+                if (current != null)
+                {
+                    var updated = current with { AccessToken = newAccess, AccessTokenExpiresAt = newExpires };
+                    SchwabTokenStore.Save(updated);
+                    Invoke(() =>
+                    {
+                        lblTokenStatus.Text = $"Token renewed — expires {newExpires.ToLocalTime():HH:mm:ss}";
+                        lblTokenStatus.ForeColor = Color.Green;
+                    });
+                }
+            }
+
+            var service = new SchwabMarketDataService(
+                _marketHttpClient, _schwabAuth,
+                creds.ApiKey, creds.ApiSecret,
+                refreshToken, storedAccess, storedExpiresAt,
+                OnTokenRenewed);
             var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
             _lastSpotPrice = allQuotes.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 
