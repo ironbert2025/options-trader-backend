@@ -116,6 +116,11 @@ partial class Form1
         txtApiSecret = new TextBox();
         btnSaveCredentials = new Button();
         lblCredentialsSaved = new Label();
+        grpRefreshToken = new GroupBox();
+        btnLogin = new Button();
+        txtResponse = new TextBox();
+        lblResponseHint = new Label();
+        lblTokenStatus = new Label();
         grpAwsSettings = new GroupBox();
         lblAwsAccessKey = new Label();
         txtAwsAccessKey = new TextBox();
@@ -146,6 +151,7 @@ partial class Form1
         grpPositionSize.SuspendLayout();
         grpTarget.SuspendLayout();
         grpSchwabCredentials.SuspendLayout();
+        grpRefreshToken.SuspendLayout();
         grpAwsSettings.SuspendLayout();
         SuspendLayout();
         // 
@@ -696,6 +702,7 @@ partial class Form1
         tabSettings.Controls.Add(grpPositionSize);
         tabSettings.Controls.Add(grpTarget);
         tabSettings.Controls.Add(grpSchwabCredentials);
+        tabSettings.Controls.Add(grpRefreshToken);
         tabSettings.Controls.Add(grpAwsSettings);
         tabSettings.Location = new Point(4, 24);
         tabSettings.Name = "tabSettings";
@@ -1051,6 +1058,54 @@ partial class Form1
         lblCredentialsSaved.Text = "Credentials Saved";
         lblCredentialsSaved.Visible = false;
         //
+        // grpRefreshToken
+        //
+        grpRefreshToken.Controls.Add(btnLogin);
+        grpRefreshToken.Controls.Add(lblResponseHint);
+        grpRefreshToken.Controls.Add(txtResponse);
+        grpRefreshToken.Controls.Add(lblTokenStatus);
+        grpRefreshToken.Location = new Point(525, 215);
+        grpRefreshToken.Name = "grpRefreshToken";
+        grpRefreshToken.Size = new Size(265, 120);
+        grpRefreshToken.TabIndex = 7;
+        grpRefreshToken.TabStop = false;
+        grpRefreshToken.Text = "Refresh Token";
+        //
+        // btnLogin
+        //
+        btnLogin.Location = new Point(10, 22);
+        btnLogin.Name = "btnLogin";
+        btnLogin.Size = new Size(75, 25);
+        btnLogin.TabIndex = 0;
+        btnLogin.Text = "Login";
+        btnLogin.Click += BtnLogin_Click;
+        //
+        // lblResponseHint
+        //
+        lblResponseHint.Location = new Point(10, 55);
+        lblResponseHint.Name = "lblResponseHint";
+        lblResponseHint.Size = new Size(245, 15);
+        lblResponseHint.Text = "Response:";
+        lblResponseHint.Font = new Font("Segoe UI", 8F);
+        //
+        // txtResponse
+        //
+        txtResponse.Location = new Point(10, 70);
+        txtResponse.Name = "txtResponse";
+        txtResponse.Size = new Size(245, 23);
+        txtResponse.TabIndex = 1;
+        txtResponse.KeyDown += TxtResponse_KeyDown;
+        //
+        // lblTokenStatus
+        //
+        lblTokenStatus.AutoSize = true;
+        lblTokenStatus.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        lblTokenStatus.ForeColor = Color.Green;
+        lblTokenStatus.Location = new Point(10, 98);
+        lblTokenStatus.Name = "lblTokenStatus";
+        lblTokenStatus.TabIndex = 2;
+        lblTokenStatus.Text = string.Empty;
+        //
         // grpAwsSettings
         //
         grpAwsSettings.Controls.Add(lblAwsAccessKey);
@@ -1184,6 +1239,8 @@ partial class Form1
         grpTarget.ResumeLayout(false);
         grpSchwabCredentials.ResumeLayout(false);
         grpSchwabCredentials.PerformLayout();
+        grpRefreshToken.ResumeLayout(false);
+        grpRefreshToken.PerformLayout();
         grpAwsSettings.ResumeLayout(false);
         grpAwsSettings.PerformLayout();
         ResumeLayout(false);
@@ -1277,6 +1334,11 @@ partial class Form1
     private TextBox txtApiSecret;
     private Button btnSaveCredentials;
     private Label lblCredentialsSaved;
+    private GroupBox grpRefreshToken;
+    private Button btnLogin;
+    private TextBox txtResponse;
+    private Label lblResponseHint;
+    private Label lblTokenStatus;
     private GroupBox grpAwsSettings;
     private Label lblAwsAccessKey;
     private TextBox txtAwsAccessKey;

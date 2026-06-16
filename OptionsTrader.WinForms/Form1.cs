@@ -282,7 +282,92 @@ public partial class Form1 : Form
         var creds = SchwabCredentialsStore.Load();
         var hasCreds = !string.IsNullOrEmpty(creds.ApiKey) && !string.IsNullOrEmpty(creds.ApiSecret);
         lblCredentialsSaved.Visible = hasCreds;
-        // Leave textboxes empty — only used when entering new credentials
+
+        // Pre-load cached access token so we don't need a refresh on first request
+        var tokens = SchwabTokenStore.Load();
+        if (tokens != null && !string.IsNullOrEmpty(tokens.AccessToken))
+        {
+            _schwabAuth.LoadFromStore(tokens.AccessToken, tokens.AccessTokenExpiresAt);
+            lblTokenStatus.Text = "Token loaded";
+            lblTokenStatus.ForeColor = Color.Green;
+        }
+        else
+        {
+            lblTokenStatus.Text = "No token — click Login";
+            lblTokenStatus.ForeColor = Color.OrangeRed;
+        }
+    }
+
+    private void BtnLogin_Click(object? sender, EventArgs e)
+    {
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey))
+        {
+            MessageBox.Show("Save your API Key first in Schwab Credentials.", "Missing API Key", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var authUrl = $"https://api.schwabapi.com/v1/oauth/authorize" +
+                      $"?response_type=code" +
+                      $"&client_id={Uri.EscapeDataString(creds.ApiKey)}" +
+                      $"&redirect_uri={Uri.EscapeDataString("https://127.0.0.1")}";
+
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(authUrl) { UseShellExecute = true });
+        lblTokenStatus.Text = "Paste the full callback URL below and press Enter";
+        lblTokenStatus.ForeColor = Color.DarkBlue;
+        txtResponse.Text = string.Empty;
+        txtResponse.Focus();
+    }
+
+    private async void TxtResponse_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode != Keys.Enter) return;
+        e.SuppressKeyPress = true;
+
+        var input = txtResponse.Text.Trim();
+        if (string.IsNullOrEmpty(input)) return;
+
+        // Extract the code from the callback URL: https://127.0.0.1?code=XXXX&session=...
+        string code;
+        try
+        {
+            var uri = new Uri(input.Contains("?") ? input : $"https://x.com?{input}");
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            code = query["code"] ?? string.Empty;
+        }
+        catch
+        {
+            code = input; // user pasted the code directly
+        }
+
+        if (string.IsNullOrEmpty(code))
+        {
+            lblTokenStatus.Text = "Could not extract code from URL";
+            lblTokenStatus.ForeColor = Color.Red;
+            return;
+        }
+
+        try
+        {
+            lblTokenStatus.Text = "Exchanging code...";
+            lblTokenStatus.ForeColor = Color.DarkBlue;
+
+            var creds = SchwabCredentialsStore.Load();
+            var (accessToken, refreshToken, expiresIn) = await _schwabAuth.ExchangeCodeAsync(
+                creds.ApiKey, creds.ApiSecret, code, "https://127.0.0.1");
+
+            var tokens = new SchwabTokens(accessToken, refreshToken, DateTime.UtcNow.AddSeconds(expiresIn - 30));
+            SchwabTokenStore.Save(tokens);
+
+            txtResponse.Text = string.Empty;
+            lblTokenStatus.Text = "Token saved successfully";
+            lblTokenStatus.ForeColor = Color.Green;
+        }
+        catch (Exception ex)
+        {
+            lblTokenStatus.Text = $"Error: {ex.Message}";
+            lblTokenStatus.ForeColor = Color.Red;
+        }
     }
 
     private void BtnSaveCredentials_Click(object? sender, EventArgs e)
@@ -428,7 +513,9 @@ public partial class Form1 : Form
 
         try
         {
-            var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret);
+            var tokens = SchwabTokenStore.Load();
+            var refreshToken = tokens?.RefreshToken ?? string.Empty;
+            var service = new SchwabMarketDataService(_marketHttpClient, _schwabAuth, creds.ApiKey, creds.ApiSecret, refreshToken);
             var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
             _lastSpotPrice = allQuotes.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 

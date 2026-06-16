@@ -18,22 +18,26 @@ public class SchwabMarketDataService : ISchwabMarketDataService
     private readonly string _apiKey;
     private readonly string _apiSecret;
 
-    public SchwabMarketDataService(HttpClient httpClient, SchwabAuthService authService, string apiKey, string apiSecret)
+    private readonly string _refreshToken;
+
+    public SchwabMarketDataService(HttpClient httpClient, SchwabAuthService authService, string apiKey, string apiSecret, string refreshToken)
     {
         _httpClient = httpClient;
         _authService = authService;
         _apiKey = apiKey;
         _apiSecret = apiSecret;
+        _refreshToken = refreshToken;
     }
 
     public async Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly expiration)
     {
-        var token = await _authService.GetAccessTokenAsync(_apiKey, _apiSecret);
+        var token = await _authService.GetAccessTokenAsync(_apiKey, _apiSecret, _refreshToken);
         var expirationStr = expiration.ToString("yyyy-MM-dd");
-        var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={expirationStr}&toDate={expirationStr}&strikeCount={StrikePriceCount}";
+        var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={expirationStr}&toDate={expirationStr}&strikeCount={StrikePriceCount}&_t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true, NoStore = true };
 
         var response = await _httpClient.SendAsync(request);
         response.EnsureSuccessStatusCode();

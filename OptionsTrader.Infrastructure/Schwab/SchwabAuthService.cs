@@ -17,7 +17,14 @@ public class SchwabAuthService
         _httpClient = httpClient;
     }
 
-    public async Task<string> GetAccessTokenAsync(string apiKey, string apiSecret)
+    // Called at startup to pre-load a cached access token from disk
+    public void LoadFromStore(string accessToken, DateTime expiresAt)
+    {
+        _accessToken = accessToken;
+        _tokenExpiresAt = expiresAt;
+    }
+
+    public async Task<string> GetAccessTokenAsync(string apiKey, string apiSecret, string refreshToken)
     {
         if (!string.IsNullOrEmpty(_accessToken) && DateTime.UtcNow < _tokenExpiresAt)
             return _accessToken;
@@ -28,7 +35,8 @@ public class SchwabAuthService
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
         request.Content = new FormUrlEncodedContent(new[]
         {
-            new KeyValuePair<string, string>("grant_type", "client_credentials")
+            new KeyValuePair<string, string>("grant_type", "refresh_token"),
+            new KeyValuePair<string, string>("refresh_token", refreshToken)
         });
 
         var response = await _httpClient.SendAsync(request);
@@ -45,5 +53,39 @@ public class SchwabAuthService
         _tokenExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn - 30);
 
         return _accessToken;
+    }
+
+    // Exchanges the one-time authorization code (from OAuth callback) for access + refresh tokens
+    public async Task<(string AccessToken, string RefreshToken, int ExpiresIn)> ExchangeCodeAsync(
+        string apiKey, string apiSecret, string code, string redirectUri)
+    {
+        var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{apiKey}:{apiSecret}"));
+
+        var request = new HttpRequestMessage(HttpMethod.Post, TokenUrl);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        request.Content = new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("grant_type", "authorization_code"),
+            new KeyValuePair<string, string>("code", code),
+            new KeyValuePair<string, string>("redirect_uri", redirectUri)
+        });
+
+        var response = await _httpClient.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(json);
+
+        var accessToken  = doc.RootElement.GetProperty("access_token").GetString()!;
+        var refreshToken = doc.RootElement.GetProperty("refresh_token").GetString()!;
+        var expiresInProp = doc.RootElement.GetProperty("expires_in");
+        var expiresIn = expiresInProp.ValueKind == JsonValueKind.String
+            ? int.Parse(expiresInProp.GetString()!)
+            : expiresInProp.GetInt32();
+
+        _accessToken    = accessToken;
+        _tokenExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn - 30);
+
+        return (accessToken, refreshToken, expiresIn);
     }
 }
