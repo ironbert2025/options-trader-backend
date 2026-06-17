@@ -14,6 +14,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     {
         base.OnModelCreating(modelBuilder);
 
+        modelBuilder.Entity<Trade>(e =>
+        {
+            e.Property(t => t.StrikePrice).HasPrecision(18, 4);
+            e.Property(t => t.SpotPrice).HasPrecision(18, 4);
+            e.Property(t => t.EntryPrice).HasPrecision(18, 4);
+            e.Property(t => t.ExitPrice).HasPrecision(18, 4);
+            e.Property(t => t.TargetPercent).HasPrecision(18, 4);
+            e.Property(t => t.Pnl).HasPrecision(18, 4);
+            e.Property(t => t.PnlPercent).HasPrecision(18, 4);
+        });
+
         modelBuilder.Entity<User>(e =>
         {
             e.HasIndex(u => u.Username).IsUnique();

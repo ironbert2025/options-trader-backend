@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OptionsTrader.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using OptionsTrader.Infrastructure.Persistence;
 namespace OptionsTrader.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260617120109_AddTradeFields")]
+    partial class AddTradeFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -99,15 +102,13 @@ namespace OptionsTrader.Infrastructure.Migrations
                         .HasColumnType("time");
 
                     b.Property<decimal>("EntryPrice")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("decimal(18,4)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime>("EntryTime")
                         .HasColumnType("datetime2");
 
                     b.Property<decimal?>("ExitPrice")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("decimal(18,4)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<DateOnly>("ExpirationDate")
                         .HasColumnType("date");
@@ -119,28 +120,23 @@ namespace OptionsTrader.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.Property<decimal?>("Pnl")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("decimal(18,4)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal?>("PnlPercent")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("decimal(18,4)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal>("SpotPrice")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("decimal(18,4)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal>("StrikePrice")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("decimal(18,4)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<string>("Symbol")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<decimal>("TargetPercent")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("decimal(18,4)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<DateOnly>("TradeDate")
                         .HasColumnType("date");
@@ -177,31 +173,31 @@ namespace OptionsTrader.Infrastructure.Migrations
                         new
                         {
                             Id = 1,
-                            PasswordHash = "$2a$11$dgDv.f7A33xAsaWPn99PUOR9nGr1BYnE8ZbCoEN.O5ND5B3fTN0zS",
+                            PasswordHash = "$2a$11$yC0FPNRVNuCnx4QXzOvwxudPB.ELdE1JCgA1XXq.uUMVJaQHRS1Mu",
                             Username = "user1"
                         },
                         new
                         {
                             Id = 2,
-                            PasswordHash = "$2a$11$taLofYtpXX1XG.iRsxcbouKURNU0EktEu8NTqZBUlazx1jvp21Ngm",
+                            PasswordHash = "$2a$11$WutdB2SqpkGVYUfgwq.RB.oflAva/BvO7OrZRbgsSn6Cz49nkI9g.",
                             Username = "user2"
                         },
                         new
                         {
                             Id = 3,
-                            PasswordHash = "$2a$11$pm9IkQDUERzv06oAbDCRAuxG9CIHBuEb8riZag4/ye4.KD.c3e06i",
+                            PasswordHash = "$2a$11$NDZssu4Cwl2qvCNmli3s1e57tQdd4xn0K4.o1fUA6qytE6VdUZkuq",
                             Username = "user3"
                         },
                         new
                         {
                             Id = 4,
-                            PasswordHash = "$2a$11$.XmU.jW8rviT7crJuwODCOU9S3f8kvUKo0eMfaIDrzJGWfQxh7hmy",
+                            PasswordHash = "$2a$11$l8Swuuidp.DeWvuIsafyYuMCrfP.gPpXKh/cIurS4kSWgS3kd3gMK",
                             Username = "user4"
                         },
                         new
                         {
                             Id = 5,
-                            PasswordHash = "$2a$11$g0BVhNXTwYwLqSVY8WoWaumOe.ffdrT05eBn/7E9k7zprVcQXP/NK",
+                            PasswordHash = "$2a$11$7z8lMqzqES6r5nKDyWjq1.2eFmVDUcOzy0xtnVq9F6b94LYlbT.jm",
                             Username = "user5"
                         });
                 });
