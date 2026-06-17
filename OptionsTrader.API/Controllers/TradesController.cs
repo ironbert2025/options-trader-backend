@@ -12,8 +12,13 @@ namespace OptionsTrader.API.Controllers;
 public class TradesController(TradeService tradeService) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetAll() =>
-        Ok(await tradeService.GetAllAsync());
+    public async Task<IActionResult> GetAll([FromQuery] DateOnly? date)
+    {
+        if (date.HasValue)
+            return Ok(await tradeService.GetByDateAsync(date.Value));
+
+        return Ok(await tradeService.GetAllAsync());
+    }
 
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)
