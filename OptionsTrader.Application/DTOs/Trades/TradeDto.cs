@@ -22,6 +22,7 @@ public class TradeDto
     public TimeSpan? Duration { get; set; }
     public decimal? Pnl { get; set; }
     public decimal? PnlPercent { get; set; }
+    public bool IsDemo { get; set; }
     public BrokerName Broker { get; set; }
     public IEnumerable<ScreenshotDto> Screenshots { get; set; } = [];
 }
