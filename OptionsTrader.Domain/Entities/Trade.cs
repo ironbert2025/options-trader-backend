@@ -21,6 +21,7 @@ public class Trade
     public TimeSpan? Duration { get; set; }
     public decimal? Pnl { get; set; }
     public decimal? PnlPercent { get; set; }
+    public bool IsDemo { get; set; }
     public BrokerName Broker { get; set; }
 
     public ICollection<Screenshot> Screenshots { get; set; } = new List<Screenshot>();

@@ -37,6 +37,7 @@ public class TradeService(ITradeRepository trades)
             Contracts        = dto.Contracts,
             Level            = dto.Level,
             TargetPercent    = dto.TargetPercent,
+            IsDemo           = dto.IsDemo,
             TradeDate        = today,
             Broker           = dto.Broker
         };
@@ -80,6 +81,7 @@ public class TradeService(ITradeRepository trades)
         Duration         = trade.Duration,
         Pnl              = trade.Pnl,
         PnlPercent       = trade.PnlPercent,
+        IsDemo           = trade.IsDemo,
         Broker           = trade.Broker,
         Screenshots      = trade.Screenshots.Select(s => new ScreenshotDto
         {

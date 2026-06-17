@@ -14,5 +14,6 @@ public class CreateTradeDto
     public int Contracts { get; set; }
     public int Level { get; set; }
     public decimal TargetPercent { get; set; }
+    public bool IsDemo { get; set; }
     public BrokerName Broker { get; set; }
 }
