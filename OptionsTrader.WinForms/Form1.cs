@@ -246,7 +246,7 @@ public partial class Form1 : Form
 
                 OpenTradesStore.Remove(t.TradeId);
                 if (t.TradeId > 0)
-                    _ = CloseTradeInApiAsync(t.TradeId, 0m, pnl, duration);
+                    _ = CloseTradeInApiAsync(t.TradeId, 0m, pnl, pnlPct, duration);
             }
             else
             {
@@ -846,7 +846,9 @@ public partial class Form1 : Form
         System.Windows.Forms.Application.DoEvents();
 
         // Save trade to API
-        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask);
+        int.TryParse(level, out var levelInt);
+        int.TryParse(ContractsSettingsStore.Load(), out var contractsInt);
+        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime);
         newRow.Tag = new TradeRowTag(tradeId, entryTime);
 
         // Persist trade locally so it survives a program restart
@@ -920,7 +922,8 @@ public partial class Form1 : Form
         if (tradeId > 0)
         {
             decimal.TryParse(cBid, out var exitPrice);
-            await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, duration);
+            decimal.TryParse(pnlPct, out var pnlPctVal);
+            await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
         }
 
         // Screenshot exit
@@ -1119,7 +1122,8 @@ public partial class Form1 : Form
         }
     }
 
-    private async Task<int> SaveTradeToApiAsync(string symbol, string rowType, string strike, decimal ask)
+    private async Task<int> SaveTradeToApiAsync(string symbol, string rowType, string strike, decimal ask,
+        int contracts, int level, decimal targetPct, DateTime entryTime, bool isDemo = false)
     {
         try
         {
@@ -1137,6 +1141,11 @@ public partial class Form1 : Form
                 SpotPrice      = _lastSpotPrice,
                 ExpirationDate = expDate.ToString("yyyy-MM-dd"),
                 EntryPrice     = ask,
+                EntryTime      = entryTime,
+                Contracts      = contracts,
+                Level          = level,
+                TargetPercent  = targetPct,
+                IsDemo         = isDemo,
                 Broker         = 0
             };
 
@@ -1159,7 +1168,7 @@ public partial class Form1 : Form
         }
     }
 
-    private async Task CloseTradeInApiAsync(int tradeId, decimal exitPrice, decimal pnl, TimeSpan duration)
+    private async Task CloseTradeInApiAsync(int tradeId, decimal exitPrice, decimal pnl, decimal pnlPercent, TimeSpan duration)
     {
         try
         {
@@ -1167,7 +1176,7 @@ public partial class Form1 : Form
             {
                 ExitPrice  = exitPrice,
                 PnL        = pnl,
-                PnLPercent = 0m,
+                PnLPercent = pnlPercent,
                 Duration   = duration
             };
             await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
