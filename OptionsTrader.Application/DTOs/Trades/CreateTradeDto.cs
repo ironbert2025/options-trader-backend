@@ -10,5 +10,9 @@ public class CreateTradeDto
     public decimal SpotPrice { get; set; }
     public DateOnly ExpirationDate { get; set; }
     public decimal EntryPrice { get; set; }
+    public DateTime EntryTime { get; set; }
+    public int Contracts { get; set; }
+    public int Level { get; set; }
+    public decimal TargetPercent { get; set; }
     public BrokerName Broker { get; set; }
 }

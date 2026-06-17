@@ -15,6 +15,13 @@ public class TradeDto
     public decimal EntryPrice { get; set; }
     public decimal? ExitPrice { get; set; }
     public DateOnly TradeDate { get; set; }
+    public DateTime EntryTime { get; set; }
+    public int Contracts { get; set; }
+    public int Level { get; set; }
+    public decimal TargetPercent { get; set; }
+    public TimeSpan? Duration { get; set; }
+    public decimal? Pnl { get; set; }
+    public decimal? PnlPercent { get; set; }
     public BrokerName Broker { get; set; }
     public IEnumerable<ScreenshotDto> Screenshots { get; set; } = [];
 }

@@ -33,6 +33,10 @@ public class TradeService(ITradeRepository trades)
             SpotPrice        = dto.SpotPrice,
             ExpirationDate   = dto.ExpirationDate,
             EntryPrice       = dto.EntryPrice,
+            EntryTime        = dto.EntryTime,
+            Contracts        = dto.Contracts,
+            Level            = dto.Level,
+            TargetPercent    = dto.TargetPercent,
             TradeDate        = today,
             Broker           = dto.Broker
         };
@@ -47,7 +51,10 @@ public class TradeService(ITradeRepository trades)
         var trade = await trades.GetByIdAsync(id)
             ?? throw new KeyNotFoundException($"Trade {id} not found.");
 
-        trade.ExitPrice = dto.ExitPrice;
+        trade.ExitPrice   = dto.ExitPrice;
+        trade.Pnl         = dto.PnL;
+        trade.PnlPercent  = dto.PnLPercent;
+        trade.Duration    = dto.Duration;
 
         await trades.UpdateAsync(trade);
         await trades.SaveChangesAsync();
@@ -66,6 +73,13 @@ public class TradeService(ITradeRepository trades)
         EntryPrice       = trade.EntryPrice,
         ExitPrice        = trade.ExitPrice,
         TradeDate        = trade.TradeDate,
+        EntryTime        = trade.EntryTime,
+        Contracts        = trade.Contracts,
+        Level            = trade.Level,
+        TargetPercent    = trade.TargetPercent,
+        Duration         = trade.Duration,
+        Pnl              = trade.Pnl,
+        PnlPercent       = trade.PnlPercent,
         Broker           = trade.Broker,
         Screenshots      = trade.Screenshots.Select(s => new ScreenshotDto
         {
