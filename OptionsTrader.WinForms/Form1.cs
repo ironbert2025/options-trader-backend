@@ -43,7 +43,40 @@ public partial class Form1 : Form
         LoadScreenCoords();
         LoadBalance();
         LoadTickerButtons();
+        _ = LoginApiAsync();
     }
+
+    private async Task LoginApiAsync()
+    {
+        try
+        {
+            var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/auth/login", new
+            {
+                username = "user1",
+                password = "Pass1234!"
+            });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                LogLine($"{DateTime.Now:HH:mm:ss} [API] Login failed — status {response.StatusCode}", Color.OrangeRed);
+                return;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<ApiLoginResult>();
+            if (result?.AccessToken != null)
+            {
+                _apiHttpClient.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", result.AccessToken);
+                LogLine($"{DateTime.Now:HH:mm:ss} [API] Authenticated as user1", Color.Yellow);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [API] Login error: {ex.Message}", Color.OrangeRed);
+        }
+    }
+
+    private record ApiLoginResult(string AccessToken, DateTime ExpiresAt);
 
     private void LoadBrokerSelection()
     {
