@@ -1,8 +1,11 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OptionsTrader.Application.DTOs.Trades;
 using OptionsTrader.Application.Services;
 
 namespace OptionsTrader.API.Controllers;
+
+[Authorize]
 
 [ApiController]
 [Route("api/[controller]")]
