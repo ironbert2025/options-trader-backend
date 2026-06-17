@@ -847,7 +847,7 @@ public partial class Form1 : Form
 
         // Save trade to API
         int.TryParse(level, out var levelInt);
-        int.TryParse(ContractsSettingsStore.Load(), out var contractsInt);
+        int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime);
         newRow.Tag = new TradeRowTag(tradeId, entryTime);
 
@@ -900,12 +900,23 @@ public partial class Form1 : Form
             tradeId  = tag.TradeId;
         }
 
-        row.Cells["colTradeExitTime"].Value = nowStr;
-        row.Cells["colTradeClose"].Value    = "Closed";
-        row.DefaultCellStyle.ForeColor      = Color.Gray;
+        // Recalculate PnL at close time using current bid
+        var entryPriceStr = row.Cells["colTradeEntryPrice"].Value?.ToString() ?? "0";
+        var contractsStr  = row.Cells["colTradeContracts"].Value?.ToString() ?? "0";
+        decimal.TryParse(cBid, out var exitBid);
+        decimal.TryParse(entryPriceStr, out var entryPrice);
+        decimal.TryParse(contractsStr, out var contractsForPnl);
+        var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);
+        var pnlPctVal = entryPrice > 0 ? Math.Round((exitBid - entryPrice) / entryPrice * 100, 1) : 0m;
+        pnl    = pnlVal.ToString("F2");
+        pnlPct = pnlPctVal.ToString("F1");
 
-        // Logger
-        decimal.TryParse(pnl, out var pnlVal);
+        row.Cells["colTradePnL"].Value        = pnl;
+        row.Cells["colTradePnLPercent"].Value = pnlPct;
+        row.Cells["colTradeExitTime"].Value   = nowStr;
+        row.Cells["colTradeClose"].Value      = "Closed";
+        row.DefaultCellStyle.ForeColor        = Color.Gray;
+
         var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
 
         LogLine(string.Empty, Color.White);
@@ -922,7 +933,6 @@ public partial class Form1 : Form
         if (tradeId > 0)
         {
             decimal.TryParse(cBid, out var exitPrice);
-            decimal.TryParse(pnlPct, out var pnlPctVal);
             await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
         }
 
