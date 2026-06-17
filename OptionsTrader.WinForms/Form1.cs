@@ -1187,7 +1187,7 @@ public partial class Form1 : Form
                 ExitPrice  = exitPrice,
                 PnL        = pnl,
                 PnLPercent = pnlPercent,
-                Duration   = duration
+                Duration   = TimeSpan.FromSeconds(Math.Floor(duration.TotalSeconds))
             };
             await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
         }
