@@ -13,6 +13,12 @@ public class TradeService(ITradeRepository trades)
         return result.Select(MapToDto);
     }
 
+    public async Task<IEnumerable<TradeDto>> GetByMonthAsync(int year, int month)
+    {
+        var result = await trades.GetByMonthAsync(year, month);
+        return result.Select(MapToDto);
+    }
+
     public async Task<IEnumerable<TradeDto>> GetByDateAsync(DateOnly date)
     {
         var result = await trades.GetByDateAsync(date);
