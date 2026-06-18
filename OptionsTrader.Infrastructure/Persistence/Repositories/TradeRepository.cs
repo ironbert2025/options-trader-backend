@@ -12,6 +12,14 @@ public class TradeRepository(AppDbContext db) : ITradeRepository
     public async Task<IEnumerable<Trade>> GetAllAsync() =>
         await db.Trades.Include(t => t.Screenshots).ToListAsync();
 
+    public async Task<IEnumerable<Trade>> GetByDateAsync(DateOnly date) =>
+        await db.Trades.Include(t => t.Screenshots).Where(t => t.TradeDate == date).ToListAsync();
+
+    public async Task<IEnumerable<Trade>> GetByMonthAsync(int year, int month) =>
+        await db.Trades.Include(t => t.Screenshots)
+            .Where(t => t.TradeDate.Year == year && t.TradeDate.Month == month)
+            .ToListAsync();
+
     public Task<bool> ExistsForDateAsync(DateOnly date) =>
         db.Trades.AnyAsync(t => t.TradeDate == date);
 
