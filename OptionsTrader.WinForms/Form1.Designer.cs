@@ -324,14 +324,14 @@ partial class Form1
         // 
         // grpOptionsChain
         // 
-        grpOptionsChain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        grpOptionsChain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
         grpOptionsChain.Controls.Add(dgvQuotes);
         grpOptionsChain.Controls.Add(lblCallHeader);
         grpOptionsChain.Controls.Add(lblPutHeader);
         grpOptionsChain.Controls.Add(chkStopAt11);
         grpOptionsChain.Location = new Point(8, 100);
         grpOptionsChain.Name = "grpOptionsChain";
-        grpOptionsChain.Size = new Size(1000, 200);
+        grpOptionsChain.Size = new Size(575, 200);
         grpOptionsChain.TabIndex = 2;
         grpOptionsChain.TabStop = false;
         grpOptionsChain.Text = "OptionsChain";
@@ -347,7 +347,7 @@ partial class Form1
         dgvQuotes.Name = "dgvQuotes";
         dgvQuotes.RowHeadersVisible = false;
         dgvQuotes.RowTemplate.Height = 22;
-        dgvQuotes.Size = new Size(994, 175);
+        dgvQuotes.Size = new Size(556, 175);
         dgvQuotes.TabIndex = 0;
         dgvQuotes.CellClick += DgvQuotes_CellClick;
         dgvQuotes.CellFormatting += DgvQuotes_CellFormatting;
@@ -393,14 +393,14 @@ partial class Form1
         // 
         colStrikePrice.FlatStyle = FlatStyle.Flat;
         colSpotPrice.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-        colSpotPrice.HeaderText = "SpotPrice";
+        colSpotPrice.HeaderText = "Spot";
         colSpotPrice.Name = "colSpotPrice";
         colSpotPrice.ReadOnly = true;
-        colSpotPrice.Width = 75;
+        colSpotPrice.Width = 55;
         //
-        colStrikePrice.HeaderText = "StrikePrice";
+        colStrikePrice.HeaderText = "Strike";
         colStrikePrice.Name = "colStrikePrice";
-        colStrikePrice.Width = 80;
+        colStrikePrice.Width = 60;
         colStrikePrice.FlatStyle = FlatStyle.Standard;
         colStrikePrice.UseColumnTextForButtonValue = false;
         // 
@@ -458,7 +458,7 @@ partial class Form1
         lblPutHeader.AutoSize = true;
         lblPutHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblPutHeader.ForeColor = Color.Red;
-        lblPutHeader.Location = new Point(415, 2);
+        lblPutHeader.Location = new Point(375, 2);
         lblPutHeader.Name = "lblPutHeader";
         lblPutHeader.Size = new Size(34, 15);
         lblPutHeader.TabIndex = 2;
@@ -467,7 +467,7 @@ partial class Form1
         // chkStopAt11
         // 
         chkStopAt11.AutoSize = true;
-        chkStopAt11.Location = new Point(760, 2);
+        chkStopAt11.Location = new Point(440, 2);
         chkStopAt11.Name = "chkStopAt11";
         chkStopAt11.Size = new Size(115, 19);
         chkStopAt11.TabIndex = 3;
