@@ -120,6 +120,7 @@ public partial class Form1 : Form
         ApplyRadioStyle(grpPositionSize);
         if (sender is RadioButton { Checked: true } selected)
             PositionSizeSettingsStore.Save(selected.Text);
+        UpdatePositionAmount();
     }
 
     private void ChkSaveDumps_CheckedChanged(object? sender, EventArgs e)
