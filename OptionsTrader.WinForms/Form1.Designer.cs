@@ -105,6 +105,7 @@ partial class Form1
         rbPosition25 = new RadioButton();
         rbPosition5 = new RadioButton();
         rbPosition10 = new RadioButton();
+        chkSaveDumps = new CheckBox();
         grpTarget = new GroupBox();
         rbTarget10 = new RadioButton();
         rbTarget35 = new RadioButton();
@@ -171,7 +172,6 @@ partial class Form1
         tabQuotes.Controls.Add(grpLogger);
         tabQuotes.Controls.Add(grpTrades);
         tabQuotes.Controls.Add(grpOptionsChain);
-        tabQuotes.Controls.Add(chkSaveToCsv);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblExpDate);
@@ -323,14 +323,14 @@ partial class Form1
         // 
         // grpOptionsChain
         // 
-        grpOptionsChain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        grpOptionsChain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
         grpOptionsChain.Controls.Add(dgvQuotes);
         grpOptionsChain.Controls.Add(lblCallHeader);
         grpOptionsChain.Controls.Add(lblPutHeader);
         grpOptionsChain.Controls.Add(chkStopAt11);
         grpOptionsChain.Location = new Point(8, 100);
         grpOptionsChain.Name = "grpOptionsChain";
-        grpOptionsChain.Size = new Size(1000, 200);
+        grpOptionsChain.Size = new Size(542, 200);
         grpOptionsChain.TabIndex = 2;
         grpOptionsChain.TabStop = false;
         grpOptionsChain.Text = "OptionsChain";
@@ -346,7 +346,7 @@ partial class Form1
         dgvQuotes.Name = "dgvQuotes";
         dgvQuotes.RowHeadersVisible = false;
         dgvQuotes.RowTemplate.Height = 22;
-        dgvQuotes.Size = new Size(994, 175);
+        dgvQuotes.Size = new Size(523, 175);
         dgvQuotes.TabIndex = 0;
         dgvQuotes.CellClick += DgvQuotes_CellClick;
         dgvQuotes.CellFormatting += DgvQuotes_CellFormatting;
@@ -357,14 +357,14 @@ partial class Form1
         colSymbolQ.HeaderText = "Symbol";
         colSymbolQ.Name = "colSymbolQ";
         colSymbolQ.ReadOnly = true;
-        colSymbolQ.Width = 70;
+        colSymbolQ.Width = 57;
         // 
         // colRange
         // 
         colRange.HeaderText = "Range";
         colRange.Name = "colRange";
         colRange.ReadOnly = true;
-        colRange.Width = 72;
+        colRange.Width = 62;
         // 
         // colCallSprd
         // 
@@ -392,14 +392,14 @@ partial class Form1
         // 
         colStrikePrice.FlatStyle = FlatStyle.Flat;
         colSpotPrice.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-        colSpotPrice.HeaderText = "SpotPrice";
+        colSpotPrice.HeaderText = "Spot";
         colSpotPrice.Name = "colSpotPrice";
         colSpotPrice.ReadOnly = true;
-        colSpotPrice.Width = 75;
+        colSpotPrice.Width = 50;
         //
-        colStrikePrice.HeaderText = "StrikePrice";
+        colStrikePrice.HeaderText = "Strike";
         colStrikePrice.Name = "colStrikePrice";
-        colStrikePrice.Width = 80;
+        colStrikePrice.Width = 60;
         colStrikePrice.FlatStyle = FlatStyle.Standard;
         colStrikePrice.UseColumnTextForButtonValue = false;
         // 
@@ -431,7 +431,7 @@ partial class Form1
         colContracts.HeaderText = "Conts";
         colContracts.Name = "colContracts";
         colContracts.ReadOnly = true;
-        colContracts.Width = 53;
+        colContracts.Width = 48;
         // 
         // colLevel
         // 
@@ -446,7 +446,7 @@ partial class Form1
         lblCallHeader.AutoSize = true;
         lblCallHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblCallHeader.ForeColor = Color.Green;
-        lblCallHeader.Location = new Point(191, 2);
+        lblCallHeader.Location = new Point(180, 2);
         lblCallHeader.Name = "lblCallHeader";
         lblCallHeader.Size = new Size(40, 15);
         lblCallHeader.TabIndex = 1;
@@ -457,7 +457,7 @@ partial class Form1
         lblPutHeader.AutoSize = true;
         lblPutHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblPutHeader.ForeColor = Color.Red;
-        lblPutHeader.Location = new Point(415, 2);
+        lblPutHeader.Location = new Point(347, 2);
         lblPutHeader.Name = "lblPutHeader";
         lblPutHeader.Size = new Size(34, 15);
         lblPutHeader.TabIndex = 2;
@@ -466,7 +466,7 @@ partial class Form1
         // chkStopAt11
         // 
         chkStopAt11.AutoSize = true;
-        chkStopAt11.Location = new Point(760, 2);
+        chkStopAt11.Location = new Point(412, 2);
         chkStopAt11.Name = "chkStopAt11";
         chkStopAt11.Size = new Size(115, 19);
         chkStopAt11.TabIndex = 3;
@@ -477,16 +477,16 @@ partial class Form1
         chkSaveToCsv.AutoSize = true;
         chkSaveToCsv.Checked = true;
         chkSaveToCsv.CheckState = CheckState.Checked;
-        chkSaveToCsv.Location = new Point(630, 72);
-        chkSaveToCsv.Size = new Size(100, 19);
+        chkSaveToCsv.Location = new Point(800, 142);
+        chkSaveToCsv.Size = new Size(110, 19);
         chkSaveToCsv.Name = "chkSaveToCsv";
-        chkSaveToCsv.Text = "Save to CSV";
+        chkSaveToCsv.Text = "Quotes to CSV";
         //
         // btnFetchQuotes
         // 
-        btnFetchQuotes.Location = new Point(600, 22);
+        btnFetchQuotes.Location = new Point(420, 57);
         btnFetchQuotes.Name = "btnFetchQuotes";
-        btnFetchQuotes.Size = new Size(100, 26);
+        btnFetchQuotes.Size = new Size(95, 25);
         btnFetchQuotes.TabIndex = 1;
         btnFetchQuotes.Text = "Fetch Quotes";
         btnFetchQuotes.Click += BtnFetchQuotes_Click;
@@ -496,9 +496,9 @@ partial class Form1
         btnStartPolling.BackColor = Color.DarkGreen;
         btnStartPolling.FlatStyle = FlatStyle.Flat;
         btnStartPolling.ForeColor = Color.White;
-        btnStartPolling.Location = new Point(490, 22);
+        btnStartPolling.Location = new Point(420, 7);
         btnStartPolling.Name = "btnStartPolling";
-        btnStartPolling.Size = new Size(100, 26);
+        btnStartPolling.Size = new Size(95, 25);
         btnStartPolling.TabIndex = 3;
         btnStartPolling.Text = "Start Polling";
         btnStartPolling.UseVisualStyleBackColor = false;
@@ -509,7 +509,7 @@ partial class Form1
         lblExpDate.AutoSize = true;
         lblExpDate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblExpDate.ForeColor = Color.DarkGoldenrod;
-        lblExpDate.Location = new Point(500, 54);
+        lblExpDate.Location = new Point(198, 82);
         lblExpDate.Name = "lblExpDate";
         lblExpDate.Size = new Size(0, 13);
         lblExpDate.TabIndex = 4;
@@ -519,7 +519,7 @@ partial class Form1
         lblLastUpdate.AutoSize = true;
         lblLastUpdate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblLastUpdate.ForeColor = Color.DarkGoldenrod;
-        lblLastUpdate.Location = new Point(630, 54);
+        lblLastUpdate.Location = new Point(435, 39);
         lblLastUpdate.Name = "lblLastUpdate";
         lblLastUpdate.Size = new Size(0, 13);
         lblLastUpdate.TabIndex = 5;
@@ -556,7 +556,7 @@ partial class Form1
         grpTickerButtons.Controls.Add(flpTickers);
         grpTickerButtons.Location = new Point(128, 4);
         grpTickerButtons.Name = "grpTickerButtons";
-        grpTickerButtons.Size = new Size(360, 68);
+        grpTickerButtons.Size = new Size(285, 68);
         grpTickerButtons.TabIndex = 6;
         grpTickerButtons.TabStop = false;
         grpTickerButtons.Text = "Tickers";
@@ -567,7 +567,7 @@ partial class Form1
         flpTickers.Location = new Point(3, 19);
         flpTickers.Name = "flpTickers";
         flpTickers.Padding = new Padding(4);
-        flpTickers.Size = new Size(354, 46);
+        flpTickers.Size = new Size(279, 46);
         flpTickers.TabIndex = 0;
         // 
         // grpTrade
@@ -700,6 +700,8 @@ partial class Form1
         tabSettings.Controls.Add(grpTickers);
         tabSettings.Controls.Add(grpScreenCoords);
         tabSettings.Controls.Add(grpPositionSize);
+        tabSettings.Controls.Add(chkSaveDumps);
+        tabSettings.Controls.Add(chkSaveToCsv);
         tabSettings.Controls.Add(grpTarget);
         tabSettings.Controls.Add(grpSchwabCredentials);
         tabSettings.Controls.Add(grpRefreshToken);
@@ -951,7 +953,16 @@ partial class Form1
         rbPosition10.TabIndex = 2;
         rbPosition10.Text = "10";
         rbPosition10.CheckedChanged += PositionSizeRadioButton_CheckedChanged;
-        // 
+        //
+        // chkSaveDumps
+        //
+        chkSaveDumps.Location = new Point(800, 118);
+        chkSaveDumps.Name = "chkSaveDumps";
+        chkSaveDumps.Size = new Size(110, 20);
+        chkSaveDumps.TabIndex = 3;
+        chkSaveDumps.Text = "Save Dumps";
+        chkSaveDumps.CheckedChanged += ChkSaveDumps_CheckedChanged;
+        //
         // grpTarget
         // 
         grpTarget.Controls.Add(rbTarget10);
@@ -1320,6 +1331,7 @@ partial class Form1
     private DataGridViewTextBoxColumn colExpDate;
     private Button btnSaveTickers;
     private GroupBox grpPositionSize;
+    private CheckBox chkSaveDumps;
     private RadioButton rbPosition25;
     private RadioButton rbPosition5;
     private RadioButton rbPosition10;

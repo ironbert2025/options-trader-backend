@@ -38,6 +38,7 @@ public partial class Form1 : Form
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
         LoadRadioSelection(grpContracts, ContractsSettingsStore.Load());
+        chkSaveDumps.Checked = DumpSettingsStore.Load();
         LoadSchwabCredentials();
         LoadAwsSettings();
         LoadScreenCoords();
@@ -119,6 +120,12 @@ public partial class Form1 : Form
         ApplyRadioStyle(grpPositionSize);
         if (sender is RadioButton { Checked: true } selected)
             PositionSizeSettingsStore.Save(selected.Text);
+        UpdatePositionAmount();
+    }
+
+    private void ChkSaveDumps_CheckedChanged(object? sender, EventArgs e)
+    {
+        DumpSettingsStore.Save(chkSaveDumps.Checked);
     }
 
     private void TargetRadioButton_CheckedChanged(object? sender, EventArgs e)
@@ -610,7 +617,7 @@ public partial class Form1 : Form
                 _marketHttpClient, _schwabAuth,
                 creds.ApiKey, creds.ApiSecret,
                 refreshToken, storedAccess, storedExpiresAt,
-                OnTokenRenewed);
+                OnTokenRenewed, chkSaveDumps.Checked);
             var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
             _lastSpotPrice = allQuotes.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 
@@ -674,7 +681,7 @@ public partial class Form1 : Form
                     _selectedTicker.Symbol, rangeText,
                     sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
                     call.SpotPrice.ToString("F2"),
-                    call.StrikePrice.ToString("F2"),
+                    FormatStrike(call.StrikePrice),
                     string.Empty, string.Empty, string.Empty,
                     contracts, level);
                 dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
@@ -690,7 +697,7 @@ public partial class Form1 : Form
                     _selectedTicker.Symbol, rangeText,
                     string.Empty, string.Empty, string.Empty,
                     put.SpotPrice.ToString("F2"),
-                    put.StrikePrice.ToString("F2"),
+                    FormatStrike(put.StrikePrice),
                     put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
                     contracts, level);
                 dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "PUT";
@@ -1329,6 +1336,9 @@ public partial class Form1 : Form
 
     /// Formats spread: removes "0." prefix and leading zeros.
     /// 0.01 → "1", 0.05 → "5", 0.10 → "10", 1.00 → "100"
+    private static string FormatStrike(decimal value) =>
+        value % 1 == 0 ? value.ToString("F0") : value.ToString("F2");
+
     private static string FormatSprd(decimal value)
     {
         // Round to 2 decimals first to avoid floating point issues (e.g. 0.36-0.35 = 0.009999...)
