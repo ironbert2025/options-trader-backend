@@ -510,7 +510,7 @@ partial class Form1
         lblExpDate.AutoSize = true;
         lblExpDate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblExpDate.ForeColor = Color.DarkGoldenrod;
-        lblExpDate.Location = new Point(500, 54);
+        lblExpDate.Location = new Point(264, 82);
         lblExpDate.Name = "lblExpDate";
         lblExpDate.Size = new Size(0, 13);
         lblExpDate.TabIndex = 4;
@@ -520,7 +520,7 @@ partial class Form1
         lblLastUpdate.AutoSize = true;
         lblLastUpdate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblLastUpdate.ForeColor = Color.DarkGoldenrod;
-        lblLastUpdate.Location = new Point(630, 54);
+        lblLastUpdate.Location = new Point(505, 54);
         lblLastUpdate.Name = "lblLastUpdate";
         lblLastUpdate.Size = new Size(0, 13);
         lblLastUpdate.TabIndex = 5;
