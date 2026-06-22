@@ -20,6 +20,7 @@ public class SchwabMarketDataService : ISchwabMarketDataService
 
     private readonly string _refreshToken;
     private readonly Func<string, DateTime, Task> _onTokenRenewed;
+    private readonly bool _enableDumps;
 
     // storedAccessToken and storedExpiresAt come from disk each polling cycle via WinForms
     private string _storedAccessToken;
@@ -33,7 +34,8 @@ public class SchwabMarketDataService : ISchwabMarketDataService
         string refreshToken,
         string storedAccessToken,
         DateTime storedExpiresAt,
-        Func<string, DateTime, Task> onTokenRenewed)
+        Func<string, DateTime, Task> onTokenRenewed,
+        bool enableDumps = false)
     {
         _httpClient          = httpClient;
         _authService         = authService;
@@ -43,6 +45,7 @@ public class SchwabMarketDataService : ISchwabMarketDataService
         _storedAccessToken   = storedAccessToken;
         _storedExpiresAt     = storedExpiresAt;
         _onTokenRenewed      = onTokenRenewed;
+        _enableDumps         = enableDumps;
     }
 
     public async Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly expiration)
@@ -64,9 +67,12 @@ public class SchwabMarketDataService : ISchwabMarketDataService
         var json = await response.Content.ReadAsStringAsync();
 
         // Debug dump
-        Directory.CreateDirectory(DumpFolder);
-        var dumpFile = Path.Combine(DumpFolder, $"{symbol}_{expiration:yyyyMMdd}_{DateTime.Now:HHmmss}.json");
-        await File.WriteAllTextAsync(dumpFile, json);
+        if (_enableDumps)
+        {
+            Directory.CreateDirectory(DumpFolder);
+            var dumpFile = Path.Combine(DumpFolder, $"{symbol}_{expiration:yyyyMMdd}_{DateTime.Now:HHmmss}.json");
+            await File.WriteAllTextAsync(dumpFile, json);
+        }
 
         return ParseOptionsChain(json, symbol);
     }

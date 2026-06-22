@@ -38,6 +38,7 @@ public partial class Form1 : Form
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
         LoadRadioSelection(grpContracts, ContractsSettingsStore.Load());
+        chkSaveDumps.Checked = DumpSettingsStore.Load();
         LoadSchwabCredentials();
         LoadAwsSettings();
         LoadScreenCoords();
@@ -119,6 +120,11 @@ public partial class Form1 : Form
         ApplyRadioStyle(grpPositionSize);
         if (sender is RadioButton { Checked: true } selected)
             PositionSizeSettingsStore.Save(selected.Text);
+    }
+
+    private void ChkSaveDumps_CheckedChanged(object? sender, EventArgs e)
+    {
+        DumpSettingsStore.Save(chkSaveDumps.Checked);
     }
 
     private void TargetRadioButton_CheckedChanged(object? sender, EventArgs e)
@@ -610,7 +616,7 @@ public partial class Form1 : Form
                 _marketHttpClient, _schwabAuth,
                 creds.ApiKey, creds.ApiSecret,
                 refreshToken, storedAccess, storedExpiresAt,
-                OnTokenRenewed);
+                OnTokenRenewed, chkSaveDumps.Checked);
             var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
             _lastSpotPrice = allQuotes.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 

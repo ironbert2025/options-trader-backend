@@ -105,6 +105,7 @@ partial class Form1
         rbPosition25 = new RadioButton();
         rbPosition5 = new RadioButton();
         rbPosition10 = new RadioButton();
+        chkSaveDumps = new CheckBox();
         grpTarget = new GroupBox();
         rbTarget10 = new RadioButton();
         rbTarget35 = new RadioButton();
@@ -700,6 +701,7 @@ partial class Form1
         tabSettings.Controls.Add(grpTickers);
         tabSettings.Controls.Add(grpScreenCoords);
         tabSettings.Controls.Add(grpPositionSize);
+        tabSettings.Controls.Add(chkSaveDumps);
         tabSettings.Controls.Add(grpTarget);
         tabSettings.Controls.Add(grpSchwabCredentials);
         tabSettings.Controls.Add(grpRefreshToken);
@@ -951,7 +953,16 @@ partial class Form1
         rbPosition10.TabIndex = 2;
         rbPosition10.Text = "10";
         rbPosition10.CheckedChanged += PositionSizeRadioButton_CheckedChanged;
-        // 
+        //
+        // chkSaveDumps
+        //
+        chkSaveDumps.Location = new Point(800, 118);
+        chkSaveDumps.Name = "chkSaveDumps";
+        chkSaveDumps.Size = new Size(110, 20);
+        chkSaveDumps.TabIndex = 3;
+        chkSaveDumps.Text = "Save Dumps";
+        chkSaveDumps.CheckedChanged += ChkSaveDumps_CheckedChanged;
+        //
         // grpTarget
         // 
         grpTarget.Controls.Add(rbTarget10);
@@ -1320,6 +1331,7 @@ partial class Form1
     private DataGridViewTextBoxColumn colExpDate;
     private Button btnSaveTickers;
     private GroupBox grpPositionSize;
+    private CheckBox chkSaveDumps;
     private RadioButton rbPosition25;
     private RadioButton rbPosition5;
     private RadioButton rbPosition10;
