@@ -11,7 +11,36 @@ public static class MarketHours
     private static readonly TimeOnly MarketOpen  = new(9, 30);
     private static readonly TimeOnly MarketClose = new(16, 0);
 
+    // Morning cutoff for the optional "Stop at 11:00 AM" toggle.
+    public static readonly TimeOnly StopAt11 = new(11, 0);
+
+    // Start of the end-of-day auto-capture window (5 min before close).
+    public static readonly TimeOnly AutoCaptureStart = new(15, 55);
+
     public static DateTime NowEst => TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EstZone);
+
+    public static bool IsWeekday =>
+        NowEst.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday);
+
+    // True once it is 11:00 AM EST or later on a weekday.
+    public static bool IsPastStopTime
+    {
+        get
+        {
+            var time = TimeOnly.FromDateTime(NowEst);
+            return IsWeekday && time >= StopAt11;
+        }
+    }
+
+    // True during the final capture window (3:55 PM – 4:00 PM EST) on a weekday.
+    public static bool IsInAutoCaptureWindow
+    {
+        get
+        {
+            var time = TimeOnly.FromDateTime(NowEst);
+            return IsWeekday && time >= AutoCaptureStart && time < MarketClose;
+        }
+    }
 
     public static bool IsOpen
     {

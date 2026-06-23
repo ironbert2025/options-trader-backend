@@ -17,7 +17,10 @@ public partial class Form1 : Form
     private const string ApiBaseUrl = "http://3.133.58.172:5000/api";
     private System.Windows.Forms.Timer? _pollingTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
+    private System.Windows.Forms.Timer? _autoCaptureTimer;
     private bool _isPolling;
+    private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
+    private bool _stoppedAt11Logged;  // avoids spamming the log on the 11 AM auto-stop
 
     // Screen coordinates capture state
     private TextBox? _coordsTarget1;
@@ -33,7 +36,7 @@ public partial class Form1 : Form
     public Form1()
     {
         InitializeComponent();
-        FormClosing += (s, e) => { _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); };
+        FormClosing += (s, e) => { _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); };
         LoadBrokerSelection();
         LoadTickers();
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
@@ -46,6 +49,28 @@ public partial class Form1 : Form
         LoadBalance();
         LoadTickerButtons();
         _ = LoginApiAsync();
+        StartAutoCaptureScheduler();
+    }
+
+    // Runs all day and auto-starts a capture session at 3:55 PM EST (5 min before close)
+    // so the final pre-close chain is saved for backtesting — even if polling was stopped earlier.
+    private void StartAutoCaptureScheduler()
+    {
+        _autoCaptureTimer = new System.Windows.Forms.Timer { Interval = 30000 }; // check every 30s
+        _autoCaptureTimer.Tick += (s, e) =>
+        {
+            if (_isPolling) return;                       // a session is already running
+            if (!chkSaveToCsv.Checked) return;            // only when CSV logging is enabled
+            if (_selectedTicker == null) return;          // need a ticker to capture
+            if (!MarketHours.IsInAutoCaptureWindow) return;
+
+            var creds = SchwabCredentialsStore.Load();
+            if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return;
+
+            LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 3:55 PM — starting pre-close capture for {_selectedTicker.Symbol}", Color.Cyan);
+            BeginPolling(showWarnings: false, isAutoCapture: true);
+        };
+        _autoCaptureTimer.Start();
     }
 
     private async Task LoginApiAsync()
@@ -498,26 +523,35 @@ public partial class Form1 : Form
 
     private void BtnStartPolling_Click(object? sender, EventArgs e)
     {
-            if (_isPolling)
+        if (_isPolling)
         {
             StopPolling();
             return;
         }
 
+        BeginPolling(showWarnings: true, isAutoCapture: false);
+    }
+
+    private void BeginPolling(bool showWarnings, bool isAutoCapture)
+    {
         if (_selectedTicker == null)
         {
-            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (showWarnings)
+                MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         var creds = SchwabCredentialsStore.Load();
         if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
         {
-            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (showWarnings)
+                MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         _isPolling = true;
+        _autoCaptureSession = isAutoCapture;
+        _stoppedAt11Logged = false;
         btnStartPolling.Text = "Stop Polling";
         btnStartPolling.BackColor = Color.DarkRed;
 
@@ -568,6 +602,19 @@ public partial class Form1 : Form
                 StopPolling();
                 return;
             }
+
+            // Optional morning stop. The 3:55 PM auto-capture session is exempt so it can run to close.
+            if (!_autoCaptureSession && chkStopAt11.Checked && MarketHours.IsPastStopTime)
+            {
+                if (!_stoppedAt11Logged)
+                {
+                    LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 11:00 AM reached — polling stopped", Color.Yellow);
+                    _stoppedAt11Logged = true;
+                }
+                StopPolling();
+                return;
+            }
+
             await FetchAndUpdateQuotesAsync();
         };
         _pollingTimer.Start();
@@ -576,6 +623,7 @@ public partial class Form1 : Form
     private void StopPolling()
     {
         _isPolling = false;
+        _autoCaptureSession = false;
         _pollingTimer?.Stop();
         _pollingTimer?.Dispose();
         _pollingTimer = null;
