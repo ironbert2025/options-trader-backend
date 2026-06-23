@@ -48,12 +48,21 @@ public class SchwabMarketDataService : ISchwabMarketDataService
         _enableDumps         = enableDumps;
     }
 
+    // Caches a renewed token in-memory so multiple chain requests in the same polling cycle
+    // reuse it instead of each triggering a separate refresh, then forwards to the caller's callback.
+    private async Task OnTokenRenewedInternal(string newAccessToken, DateTime newExpiresAt)
+    {
+        _storedAccessToken = newAccessToken;
+        _storedExpiresAt   = newExpiresAt;
+        await _onTokenRenewed(newAccessToken, newExpiresAt);
+    }
+
     public async Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly expiration)
     {
         var token = await _authService.GetAccessTokenAsync(
             _apiKey, _apiSecret,
             _storedAccessToken, _storedExpiresAt,
-            _refreshToken, _onTokenRenewed);
+            _refreshToken, OnTokenRenewedInternal);
         var expirationStr = expiration.ToString("yyyy-MM-dd");
         var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={expirationStr}&toDate={expirationStr}&strikeCount={StrikePriceCount}&_t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
 

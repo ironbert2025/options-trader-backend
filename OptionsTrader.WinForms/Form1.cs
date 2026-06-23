@@ -28,11 +28,12 @@ public partial class Form1 : Form
     private TickerEntry? _selectedTicker;
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
+    private CsvLogger? _csvLoggerNext;
 
     public Form1()
     {
         InitializeComponent();
-        FormClosing += (s, e) => { _csvLogger?.Dispose(); };
+        FormClosing += (s, e) => { _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); };
         LoadBrokerSelection();
         LoadTickers();
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
@@ -520,12 +521,18 @@ public partial class Form1 : Form
         btnStartPolling.Text = "Stop Polling";
         btnStartPolling.BackColor = Color.DarkRed;
 
-        // Open CSV logger if enabled
+        // Open CSV loggers if enabled (one for current ExpDate, one for the next)
         if (chkSaveToCsv.Checked && _selectedTicker != null)
         {
-            var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
+            var today       = DateOnly.FromDateTime(DateTime.Today);
+            var expDate     = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
+            var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
+
             _csvLogger = new CsvLogger();
-            _csvLogger.Open(_selectedTicker.Symbol, DateOnly.FromDateTime(DateTime.Today), expDate);
+            _csvLogger.Open(_selectedTicker.Symbol, today, expDate);
+
+            _csvLoggerNext = new CsvLogger();
+            _csvLoggerNext.Open(_selectedTicker.Symbol, today, nextExpDate);
         }
 
         if (MarketHours.IsOpen)
@@ -580,6 +587,8 @@ public partial class Form1 : Form
 
         _csvLogger?.Close();
         _csvLogger = null;
+        _csvLoggerNext?.Close();
+        _csvLoggerNext = null;
     }
 
     private async Task FetchAndUpdateQuotesAsync()
@@ -618,90 +627,38 @@ public partial class Form1 : Form
                 creds.ApiKey, creds.ApiSecret,
                 refreshToken, storedAccess, storedExpiresAt,
                 OnTokenRenewed, chkSaveDumps.Checked);
+
+            // Primary chain (current ExpDate)
             var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
             _lastSpotPrice = allQuotes.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 
-            // Append to CSV if logging is enabled
             if (chkSaveToCsv.Checked)
                 _csvLogger?.AppendRows(allQuotes);
 
-            // Parse range from ticker settings
-            decimal.TryParse(_selectedTicker.Low,  out var rangeLow);
-            decimal.TryParse(_selectedTicker.High, out var rangeHigh);
-            var rangeText = $"{_selectedTicker.Low} - {_selectedTicker.High}";
+            PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker);
 
-            // Level lookup: rank among ALL OTM strikes (before range filter)
-            var allOtmCallStrikes = allQuotes
-                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && !q.InTheMoney)
-                .OrderBy(q => q.StrikePrice)   // ascending = closest first
-                .Select(q => q.StrikePrice)
-                .ToList();
-
-            var allOtmPutStrikes = allQuotes
-                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && !q.InTheMoney)
-                .OrderByDescending(q => q.StrikePrice)  // descending = closest first
-                .Select(q => q.StrikePrice)
-                .ToList();
-
-            // Filter OTM options within range (range = Ask price Low-High)
-            // CALLs: descending (farthest from spot first)
-            var otmCalls = allQuotes
-                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
-                         && !q.InTheMoney
-                         && q.Ask >= rangeLow && q.Ask <= rangeHigh)
-                .OrderByDescending(q => q.StrikePrice)
-                .ToList();
-
-            // PUTs: descending (closest to spot first)
-            var otmPuts = allQuotes
-                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
-                         && !q.InTheMoney
-                         && q.Ask >= rangeLow && q.Ask <= rangeHigh)
-                .OrderByDescending(q => q.StrikePrice)
-                .ToList();
-
-            // Calculate position size
-            var positionSize = GetPositionSize();
-
-            // Update PnL for open trades before rebuilding
-            var callMapForTrades = otmCalls.ToDictionary(q => ("CALL", q.StrikePrice));
-            var putMapForTrades  = otmPuts.ToDictionary(q => ("PUT", q.StrikePrice));
+            // Update PnL for open trades against the FULL chain (not the range-filtered grid),
+            // so a trade's current bid keeps updating even after its strike leaves the display range.
+            var callMapForTrades = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call)
+                .GroupBy(q => q.StrikePrice)
+                .ToDictionary(g => ("CALL", g.Key), g => g.First());
+            var putMapForTrades = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put)
+                .GroupBy(q => q.StrikePrice)
+                .ToDictionary(g => ("PUT", g.Key), g => g.First());
             UpdateTradesPnL(callMapForTrades, putMapForTrades);
 
-            // Always rebuild rows so strikes that move ITM/OTM are reflected immediately
-            dgvQuotes.Rows.Clear();
+            // Next chain (next ExpDate, e.g. tomorrow for daily)
+            var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
+            lblExpDateNext.Text = $"ExpDate: {nextExpDate:yyyy-MM-dd}";
 
-            foreach (var call in otmCalls)
-            {
-                var sprd      = FormatSprd(call.Ask - call.Bid);
-                var contracts = GetContractsValue(call.Ask);
-                var levelIdx  = allOtmCallStrikes.IndexOf(call.StrikePrice);
-                var level     = (levelIdx + 1).ToString();
-                dgvQuotes.Rows.Add(
-                    _selectedTicker.Symbol, rangeText,
-                    sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
-                    call.SpotPrice.ToString("F2"),
-                    FormatStrike(call.StrikePrice),
-                    string.Empty, string.Empty, string.Empty,
-                    contracts, level);
-                dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "CALL";
-            }
+            var allQuotesNext = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, nextExpDate)).ToList();
 
-            foreach (var put in otmPuts)
-            {
-                var sprd      = FormatSprd(put.Ask - put.Bid);
-                var contracts = GetContractsValue(put.Ask);
-                var levelIdx  = allOtmPutStrikes.IndexOf(put.StrikePrice);
-                var level     = (levelIdx + 1).ToString();
-                dgvQuotes.Rows.Add(
-                    _selectedTicker.Symbol, rangeText,
-                    string.Empty, string.Empty, string.Empty,
-                    put.SpotPrice.ToString("F2"),
-                    FormatStrike(put.StrikePrice),
-                    put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
-                    contracts, level);
-                dgvQuotes.Rows[dgvQuotes.Rows.Count - 1].Tag = "PUT";
-            }
+            if (chkSaveToCsv.Checked)
+                _csvLoggerNext?.AppendRows(allQuotesNext);
+
+            PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
@@ -762,6 +719,152 @@ public partial class Form1 : Form
             else
                 e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
         }
+    }
+
+    // Filters the chain to OTM strikes within the ticker's Ask range and (re)builds the given grid.
+    // Returns the in-range OTM call/put lists so the caller can build trade-PnL maps if needed.
+    private (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
+        DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker)
+    {
+        decimal.TryParse(ticker.Low,  out var rangeLow);
+        decimal.TryParse(ticker.High, out var rangeHigh);
+        var rangeText = $"{ticker.Low} - {ticker.High}";
+
+        // Level lookup: rank among ALL OTM strikes (before range filter)
+        var allOtmCallStrikes = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && !q.InTheMoney)
+            .OrderBy(q => q.StrikePrice)   // ascending = closest first
+            .Select(q => q.StrikePrice)
+            .ToList();
+
+        var allOtmPutStrikes = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && !q.InTheMoney)
+            .OrderByDescending(q => q.StrikePrice)  // descending = closest first
+            .Select(q => q.StrikePrice)
+            .ToList();
+
+        // Filter OTM options within range (range = Ask price Low-High)
+        var otmCalls = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
+                     && !q.InTheMoney
+                     && q.Ask >= rangeLow && q.Ask <= rangeHigh)
+            .OrderByDescending(q => q.StrikePrice)
+            .ToList();
+
+        var otmPuts = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
+                     && !q.InTheMoney
+                     && q.Ask >= rangeLow && q.Ask <= rangeHigh)
+            .OrderByDescending(q => q.StrikePrice)
+            .ToList();
+
+        // Always rebuild rows so strikes that move ITM/OTM are reflected immediately
+        grid.Rows.Clear();
+
+        foreach (var call in otmCalls)
+        {
+            var sprd      = FormatSprd(call.Ask - call.Bid);
+            var contracts = GetContractsValue(call.Ask);
+            var levelIdx  = allOtmCallStrikes.IndexOf(call.StrikePrice);
+            var level     = (levelIdx + 1).ToString();
+            grid.Rows.Add(
+                ticker.Symbol, rangeText,
+                sprd, call.Bid.ToString("F2"), call.Ask.ToString("F2"),
+                call.SpotPrice.ToString("F2"),
+                FormatStrike(call.StrikePrice),
+                string.Empty, string.Empty, string.Empty,
+                contracts, level);
+            grid.Rows[grid.Rows.Count - 1].Tag = "CALL";
+        }
+
+        foreach (var put in otmPuts)
+        {
+            var sprd      = FormatSprd(put.Ask - put.Bid);
+            var contracts = GetContractsValue(put.Ask);
+            var levelIdx  = allOtmPutStrikes.IndexOf(put.StrikePrice);
+            var level     = (levelIdx + 1).ToString();
+            grid.Rows.Add(
+                ticker.Symbol, rangeText,
+                string.Empty, string.Empty, string.Empty,
+                put.SpotPrice.ToString("F2"),
+                FormatStrike(put.StrikePrice),
+                put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
+                contracts, level);
+            grid.Rows[grid.Rows.Count - 1].Tag = "PUT";
+        }
+
+        return (otmCalls, otmPuts);
+    }
+
+    private void DgvQuotesNext_CellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        var row = dgvQuotesNext.Rows[e.RowIndex];
+
+        var callSprdCol = dgvQuotesNext.Columns["colCallSprdNext"].Index;
+        var putSprdCol  = dgvQuotesNext.Columns["colPutSprdNext"].Index;
+        var callBidCol  = dgvQuotesNext.Columns["colCallBidNext"].Index;
+        var putBidCol   = dgvQuotesNext.Columns["colPutBidNext"].Index;
+        var callAskCol  = dgvQuotesNext.Columns["colCallAskNext"].Index;
+        var putAskCol   = dgvQuotesNext.Columns["colPutAskNext"].Index;
+
+        if (e.ColumnIndex == callSprdCol || e.ColumnIndex == putSprdCol)
+        {
+            e.CellStyle.ForeColor = Color.Red;
+            e.CellStyle.Font = new Font(dgvQuotesNext.Font, FontStyle.Bold);
+        }
+
+        if (e.ColumnIndex == callAskCol || e.ColumnIndex == putAskCol)
+        {
+            e.CellStyle.ForeColor = Color.DarkGreen;
+            e.CellStyle.Font = new Font(dgvQuotesNext.Font, FontStyle.Bold);
+        }
+
+        if (e.ColumnIndex == callBidCol)
+        {
+            if (decimal.TryParse(row.Cells["colCallSprdNext"].Value?.ToString(), out var callSprd) && callSprd <= 2)
+                e.CellStyle.BackColor = Color.LightGreen;
+            else
+                e.CellStyle.BackColor = dgvQuotesNext.DefaultCellStyle.BackColor;
+        }
+
+        if (e.ColumnIndex == putBidCol)
+        {
+            if (decimal.TryParse(row.Cells["colPutSprdNext"].Value?.ToString(), out var putSprd) && putSprd <= 2)
+                e.CellStyle.BackColor = Color.LightGreen;
+            else
+                e.CellStyle.BackColor = dgvQuotesNext.DefaultCellStyle.BackColor;
+        }
+    }
+
+    private void DgvQuotesNext_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        if (e.ColumnIndex != dgvQuotesNext.Columns["colStrikePriceNext"].Index) return;
+
+        var val     = e.Value?.ToString();
+        var rowType = dgvQuotesNext.Rows[e.RowIndex].Tag?.ToString();
+
+        e.PaintBackground(e.ClipBounds, true);
+
+        if (!string.IsNullOrEmpty(val))
+        {
+            var bgColor  = rowType == "PUT" ? Color.Red : Color.DarkGreen;
+            var btnRect  = Rectangle.Inflate(e.CellBounds, -3, -3);
+
+            using var fillBrush = new SolidBrush(bgColor);
+            using var borderPen = new Pen(ControlPaint.Dark(bgColor, 0.2f));
+            using var textFont  = new Font(dgvQuotesNext.Font, FontStyle.Bold);
+
+            e.Graphics!.FillRectangle(fillBrush, btnRect);
+            e.Graphics.DrawRectangle(borderPen, btnRect);
+
+            TextRenderer.DrawText(
+                e.Graphics, val, textFont, btnRect, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+        }
+
+        e.Handled = true;
     }
 
     private void DgvQuotes_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)

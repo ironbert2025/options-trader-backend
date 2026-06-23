@@ -22,6 +22,22 @@ public static class ExpirationDateResolver
         };
     }
 
+    // Resolves the expiration date that comes right after the current one (e.g. tomorrow for "D").
+    // Fixed dates have no "next" occurrence, so they resolve to the same date.
+    public static DateOnly ResolveNext(string expDateCode)
+    {
+        var current = Resolve(expDateCode);
+        var dayAfterCurrent = current.AddDays(1);
+
+        return expDateCode.Trim().ToUpperInvariant() switch
+        {
+            "D"   => dayAfterCurrent,
+            "F"   => NextWeekday(dayAfterCurrent, DayOfWeek.Friday),
+            "MWF" => NextMwf(dayAfterCurrent),
+            _     => current
+        };
+    }
+
     // Returns today if today matches the target day, otherwise the next occurrence.
     private static DateOnly NextWeekday(DateOnly from, DayOfWeek target)
     {
