@@ -891,13 +891,16 @@ public partial class Form1 : Form
         if (e.ColumnIndex != dgvQuotesNext.Columns["colStrikePriceNext"].Index) return;
 
         var val     = e.Value?.ToString();
-        var rowType = dgvQuotesNext.Rows[e.RowIndex].Tag?.ToString();
+        var row     = dgvQuotesNext.Rows[e.RowIndex];
+        var rowType = row.Tag?.ToString();
+        var disabled = IsRowBidZero(row, "colCallBidNext", "colPutBidNext");
 
         e.PaintBackground(e.ClipBounds, true);
 
         if (!string.IsNullOrEmpty(val))
         {
-            var bgColor  = rowType == "PUT" ? Color.Red : Color.DarkGreen;
+            var bgColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
+            var textColor = disabled ? Color.Gray : Color.White;
             var btnRect  = Rectangle.Inflate(e.CellBounds, -3, -3);
 
             using var fillBrush = new SolidBrush(bgColor);
@@ -908,11 +911,20 @@ public partial class Form1 : Form
             e.Graphics.DrawRectangle(borderPen, btnRect);
 
             TextRenderer.DrawText(
-                e.Graphics, val, textFont, btnRect, Color.White,
+                e.Graphics, val, textFont, btnRect, textColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
         }
 
         e.Handled = true;
+    }
+
+    // A row's tradable bid is the Call Bid for CALL rows and the Put Bid for PUT rows.
+    // A zero (or missing) bid means the option is illiquid — its Strike button must be disabled.
+    private static bool IsRowBidZero(DataGridViewRow row, string callBidColName, string putBidColName)
+    {
+        var bidColName = row.Tag?.ToString() == "PUT" ? putBidColName : callBidColName;
+        var bidStr = row.Cells[bidColName].Value?.ToString();
+        return !decimal.TryParse(bidStr, out var bid) || bid == 0m;
     }
 
     private void DgvQuotes_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
@@ -921,14 +933,17 @@ public partial class Form1 : Form
         if (e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
 
         var val     = e.Value?.ToString();
-        var rowType = dgvQuotes.Rows[e.RowIndex].Tag?.ToString();
+        var row     = dgvQuotes.Rows[e.RowIndex];
+        var rowType = row.Tag?.ToString();
+        var disabled = IsRowBidZero(row, "colCallBid", "colPutBid");
 
         // Paint default background
         e.PaintBackground(e.ClipBounds, true);
 
         if (!string.IsNullOrEmpty(val))
         {
-            var btnColor = rowType == "PUT" ? Color.Red : Color.DarkGreen;
+            var btnColor = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
+            var textColor = disabled ? Color.Gray : Color.White;
             var btnRect  = Rectangle.Inflate(e.CellBounds, -3, -3);
 
             using var fillBrush = new SolidBrush(btnColor);
@@ -939,7 +954,7 @@ public partial class Form1 : Form
             e.Graphics.DrawRectangle(borderPen, btnRect);
 
             TextRenderer.DrawText(
-                e.Graphics, val, textFont, btnRect, Color.White,
+                e.Graphics, val, textFont, btnRect, textColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
         }
 
@@ -949,6 +964,10 @@ public partial class Form1 : Form
     private void DgvQuotes_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
+
+        // Block clicks on illiquid options (bid = 0) to avoid opening a guaranteed-loss order
+        if (IsRowBidZero(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
+
         if (rbNoTrade.Checked)
             OpenSimulatedTrade(e.RowIndex);
         // Trade / Trade-Target: real order — coming soon
