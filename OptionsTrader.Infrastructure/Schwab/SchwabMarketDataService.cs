@@ -123,7 +123,12 @@ public class SchwabMarketDataService : ISchwabMarketDataService
                         ExpirationDate = expiration,
                         InTheMoney     = contract.TryGetProperty("inTheMoney", out var itm) && itm.GetBoolean(),
                         IntrinsicValue = contract.TryGetProperty("intrinsicValue", out var iv)  ? iv.GetDecimal()  : 0m,
-                        ExtrinsicValue = contract.TryGetProperty("extrinsicValue", out var ev)  ? ev.GetDecimal()  : 0m
+                        ExtrinsicValue = contract.TryGetProperty("extrinsicValue", out var ev)  ? ev.GetDecimal()  : 0m,
+                        Delta              = contract.TryGetProperty("delta", out var delta)           ? delta.GetDecimal()      : 0m,
+                        Gamma              = contract.TryGetProperty("gamma", out var gamma)           ? gamma.GetDecimal()      : 0m,
+                        Theta              = contract.TryGetProperty("theta", out var theta)           ? theta.GetDecimal()      : 0m,
+                        Vega               = contract.TryGetProperty("vega", out var vega)             ? vega.GetDecimal()       : 0m,
+                        ImpliedVolatility  = contract.TryGetProperty("volatility", out var vol)         ? vol.GetDecimal()        : 0m
                     };
                 }
             }
