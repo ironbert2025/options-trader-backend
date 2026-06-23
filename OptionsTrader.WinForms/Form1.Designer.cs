@@ -51,6 +51,23 @@ partial class Form1
         colLevel = new DataGridViewTextBoxColumn();
         lblCallHeader = new Label();
         lblPutHeader = new Label();
+        grpOptionsChainNext = new GroupBox();
+        dgvQuotesNext = new DataGridView();
+        colSymbolQNext = new DataGridViewTextBoxColumn();
+        colRangeNext = new DataGridViewTextBoxColumn();
+        colCallSprdNext = new DataGridViewTextBoxColumn();
+        colCallBidNext = new DataGridViewTextBoxColumn();
+        colCallAskNext = new DataGridViewTextBoxColumn();
+        colSpotPriceNext = new DataGridViewTextBoxColumn();
+        colStrikePriceNext = new DataGridViewTextBoxColumn();
+        colPutBidNext = new DataGridViewTextBoxColumn();
+        colPutAskNext = new DataGridViewTextBoxColumn();
+        colPutSprdNext = new DataGridViewTextBoxColumn();
+        colContractsNext = new DataGridViewTextBoxColumn();
+        colLevelNext = new DataGridViewTextBoxColumn();
+        lblCallHeaderNext = new Label();
+        lblPutHeaderNext = new Label();
+        lblExpDateNext = new Label();
         chkStopAt11 = new CheckBox();
         chkSaveToCsv = new CheckBox();
         btnFetchQuotes = new Button();
@@ -140,6 +157,8 @@ partial class Form1
         ((System.ComponentModel.ISupportInitialize)dgvTrades).BeginInit();
         grpOptionsChain.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).BeginInit();
+        grpOptionsChainNext.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)dgvQuotesNext).BeginInit();
         grpBalance.SuspendLayout();
         grpTickerButtons.SuspendLayout();
         grpTrade.SuspendLayout();
@@ -164,7 +183,7 @@ partial class Form1
         tabControl.Location = new Point(0, 0);
         tabControl.Name = "tabControl";
         tabControl.SelectedIndex = 0;
-        tabControl.Size = new Size(1024, 600);
+        tabControl.Size = new Size(1121, 600);
         tabControl.TabIndex = 0;
         // 
         // tabQuotes
@@ -172,9 +191,11 @@ partial class Form1
         tabQuotes.Controls.Add(grpLogger);
         tabQuotes.Controls.Add(grpTrades);
         tabQuotes.Controls.Add(grpOptionsChain);
+        tabQuotes.Controls.Add(grpOptionsChainNext);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblExpDate);
+        tabQuotes.Controls.Add(lblExpDateNext);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Controls.Add(grpTickerButtons);
@@ -192,7 +213,7 @@ partial class Form1
         grpLogger.Controls.Add(rtbLogger);
         grpLogger.Location = new Point(8, 415);
         grpLogger.Name = "grpLogger";
-        grpLogger.Size = new Size(1000, 149);
+        grpLogger.Size = new Size(1090, 149);
         grpLogger.TabIndex = 0;
         grpLogger.TabStop = false;
         grpLogger.Text = "Logger";
@@ -216,7 +237,7 @@ partial class Form1
         grpTrades.Controls.Add(dgvTrades);
         grpTrades.Location = new Point(11, 306);
         grpTrades.Name = "grpTrades";
-        grpTrades.Size = new Size(1000, 90);
+        grpTrades.Size = new Size(1087, 90);
         grpTrades.TabIndex = 1;
         grpTrades.TabStop = false;
         grpTrades.Text = "Trades";
@@ -462,7 +483,159 @@ partial class Form1
         lblPutHeader.Size = new Size(34, 15);
         lblPutHeader.TabIndex = 2;
         lblPutHeader.Text = "PUT";
-        // 
+        //
+        // grpOptionsChainNext
+        //
+        grpOptionsChainNext.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
+        grpOptionsChainNext.Controls.Add(dgvQuotesNext);
+        grpOptionsChainNext.Controls.Add(lblCallHeaderNext);
+        grpOptionsChainNext.Controls.Add(lblPutHeaderNext);
+        grpOptionsChainNext.Location = new Point(556, 100);
+        grpOptionsChainNext.Name = "grpOptionsChainNext";
+        grpOptionsChainNext.Size = new Size(542, 200);
+        grpOptionsChainNext.TabIndex = 7;
+        grpOptionsChainNext.TabStop = false;
+        grpOptionsChainNext.Text = "OptionsChain (Next ExpDate)";
+        //
+        // dgvQuotesNext
+        //
+        dgvQuotesNext.AllowUserToAddRows = false;
+        dgvQuotesNext.AllowUserToDeleteRows = false;
+        dgvQuotesNext.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        dgvQuotesNext.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        dgvQuotesNext.Columns.AddRange(new DataGridViewColumn[] { colSymbolQNext, colRangeNext, colCallSprdNext, colCallBidNext, colCallAskNext, colSpotPriceNext, colStrikePriceNext, colPutBidNext, colPutAskNext, colPutSprdNext, colContractsNext, colLevelNext });
+        dgvQuotesNext.Location = new Point(3, 20);
+        dgvQuotesNext.Name = "dgvQuotesNext";
+        dgvQuotesNext.ReadOnly = true;
+        dgvQuotesNext.RowHeadersVisible = false;
+        dgvQuotesNext.RowTemplate.Height = 22;
+        dgvQuotesNext.Size = new Size(523, 175);
+        dgvQuotesNext.TabIndex = 0;
+        dgvQuotesNext.CellFormatting += DgvQuotesNext_CellFormatting;
+        dgvQuotesNext.CellPainting += DgvQuotesNext_CellPainting;
+        //
+        // colSymbolQNext
+        //
+        colSymbolQNext.HeaderText = "Symbol";
+        colSymbolQNext.Name = "colSymbolQNext";
+        colSymbolQNext.ReadOnly = true;
+        colSymbolQNext.Width = 57;
+        //
+        // colRangeNext
+        //
+        colRangeNext.HeaderText = "Range";
+        colRangeNext.Name = "colRangeNext";
+        colRangeNext.ReadOnly = true;
+        colRangeNext.Width = 62;
+        //
+        // colCallSprdNext
+        //
+        colCallSprdNext.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        colCallSprdNext.HeaderText = "Sprd";
+        colCallSprdNext.Name = "colCallSprdNext";
+        colCallSprdNext.ReadOnly = true;
+        colCallSprdNext.Width = 33;
+        //
+        // colCallBidNext
+        //
+        colCallBidNext.HeaderText = "Bid";
+        colCallBidNext.Name = "colCallBidNext";
+        colCallBidNext.ReadOnly = true;
+        colCallBidNext.Width = 33;
+        //
+        // colCallAskNext
+        //
+        colCallAskNext.HeaderText = "Ask";
+        colCallAskNext.Name = "colCallAskNext";
+        colCallAskNext.ReadOnly = true;
+        colCallAskNext.Width = 33;
+        //
+        // colSpotPriceNext
+        //
+        colSpotPriceNext.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        colSpotPriceNext.HeaderText = "Spot";
+        colSpotPriceNext.Name = "colSpotPriceNext";
+        colSpotPriceNext.ReadOnly = true;
+        colSpotPriceNext.Width = 50;
+        //
+        // colStrikePriceNext
+        //
+        colStrikePriceNext.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        colStrikePriceNext.HeaderText = "Strike";
+        colStrikePriceNext.Name = "colStrikePriceNext";
+        colStrikePriceNext.ReadOnly = true;
+        colStrikePriceNext.Width = 60;
+        //
+        // colPutBidNext
+        //
+        colPutBidNext.HeaderText = "Bid";
+        colPutBidNext.Name = "colPutBidNext";
+        colPutBidNext.ReadOnly = true;
+        colPutBidNext.Width = 33;
+        //
+        // colPutAskNext
+        //
+        colPutAskNext.HeaderText = "Ask";
+        colPutAskNext.Name = "colPutAskNext";
+        colPutAskNext.ReadOnly = true;
+        colPutAskNext.Width = 33;
+        //
+        // colPutSprdNext
+        //
+        colPutSprdNext.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        colPutSprdNext.HeaderText = "Sprd";
+        colPutSprdNext.Name = "colPutSprdNext";
+        colPutSprdNext.ReadOnly = true;
+        colPutSprdNext.Width = 33;
+        //
+        // colContractsNext
+        //
+        colContractsNext.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        colContractsNext.HeaderText = "Conts";
+        colContractsNext.Name = "colContractsNext";
+        colContractsNext.ReadOnly = true;
+        colContractsNext.Width = 48;
+        //
+        // colLevelNext
+        //
+        colLevelNext.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        colLevelNext.HeaderText = "Level";
+        colLevelNext.Name = "colLevelNext";
+        colLevelNext.ReadOnly = true;
+        colLevelNext.Width = 45;
+        //
+        // lblCallHeaderNext
+        //
+        lblCallHeaderNext.AutoSize = true;
+        lblCallHeaderNext.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+        lblCallHeaderNext.ForeColor = Color.Green;
+        lblCallHeaderNext.Location = new Point(180, 2);
+        lblCallHeaderNext.Name = "lblCallHeaderNext";
+        lblCallHeaderNext.Size = new Size(40, 15);
+        lblCallHeaderNext.TabIndex = 1;
+        lblCallHeaderNext.Text = "CALL";
+        //
+        // lblPutHeaderNext
+        //
+        lblPutHeaderNext.AutoSize = true;
+        lblPutHeaderNext.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+        lblPutHeaderNext.ForeColor = Color.Red;
+        lblPutHeaderNext.Location = new Point(347, 2);
+        lblPutHeaderNext.Name = "lblPutHeaderNext";
+        lblPutHeaderNext.Size = new Size(34, 15);
+        lblPutHeaderNext.TabIndex = 2;
+        lblPutHeaderNext.Text = "PUT";
+        //
+        // lblExpDateNext
+        //
+        lblExpDateNext.AutoSize = true;
+        lblExpDateNext.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        lblExpDateNext.ForeColor = Color.DarkGoldenrod;
+        lblExpDateNext.Location = new Point(761, 82);
+        lblExpDateNext.Name = "lblExpDateNext";
+        lblExpDateNext.Size = new Size(0, 13);
+        lblExpDateNext.TabIndex = 8;
+        //
         // chkStopAt11
         // 
         chkStopAt11.AutoSize = true;
@@ -575,7 +748,7 @@ partial class Form1
         grpTrade.Controls.Add(rbNoTrade);
         grpTrade.Controls.Add(rbTrade);
         grpTrade.Controls.Add(rbTradeTarget);
-        grpTrade.Location = new Point(760, 4);
+        grpTrade.Location = new Point(895, 4);
         grpTrade.Name = "grpTrade";
         grpTrade.Size = new Size(110, 90);
         grpTrade.TabIndex = 7;
@@ -622,7 +795,7 @@ partial class Form1
         grpContracts.Controls.Add(rbContracts5);
         grpContracts.Controls.Add(rbContracts6);
         grpContracts.Controls.Add(rbContractsPositionSize);
-        grpContracts.Location = new Point(878, 4);
+        grpContracts.Location = new Point(1008, 4);
         grpContracts.Name = "grpContracts";
         grpContracts.Size = new Size(105, 90);
         grpContracts.TabIndex = 8;
@@ -1222,7 +1395,7 @@ partial class Form1
         //
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(1024, 600);
+        ClientSize = new Size(1121, 600);
         Controls.Add(tabControl);
         Name = "Form1";
         Text = "Options Trader";
@@ -1235,6 +1408,9 @@ partial class Form1
         grpOptionsChain.ResumeLayout(false);
         grpOptionsChain.PerformLayout();
         ((System.ComponentModel.ISupportInitialize)dgvQuotes).EndInit();
+        grpOptionsChainNext.ResumeLayout(false);
+        grpOptionsChainNext.PerformLayout();
+        ((System.ComponentModel.ISupportInitialize)dgvQuotesNext).EndInit();
         grpBalance.ResumeLayout(false);
         grpBalance.PerformLayout();
         grpTickerButtons.ResumeLayout(false);
@@ -1292,6 +1468,23 @@ partial class Form1
     private RadioButton rbContracts6;
     private RadioButton rbContractsPositionSize;
     private GroupBox grpOptionsChain;
+    private GroupBox grpOptionsChainNext;
+    private DataGridView dgvQuotesNext;
+    private DataGridViewTextBoxColumn colSymbolQNext;
+    private DataGridViewTextBoxColumn colRangeNext;
+    private DataGridViewTextBoxColumn colCallSprdNext;
+    private DataGridViewTextBoxColumn colCallBidNext;
+    private DataGridViewTextBoxColumn colCallAskNext;
+    private DataGridViewTextBoxColumn colSpotPriceNext;
+    private DataGridViewTextBoxColumn colStrikePriceNext;
+    private DataGridViewTextBoxColumn colPutBidNext;
+    private DataGridViewTextBoxColumn colPutAskNext;
+    private DataGridViewTextBoxColumn colPutSprdNext;
+    private DataGridViewTextBoxColumn colContractsNext;
+    private DataGridViewTextBoxColumn colLevelNext;
+    private Label lblCallHeaderNext;
+    private Label lblPutHeaderNext;
+    private Label lblExpDateNext;
     private GroupBox grpTrades;
     private GroupBox grpLogger;
     private RichTextBox rtbLogger;
