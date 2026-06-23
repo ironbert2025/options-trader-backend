@@ -11,7 +11,7 @@ namespace OptionsTrader.WinForms;
 public sealed class CsvLogger : IDisposable
 {
     private const string OutputFolder = @"C:\OptionsData";
-    private const string Header = "Time,Hour,Minutes,Seconds,SpotPrice,StrikePrice,Bid,Ask,IntValue,ExtValue";
+    private const string Header = "Time,Hour,Minutes,Seconds,SpotPrice,StrikePrice,Bid,Ask,IntValue,ExtValue,Delta,Gamma,Theta,Vega,IV";
 
     private StreamWriter? _callWriter;
     private StreamWriter? _putWriter;
@@ -50,7 +50,7 @@ public sealed class CsvLogger : IDisposable
             // Skip rows where Bid == 0
             if (q.Bid == 0) continue;
 
-            var line = $"{timeStr},{hour},{min},{sec},{q.SpotPrice},{q.StrikePrice},{q.Bid},{q.Ask},{q.IntrinsicValue},{q.ExtrinsicValue}";
+            var line = $"{timeStr},{hour},{min},{sec},{q.SpotPrice},{q.StrikePrice},{q.Bid},{q.Ask},{q.IntrinsicValue},{q.ExtrinsicValue},{q.Delta},{q.Gamma},{q.Theta},{q.Vega},{q.ImpliedVolatility}";
 
             if (q.OptionType == OptionType.Call)
                 _callWriter.WriteLine(line);
