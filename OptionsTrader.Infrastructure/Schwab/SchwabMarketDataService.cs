@@ -57,14 +57,18 @@ public class SchwabMarketDataService : ISchwabMarketDataService
         await _onTokenRenewed(newAccessToken, newExpiresAt);
     }
 
-    public async Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly expiration)
+    public Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly expiration) =>
+        GetOptionsChainAsync(symbol, expiration, expiration);
+
+    public async Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly fromDate, DateOnly toDate)
     {
         var token = await _authService.GetAccessTokenAsync(
             _apiKey, _apiSecret,
             _storedAccessToken, _storedExpiresAt,
             _refreshToken, OnTokenRenewedInternal);
-        var expirationStr = expiration.ToString("yyyy-MM-dd");
-        var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={expirationStr}&toDate={expirationStr}&strikeCount={StrikePriceCount}&_t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+        var fromStr = fromDate.ToString("yyyy-MM-dd");
+        var toStr   = toDate.ToString("yyyy-MM-dd");
+        var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={fromStr}&toDate={toStr}&strikeCount={StrikePriceCount}&_t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -79,7 +83,7 @@ public class SchwabMarketDataService : ISchwabMarketDataService
         if (_enableDumps)
         {
             Directory.CreateDirectory(DumpFolder);
-            var dumpFile = Path.Combine(DumpFolder, $"{symbol}_{expiration:yyyyMMdd}_{DateTime.Now:HHmmss}.json");
+            var dumpFile = Path.Combine(DumpFolder, $"{symbol}_{fromDate:yyyyMMdd}_{toDate:yyyyMMdd}_{DateTime.Now:HHmmss}.json");
             await File.WriteAllTextAsync(dumpFile, json);
         }
 

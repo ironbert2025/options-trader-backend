@@ -676,10 +676,19 @@ public partial class Form1 : Form
                 refreshToken, storedAccess, storedExpiresAt,
                 OnTokenRenewed, chkSaveDumps.Checked);
 
-            // Primary chain (current ExpDate)
-            var allQuotes = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, expDate)).ToList();
-            _lastSpotPrice = allQuotes.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
+            var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
+            lblExpDateNext.Text = $"ExpDate: {nextExpDate:yyyy-MM-dd}";
 
+            // Single call covering today → nextExpDate, so both grids share one underlying (spot) snapshot.
+            var fromDate  = DateOnly.FromDateTime(MarketHours.NowEst);
+            var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate)).ToList();
+
+            var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();
+            var allQuotesNext = fullChain.Where(q => q.ExpirationDate == nextExpDate).ToList();
+
+            _lastSpotPrice = fullChain.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
+
+            // Primary chain (current ExpDate)
             if (chkSaveToCsv.Checked)
                 _csvLogger?.AppendRows(allQuotes);
 
@@ -698,11 +707,6 @@ public partial class Form1 : Form
             UpdateTradesPnL(callMapForTrades, putMapForTrades);
 
             // Next chain (next ExpDate, e.g. tomorrow for daily)
-            var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
-            lblExpDateNext.Text = $"ExpDate: {nextExpDate:yyyy-MM-dd}";
-
-            var allQuotesNext = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, nextExpDate)).ToList();
-
             if (chkSaveToCsv.Checked)
                 _csvLoggerNext?.AppendRows(allQuotesNext);
 
