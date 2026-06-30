@@ -34,6 +34,8 @@ public partial class Form1 : Form
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
     private List<SchwabAccountDto> _accounts = new();
+    private string _selectedCounts = "In Range"; // session-only, always defaults to In Range on launch
+    private List<OptionQuoteDto> _lastAllQuotes = new(); // current-expiration chain from the last fetch, for instant re-filtering
 
     public Form1()
     {
@@ -44,12 +46,14 @@ public partial class Form1 : Form
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
         LoadRadioSelection(grpTarget, TargetSettingsStore.Load());
         LoadRadioSelection(grpContracts, ContractsSettingsStore.Load());
+        ApplyRadioStyle(grpCounts);
         chkSaveDumps.Checked = DumpSettingsStore.Load();
         LoadSchwabCredentials();
         LoadAwsSettings();
         LoadScreenCoords();
         LoadBalance();
         LoadTickerButtons();
+        LoadCachedAccounts();
         _ = LoginApiAsync();
         StartAutoCaptureScheduler();
     }
@@ -69,7 +73,7 @@ public partial class Form1 : Form
             var creds = SchwabCredentialsStore.Load();
             if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return;
 
-            LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 3:55 PM — starting pre-close capture for {_selectedTicker.Symbol}", Color.Cyan);
+            // LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 3:55 PM — starting pre-close capture for {_selectedTicker.Symbol}", Color.Cyan);
             BeginPolling(showWarnings: false, isAutoCapture: true);
         };
         _autoCaptureTimer.Start();
@@ -87,7 +91,7 @@ public partial class Form1 : Form
 
             if (!response.IsSuccessStatusCode)
             {
-                LogLine($"{DateTime.Now:HH:mm:ss} [API] Login failed — status {response.StatusCode}", Color.OrangeRed);
+                // LogLine($"{DateTime.Now:HH:mm:ss} [API] Login failed — status {response.StatusCode}", Color.OrangeRed);
                 return;
             }
 
@@ -96,12 +100,12 @@ public partial class Form1 : Form
             {
                 _apiHttpClient.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", result.AccessToken);
-                LogLine($"{DateTime.Now:HH:mm:ss} [API] Authenticated as user1", Color.Yellow);
+                // LogLine($"{DateTime.Now:HH:mm:ss} [API] Authenticated as user1", Color.Yellow);
             }
         }
         catch (Exception ex)
         {
-            LogLine($"{DateTime.Now:HH:mm:ss} [API] Login error: {ex.Message}", Color.OrangeRed);
+            // LogLine($"{DateTime.Now:HH:mm:ss} [API] Login error: {ex.Message}", Color.OrangeRed);
         }
     }
 
@@ -168,6 +172,19 @@ public partial class Form1 : Form
         ApplyRadioStyle(grpContracts);
         if (sender is RadioButton { Checked: true } selected)
             ContractsSettingsStore.Save(selected.Text);
+    }
+
+    private void CountsRadioButton_CheckedChanged(object? sender, EventArgs e)
+    {
+        ApplyRadioStyle(grpCounts);
+        if (sender is RadioButton { Checked: true } selected)
+            _selectedCounts = selected.Text;
+    }
+
+    private void CallPutFilter_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (_selectedTicker == null || _lastAllQuotes.Count == 0) return;
+        PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true);
     }
 
     private static void ApplyRadioStyle(GroupBox group)
@@ -277,7 +294,7 @@ public partial class Form1 : Form
                 expiredRow.DefaultCellStyle.ForeColor = Color.Gray;
                 expiredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
 
-                LogLine($"{now:HH:mm:ss} Restored EXPIRED trade ({t.OptionType}) Strike: {t.StrikePrice}  Closed with Bid=0  PnL: {pnl:F2}", Color.Gray);
+                // LogLine($"{now:HH:mm:ss} Restored EXPIRED trade ({t.OptionType}) Strike: {t.StrikePrice}  Closed with Bid=0  PnL: {pnl:F2}", Color.Gray);
 
                 OpenTradesStore.Remove(t.TradeId);
                 if (t.TradeId > 0)
@@ -302,7 +319,7 @@ public partial class Form1 : Form
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
                 restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
 
-                LogLine($"{DateTime.Now:HH:mm:ss} Restored open trade ({t.OptionType}) Strike: {t.StrikePrice}  Entry: {t.EntryPrice:F2}  Contracts: {t.Contracts}", Color.Cyan);
+                // LogLine($"{DateTime.Now:HH:mm:ss} Restored open trade ({t.OptionType}) Strike: {t.StrikePrice}  Entry: {t.EntryPrice:F2}  Contracts: {t.Contracts}", Color.Cyan);
             }
         }
     }
@@ -352,7 +369,7 @@ public partial class Form1 : Form
         lblCredentialsSaved.Visible = hasCreds;
 
         // Wire logger so token events appear in the log panel
-        _schwabAuth.SetLogCallback(msg => Invoke(() => LogLine(msg, Color.Yellow)));
+        // _schwabAuth.SetLogCallback(msg => Invoke(() => LogLine(msg, Color.Yellow)));
 
         var tokens = SchwabTokenStore.Load();
         if (tokens != null && !string.IsNullOrEmpty(tokens.AccessToken))
@@ -390,14 +407,14 @@ public partial class Form1 : Form
         if (daysLeft <= 1)
         {
             var msg = $"{DateTime.Now:HH:mm:ss} [Token] ⚠ REFRESH TOKEN expires {expiresLocal:yyyy-MM-dd} — click Login before 9:30 AM to renew!";
-            LogLine(msg, Color.OrangeRed);
+            // LogLine(msg, Color.OrangeRed);
             lblTokenStatus.Text = "Refresh token expiring — Login needed!";
             lblTokenStatus.ForeColor = Color.OrangeRed;
         }
         else if (isMonday && daysLeft <= 3)
         {
             var msg = $"{DateTime.Now:HH:mm:ss} [Token] Refresh token expires in {(int)daysLeft} days ({expiresLocal:yyyy-MM-dd})";
-            LogLine(msg, Color.Orange);
+            // LogLine(msg, Color.Orange);
         }
     }
 
@@ -465,7 +482,7 @@ public partial class Form1 : Form
                 DateTime.UtcNow.AddSeconds(expiresIn - 30),
                 DateTime.UtcNow.AddDays(7));
             SchwabTokenStore.Save(tokens);
-            LogLine($"{DateTime.Now:HH:mm:ss} [Token] Refresh token saved — valid until {DateTime.Now.AddDays(7):yyyy-MM-dd}", Color.Yellow);
+            // LogLine($"{DateTime.Now:HH:mm:ss} [Token] Refresh token saved — valid until {DateTime.Now.AddDays(7):yyyy-MM-dd}", Color.Yellow);
 
             txtResponse.Text = string.Empty;
             lblTokenStatus.Text = "Token saved successfully";
@@ -610,7 +627,7 @@ public partial class Form1 : Form
             {
                 if (!_stoppedAt11Logged)
                 {
-                    LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 11:00 AM reached — polling stopped", Color.Yellow);
+                    // LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 11:00 AM reached — polling stopped", Color.Yellow);
                     _stoppedAt11Logged = true;
                 }
                 StopPolling();
@@ -688,13 +705,14 @@ public partial class Form1 : Form
             var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();
             var allQuotesNext = fullChain.Where(q => q.ExpirationDate == nextExpDate).ToList();
 
+            _lastAllQuotes = allQuotes;
             _lastSpotPrice = fullChain.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 
             // Primary chain (current ExpDate)
             if (chkSaveToCsv.Checked)
                 _csvLogger?.AppendRows(allQuotes);
 
-            PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker);
+            PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true);
 
             // Update PnL for open trades against the FULL chain (not the range-filtered grid),
             // so a trade's current bid keeps updating even after its strike leaves the display range.
@@ -778,13 +796,13 @@ public partial class Form1 : Form
     // Filters the chain to OTM strikes within the ticker's Ask range and (re)builds the given grid.
     // Returns the in-range OTM call/put lists so the caller can build trade-PnL maps if needed.
     private (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
-        DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker)
+        DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false)
     {
         decimal.TryParse(ticker.Low,  out var rangeLow);
         decimal.TryParse(ticker.High, out var rangeHigh);
         var rangeText = $"{ticker.Low} - {ticker.High}";
 
-        // Level lookup: rank among ALL OTM strikes (before range filter)
+        // Level lookup: rank among ALL OTM strikes (before range/count filter)
         var allOtmCallStrikes = allQuotes
             .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && !q.InTheMoney)
             .OrderBy(q => q.StrikePrice)   // ascending = closest first
@@ -797,20 +815,52 @@ public partial class Form1 : Form
             .Select(q => q.StrikePrice)
             .ToList();
 
-        // Filter OTM options within range (range = Ask price Low-High)
-        var otmCalls = allQuotes
-            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
-                     && !q.InTheMoney
-                     && q.Ask >= rangeLow && q.Ask <= rangeHigh)
-            .OrderByDescending(q => q.StrikePrice)
-            .ToList();
+        List<OptionQuoteDto> otmCalls;
+        List<OptionQuoteDto> otmPuts;
 
-        var otmPuts = allQuotes
-            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
-                     && !q.InTheMoney
-                     && q.Ask >= rangeLow && q.Ask <= rangeHigh)
-            .OrderByDescending(q => q.StrikePrice)
-            .ToList();
+        if (applyCountsFilter && int.TryParse(_selectedCounts, out var count))
+        {
+            // Show the N closest OTM strikes regardless of the Ask price range.
+            var callStrikeSet = allOtmCallStrikes.Take(count).ToHashSet();
+            var putStrikeSet  = allOtmPutStrikes.Take(count).ToHashSet();
+
+            otmCalls = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && callStrikeSet.Contains(q.StrikePrice))
+                .OrderByDescending(q => q.StrikePrice)
+                .ToList();
+
+            otmPuts = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && putStrikeSet.Contains(q.StrikePrice))
+                .OrderByDescending(q => q.StrikePrice)
+                .ToList();
+        }
+        else
+        {
+            // Filter OTM options within range (range = Ask price Low-High)
+            otmCalls = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call
+                         && !q.InTheMoney
+                         && q.Ask >= rangeLow && q.Ask <= rangeHigh)
+                .OrderByDescending(q => q.StrikePrice)
+                .ToList();
+
+            otmPuts = allQuotes
+                .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put
+                         && !q.InTheMoney
+                         && q.Ask >= rangeLow && q.Ask <= rangeHigh)
+                .OrderByDescending(q => q.StrikePrice)
+                .ToList();
+        }
+
+        // CALL/PUT checkbox filter (current grid only): one checked shows only that side;
+        // both checked or both unchecked shows both.
+        if (applyCountsFilter)
+        {
+            var callOnly = chkCallFilter.Checked && !chkPutFilter.Checked;
+            var putOnly  = chkPutFilter.Checked && !chkCallFilter.Checked;
+            if (callOnly) otmPuts  = new List<OptionQuoteDto>();
+            if (putOnly)  otmCalls = new List<OptionQuoteDto>();
+        }
 
         // Always rebuild rows so strikes that move ITM/OTM are reflected immediately
         grid.Rows.Clear();
@@ -1060,7 +1110,7 @@ public partial class Form1 : Form
             PnlTarget:      targetPct.ToString("F0")));
 
         var entryPath = CaptureScreenshot(symbol, rowType, "entry");
-        LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
+        // LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
         _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
 
         return tradeId;
@@ -1188,6 +1238,12 @@ public partial class Form1 : Form
 
     // ----- Broker accounts (Settings tab) -----
 
+    private void LoadCachedAccounts()
+    {
+        var cached = AccountsCacheStore.Load();
+        if (cached.Count > 0) PopulateAccountsGrid(cached, persist: false);
+    }
+
     private async void BtnRefreshAccounts_Click(object? sender, EventArgs e)
     {
         var creds = SchwabCredentialsStore.Load();
@@ -1203,7 +1259,7 @@ public partial class Form1 : Form
             var service  = CreateTradingService();
             var accounts = (await service.GetAccountNumbersAsync()).ToList();
             PopulateAccountsGrid(accounts);
-            LogLine($"{DateTime.Now:HH:mm:ss} [Accounts] Loaded {accounts.Count} account(s)", Color.Yellow);
+            // LogLine($"{DateTime.Now:HH:mm:ss} [Accounts] Loaded {accounts.Count} account(s)", Color.Yellow);
         }
         catch (Exception ex)
         {
@@ -1215,11 +1271,13 @@ public partial class Form1 : Form
         }
     }
 
-    private void PopulateAccountsGrid(List<SchwabAccountDto> accounts)
+    private void PopulateAccountsGrid(List<SchwabAccountDto> accounts, bool persist = true)
     {
         _accounts = accounts;
         dgvAccounts.Rows.Clear();
         var selected = SelectedAccountStore.Load();
+
+        if (persist) AccountsCacheStore.Save(accounts);
 
         foreach (var acct in accounts)
         {
@@ -1248,7 +1306,7 @@ public partial class Form1 : Form
         var hash   = dgvAccounts.Rows[e.RowIndex].Cells["colAccountHash"].Value?.ToString() ?? string.Empty;
         var number = _accounts.FirstOrDefault(a => a.HashValue == hash)?.AccountNumber ?? string.Empty;
         SelectedAccountStore.Save(new SelectedAccount(number, hash));
-        LogLine($"{DateTime.Now:HH:mm:ss} [Accounts] Default account set to {MaskAccount(number)}", Color.Yellow);
+        // LogLine($"{DateTime.Now:HH:mm:ss} [Accounts] Default account set to {MaskAccount(number)}", Color.Yellow);
     }
 
     private static string MaskAccount(string number) =>
@@ -1323,13 +1381,13 @@ public partial class Form1 : Form
 
         // Screenshot exit
         var exitPath = CaptureScreenshot(symbol, type, "exit");
-        LogLine($"{nowStr} Screenshot: {exitPath}", Color.DimGray);
+        // LogLine($"{nowStr} Screenshot: {exitPath}", Color.DimGray);
         _ = UploadScreenshotAsync(exitPath, symbol, type, tradeId, nowStr);
 
         // Screenshot TradeLog (Trades + Logger section of the form)
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
-        LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
+        // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
         _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr);
     }
 
@@ -1616,11 +1674,11 @@ public partial class Form1 : Form
                 }
             }
 
-            this.Invoke(() => LogLine($"{timeStr} Uploaded: {s3Url}", Color.DimGray));
+            // this.Invoke(() => LogLine($"{timeStr} Uploaded: {s3Url}", Color.DimGray));
         }
         catch (Exception ex)
         {
-            this.Invoke(() => LogLine($"{timeStr} S3 upload failed: {ex.Message}", Color.Red));
+            // this.Invoke(() => LogLine($"{timeStr} S3 upload failed: {ex.Message}", Color.Red));
         }
     }
 
