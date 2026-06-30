@@ -1636,6 +1636,8 @@ public partial class Form1 : Form
     private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
                                   Dictionary<(string, decimal), OptionQuoteDto> putMap)
     {
+        var rowsToClose = new List<DataGridViewRow>();
+
         foreach (DataGridViewRow row in dgvTrades.Rows)
         {
             // Skip closed trades
@@ -1666,7 +1668,18 @@ public partial class Form1 : Form
             // Color PnL
             row.Cells["colTradePnL"].Style.ForeColor        = pnl >= 0 ? Color.Green : Color.Red;
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
+
+            // Auto-close when the current bid reaches the target price (T_Bid).
+            if (decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
+                && targetBid > 0 && currentBid >= targetBid)
+            {
+                rowsToClose.Add(row);
+            }
         }
+
+        // Fire target closes after iterating so the loop isn't re-entered mid-enumeration.
+        foreach (var row in rowsToClose)
+            _ = CloseTradeRowAsync(row, "TARGET");
     }
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
