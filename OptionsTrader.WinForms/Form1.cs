@@ -1,6 +1,7 @@
 using Amazon.S3;
 using Amazon.S3.Model;
 using OptionsTrader.Application.DTOs.Options;
+using OptionsTrader.Application.DTOs.Trading;
 using OptionsTrader.Infrastructure.Schwab;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -32,6 +33,7 @@ public partial class Form1 : Form
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
+    private List<SchwabAccountDto> _accounts = new();
 
     public Form1()
     {
@@ -974,7 +976,10 @@ public partial class Form1 : Form
 
         if (rbNoTrade.Checked)
             OpenSimulatedTrade(e.RowIndex);
-        // Trade / Trade-Target: real order — coming soon
+        else if (rbTrade.Checked)
+            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false);
+        else if (rbTradeTarget.Checked)
+            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true);
     }
 
     private async void OpenSimulatedTrade(int rowIndex)
@@ -983,8 +988,17 @@ public partial class Form1 : Form
         var rowType   = row.Tag?.ToString() ?? "CALL";
         var strike    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
         var contracts = row.Cells["colContracts"].Value?.ToString() ?? "0";
+        var level     = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
         var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
+        var (bid, ask) = ReadRowBidAsk(row, rowType);
+        if (ask <= 0) return;
+
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: false);
+    }
+
+    private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
+    {
         decimal bid, ask;
         if (rowType == "CALL")
         {
@@ -996,14 +1010,19 @@ public partial class Form1 : Form
             decimal.TryParse(row.Cells["colPutBid"].Value?.ToString(), out bid);
             decimal.TryParse(row.Cells["colPutAsk"].Value?.ToString(), out ask);
         }
+        return (bid, ask);
+    }
 
-        if (ask <= 0) return;
-
+    // Records an opened position in the Trades grid + backend API + local persistence + entry screenshot.
+    // Shared by simulated trades and real (broker) trades. Returns the API trade id.
+    private async Task<int> RecordEntryAsync(string symbol, string rowType, string strike, string level,
+        decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo)
+    {
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-        var tBid     = Math.Round(ask * (1 + targetPct / 100m), 2);
-        var entryStr = ask.ToString("F2");
+        var tBid      = Math.Round(ask * (1 + targetPct / 100m), 2);
+        var entryStr  = ask.ToString("F2");
         var entryTime = DateTime.Now;
-        var now      = entryTime.ToString("HH:mm:ss");
+        var now       = entryTime.ToString("HH:mm:ss");
 
         dgvTrades.Rows.Add(
             now, rowType, strike,
@@ -1013,26 +1032,20 @@ public partial class Form1 : Form
             string.Empty, "Close");
 
         var newRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-
-        // Color static cells
         newRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
         newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
         newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
 
-        // Logger
-        var level = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
-        LogLine($"{now} Trade Manual ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
+        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
         System.Windows.Forms.Application.DoEvents();
 
-        // Save trade to API
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
-        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime);
+        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
         newRow.Tag = new TradeRowTag(tradeId, entryTime);
 
-        // Persist trade locally so it survives a program restart
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         OpenTradesStore.Add(new PersistedTrade(
             TradeId:        tradeId,
@@ -1046,11 +1059,202 @@ public partial class Form1 : Form
             Level:          level,
             PnlTarget:      targetPct.ToString("F0")));
 
-        // Screenshot entry
         var entryPath = CaptureScreenshot(symbol, rowType, "entry");
         LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
         _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
+
+        return tradeId;
     }
+
+    // ----- Real broker order execution (Schwab) -----
+
+    private async Task OnSchwabTokenRenewed(string newAccess, DateTime newExpires)
+    {
+        var current = SchwabTokenStore.Load();
+        if (current == null) return;
+        var updated = current with { AccessToken = newAccess, AccessTokenExpiresAt = newExpires };
+        SchwabTokenStore.Save(updated);
+        if (IsHandleCreated)
+            Invoke(() =>
+            {
+                lblTokenStatus.Text = $"Token renewed — expires {newExpires.ToLocalTime():HH:mm:ss}";
+                lblTokenStatus.ForeColor = Color.Green;
+            });
+    }
+
+    private SchwabTradingService CreateTradingService()
+    {
+        var creds  = SchwabCredentialsStore.Load();
+        var tokens = SchwabTokenStore.Load();
+        return new SchwabTradingService(
+            _marketHttpClient, _schwabAuth,
+            creds.ApiKey, creds.ApiSecret,
+            tokens?.RefreshToken ?? string.Empty,
+            tokens?.AccessToken ?? string.Empty,
+            tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
+            OnSchwabTokenRenewed);
+    }
+
+    private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)
+    {
+        var account = SelectedAccountStore.Load();
+        if (account == null || string.IsNullOrEmpty(account.HashValue))
+        {
+            MessageBox.Show("No broker account selected. Go to Settings → Broker Accounts, click Refresh Accounts and pick a default.",
+                "No Account Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        if (_selectedTicker == null) return;
+
+        var row          = dgvQuotes.Rows[rowIndex];
+        var rowType      = row.Tag?.ToString() ?? "CALL";
+        var strikeStr    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
+        var contractsStr = row.Cells["colContracts"].Value?.ToString() ?? "0";
+        var level        = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
+        var symbol       = _selectedTicker.Symbol;
+
+        var (bid, ask) = ReadRowBidAsk(row, rowType);
+        if (ask <= 0) return;
+        if (!int.TryParse(contractsStr, out var qty) || qty <= 0)
+        {
+            MessageBox.Show("Invalid contract quantity.", "Order", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        if (!decimal.TryParse(strikeStr, out var strike)) return;
+
+        var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
+        var occ     = OccOptionSymbol.Build(symbol, expDate, rowType, strike);
+        var masked  = MaskAccount(account.AccountNumber);
+        decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
+        var targetLine = withTarget ? $"\nExit: SELL_TO_CLOSE LIMIT at +{targetPct:F0}% of fill" : string.Empty;
+
+        var confirm = MessageBox.Show(
+            $"Send a REAL market order to Schwab?\n\n" +
+            $"Account: {masked}\n" +
+            $"Symbol:  {symbol} {rowType}\n" +
+            $"Strike:  {strikeStr}\n" +
+            $"Expiry:  {expDate:yyyy-MM-dd}\n" +
+            $"Qty:     {qty} contract(s)\n" +
+            $"Entry:   MARKET BUY_TO_OPEN{targetLine}\n\n" +
+            $"OCC: {occ}",
+            "Confirm REAL Order", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+        if (confirm != DialogResult.Yes) return;
+
+        try
+        {
+            var trading = CreateTradingService();
+            var now = DateTime.Now.ToString("HH:mm:ss");
+            LogLine($"{now} [Order] Sending MARKET BUY_TO_OPEN  {symbol} {rowType} {strikeStr} x{qty}  acct {masked}", Color.Cyan);
+
+            var entryOrderId = await trading.PlaceOptionMarketOrderAsync(account.HashValue, occ, "BUY_TO_OPEN", qty);
+            LogLine($"{now} [Order] Entry accepted — order id {entryOrderId}", Color.LimeGreen);
+
+            // Record the real position in grid + backend + screenshot
+            await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false);
+
+            if (withTarget)
+                await PlaceTargetExitAsync(trading, account.HashValue, occ, qty, entryOrderId, targetPct);
+        }
+        catch (Exception ex)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Order] FAILED: {ex.Message}", Color.Red);
+            MessageBox.Show($"Order failed: {ex.Message}", "Order Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // Waits for the entry order to fill, then sends a SELL_TO_CLOSE LIMIT at the target % of the fill price.
+    private async Task PlaceTargetExitAsync(SchwabTradingService trading, string accountHash, string occ,
+        int qty, long entryOrderId, decimal targetPct)
+    {
+        decimal? fill = null;
+        for (int i = 0; i < 5 && fill == null; i++)
+        {
+            await Task.Delay(1500);
+            var order = await trading.GetOrderAsync(accountHash, entryOrderId);
+            if (order.Status.Equals("FILLED", StringComparison.OrdinalIgnoreCase) && order.FilledPrice.HasValue)
+                fill = order.FilledPrice;
+        }
+
+        if (fill == null)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Order] Entry fill not confirmed yet — target exit NOT sent. Place it manually if needed.", Color.Orange);
+            return;
+        }
+
+        var targetPrice = Math.Round(fill.Value * (1 + targetPct / 100m), 2);
+        var exitOrderId = await trading.PlaceOptionLimitOrderAsync(accountHash, occ, "SELL_TO_CLOSE", qty, targetPrice);
+        LogLine($"{DateTime.Now:HH:mm:ss} [Order] Fill {fill:F2} → target exit LIMIT {targetPrice:F2} sent — order id {exitOrderId}", Color.LimeGreen);
+    }
+
+    // ----- Broker accounts (Settings tab) -----
+
+    private async void BtnRefreshAccounts_Click(object? sender, EventArgs e)
+    {
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        btnRefreshAccounts.Enabled = false;
+        try
+        {
+            var service  = CreateTradingService();
+            var accounts = (await service.GetAccountNumbersAsync()).ToList();
+            PopulateAccountsGrid(accounts);
+            LogLine($"{DateTime.Now:HH:mm:ss} [Accounts] Loaded {accounts.Count} account(s)", Color.Yellow);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not load accounts: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            btnRefreshAccounts.Enabled = true;
+        }
+    }
+
+    private void PopulateAccountsGrid(List<SchwabAccountDto> accounts)
+    {
+        _accounts = accounts;
+        dgvAccounts.Rows.Clear();
+        var selected = SelectedAccountStore.Load();
+
+        foreach (var acct in accounts)
+        {
+            var isDefault = selected != null && selected.HashValue == acct.HashValue;
+            dgvAccounts.Rows.Add(isDefault, MaskAccount(acct.AccountNumber), acct.HashValue);
+        }
+
+        // Default to the first account if none was persisted.
+        if (selected == null && accounts.Count > 0)
+        {
+            dgvAccounts.Rows[0].Cells["colAccountDefault"].Value = true;
+            SelectedAccountStore.Save(new SelectedAccount(accounts[0].AccountNumber, accounts[0].HashValue));
+        }
+    }
+
+    private void DgvAccounts_CellContentClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex != dgvAccounts.Columns["colAccountDefault"].Index) return;
+
+        dgvAccounts.CommitEdit(DataGridViewDataErrorContexts.Commit);
+
+        // Radio behaviour: the clicked row is the only one checked (and can't be unchecked).
+        for (int i = 0; i < dgvAccounts.Rows.Count; i++)
+            dgvAccounts.Rows[i].Cells["colAccountDefault"].Value = (i == e.RowIndex);
+
+        var hash   = dgvAccounts.Rows[e.RowIndex].Cells["colAccountHash"].Value?.ToString() ?? string.Empty;
+        var number = _accounts.FirstOrDefault(a => a.HashValue == hash)?.AccountNumber ?? string.Empty;
+        SelectedAccountStore.Save(new SelectedAccount(number, hash));
+        LogLine($"{DateTime.Now:HH:mm:ss} [Accounts] Default account set to {MaskAccount(number)}", Color.Yellow);
+    }
+
+    private static string MaskAccount(string number) =>
+        string.IsNullOrEmpty(number) || number.Length <= 4
+            ? number
+            : new string('•', number.Length - 4) + number[^4..];
 
     private async void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
@@ -1432,6 +1636,8 @@ public partial class Form1 : Form
     private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
                                   Dictionary<(string, decimal), OptionQuoteDto> putMap)
     {
+        var rowsToClose = new List<DataGridViewRow>();
+
         foreach (DataGridViewRow row in dgvTrades.Rows)
         {
             // Skip closed trades
@@ -1462,7 +1668,18 @@ public partial class Form1 : Form
             // Color PnL
             row.Cells["colTradePnL"].Style.ForeColor        = pnl >= 0 ? Color.Green : Color.Red;
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
+
+            // Auto-close when the current bid reaches the target price (T_Bid).
+            if (decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
+                && targetBid > 0 && currentBid >= targetBid)
+            {
+                rowsToClose.Add(row);
+            }
         }
+
+        // Fire target closes after iterating so the loop isn't re-entered mid-enumeration.
+        foreach (var row in rowsToClose)
+            _ = CloseTradeRowAsync(row, "TARGET");
     }
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)

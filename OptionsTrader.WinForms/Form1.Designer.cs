@@ -139,6 +139,12 @@ partial class Form1
         txtResponse = new TextBox();
         lblResponseHint = new Label();
         lblTokenStatus = new Label();
+        grpAccounts = new GroupBox();
+        dgvAccounts = new DataGridView();
+        colAccountDefault = new DataGridViewCheckBoxColumn();
+        colAccountNumber = new DataGridViewTextBoxColumn();
+        colAccountHash = new DataGridViewTextBoxColumn();
+        btnRefreshAccounts = new Button();
         grpAwsSettings = new GroupBox();
         lblAwsAccessKey = new Label();
         txtAwsAccessKey = new TextBox();
@@ -172,6 +178,8 @@ partial class Form1
         grpTarget.SuspendLayout();
         grpSchwabCredentials.SuspendLayout();
         grpRefreshToken.SuspendLayout();
+        grpAccounts.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)dgvAccounts).BeginInit();
         grpAwsSettings.SuspendLayout();
         SuspendLayout();
         // 
@@ -878,6 +886,7 @@ partial class Form1
         tabSettings.Controls.Add(grpTarget);
         tabSettings.Controls.Add(grpSchwabCredentials);
         tabSettings.Controls.Add(grpRefreshToken);
+        tabSettings.Controls.Add(grpAccounts);
         tabSettings.Controls.Add(grpAwsSettings);
         tabSettings.Location = new Point(4, 24);
         tabSettings.Name = "tabSettings";
@@ -1290,6 +1299,60 @@ partial class Form1
         lblTokenStatus.TabIndex = 2;
         lblTokenStatus.Text = string.Empty;
         //
+        // grpAccounts
+        //
+        grpAccounts.Controls.Add(dgvAccounts);
+        grpAccounts.Controls.Add(btnRefreshAccounts);
+        grpAccounts.Location = new Point(800, 215);
+        grpAccounts.Name = "grpAccounts";
+        grpAccounts.Size = new Size(310, 165);
+        grpAccounts.TabIndex = 8;
+        grpAccounts.TabStop = false;
+        grpAccounts.Text = "Broker Accounts (Schwab)";
+        //
+        // dgvAccounts
+        //
+        dgvAccounts.AllowUserToAddRows = false;
+        dgvAccounts.AllowUserToDeleteRows = false;
+        dgvAccounts.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        dgvAccounts.Columns.AddRange(new DataGridViewColumn[] { colAccountDefault, colAccountNumber, colAccountHash });
+        dgvAccounts.Location = new Point(10, 22);
+        dgvAccounts.Name = "dgvAccounts";
+        dgvAccounts.RowHeadersVisible = false;
+        dgvAccounts.RowTemplate.Height = 22;
+        dgvAccounts.Size = new Size(290, 100);
+        dgvAccounts.TabIndex = 0;
+        dgvAccounts.CellContentClick += DgvAccounts_CellContentClick;
+        //
+        // colAccountDefault
+        //
+        colAccountDefault.HeaderText = "Default";
+        colAccountDefault.Name = "colAccountDefault";
+        colAccountDefault.Width = 55;
+        //
+        // colAccountNumber
+        //
+        colAccountNumber.HeaderText = "Account";
+        colAccountNumber.Name = "colAccountNumber";
+        colAccountNumber.ReadOnly = true;
+        colAccountNumber.Width = 215;
+        //
+        // colAccountHash
+        //
+        colAccountHash.HeaderText = "Hash";
+        colAccountHash.Name = "colAccountHash";
+        colAccountHash.ReadOnly = true;
+        colAccountHash.Visible = false;
+        //
+        // btnRefreshAccounts
+        //
+        btnRefreshAccounts.Location = new Point(10, 128);
+        btnRefreshAccounts.Name = "btnRefreshAccounts";
+        btnRefreshAccounts.Size = new Size(130, 25);
+        btnRefreshAccounts.TabIndex = 1;
+        btnRefreshAccounts.Text = "Refresh Accounts";
+        btnRefreshAccounts.Click += BtnRefreshAccounts_Click;
+        //
         // grpAwsSettings
         //
         grpAwsSettings.Controls.Add(lblAwsAccessKey);
@@ -1428,6 +1491,8 @@ partial class Form1
         grpSchwabCredentials.PerformLayout();
         grpRefreshToken.ResumeLayout(false);
         grpRefreshToken.PerformLayout();
+        grpAccounts.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)dgvAccounts).EndInit();
         grpAwsSettings.ResumeLayout(false);
         grpAwsSettings.PerformLayout();
         ResumeLayout(false);
@@ -1540,6 +1605,12 @@ partial class Form1
     private Button btnSaveCredentials;
     private Label lblCredentialsSaved;
     private GroupBox grpRefreshToken;
+    private GroupBox grpAccounts;
+    private DataGridView dgvAccounts;
+    private DataGridViewCheckBoxColumn colAccountDefault;
+    private DataGridViewTextBoxColumn colAccountNumber;
+    private DataGridViewTextBoxColumn colAccountHash;
+    private Button btnRefreshAccounts;
     private Button btnLogin;
     private TextBox txtResponse;
     private Label lblResponseHint;
