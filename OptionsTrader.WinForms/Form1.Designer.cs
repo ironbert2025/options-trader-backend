@@ -51,6 +51,8 @@ partial class Form1
         colLevel = new DataGridViewTextBoxColumn();
         lblCallHeader = new Label();
         lblPutHeader = new Label();
+        chkCallFilter = new CheckBox();
+        chkPutFilter = new CheckBox();
         grpOptionsChainNext = new GroupBox();
         dgvQuotesNext = new DataGridView();
         colSymbolQNext = new DataGridViewTextBoxColumn();
@@ -91,6 +93,20 @@ partial class Form1
         rbContracts5 = new RadioButton();
         rbContracts6 = new RadioButton();
         rbContractsPositionSize = new RadioButton();
+        grpCounts = new GroupBox();
+        rbCounts3 = new RadioButton();
+        rbCounts4 = new RadioButton();
+        rbCounts5 = new RadioButton();
+        rbCounts6 = new RadioButton();
+        rbCounts7 = new RadioButton();
+        rbCounts8 = new RadioButton();
+        rbCounts9 = new RadioButton();
+        rbCounts10 = new RadioButton();
+        rbCounts11 = new RadioButton();
+        rbCounts12 = new RadioButton();
+        rbCounts13 = new RadioButton();
+        rbCounts14 = new RadioButton();
+        rbCountsInRange = new RadioButton();
         tabSettings = new TabPage();
         grpBroker = new GroupBox();
         rbSchwab = new RadioButton();
@@ -169,6 +185,7 @@ partial class Form1
         grpTickerButtons.SuspendLayout();
         grpTrade.SuspendLayout();
         grpContracts.SuspendLayout();
+        grpCounts.SuspendLayout();
         tabSettings.SuspendLayout();
         grpBroker.SuspendLayout();
         grpTickers.SuspendLayout();
@@ -191,7 +208,7 @@ partial class Form1
         tabControl.Location = new Point(0, 0);
         tabControl.Name = "tabControl";
         tabControl.SelectedIndex = 0;
-        tabControl.Size = new Size(1121, 600);
+        tabControl.Size = new Size(1181, 600);
         tabControl.TabIndex = 0;
         // 
         // tabQuotes
@@ -202,13 +219,13 @@ partial class Form1
         tabQuotes.Controls.Add(grpOptionsChainNext);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnStartPolling);
-        tabQuotes.Controls.Add(lblExpDate);
-        tabQuotes.Controls.Add(lblExpDateNext);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Controls.Add(grpTickerButtons);
         tabQuotes.Controls.Add(grpTrade);
         tabQuotes.Controls.Add(grpContracts);
+        tabQuotes.Controls.Add(grpCounts);
+        tabQuotes.Controls.Add(chkStopAt11);
         tabQuotes.Location = new Point(4, 24);
         tabQuotes.Name = "tabQuotes";
         tabQuotes.Padding = new Padding(8);
@@ -221,7 +238,7 @@ partial class Form1
         grpLogger.Controls.Add(rtbLogger);
         grpLogger.Location = new Point(8, 415);
         grpLogger.Name = "grpLogger";
-        grpLogger.Size = new Size(1090, 149);
+        grpLogger.Size = new Size(1150, 149);
         grpLogger.TabIndex = 0;
         grpLogger.TabStop = false;
         grpLogger.Text = "Logger";
@@ -235,7 +252,7 @@ partial class Form1
         rtbLogger.Name = "rtbLogger";
         rtbLogger.ReadOnly = true;
         rtbLogger.ScrollBars = RichTextBoxScrollBars.Vertical;
-        rtbLogger.Size = new Size(994, 127);
+        rtbLogger.Size = new Size(1054, 127);
         rtbLogger.TabIndex = 0;
         rtbLogger.Text = "";
         rtbLogger.WordWrap = false;
@@ -245,7 +262,7 @@ partial class Form1
         grpTrades.Controls.Add(dgvTrades);
         grpTrades.Location = new Point(11, 306);
         grpTrades.Name = "grpTrades";
-        grpTrades.Size = new Size(1087, 90);
+        grpTrades.Size = new Size(1147, 90);
         grpTrades.TabIndex = 1;
         grpTrades.TabStop = false;
         grpTrades.Text = "Trades";
@@ -262,7 +279,7 @@ partial class Form1
         dgvTrades.Name = "dgvTrades";
         dgvTrades.RowHeadersVisible = false;
         dgvTrades.RowTemplate.Height = 22;
-        dgvTrades.Size = new Size(994, 68);
+        dgvTrades.Size = new Size(1054, 68);
         dgvTrades.TabIndex = 0;
         dgvTrades.CellClick += DgvTrades_CellClick;
         // 
@@ -356,10 +373,12 @@ partial class Form1
         grpOptionsChain.Controls.Add(dgvQuotes);
         grpOptionsChain.Controls.Add(lblCallHeader);
         grpOptionsChain.Controls.Add(lblPutHeader);
-        grpOptionsChain.Controls.Add(chkStopAt11);
+        grpOptionsChain.Controls.Add(chkCallFilter);
+        grpOptionsChain.Controls.Add(chkPutFilter);
+        grpOptionsChain.Controls.Add(lblExpDate);
         grpOptionsChain.Location = new Point(8, 100);
         grpOptionsChain.Name = "grpOptionsChain";
-        grpOptionsChain.Size = new Size(542, 200);
+        grpOptionsChain.Size = new Size(572, 200);
         grpOptionsChain.TabIndex = 2;
         grpOptionsChain.TabStop = false;
         grpOptionsChain.Text = "OptionsChain";
@@ -375,7 +394,7 @@ partial class Form1
         dgvQuotes.Name = "dgvQuotes";
         dgvQuotes.RowHeadersVisible = false;
         dgvQuotes.RowTemplate.Height = 22;
-        dgvQuotes.Size = new Size(523, 175);
+        dgvQuotes.Size = new Size(566, 175);
         dgvQuotes.TabIndex = 0;
         dgvQuotes.CellClick += DgvQuotes_CellClick;
         dgvQuotes.CellFormatting += DgvQuotes_CellFormatting;
@@ -475,7 +494,7 @@ partial class Form1
         lblCallHeader.AutoSize = true;
         lblCallHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblCallHeader.ForeColor = Color.Green;
-        lblCallHeader.Location = new Point(180, 2);
+        lblCallHeader.Location = new Point(124, 2);
         lblCallHeader.Name = "lblCallHeader";
         lblCallHeader.Size = new Size(40, 15);
         lblCallHeader.TabIndex = 1;
@@ -486,11 +505,39 @@ partial class Form1
         lblPutHeader.AutoSize = true;
         lblPutHeader.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblPutHeader.ForeColor = Color.Red;
-        lblPutHeader.Location = new Point(347, 2);
+        lblPutHeader.Location = new Point(403, 2);
         lblPutHeader.Name = "lblPutHeader";
         lblPutHeader.Size = new Size(34, 15);
         lblPutHeader.TabIndex = 2;
         lblPutHeader.Text = "PUT";
+        //
+        // chkCallFilter
+        //
+        chkCallFilter.AutoSize = true;
+        chkCallFilter.Location = new Point(106, 3);
+        chkCallFilter.Name = "chkCallFilter";
+        chkCallFilter.Size = new Size(15, 14);
+        chkCallFilter.TabIndex = 9;
+        chkCallFilter.CheckedChanged += CallPutFilter_CheckedChanged;
+        //
+        // chkPutFilter
+        //
+        chkPutFilter.AutoSize = true;
+        chkPutFilter.Location = new Point(385, 3);
+        chkPutFilter.Name = "chkPutFilter";
+        chkPutFilter.Size = new Size(15, 14);
+        chkPutFilter.TabIndex = 10;
+        chkPutFilter.CheckedChanged += CallPutFilter_CheckedChanged;
+        //
+        // lblExpDate
+        //
+        lblExpDate.AutoSize = true;
+        lblExpDate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        lblExpDate.ForeColor = Color.DarkGoldenrod;
+        lblExpDate.Location = new Point(208, 3);
+        lblExpDate.Name = "lblExpDate";
+        lblExpDate.Size = new Size(0, 13);
+        lblExpDate.TabIndex = 4;
         //
         // grpOptionsChainNext
         //
@@ -498,9 +545,10 @@ partial class Form1
         grpOptionsChainNext.Controls.Add(dgvQuotesNext);
         grpOptionsChainNext.Controls.Add(lblCallHeaderNext);
         grpOptionsChainNext.Controls.Add(lblPutHeaderNext);
-        grpOptionsChainNext.Location = new Point(556, 100);
+        grpOptionsChainNext.Controls.Add(lblExpDateNext);
+        grpOptionsChainNext.Location = new Point(586, 100);
         grpOptionsChainNext.Name = "grpOptionsChainNext";
-        grpOptionsChainNext.Size = new Size(542, 200);
+        grpOptionsChainNext.Size = new Size(572, 200);
         grpOptionsChainNext.TabIndex = 7;
         grpOptionsChainNext.TabStop = false;
         grpOptionsChainNext.Text = "OptionsChain (Next ExpDate)";
@@ -517,7 +565,7 @@ partial class Form1
         dgvQuotesNext.ReadOnly = true;
         dgvQuotesNext.RowHeadersVisible = false;
         dgvQuotesNext.RowTemplate.Height = 22;
-        dgvQuotesNext.Size = new Size(523, 175);
+        dgvQuotesNext.Size = new Size(566, 175);
         dgvQuotesNext.TabIndex = 0;
         dgvQuotesNext.CellFormatting += DgvQuotesNext_CellFormatting;
         dgvQuotesNext.CellPainting += DgvQuotesNext_CellPainting;
@@ -617,7 +665,7 @@ partial class Form1
         lblCallHeaderNext.AutoSize = true;
         lblCallHeaderNext.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblCallHeaderNext.ForeColor = Color.Green;
-        lblCallHeaderNext.Location = new Point(180, 2);
+        lblCallHeaderNext.Location = new Point(124, 2);
         lblCallHeaderNext.Name = "lblCallHeaderNext";
         lblCallHeaderNext.Size = new Size(40, 15);
         lblCallHeaderNext.TabIndex = 1;
@@ -628,7 +676,7 @@ partial class Form1
         lblPutHeaderNext.AutoSize = true;
         lblPutHeaderNext.Font = new Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
         lblPutHeaderNext.ForeColor = Color.Red;
-        lblPutHeaderNext.Location = new Point(347, 2);
+        lblPutHeaderNext.Location = new Point(403, 2);
         lblPutHeaderNext.Name = "lblPutHeaderNext";
         lblPutHeaderNext.Size = new Size(34, 15);
         lblPutHeaderNext.TabIndex = 2;
@@ -639,7 +687,7 @@ partial class Form1
         lblExpDateNext.AutoSize = true;
         lblExpDateNext.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblExpDateNext.ForeColor = Color.DarkGoldenrod;
-        lblExpDateNext.Location = new Point(761, 82);
+        lblExpDateNext.Location = new Point(208, 3);
         lblExpDateNext.Name = "lblExpDateNext";
         lblExpDateNext.Size = new Size(0, 13);
         lblExpDateNext.TabIndex = 8;
@@ -647,7 +695,7 @@ partial class Form1
         // chkStopAt11
         // 
         chkStopAt11.AutoSize = true;
-        chkStopAt11.Location = new Point(412, 2);
+        chkStopAt11.Location = new Point(420, 84);
         chkStopAt11.Name = "chkStopAt11";
         chkStopAt11.Size = new Size(115, 19);
         chkStopAt11.TabIndex = 3;
@@ -684,17 +732,7 @@ partial class Form1
         btnStartPolling.Text = "Start Polling";
         btnStartPolling.UseVisualStyleBackColor = false;
         btnStartPolling.Click += BtnStartPolling_Click;
-        // 
-        // lblExpDate
-        // 
-        lblExpDate.AutoSize = true;
-        lblExpDate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
-        lblExpDate.ForeColor = Color.DarkGoldenrod;
-        lblExpDate.Location = new Point(198, 82);
-        lblExpDate.Name = "lblExpDate";
-        lblExpDate.Size = new Size(0, 13);
-        lblExpDate.TabIndex = 4;
-        // 
+        //
         // lblLastUpdate
         // 
         lblLastUpdate.AutoSize = true;
@@ -874,6 +912,147 @@ partial class Form1
         rbContractsPositionSize.TabIndex = 6;
         rbContractsPositionSize.Text = "PositionSize";
         rbContractsPositionSize.CheckedChanged += ContractsRadioButton_CheckedChanged;
+        //
+        // grpCounts
+        //
+        grpCounts.Controls.Add(rbCounts3);
+        grpCounts.Controls.Add(rbCounts4);
+        grpCounts.Controls.Add(rbCounts5);
+        grpCounts.Controls.Add(rbCounts6);
+        grpCounts.Controls.Add(rbCounts7);
+        grpCounts.Controls.Add(rbCounts8);
+        grpCounts.Controls.Add(rbCounts9);
+        grpCounts.Controls.Add(rbCounts10);
+        grpCounts.Controls.Add(rbCounts11);
+        grpCounts.Controls.Add(rbCounts12);
+        grpCounts.Controls.Add(rbCounts13);
+        grpCounts.Controls.Add(rbCounts14);
+        grpCounts.Controls.Add(rbCountsInRange);
+        grpCounts.Location = new Point(545, 4);
+        grpCounts.Name = "grpCounts";
+        grpCounts.Size = new Size(265, 90);
+        grpCounts.TabIndex = 9;
+        grpCounts.TabStop = false;
+        grpCounts.Text = "Counts";
+        //
+        // rbCounts3
+        //
+        rbCounts3.Location = new Point(6, 20);
+        rbCounts3.Name = "rbCounts3";
+        rbCounts3.Size = new Size(36, 18);
+        rbCounts3.TabIndex = 0;
+        rbCounts3.Text = "3";
+        rbCounts3.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts4
+        //
+        rbCounts4.Location = new Point(48, 20);
+        rbCounts4.Name = "rbCounts4";
+        rbCounts4.Size = new Size(36, 18);
+        rbCounts4.TabIndex = 1;
+        rbCounts4.Text = "4";
+        rbCounts4.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts5
+        //
+        rbCounts5.Location = new Point(90, 20);
+        rbCounts5.Name = "rbCounts5";
+        rbCounts5.Size = new Size(36, 18);
+        rbCounts5.TabIndex = 2;
+        rbCounts5.Text = "5";
+        rbCounts5.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts6
+        //
+        rbCounts6.Location = new Point(132, 20);
+        rbCounts6.Name = "rbCounts6";
+        rbCounts6.Size = new Size(36, 18);
+        rbCounts6.TabIndex = 3;
+        rbCounts6.Text = "6";
+        rbCounts6.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts7
+        //
+        rbCounts7.Location = new Point(174, 20);
+        rbCounts7.Name = "rbCounts7";
+        rbCounts7.Size = new Size(36, 18);
+        rbCounts7.TabIndex = 4;
+        rbCounts7.Text = "7";
+        rbCounts7.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts8
+        //
+        rbCounts8.Location = new Point(216, 20);
+        rbCounts8.Name = "rbCounts8";
+        rbCounts8.Size = new Size(36, 18);
+        rbCounts8.TabIndex = 5;
+        rbCounts8.Text = "8";
+        rbCounts8.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts9
+        //
+        rbCounts9.Location = new Point(6, 42);
+        rbCounts9.Name = "rbCounts9";
+        rbCounts9.Size = new Size(42, 18);
+        rbCounts9.TabIndex = 6;
+        rbCounts9.Text = "9";
+        rbCounts9.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts10
+        //
+        rbCounts10.Location = new Point(48, 42);
+        rbCounts10.Name = "rbCounts10";
+        rbCounts10.Size = new Size(42, 18);
+        rbCounts10.TabIndex = 7;
+        rbCounts10.Text = "10";
+        rbCounts10.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts11
+        //
+        rbCounts11.Location = new Point(90, 42);
+        rbCounts11.Name = "rbCounts11";
+        rbCounts11.Size = new Size(42, 18);
+        rbCounts11.TabIndex = 8;
+        rbCounts11.Text = "11";
+        rbCounts11.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts12
+        //
+        rbCounts12.Location = new Point(132, 42);
+        rbCounts12.Name = "rbCounts12";
+        rbCounts12.Size = new Size(42, 18);
+        rbCounts12.TabIndex = 9;
+        rbCounts12.Text = "12";
+        rbCounts12.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts13
+        //
+        rbCounts13.Location = new Point(174, 42);
+        rbCounts13.Name = "rbCounts13";
+        rbCounts13.Size = new Size(42, 18);
+        rbCounts13.TabIndex = 10;
+        rbCounts13.Text = "13";
+        rbCounts13.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCounts14
+        //
+        rbCounts14.Location = new Point(216, 42);
+        rbCounts14.Name = "rbCounts14";
+        rbCounts14.Size = new Size(42, 18);
+        rbCounts14.TabIndex = 11;
+        rbCounts14.Text = "14";
+        rbCounts14.CheckedChanged += CountsRadioButton_CheckedChanged;
+        //
+        // rbCountsInRange
+        //
+        rbCountsInRange.Checked = true;
+        rbCountsInRange.Location = new Point(6, 64);
+        rbCountsInRange.Name = "rbCountsInRange";
+        rbCountsInRange.Size = new Size(90, 18);
+        rbCountsInRange.TabIndex = 12;
+        rbCountsInRange.TabStop = true;
+        rbCountsInRange.Text = "In Range";
+        rbCountsInRange.CheckedChanged += CountsRadioButton_CheckedChanged;
         //
         // tabSettings
         // 
@@ -1458,7 +1637,7 @@ partial class Form1
         //
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(1121, 600);
+        ClientSize = new Size(1181, 600);
         Controls.Add(tabControl);
         Name = "Form1";
         Text = "Options Trader";
@@ -1479,6 +1658,7 @@ partial class Form1
         grpTickerButtons.ResumeLayout(false);
         grpTrade.ResumeLayout(false);
         grpContracts.ResumeLayout(false);
+        grpCounts.ResumeLayout(false);
         tabSettings.ResumeLayout(false);
         grpBroker.ResumeLayout(false);
         grpTickers.ResumeLayout(false);
@@ -1518,6 +1698,8 @@ partial class Form1
     private DataGridViewTextBoxColumn colLevel;
     private Label lblCallHeader;
     private Label lblPutHeader;
+    private CheckBox chkCallFilter;
+    private CheckBox chkPutFilter;
     private CheckBox chkStopAt11;
     private CheckBox chkSaveToCsv;
     private GroupBox grpTrade;
@@ -1532,6 +1714,20 @@ partial class Form1
     private RadioButton rbContracts5;
     private RadioButton rbContracts6;
     private RadioButton rbContractsPositionSize;
+    private GroupBox grpCounts;
+    private RadioButton rbCounts3;
+    private RadioButton rbCounts4;
+    private RadioButton rbCounts5;
+    private RadioButton rbCounts6;
+    private RadioButton rbCounts7;
+    private RadioButton rbCounts8;
+    private RadioButton rbCounts9;
+    private RadioButton rbCounts10;
+    private RadioButton rbCounts11;
+    private RadioButton rbCounts12;
+    private RadioButton rbCounts13;
+    private RadioButton rbCounts14;
+    private RadioButton rbCountsInRange;
     private GroupBox grpOptionsChain;
     private GroupBox grpOptionsChainNext;
     private DataGridView dgvQuotesNext;
