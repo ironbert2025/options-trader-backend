@@ -50,6 +50,7 @@ public partial class Form1 : Form
         LoadScreenCoords();
         LoadBalance();
         LoadTickerButtons();
+        LoadCachedAccounts();
         _ = LoginApiAsync();
         StartAutoCaptureScheduler();
     }
@@ -1188,6 +1189,12 @@ public partial class Form1 : Form
 
     // ----- Broker accounts (Settings tab) -----
 
+    private void LoadCachedAccounts()
+    {
+        var cached = AccountsCacheStore.Load();
+        if (cached.Count > 0) PopulateAccountsGrid(cached, persist: false);
+    }
+
     private async void BtnRefreshAccounts_Click(object? sender, EventArgs e)
     {
         var creds = SchwabCredentialsStore.Load();
@@ -1215,11 +1222,13 @@ public partial class Form1 : Form
         }
     }
 
-    private void PopulateAccountsGrid(List<SchwabAccountDto> accounts)
+    private void PopulateAccountsGrid(List<SchwabAccountDto> accounts, bool persist = true)
     {
         _accounts = accounts;
         dgvAccounts.Rows.Clear();
         var selected = SelectedAccountStore.Load();
+
+        if (persist) AccountsCacheStore.Save(accounts);
 
         foreach (var acct in accounts)
         {
