@@ -8,7 +8,7 @@ using System.Text.Json;
 
 namespace OptionsTrader.WinForms;
 
-file record TradeRowTag(int TradeId, DateTime EntryTime);
+file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false);
 
 public partial class Form1 : Form
 {
@@ -1044,7 +1044,7 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: false);
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: false, suppressAutoClose: false);
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
@@ -1064,9 +1064,9 @@ public partial class Form1 : Form
     }
 
     // Records an opened position in the Trades grid + backend API + local persistence + entry screenshot.
-    // Shared by simulated trades and real (broker) trades. Returns the API trade id.
-    private async Task<int> RecordEntryAsync(string symbol, string rowType, string strike, string level,
-        decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo)
+    // Shared by simulated trades and real (broker) trades. Returns the API trade id and the new grid row.
+    private async Task<(int TradeId, DataGridViewRow Row)> RecordEntryAsync(string symbol, string rowType, string strike, string level,
+        decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool suppressAutoClose = false)
     {
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var tBid      = Math.Round(ask * (1 + targetPct / 100m), 2);
@@ -1094,7 +1094,7 @@ public partial class Form1 : Form
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
-        newRow.Tag = new TradeRowTag(tradeId, entryTime);
+        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose);
 
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         OpenTradesStore.Add(new PersistedTrade(
@@ -1113,7 +1113,7 @@ public partial class Form1 : Form
         // LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
         _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
 
-        return tradeId;
+        return (tradeId, newRow);
     }
 
     // ----- Real broker order execution (Schwab) -----
@@ -1199,11 +1199,13 @@ public partial class Form1 : Form
             var entryOrderId = await trading.PlaceOptionMarketOrderAsync(account.HashValue, occ, "BUY_TO_OPEN", qty);
             LogLine($"{now} [Order] Entry accepted — order id {entryOrderId}", Color.LimeGreen);
 
-            // Record the real position in grid + backend + screenshot
-            await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false);
+            // Record the real position in grid + backend + screenshot.
+            // Trade-Target rows still auto-close in the log (mirrors the real LIMIT order closing
+            // on the server); plain Trade rows are manual-close only.
+            var (_, tradeRow) = await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false, suppressAutoClose: !withTarget);
 
-            if (withTarget)
-                await PlaceTargetExitAsync(trading, account.HashValue, occ, qty, entryOrderId, targetPct);
+            // Poll for the real fill, sync it into the log, then (if Trade-Target) send the LIMIT exit.
+            _ = FinalizeRealEntryAsync(trading, account.HashValue, occ, qty, entryOrderId, targetPct, withTarget, tradeRow);
         }
         catch (Exception ex)
         {
@@ -1212,9 +1214,11 @@ public partial class Form1 : Form
         }
     }
 
-    // Waits for the entry order to fill, then sends a SELL_TO_CLOSE LIMIT at the target % of the fill price.
-    private async Task PlaceTargetExitAsync(SchwabTradingService trading, string accountHash, string occ,
-        int qty, long entryOrderId, decimal targetPct)
+    // Waits for the entry order to fill, syncs the real EntryPrice/Target into the Trades grid, and —
+    // for Trade-Target — sends the SELL_TO_CLOSE LIMIT order so the position closes itself on the server.
+    // The Trades grid will auto-close the same row once PnL_Percent reaches PnL_Target (see UpdateTradesPnL).
+    private async Task FinalizeRealEntryAsync(SchwabTradingService trading, string accountHash, string occ,
+        int qty, long entryOrderId, decimal targetPct, bool withTarget, DataGridViewRow row)
     {
         decimal? fill = null;
         for (int i = 0; i < 5 && fill == null; i++)
@@ -1227,13 +1231,25 @@ public partial class Form1 : Form
 
         if (fill == null)
         {
-            LogLine($"{DateTime.Now:HH:mm:ss} [Order] Entry fill not confirmed yet — target exit NOT sent. Place it manually if needed.", Color.Orange);
+            LogLine($"{DateTime.Now:HH:mm:ss} [Order] Entry fill not confirmed yet — keeping Ask as EntryPrice. Target exit NOT sent.", Color.Orange);
             return;
         }
 
         var targetPrice = Math.Round(fill.Value * (1 + targetPct / 100m), 2);
-        var exitOrderId = await trading.PlaceOptionLimitOrderAsync(accountHash, occ, "SELL_TO_CLOSE", qty, targetPrice);
-        LogLine($"{DateTime.Now:HH:mm:ss} [Order] Fill {fill:F2} → target exit LIMIT {targetPrice:F2} sent — order id {exitOrderId}", Color.LimeGreen);
+
+        Invoke(() =>
+        {
+            if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return; // already closed
+            row.Cells["colTradeEntryPrice"].Value = fill.Value.ToString("F2");
+            row.Cells["colTradeTBid"].Value        = targetPrice.ToString("F2");
+            LogLine($"{DateTime.Now:HH:mm:ss} [Order] Real EntryPrice confirmed: {fill.Value:F2}  Target: {targetPrice:F2}", Color.LimeGreen);
+        });
+
+        if (withTarget)
+        {
+            var exitOrderId = await trading.PlaceOptionLimitOrderAsync(accountHash, occ, "SELL_TO_CLOSE", qty, targetPrice);
+            LogLine($"{DateTime.Now:HH:mm:ss} [Order] Target exit LIMIT {targetPrice:F2} sent — order id {exitOrderId}", Color.LimeGreen);
+        }
     }
 
     // ----- Broker accounts (Settings tab) -----
@@ -1728,7 +1744,11 @@ public partial class Form1 : Form
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
 
             // Auto-close when the current bid reaches the target price (T_Bid).
-            if (decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
+            // Plain real trades (no target order) are manual-close only; Trade-Target rows still
+            // auto-close here to mirror the real LIMIT order closing on the server.
+            var suppressAutoClose = row.Tag is TradeRowTag { SuppressAutoClose: true };
+            if (!suppressAutoClose
+                && decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
                 && targetBid > 0 && currentBid >= targetBid)
             {
                 rowsToClose.Add(row);
