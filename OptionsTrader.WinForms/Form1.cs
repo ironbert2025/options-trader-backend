@@ -21,7 +21,7 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _autoCaptureTimer;
     private bool _isPolling;
     private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
-    private bool _stoppedAt11Logged;  // avoids spamming the log on the 11 AM auto-stop
+    private bool _throttledAfter11;   // true once the 6s poll has downshifted to 1-minute after 11 AM
 
     // Screen coordinates capture state
     private TextBox? _coordsTarget1;
@@ -570,7 +570,7 @@ public partial class Form1 : Form
 
         _isPolling = true;
         _autoCaptureSession = isAutoCapture;
-        _stoppedAt11Logged = false;
+        _throttledAfter11 = false;
         btnStartPolling.Text = "Stop Polling";
         btnStartPolling.BackColor = Color.DarkRed;
 
@@ -622,16 +622,14 @@ public partial class Form1 : Form
                 return;
             }
 
-            // Optional morning stop. The 3:55 PM auto-capture session is exempt so it can run to close.
-            if (!_autoCaptureSession && chkStopAt11.Checked && MarketHours.IsPastStopTime)
+            // After 11 AM, downshift from 6s to 1-minute polling (still saving to CSV) instead of
+            // stopping — applies whether "Stop at 11:00 AM" is checked or not. The 3:55 PM
+            // auto-capture session is exempt so it keeps running at full cadence to close.
+            if (!_autoCaptureSession && !_throttledAfter11 && MarketHours.IsPastStopTime)
             {
-                if (!_stoppedAt11Logged)
-                {
-                    // LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 11:00 AM reached — polling stopped", Color.Yellow);
-                    _stoppedAt11Logged = true;
-                }
-                StopPolling();
-                return;
+                _pollingTimer!.Interval = 60000;
+                _throttledAfter11 = true;
+                // LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 11:00 AM reached — polling throttled to 1/min", Color.Yellow);
             }
 
             await FetchAndUpdateQuotesAsync();
