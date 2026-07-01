@@ -8,7 +8,7 @@ using System.Text.Json;
 
 namespace OptionsTrader.WinForms;
 
-file record TradeRowTag(int TradeId, DateTime EntryTime);
+file record TradeRowTag(int TradeId, DateTime EntryTime, bool IsRealTrade = false);
 
 public partial class Form1 : Form
 {
@@ -1044,7 +1044,7 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: false);
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: false, isRealTrade: false);
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
@@ -1064,9 +1064,9 @@ public partial class Form1 : Form
     }
 
     // Records an opened position in the Trades grid + backend API + local persistence + entry screenshot.
-    // Shared by simulated trades and real (broker) trades. Returns the API trade id.
-    private async Task<int> RecordEntryAsync(string symbol, string rowType, string strike, string level,
-        decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo)
+    // Shared by simulated trades and real (broker) trades. Returns the API trade id and the new grid row.
+    private async Task<(int TradeId, DataGridViewRow Row)> RecordEntryAsync(string symbol, string rowType, string strike, string level,
+        decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool isRealTrade = false)
     {
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var tBid      = Math.Round(ask * (1 + targetPct / 100m), 2);
@@ -1094,7 +1094,7 @@ public partial class Form1 : Form
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
-        newRow.Tag = new TradeRowTag(tradeId, entryTime);
+        newRow.Tag = new TradeRowTag(tradeId, entryTime, isRealTrade);
 
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         OpenTradesStore.Add(new PersistedTrade(
@@ -1113,7 +1113,7 @@ public partial class Form1 : Form
         // LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
         _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
 
-        return tradeId;
+        return (tradeId, newRow);
     }
 
     // ----- Real broker order execution (Schwab) -----
@@ -1200,7 +1200,10 @@ public partial class Form1 : Form
             LogLine($"{now} [Order] Entry accepted — order id {entryOrderId}", Color.LimeGreen);
 
             // Record the real position in grid + backend + screenshot
-            await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false);
+            var (_, tradeRow) = await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false, isRealTrade: true);
+
+            // Poll for the actual fill price and replace the placeholder (Ask) EntryPrice once known.
+            _ = UpdateEntryPriceFromFillAsync(trading, account.HashValue, entryOrderId, tradeRow);
 
             if (withTarget)
                 await PlaceTargetExitAsync(trading, account.HashValue, occ, qty, entryOrderId, targetPct);
@@ -1234,6 +1237,33 @@ public partial class Form1 : Form
         var targetPrice = Math.Round(fill.Value * (1 + targetPct / 100m), 2);
         var exitOrderId = await trading.PlaceOptionLimitOrderAsync(accountHash, occ, "SELL_TO_CLOSE", qty, targetPrice);
         LogLine($"{DateTime.Now:HH:mm:ss} [Order] Fill {fill:F2} → target exit LIMIT {targetPrice:F2} sent — order id {exitOrderId}", Color.LimeGreen);
+    }
+
+    // Polls the entry order until it fills, then replaces the placeholder (Ask) EntryPrice with the
+    // real fill price from Schwab. PnL/PnL% keep updating from that value on every subsequent quote cycle.
+    private async Task UpdateEntryPriceFromFillAsync(SchwabTradingService trading, string accountHash, long entryOrderId, DataGridViewRow row)
+    {
+        decimal? fill = null;
+        for (int i = 0; i < 5 && fill == null; i++)
+        {
+            await Task.Delay(1500);
+            var order = await trading.GetOrderAsync(accountHash, entryOrderId);
+            if (order.Status.Equals("FILLED", StringComparison.OrdinalIgnoreCase) && order.FilledPrice.HasValue)
+                fill = order.FilledPrice;
+        }
+
+        if (fill == null)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Order] Entry fill not confirmed yet — keeping Ask as EntryPrice.", Color.Orange);
+            return;
+        }
+
+        Invoke(() =>
+        {
+            if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return; // already closed
+            row.Cells["colTradeEntryPrice"].Value = fill.Value.ToString("F2");
+            LogLine($"{DateTime.Now:HH:mm:ss} [Order] Real EntryPrice confirmed: {fill.Value:F2}", Color.LimeGreen);
+        });
     }
 
     // ----- Broker accounts (Settings tab) -----
@@ -1728,7 +1758,10 @@ public partial class Form1 : Form
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
 
             // Auto-close when the current bid reaches the target price (T_Bid).
-            if (decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
+            // Real broker trades are never auto-closed — the trader closes those manually.
+            var isRealTrade = row.Tag is TradeRowTag { IsRealTrade: true };
+            if (!isRealTrade
+                && decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
                 && targetBid > 0 && currentBid >= targetBid)
             {
                 rowsToClose.Add(row);
