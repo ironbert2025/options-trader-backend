@@ -19,6 +19,7 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _pollingTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
     private System.Windows.Forms.Timer? _autoCaptureTimer;
+    private System.Windows.Forms.Timer? _ivHistorialTimer;
     private bool _isPolling;
     private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
     private bool _throttledAfter11;   // true once the 6s poll has downshifted to 1-minute after 11 AM
@@ -40,7 +41,7 @@ public partial class Form1 : Form
     public Form1()
     {
         InitializeComponent();
-        FormClosing += (s, e) => { _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); };
+        FormClosing += (s, e) => { _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose(); };
         LoadBrokerSelection();
         LoadTickers();
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
@@ -56,6 +57,25 @@ public partial class Form1 : Form
         LoadCachedAccounts();
         _ = LoginApiAsync();
         StartAutoCaptureScheduler();
+        StartIvHistorialScheduler();
+    }
+
+    // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
+    // instance's own selected ticker to C:\OptionsData\IV_Historial_Apertura.csv — e.g. the SPY
+    // instance only ever writes the SPY row, the QQQ instance only the QQQ row.
+    private void StartIvHistorialScheduler()
+    {
+        TryAppendIvHistorialSnapshot();
+
+        _ivHistorialTimer = new System.Windows.Forms.Timer { Interval = 300000 }; // every 5 min
+        _ivHistorialTimer.Tick += (s, e) => TryAppendIvHistorialSnapshot();
+        _ivHistorialTimer.Start();
+    }
+
+    private void TryAppendIvHistorialSnapshot()
+    {
+        if (_selectedTicker == null) return;
+        IvHistorialWriter.TryAppendTodaysSnapshot(_selectedTicker.Symbol, _selectedTicker.ExpDate);
     }
 
     // Runs all day and auto-starts a capture session at 3:55 PM EST (5 min before close)
