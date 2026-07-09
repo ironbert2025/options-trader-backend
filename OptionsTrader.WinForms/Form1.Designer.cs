@@ -72,6 +72,7 @@ partial class Form1
         lblExpDateNext = new Label();
         chkStopAt11 = new CheckBox();
         chkSaveToCsv = new CheckBox();
+        chkHideNextExpDate = new CheckBox();
         btnFetchQuotes = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
@@ -711,6 +712,18 @@ partial class Form1
         chkSaveToCsv.Name = "chkSaveToCsv";
         chkSaveToCsv.Text = "Quotes to CSV";
         //
+        // chkHideNextExpDate
+        //
+        chkHideNextExpDate.AutoSize = true;
+        chkHideNextExpDate.Checked = true;
+        chkHideNextExpDate.CheckState = CheckState.Checked;
+        chkHideNextExpDate.Location = new Point(800, 166);
+        chkHideNextExpDate.Name = "chkHideNextExpDate";
+        chkHideNextExpDate.Size = new Size(115, 19);
+        chkHideNextExpDate.TabIndex = 4;
+        chkHideNextExpDate.Text = "Hide Next ExpDate";
+        chkHideNextExpDate.CheckedChanged += ChkHideNextExpDate_CheckedChanged;
+        //
         // btnFetchQuotes
         // 
         btnFetchQuotes.Location = new Point(420, 57);
@@ -1062,6 +1075,7 @@ partial class Form1
         tabSettings.Controls.Add(grpPositionSize);
         tabSettings.Controls.Add(chkSaveDumps);
         tabSettings.Controls.Add(chkSaveToCsv);
+        tabSettings.Controls.Add(chkHideNextExpDate);
         tabSettings.Controls.Add(grpTarget);
         tabSettings.Controls.Add(grpSchwabCredentials);
         tabSettings.Controls.Add(grpRefreshToken);
@@ -1702,6 +1716,7 @@ partial class Form1
     private CheckBox chkPutFilter;
     private CheckBox chkStopAt11;
     private CheckBox chkSaveToCsv;
+    private CheckBox chkHideNextExpDate;
     private GroupBox grpTrade;
     private RadioButton rbNoTrade;
     private RadioButton rbTrade;

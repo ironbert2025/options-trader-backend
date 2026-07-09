@@ -49,6 +49,7 @@ public partial class Form1 : Form
         LoadRadioSelection(grpContracts, ContractsSettingsStore.Load());
         ApplyRadioStyle(grpCounts);
         chkSaveDumps.Checked = DumpSettingsStore.Load();
+        grpOptionsChainNext.Visible = !chkHideNextExpDate.Checked;
         LoadSchwabCredentials();
         LoadAwsSettings();
         LoadScreenCoords();
@@ -178,6 +179,11 @@ public partial class Form1 : Form
     private void ChkSaveDumps_CheckedChanged(object? sender, EventArgs e)
     {
         DumpSettingsStore.Save(chkSaveDumps.Checked);
+    }
+
+    private void ChkHideNextExpDate_CheckedChanged(object? sender, EventArgs e)
+    {
+        grpOptionsChainNext.Visible = !chkHideNextExpDate.Checked;
     }
 
     private void TargetRadioButton_CheckedChanged(object? sender, EventArgs e)
@@ -604,8 +610,11 @@ public partial class Form1 : Form
             _csvLogger = new CsvLogger();
             _csvLogger.Open(_selectedTicker.Symbol, today, expDate);
 
-            _csvLoggerNext = new CsvLogger();
-            _csvLoggerNext.Open(_selectedTicker.Symbol, today, nextExpDate);
+            if (!chkHideNextExpDate.Checked)
+            {
+                _csvLoggerNext = new CsvLogger();
+                _csvLoggerNext.Open(_selectedTicker.Symbol, today, nextExpDate);
+            }
         }
 
         if (MarketHours.IsOpen)
@@ -744,11 +753,15 @@ public partial class Form1 : Form
                 .ToDictionary(g => ("PUT", g.Key), g => g.First());
             UpdateTradesPnL(callMapForTrades, putMapForTrades);
 
-            // Next chain (next ExpDate, e.g. tomorrow for daily)
-            if (chkSaveToCsv.Checked)
-                _csvLoggerNext?.AppendRows(allQuotesNext);
+            // Next chain (next ExpDate, e.g. tomorrow for daily) — skipped entirely while
+            // "Hide Next ExpDate" is checked (no grid refresh, no CSV write).
+            if (!chkHideNextExpDate.Checked)
+            {
+                if (chkSaveToCsv.Checked)
+                    _csvLoggerNext?.AppendRows(allQuotesNext);
 
-            PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
+                PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
+            }
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
