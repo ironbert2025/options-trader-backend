@@ -74,9 +74,9 @@ Toda la configuración del operador vive en la pestaña **Settings** y se persis
 - Avisos automáticos de expiración del refresh token (alerta el lunes / mismo día).
 
 ### JWT para la API propia
-- **`AuthController` / `AuthService`**: login con usuario+contraseña, verificación **BCrypt** y emisión de **JWT Bearer** (12 horas).
+- **`AuthController` / `AuthService`**: login con usuario+contraseña. `AuthService.LoginAsync` busca el usuario en la BD (`IUserRepository.FindByUsernameAsync` → `AppDbContext.Users`), valida el password con **BCrypt.Verify** contra el hash guardado, y si coincide emite un **JWT Bearer** (12 horas).
 - 5 usuarios fijos sembrados (`user1`–`user5`), mismo rol (sin admin).
-- La WinForms hace **auto-login como `user1`** al arrancar y adjunta el Bearer token a las llamadas a la API.
+- **`LoginForm`** (WinForms): al arrancar el programa se muestra un **formulario de login modal** (usuario + contraseña + botón Enter, centrado en pantalla) — ya no hay auto-login con credenciales fijas en el código. El login real valida contra la BD como cualquier otro cliente de la API. Si el usuario **cancela** el diálogo, el programa **se cierra** de inmediato (`Environment.Exit`). Si el login es exitoso, el JWT se adjunta al `HttpClient` de la WinForms para el resto de la sesión.
 - Endpoints protegidos con `[Authorize]`; **CORS** habilitado para el frontend Angular.
 
 ---

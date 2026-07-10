@@ -15,6 +15,14 @@ El programa tiene **dos pestañas**:
 
 ---
 
+## Al abrir el programa — Login
+
+Cada vez que abres Options Trader aparece primero una ventana pequeña pidiendo **Usuario** y **Contraseña**. Escribe tus datos y pulsa **Enter** (o la tecla Enter del teclado) para entrar.
+
+> Si cierras esa ventana sin ingresar (o el usuario/contraseña son incorrectos), **el programa se cierra** — vuelve a abrirlo e intenta de nuevo.
+
+---
+
 ## Parte 1 — Preparación inicial (se hace una vez)
 
 Todo esto está en la pestaña **Settings**. Una vez configurado, queda guardado para las próximas veces.
@@ -132,7 +140,7 @@ Si activaste **Quotes to CSV** en Settings, el programa guarda todos los precios
 
 ## Resumen rápido del día
 
-1. Abre el programa → escribe tu **Balance**.
+1. Abre el programa → **inicia sesión** (usuario/contraseña) → escribe tu **Balance**.
 2. Elige el **símbolo** → **Start Polling**.
 3. Elige el modo: **No Trade**, **Trade** o **Trade-Target**.
 4. **Click en el Strike** → confirma si es real.
