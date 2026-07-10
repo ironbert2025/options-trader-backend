@@ -62,16 +62,18 @@ public partial class Form1 : Form
     }
 
     // Prompts for one of the 5 fixed app users on startup instead of auto-logging in as a
-    // hardcoded account. If the user cancels or login fails, the app still opens — API calls
-    // (saving trades/screenshots) will just fail until a successful login is done.
+    // hardcoded account. Canceling the login closes the whole app immediately.
     private void Form1_Load(object? sender, EventArgs e)
     {
         using var loginForm = new LoginForm(_apiHttpClient, ApiBaseUrl);
-        if (loginForm.ShowDialog(this) == DialogResult.OK && loginForm.AccessToken != null)
+        if (loginForm.ShowDialog(this) != DialogResult.OK || loginForm.AccessToken == null)
         {
-            _apiHttpClient.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", loginForm.AccessToken);
+            Environment.Exit(0);
+            return;
         }
+
+        _apiHttpClient.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", loginForm.AccessToken);
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this

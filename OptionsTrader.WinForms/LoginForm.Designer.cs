@@ -86,7 +86,7 @@ partial class LoginForm
         MaximizeBox = false;
         MinimizeBox = false;
         Name = "LoginForm";
-        StartPosition = FormStartPosition.CenterParent;
+        StartPosition = FormStartPosition.CenterScreen;
         Text = "Options Trader — Login";
         ResumeLayout(false);
         PerformLayout();
