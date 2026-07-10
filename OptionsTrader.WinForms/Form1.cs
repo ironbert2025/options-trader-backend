@@ -56,9 +56,22 @@ public partial class Form1 : Form
         LoadBalance();
         LoadTickerButtons();
         LoadCachedAccounts();
-        _ = LoginApiAsync();
+        Load += Form1_Load;
         StartAutoCaptureScheduler();
         StartIvHistorialScheduler();
+    }
+
+    // Prompts for one of the 5 fixed app users on startup instead of auto-logging in as a
+    // hardcoded account. If the user cancels or login fails, the app still opens — API calls
+    // (saving trades/screenshots) will just fail until a successful login is done.
+    private void Form1_Load(object? sender, EventArgs e)
+    {
+        using var loginForm = new LoginForm(_apiHttpClient, ApiBaseUrl);
+        if (loginForm.ShowDialog(this) == DialogResult.OK && loginForm.AccessToken != null)
+        {
+            _apiHttpClient.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", loginForm.AccessToken);
+        }
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
@@ -99,38 +112,6 @@ public partial class Form1 : Form
         };
         _autoCaptureTimer.Start();
     }
-
-    private async Task LoginApiAsync()
-    {
-        try
-        {
-            var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/auth/login", new
-            {
-                username = "user1",
-                password = "Pass1234!"
-            });
-
-            if (!response.IsSuccessStatusCode)
-            {
-                // LogLine($"{DateTime.Now:HH:mm:ss} [API] Login failed — status {response.StatusCode}", Color.OrangeRed);
-                return;
-            }
-
-            var result = await response.Content.ReadFromJsonAsync<ApiLoginResult>();
-            if (result?.AccessToken != null)
-            {
-                _apiHttpClient.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", result.AccessToken);
-                // LogLine($"{DateTime.Now:HH:mm:ss} [API] Authenticated as user1", Color.Yellow);
-            }
-        }
-        catch (Exception ex)
-        {
-            // LogLine($"{DateTime.Now:HH:mm:ss} [API] Login error: {ex.Message}", Color.OrangeRed);
-        }
-    }
-
-    private record ApiLoginResult(string AccessToken, DateTime ExpiresAt);
 
     private void LoadBrokerSelection()
     {
