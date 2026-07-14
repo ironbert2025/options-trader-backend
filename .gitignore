@@ -12,6 +12,9 @@ obj/
 # Rider
 .idea/
 
+# Obsidian
+.obsidian/
+
 # NuGet
 *.nupkg
 *.snupkg
