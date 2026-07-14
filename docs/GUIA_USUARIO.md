@@ -23,6 +23,8 @@ Cada vez que abres Options Trader aparece primero una ventana pequeña pidiendo 
 
 > Si cierras esa ventana sin ingresar (o el usuario/contraseña son incorrectos), **el programa se cierra** — vuelve a abrirlo e intenta de nuevo.
 
+> **Importante:** cada trade que abras queda asociado al usuario con el que iniciaste sesión. Solo vas a ver (y poder cerrar) **tus propios trades** — si otra persona usa `user2`, por ejemplo, no vas a ver sus operaciones ni ella las tuyas, aunque sea la misma cuenta de Schwab por detrás.
+
 ---
 
 ## Parte 1 — Preparación inicial (se hace una vez)
