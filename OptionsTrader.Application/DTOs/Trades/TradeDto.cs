@@ -24,5 +24,7 @@ public class TradeDto
     public decimal? PnlPercent { get; set; }
     public bool IsDemo { get; set; }
     public BrokerName Broker { get; set; }
+    public int UserId { get; set; }
+    public string Username { get; set; } = string.Empty;
     public IEnumerable<ScreenshotDto> Screenshots { get; set; } = [];
 }
