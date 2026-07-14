@@ -4,6 +4,18 @@ Documentación completa y detallada del proyecto. Para el detalle técnico de ca
 
 ---
 
+## Origen y motivación del proyecto
+
+Este proyecto nace de una necesidad real detectada en una academia de trading de opciones en Miami, EE.UU., donde estudiantes e instructores envían sus órdenes al broker a través de una app móvil. En ese flujo, desde que el trader decide entrar hasta que la orden efectivamente se envía al mercado, pasan **no menos de 20 segundos** — tiempo suficiente para que el precio real de entrada difiera considerablemente del precio observado al momento de tomar la decisión. En algunos casos, el precio ya se ha movido lo suficiente como para alcanzar la salida planificada antes de siquiera completarse la entrada.
+
+Para resolver esto se desarrolló esta **aplicación de escritorio Windows**: todo el proceso que en el móvil toma ~20 segundos aquí se completa en **menos de 3 segundos** — desde el envío de la orden, la confirmación vía HTTP, hasta la actualización del precio de salida. Los pasos que normalmente requieren intervención manual para introducir datos ya están predeterminados en la app, lo que le ahorra tiempo valioso al trader. **Ese es el principal valor del programa: ahorro de tiempo y lograr entrar al precio más cercano posible al que existía en el momento de la decisión.** Además, el programa monitorea la posición en tiempo real y la muestra visualmente.
+
+Lo que comenzó como una necesidad puntual para enviar órdenes a un broker específico escaló hacia una plataforma completa: se sumaron una **API** para persistencia de información y un **frontend en Angular** para llevar el histórico de posiciones y sus estadísticas. Hoy el sistema puede usarse para estudiar y practicar las estrategias enseñadas en la academia, enviar trades reales y llevar la estadística de resultados.
+
+Esta plataforma será presentada en una demostración a la academia para evaluar el interés y valor que le encuentren, con miras a continuar el desarrollo — incluyendo soporte para otros brokers (actualmente solo está implementado **Charles Schwab**) y cualquier otra necesidad a nivel de backend/frontend que surja.
+
+---
+
 ## a. Descripción general del proyecto
 
 Options Trader es un sistema de trading de opciones intradía compuesto por tres componentes:
