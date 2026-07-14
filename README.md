@@ -16,6 +16,8 @@ La WinForms habla **directamente con la API de Schwab** para datos de mercado y 
 
 ![Diagrama de arquitectura](docs/images/architecture-diagram.png)
 
+> **Nota sobre el alcance de la evaluación (TFM):** independientemente de que se ha construido una plataforma completa de trading de opciones — backend, frontend, API y recursos Cloud en AWS (EC2, SQL Server, S3) —, se propone que **BigSchool evalúe como TFM únicamente la aplicación de escritorio Windows (WinForms)**, ya que revisar la plataforma completa sería excesivamente laborioso y consumiría demasiado tiempo. El sistema completo puede probarse igualmente (ver sección f para las credenciales), pero la evaluación debería enfocarse en la Windows App.
+
 ---
 
 ## b. Stack tecnológico utilizado
@@ -91,8 +93,9 @@ Ver [`docs/FUNCIONALIDADES.md`](docs/FUNCIONALIDADES.md) para el detalle complet
 
 El sistema tiene 5 usuarios fijos sembrados en la base de datos (`user1` a `user5`), todos con el mismo rol y la misma contraseña de prueba:
 
-| Usuario | Contraseña |
-|---|---|
-| `user1` | `Pass1234!` |
+| Usuario | Contraseña | Uso |
+|---|---|---|
+| `user1` | `Pass1234!` | Usuario de prueba del desarrollador — en el frontend se muestran sus trades y actividad. |
+| `user2` | `Pass1234!` | Usuario de prueba para que BigSchool use la aplicación e inyecte datos de prueba a la base de datos. |
 
 *(`user2`–`user5` usan la misma contraseña; sirven para distinguir sesiones simultáneas, no roles distintos.)*
