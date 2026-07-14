@@ -125,6 +125,12 @@ Pestaña **Options Quotes**: corazón operativo del programa.
 - Numeración diaria (`DailyTradeNumber`) y regla de **máximo un trade por día**.
 - Las operaciones abiertas se **persisten localmente** (`OpenTradesStore` → `open_trades.json`) y se **restauran al reiniciar**, reconciliando las que ya expiraron.
 
+### Propiedad por usuario (`Trade.UserId`)
+- Cada trade queda **asociado al usuario logueado** (`Trade.UserId`, FK a `Users`), derivado del claim `NameIdentifier` del JWT en el servidor — **nunca** confiado desde el cliente.
+- Todos los endpoints de lectura (`GET /trades`, `?date=`, `?month=`, `/{id}`) y el cierre (`PATCH /{id}/close`) están **filtrados/validados por el usuario autenticado**: un usuario nunca ve ni puede cerrar el trade de otro (404 si no es suyo).
+- La regla de **"máximo un trade por día" es por usuario**: cada uno de los 5 usuarios tiene su propio conteo diario (`NextDailyTradeNumberAsync` filtra por `userId`).
+- Los screenshots heredan la propiedad del trade al que pertenecen — `GET /screenshots/trade/{tradeId}` valida que el trade sea del usuario antes de devolver o aceptar nuevos.
+
 ---
 
 ## 6. Ejecución de órdenes reales al broker
@@ -209,17 +215,18 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 | Endpoint | Método | Descripción |
 |---|---|---|
 | `/api/auth/login` | POST | Login → JWT (BCrypt + 12 h). |
-| `/api/trades` | GET | Lista todos los trades. |
-| `/api/trades?date=YYYY-MM-DD` | GET | Filtra por día. |
-| `/api/trades?month=YYYY-MM` | GET | Filtra por mes (calendario / PnL diario). |
-| `/api/trades/{id}` | GET | Trade por id (incluye screenshots). |
-| `/api/trades` | POST | Crea trade (numeración diaria automática). |
-| `/api/trades/{id}/close` | PATCH | Cierra trade (ExitPrice, PnL, %, Duration). |
-| `/api/screenshots` | POST | Asocia URL de S3 a un trade (máx. 3). |
-| `/api/screenshots/trade/{tradeId}` | GET | Screenshots de un trade. |
+| `/api/trades` | GET | Lista los trades **del usuario autenticado**. |
+| `/api/trades?date=YYYY-MM-DD` | GET | Filtra por día (y por usuario). |
+| `/api/trades?month=YYYY-MM` | GET | Filtra por mes (calendario / PnL diario; y por usuario). |
+| `/api/trades/{id}` | GET | Trade por id (incluye screenshots). 404 si no existe o no es del usuario. |
+| `/api/trades` | POST | Crea trade (numeración diaria automática, por usuario) — el `UserId` se toma del JWT. |
+| `/api/trades/{id}/close` | PATCH | Cierra trade (ExitPrice, PnL, %, Duration). 404 si el trade no es del usuario. |
+| `/api/screenshots` | POST | Asocia URL de S3 a un trade (máx. 3). 404 si el trade no es del usuario. |
+| `/api/screenshots/trade/{tradeId}` | GET | Screenshots de un trade. 404 si el trade no es del usuario. |
 
+- **`TradeDto`** expone `UserId` y `Username` además de los campos del trade.
 - **DTOs obligatorios**: `Entidad → DTO → API → Swagger → NSwag → Interfaz TS + Servicio Angular`.
-- **Migraciones EF Core** aplicadas automáticamente al arrancar.
+- **Migraciones EF Core** aplicadas automáticamente al arrancar (`db.Database.Migrate()` en `Program.cs`) — por ejemplo, `AddUserIdToTrade` agregó la columna nullable, hizo *backfill* de todos los trades preexistentes a `user1`, y luego forzó `NOT NULL` + FK, sin necesidad de tocar la base de datos a mano.
 - **Swagger** en desarrollo.
 - **Despliegue HTTP-only en EC2**: no hay certificado TLS configurado en el servidor (la WinForms le pega por `http://`), así que `UseHttpsRedirection()` fue removido de `Program.cs` (evitaba warnings de "failed to determine the https port" y redirecciones rotas). Se agregó logging explícito a **consola y Debug** (`ClearProviders` + `AddConsole` + `AddDebug`) para facilitar diagnóstico en el servidor.
 
@@ -229,7 +236,7 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 
 | Dato | Dónde | Tecnología |
 |---|---|---|
-| Trades, Screenshots, Users, BrokerSettings | Base de datos | **SQL Server** (en EC2) vía **EF Core** |
+| Trades, Screenshots, Users, BrokerSettings | Base de datos | **SQL Server** (en EC2) vía **EF Core** — `Trades.UserId` (FK a `Users`, NOT NULL) |
 | Imágenes de screenshots | Nube | **AWS S3** |
 | Cotizaciones / órdenes en tiempo real | — | **Schwab API** directo |
 | Configuración del operador | Local | JSON en `%AppData%\OptionsTrader\` |
@@ -243,11 +250,11 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 
 ## 12. Reglas de negocio
 
-- Máximo **un trade por día**.
+- Máximo **un trade por día por usuario**.
 - Máximo **3 screenshots por trade**.
 - **Un solo broker activo** a la vez (Schwab activo; IBKR / ETrade futuros).
-- **5 usuarios fijos**, mismo rol (sin admin).
-- El frontend Angular es **solo lectura** (no ejecuta operaciones).
+- **5 usuarios fijos**, mismo rol (sin admin) — cada uno solo ve y opera sus propios trades.
+- El frontend Angular es **solo lectura** (no ejecuta operaciones), y también queda limitado a los trades del usuario logueado.
 - Trades disparados al hacer click en una fila de Strike.
 - **Confirmación obligatoria** antes de cada orden real al broker.
 - **No se permite abrir** una operación cuando el Bid de la opción es 0 (pérdida segura).
