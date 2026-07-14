@@ -14,6 +14,8 @@ Options Trader es un sistema de trading de opciones intradía compuesto por tres
 
 La WinForms habla **directamente con la API de Schwab** para datos de mercado y ejecución de órdenes; no pasa por la API propia. La API ASP.NET Core se usa solo para **login** y para **guardar trades y screenshots** en base de datos / S3.
 
+![Diagrama de arquitectura](docs/images/architecture-diagram.png)
+
 ---
 
 ## b. Stack tecnológico utilizado
@@ -28,6 +30,7 @@ La WinForms habla **directamente con la API de Schwab** para datos de mercado y 
 | Screenshots | AWS S3 |
 | Frontend | Angular (repo `options-trader-web`) |
 | Sincronización de tipos | Swagger + NSwag (DTO → TypeScript) |
+| Desarrollo asistido por IA | Claude Code Pro — modelo Sonnet 5, esfuerzo de razonamiento Low/Medium |
 
 ---
 
