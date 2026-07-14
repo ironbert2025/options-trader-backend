@@ -23,6 +23,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(t => t.TargetPercent).HasPrecision(18, 4);
             e.Property(t => t.Pnl).HasPrecision(18, 4);
             e.Property(t => t.PnlPercent).HasPrecision(18, 4);
+
+            e.HasOne(t => t.User)
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<User>(e =>

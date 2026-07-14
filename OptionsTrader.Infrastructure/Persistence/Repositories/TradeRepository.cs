@@ -7,26 +7,30 @@ namespace OptionsTrader.Infrastructure.Persistence.Repositories;
 public class TradeRepository(AppDbContext db) : ITradeRepository
 {
     public Task<Trade?> GetByIdAsync(int id) =>
-        db.Trades.Include(t => t.Screenshots).FirstOrDefaultAsync(t => t.Id == id);
+        db.Trades.Include(t => t.Screenshots).Include(t => t.User).FirstOrDefaultAsync(t => t.Id == id);
 
-    public async Task<IEnumerable<Trade>> GetAllAsync() =>
-        await db.Trades.Include(t => t.Screenshots).ToListAsync();
-
-    public async Task<IEnumerable<Trade>> GetByDateAsync(DateOnly date) =>
-        await db.Trades.Include(t => t.Screenshots).Where(t => t.TradeDate == date).ToListAsync();
-
-    public async Task<IEnumerable<Trade>> GetByMonthAsync(int year, int month) =>
-        await db.Trades.Include(t => t.Screenshots)
-            .Where(t => t.TradeDate.Year == year && t.TradeDate.Month == month)
+    public async Task<IEnumerable<Trade>> GetAllAsync(int userId) =>
+        await db.Trades.Include(t => t.Screenshots).Include(t => t.User)
+            .Where(t => t.UserId == userId)
             .ToListAsync();
 
-    public Task<bool> ExistsForDateAsync(DateOnly date) =>
-        db.Trades.AnyAsync(t => t.TradeDate == date);
+    public async Task<IEnumerable<Trade>> GetByDateAsync(DateOnly date, int userId) =>
+        await db.Trades.Include(t => t.Screenshots).Include(t => t.User)
+            .Where(t => t.TradeDate == date && t.UserId == userId)
+            .ToListAsync();
 
-    public async Task<int> NextDailyTradeNumberAsync(DateOnly date)
+    public async Task<IEnumerable<Trade>> GetByMonthAsync(int year, int month, int userId) =>
+        await db.Trades.Include(t => t.Screenshots).Include(t => t.User)
+            .Where(t => t.TradeDate.Year == year && t.TradeDate.Month == month && t.UserId == userId)
+            .ToListAsync();
+
+    public Task<bool> ExistsForDateAsync(DateOnly date, int userId) =>
+        db.Trades.AnyAsync(t => t.TradeDate == date && t.UserId == userId);
+
+    public async Task<int> NextDailyTradeNumberAsync(DateOnly date, int userId)
     {
         var max = await db.Trades
-            .Where(t => t.TradeDate == date)
+            .Where(t => t.TradeDate == date && t.UserId == userId)
             .MaxAsync(t => (int?)t.DailyTradeNumber) ?? 0;
         return max + 1;
     }

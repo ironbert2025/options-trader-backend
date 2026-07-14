@@ -24,5 +24,8 @@ public class Trade
     public bool IsDemo { get; set; }
     public BrokerName Broker { get; set; }
 
+    public int UserId { get; set; }
+    public User User { get; set; } = null!;
+
     public ICollection<Screenshot> Screenshots { get; set; } = new List<Screenshot>();
 }
