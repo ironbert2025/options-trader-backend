@@ -77,6 +77,7 @@ partial class Form1
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
+        lblWelcome = new Label();
         grpBalance = new GroupBox();
         txtBalance = new TextBox();
         lblPositionAmount = new Label();
@@ -221,6 +222,7 @@ partial class Form1
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
+        tabQuotes.Controls.Add(lblWelcome);
         tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Controls.Add(grpTickerButtons);
         tabQuotes.Controls.Add(grpTrade);
@@ -755,7 +757,17 @@ partial class Form1
         lblLastUpdate.Name = "lblLastUpdate";
         lblLastUpdate.Size = new Size(0, 13);
         lblLastUpdate.TabIndex = 5;
-        // 
+        //
+        // lblWelcome
+        //
+        lblWelcome.AutoSize = true;
+        lblWelcome.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
+        lblWelcome.ForeColor = Color.DarkSlateGray;
+        lblWelcome.Location = new Point(8, 84);
+        lblWelcome.Name = "lblWelcome";
+        lblWelcome.Size = new Size(0, 13);
+        lblWelcome.TabIndex = 6;
+        //
         // grpBalance
         // 
         grpBalance.Controls.Add(txtBalance);
@@ -1783,6 +1795,7 @@ partial class Form1
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;
+    private Label lblWelcome;
     private GroupBox grpBalance;
     private TextBox txtBalance;
     private Label lblPositionAmount;

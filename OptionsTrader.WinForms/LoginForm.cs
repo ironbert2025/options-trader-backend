@@ -2,7 +2,7 @@ using System.Net.Http.Json;
 
 namespace OptionsTrader.WinForms;
 
-internal record LoginResult(string AccessToken, DateTime ExpiresAt);
+internal record LoginResult(string AccessToken, DateTime ExpiresAt, string Name, string LastName);
 
 public partial class LoginForm : Form
 {
@@ -11,6 +11,8 @@ public partial class LoginForm : Form
 
     public string? AccessToken { get; private set; }
     public string? Username { get; private set; }
+    public string? FirstName { get; private set; }
+    public string? LastName { get; private set; }
 
     public LoginForm(HttpClient httpClient, string apiBaseUrl)
     {
@@ -49,6 +51,8 @@ public partial class LoginForm : Form
 
             AccessToken = result.AccessToken;
             Username = username;
+            FirstName = result.Name;
+            LastName = result.LastName;
             DialogResult = DialogResult.OK;
             Close();
         }

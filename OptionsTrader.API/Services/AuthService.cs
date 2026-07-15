@@ -24,7 +24,9 @@ public class AuthService(IUserRepository userRepository, IConfiguration configur
         var claims = new[]
         {
             new Claim(ClaimTypes.Name, user.Username),
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new Claim(ClaimTypes.GivenName, user.Name),
+            new Claim(ClaimTypes.Surname, user.LastName)
         };
 
         var key   = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
@@ -37,6 +39,6 @@ public class AuthService(IUserRepository userRepository, IConfiguration configur
             expires:            expiresAt,
             signingCredentials: creds);
 
-        return new TokenResponseDto(new JwtSecurityTokenHandler().WriteToken(token), expiresAt);
+        return new TokenResponseDto(new JwtSecurityTokenHandler().WriteToken(token), expiresAt, user.Name, user.LastName);
     }
 }
