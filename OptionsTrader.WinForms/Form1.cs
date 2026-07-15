@@ -74,6 +74,8 @@ public partial class Form1 : Form
 
         _apiHttpClient.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", loginForm.AccessToken);
+
+        lblWelcome.Text = $"Bienvenido, {loginForm.FirstName} {loginForm.LastName}";
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this

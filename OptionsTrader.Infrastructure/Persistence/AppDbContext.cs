@@ -37,11 +37,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         // Seed 5 fixed users with bcrypt-hashed passwords
         modelBuilder.Entity<User>().HasData(
-            new User { Id = 1, Username = "user1", PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") },
-            new User { Id = 2, Username = "user2", PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") },
-            new User { Id = 3, Username = "user3", PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") },
-            new User { Id = 4, Username = "user4", PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") },
-            new User { Id = 5, Username = "user5", PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") }
+            new User { Id = 1, Username = "user1", Name = "Aldo",      LastName = "Arias",    PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") },
+            new User { Id = 2, Username = "user2", Name = "Brais",     LastName = "Moure",     PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") },
+            new User { Id = 3, Username = "user3", Name = "Yurani",    LastName = "Ramirez",   PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") },
+            new User { Id = 4, Username = "user4", Name = "Maricela",  LastName = "Arias",     PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") },
+            new User { Id = 5, Username = "user5", Name = "Maricelys", LastName = "Arias",     PasswordHash = BCrypt.Net.BCrypt.HashPassword("Pass1234!") }
         );
     }
 }
