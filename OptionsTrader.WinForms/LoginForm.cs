@@ -19,6 +19,12 @@ public partial class LoginForm : Form
         InitializeComponent();
         _httpClient = httpClient;
         _apiBaseUrl = apiBaseUrl;
+
+        var savedUsername = LoginUsernameStore.Load();
+        if (!string.IsNullOrEmpty(savedUsername))
+            txtUsername.Text = savedUsername;
+
+        Shown += (s, e) => txtPassword.Focus();
     }
 
     private async void BtnEnter_Click(object? sender, EventArgs e)
@@ -53,6 +59,7 @@ public partial class LoginForm : Form
             Username = username;
             FirstName = result.Name;
             LastName = result.LastName;
+            LoginUsernameStore.Save(username);
             DialogResult = DialogResult.OK;
             Close();
         }
