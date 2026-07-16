@@ -89,7 +89,7 @@ OptionsTrader.sln
 
 ## e. Funcionalidades principales
 
-- **Login** con usuario/contraseña validado contra la base de datos (5 usuarios fijos, mismo rol).
+- **Login** con usuario/contraseña validado contra la base de datos (5 usuarios fijos, mismo rol); recuerda el último username usado (nunca la contraseña) y muestra el nombre del usuario logueado en la barra de estado.
 - **Cotizaciones de opciones en tiempo real** (polling a Schwab), con doble grid (expiración actual y siguiente), filtros por rango/Counts/CALL-PUT.
 - **Ejecución de trades**: modo simulado (`No Trade`), o real vía Schwab (`Trade` / `Trade-Target`), con confirmación obligatoria y sincronización con el precio real de llenado.
 - **Trades y screenshots asociados al usuario logueado**: cada trade queda ligado al usuario que lo creó (derivado del JWT, nunca del cliente); cada usuario solo ve y puede cerrar sus propios trades.

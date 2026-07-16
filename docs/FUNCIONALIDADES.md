@@ -75,8 +75,11 @@ Toda la configuración del operador vive en la pestaña **Settings** y se persis
 
 ### JWT para la API propia
 - **`AuthController` / `AuthService`**: login con usuario+contraseña. `AuthService.LoginAsync` busca el usuario en la BD (`IUserRepository.FindByUsernameAsync` → `AppDbContext.Users`), valida el password con **BCrypt.Verify** contra el hash guardado, y si coincide emite un **JWT Bearer** (12 horas).
-- 5 usuarios fijos sembrados (`user1`–`user5`), mismo rol (sin admin).
+- 5 usuarios fijos sembrados (`user1`–`user5`), mismo rol (sin admin), cada uno con **`Name`/`LastName`** reales en la BD (no solo el username).
+- El JWT incluye los claims `NameIdentifier` (Id), `Name` (username), `GivenName` y `Surname`. La respuesta de login (`TokenResponseDto`) también devuelve `Name`/`LastName` directamente, para que la WinForms no tenga que decodificar el token.
 - **`LoginForm`** (WinForms): al arrancar el programa se muestra un **formulario de login modal** (usuario + contraseña + botón Enter, centrado en pantalla) — ya no hay auto-login con credenciales fijas en el código. El login real valida contra la BD como cualquier otro cliente de la API. Si el usuario **cancela** el diálogo, el programa **se cierra** de inmediato (`Environment.Exit`). Si el login es exitoso, el JWT se adjunta al `HttpClient` de la WinForms para el resto de la sesión.
+- **Username persistido, password nunca**: `LoginUsernameStore` guarda localmente (`%AppData%\OptionsTrader\last_login_username.txt`) solo el último usuario que hizo login exitoso, precargado la próxima vez que se abre el `LoginForm`; el foco queda en el campo Password (vía el evento `Shown`, no `Load`, para que no se lo robe la activación de la ventana).
+- Tras el login, el nombre del usuario se muestra en un **`StatusStrip`** anclado abajo del form ("User: {Nombre} {Apellido}").
 - Endpoints protegidos con `[Authorize]`; **CORS** habilitado para el frontend Angular.
 
 ---
@@ -100,6 +103,7 @@ Pestaña **Options Quotes**: corazón operativo del programa.
 - **Filtro "Counts"** (solo grid actual): en vez de mostrar todo lo que cae en el rango Low/High, permite fijar cuántos strikes OTM mostrar (3 a 14, más cercanos al Spot) o volver a **"In Range"** (comportamiento por rango, default). Selección de sesión, no se persiste entre reinicios.
 - **Filtro CALL / PUT** (solo grid actual): dos checkboxes sobre los encabezados Call/Put — si se marca solo uno, el grid muestra únicamente ese lado; si ambos están marcados o ambos desmarcados, muestra los dos. Se aplica al instante sobre la última cotización recibida.
 - **Ocultar Next ExpDate**: con el checkbox *Hide Next ExpDate* (Settings) marcado, el grid de la próxima expiración no se muestra ni se reconstruye en cada ciclo, y tampoco se abre/escribe su CSV.
+- **Grids con filas en blanco de relleno**: al arrancar el programa y al seleccionar un ticker, los grids de cotizaciones se rellenan con filas vacías (hasta 8) para verse como una tabla lista, en vez de un área gris sólida. Cuando llegan cotizaciones reales, `PopulateQuotesGrid` limpia y repuebla, volviendo a rellenar el remanente con filas en blanco si hay menos de 8 resultados.
 
 ---
 
@@ -111,6 +115,8 @@ Pestaña **Options Quotes**: corazón operativo del programa.
 - **Tamaño de posición**: `balance × position% / 100`, recalculado en tiempo real.
 - **Precio objetivo (T_Bid)**: `Ask × (1 + target% / 100)`.
 - La fila aparece en la grilla **Trades** con Entry, Bid actual (C_Bid), T_Bid, PnL, etc., y se registra todo en el **Logger**.
+- La columna **Type** se colorea **verde para CALL** y **rojo para PUT** en cada fila (`SetTradeTypeColor`), aplicado tanto a operaciones nuevas como a las restauradas al reiniciar.
+- Igual que los grids de cotizaciones, la tabla **Trades** se rellena con filas en blanco (hasta 4) para no verse vacía; se limpian (`RemoveBlankPlaceholderRows`, identificadas porque nunca tienen `Tag`) justo antes de insertar una fila real, y se vuelve a rellenar el remanente después.
 
 ### Seguimiento en vivo
 - En cada ciclo se **recalcula el PnL** de las operaciones abiertas: `(BidActual − Entry) × Contratos × 100`, con porcentaje y coloreado verde/rojo.
@@ -189,7 +195,7 @@ A partir del radio **Trade** / **Trade-Target**, el click en un Strike envía un
 - **Dumps JSON** opcionales (`C:\Dumps`) con la respuesta cruda de Schwab.
 
 ### Historial de IV de apertura (`IvHistorialWriter`)
-- Cada 5 minutos (y una vez al abrir el programa), **cada instancia** intenta agregar la fila de **su propio ticker seleccionado** a `C:\OptionsData\IV_Historial_Apertura.csv` — la instancia de SPY solo escribe la fila de SPY, la de QQQ solo la suya, sin tocar los CSV de otros símbolos.
+- **Se intenta en cada ciclo de polling** (no solo cada 5 minutos): apenas `FetchAndUpdateQuotesAsync` guarda una fila al CSV (con *Quotes to CSV* activo), se llama a `TryAppendIvHistorialSnapshot()` de inmediato — así el snapshot de apertura se captura tan pronto la ventana 9:30-9:35 tiene datos, sin esperar al final del día. El temporizador de 5 minutos (y una corrida al abrir el programa) sigue como respaldo. **Cada instancia** intenta agregar la fila de **su propio ticker seleccionado** a `C:\OptionsData\IV_Historial_Apertura.csv` — la instancia de SPY solo escribe la fila de SPY, la de QQQ solo la suya, sin tocar los CSV de otros símbolos.
 - Para cada símbolo, toma el **primer snapshot** (ciclo de polling) dentro de la ventana **09:30:00–09:35:00 EST** de los CSV Call/Put del día, identifica el **strike ATM** (el más cercano al Spot) por separado en Call y Put, y calcula `IV_ATM_Promedio` = promedio de ambos IV.
 - Columnas del archivo maestro: `Fecha, Simbolo, HoraSnapshot, SpotPrice, StrikeATM_Call, IV_Call_ATM, StrikeATM_Put, IV_Put_ATM, IV_ATM_Promedio`.
 - **Idempotente**: si ya existe una fila para esa Fecha+Símbolo no la duplica. Si no hay datos en la ventana (feriado o ticker no pollingueado aún ese día), no escribe nada para ese símbolo y **reintenta en el siguiente ciclo**.
@@ -202,7 +208,7 @@ A partir del radio **Trade** / **Trade-Target**, el click en un Strike envía un
 
 - **`MarketHours`**: apertura/cierre de NYSE (9:30–16:00 EST), días hábiles y tiempo hasta la próxima apertura — en hora **EST** real.
 - **Arranque diferido**: si se pulsa *Start Polling* fuera de horario, espera hasta la apertura y arranca solo.
-- **Reducción de cadencia a las 11:00 AM**: a partir de las 11:00 AM EST el polling **ya no se detiene** — el intervalo del timer baja de 6 s a **60 s (1 vez por minuto)**, y sigue guardando en CSV normalmente. Ocurre siempre, esté o no marcado el checkbox *Stop at 11:00 AM* (el checkbox queda actualmente sin efecto sobre este comportamiento). La sesión de auto-captura de las 3:55 PM está exenta y sigue a cadencia completa.
+- **Reducción de cadencia a las 11:00 AM**: a partir de las 11:00 AM EST el polling **ya no se detiene** — el intervalo del timer baja de 6 s a **60 s (1 vez por minuto)**, y sigue guardando en CSV normalmente. Ocurre siempre para todos los usuarios, sin ninguna casilla que lo controle. El checkbox *Stop at 11:00 AM* quedó **oculto** (`Visible = false`) ya que no tenía ningún efecto sobre este comportamiento. La sesión de auto-captura de las 3:55 PM está exenta y sigue a cadencia completa.
 - **Auto-captura pre-cierre (3:55 PM EST)**: un temporizador independiente arranca solo una sesión de captura 5 min antes del cierre, guarda ambas cadenas (grids + CSV) hasta las 4:00 PM y se detiene. Funciona aunque el polling ya esté en cadencia de 1 min.
 - **Historial de IV de apertura**: ver §8 — temporizador propio cada 5 min, independiente del polling.
 
@@ -214,7 +220,7 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 
 | Endpoint | Método | Descripción |
 |---|---|---|
-| `/api/auth/login` | POST | Login → JWT (BCrypt + 12 h). |
+| `/api/auth/login` | POST | Login → JWT (BCrypt + 12 h) + `Name`/`LastName` del usuario. |
 | `/api/trades` | GET | Lista los trades **del usuario autenticado**. |
 | `/api/trades?date=YYYY-MM-DD` | GET | Filtra por día (y por usuario). |
 | `/api/trades?month=YYYY-MM` | GET | Filtra por mes (calendario / PnL diario; y por usuario). |
@@ -226,7 +232,7 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 
 - **`TradeDto`** expone `UserId` y `Username` además de los campos del trade.
 - **DTOs obligatorios**: `Entidad → DTO → API → Swagger → NSwag → Interfaz TS + Servicio Angular`.
-- **Migraciones EF Core** aplicadas automáticamente al arrancar (`db.Database.Migrate()` en `Program.cs`) — por ejemplo, `AddUserIdToTrade` agregó la columna nullable, hizo *backfill* de todos los trades preexistentes a `user1`, y luego forzó `NOT NULL` + FK, sin necesidad de tocar la base de datos a mano.
+- **Migraciones EF Core** aplicadas automáticamente al arrancar (`db.Database.Migrate()` en `Program.cs`) — por ejemplo, `AddUserIdToTrade` agregó la columna nullable, hizo *backfill* de todos los trades preexistentes a `user1`, y luego forzó `NOT NULL` + FK, sin necesidad de tocar la base de datos a mano. `AddNameAndLastNameToUser` siguió el mismo patrón (nullable → backfill de los 5 usuarios reales → `NOT NULL`), sin tocar `PasswordHash`.
 - **Swagger** en desarrollo.
 - **Despliegue HTTP-only en EC2**: no hay certificado TLS configurado en el servidor (la WinForms le pega por `http://`), así que `UseHttpsRedirection()` fue removido de `Program.cs` (evitaba warnings de "failed to determine the https port" y redirecciones rotas). Se agregó logging explícito a **consola y Debug** (`ClearProviders` + `AddConsole` + `AddDebug`) para facilitar diagnóstico en el servidor.
 
@@ -236,7 +242,7 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 
 | Dato | Dónde | Tecnología |
 |---|---|---|
-| Trades, Screenshots, Users, BrokerSettings | Base de datos | **SQL Server** (en EC2) vía **EF Core** — `Trades.UserId` (FK a `Users`, NOT NULL) |
+| Trades, Screenshots, Users, BrokerSettings | Base de datos | **SQL Server** (en EC2) vía **EF Core** — `Trades.UserId` (FK a `Users`, NOT NULL); `Users.Name`/`LastName` |
 | Imágenes de screenshots | Nube | **AWS S3** |
 | Cotizaciones / órdenes en tiempo real | — | **Schwab API** directo |
 | Configuración del operador | Local | JSON en `%AppData%\OptionsTrader\` |
@@ -245,6 +251,7 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 | Trades abiertos (recuperación) | Local | `open_trades.json` |
 | Datos para backtesting | Local | CSV en `C:\OptionsData`, dumps en `C:\Dumps` |
 | Historial de IV de apertura | Local | `C:\OptionsData\IV_Historial_Apertura.csv` |
+| Último username usado (no password) | Local | `LoginUsernameStore` → `last_login_username.txt` |
 
 ---
 
