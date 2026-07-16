@@ -42,6 +42,12 @@ public partial class Form1 : Form
     {
         InitializeComponent();
         FormClosing += (s, e) => { _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose(); };
+
+        // Start with blank placeholder rows (no data, just empty cells) so the grids look like
+        // ready spreadsheets instead of a solid gray box before the user picks a ticker.
+        PadWithBlankRows(dgvQuotes, 8);
+        PadWithBlankRows(dgvQuotesNext, 8);
+        PadWithBlankRows(dgvTrades, 4);
         LoadBrokerSelection();
         LoadTickers();
         LoadRadioSelection(grpPositionSize, PositionSizeSettingsStore.Load());
@@ -75,7 +81,7 @@ public partial class Form1 : Form
         _apiHttpClient.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", loginForm.AccessToken);
 
-        lblWelcome.Text = $"Bienvenido, {loginForm.FirstName} {loginForm.LastName}";
+        lblStatusUser.Text = $"User: {loginForm.FirstName} {loginForm.LastName}";
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
@@ -261,7 +267,16 @@ public partial class Form1 : Form
 
         _selectedTicker = clicked.Tag as TickerEntry;
 
+        // Reset to blank placeholder rows — real quotes arrive once Start Polling/Fetch Quotes
+        // is used, so keep the grids looking like ready tables in the meantime.
+        dgvQuotes.Rows.Clear();
+        dgvQuotesNext.Rows.Clear();
+        dgvTrades.Rows.Clear();
+        PadWithBlankRows(dgvQuotes, 8);
+        PadWithBlankRows(dgvQuotesNext, 8);
+
         RestoreOpenTrades(_selectedTicker?.Symbol ?? string.Empty);
+        PadWithBlankRows(dgvTrades, 4);
     }
 
     private void RestoreOpenTrades(string symbol)
@@ -304,6 +319,7 @@ public partial class Form1 : Form
                 expiredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime);
                 expiredRow.DefaultCellStyle.ForeColor = Color.Gray;
                 expiredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
+                SetTradeTypeColor(expiredRow, t.OptionType);
 
                 // LogLine($"{now:HH:mm:ss} Restored EXPIRED trade ({t.OptionType}) Strike: {t.StrikePrice}  Closed with Bid=0  PnL: {pnl:F2}", Color.Gray);
 
@@ -329,10 +345,28 @@ public partial class Form1 : Form
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
                 restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
+                SetTradeTypeColor(restoredRow, t.OptionType);
 
                 // LogLine($"{DateTime.Now:HH:mm:ss} Restored open trade ({t.OptionType}) Strike: {t.StrikePrice}  Entry: {t.EntryPrice:F2}  Contracts: {t.Contracts}", Color.Cyan);
             }
         }
+    }
+
+    // Blank placeholder rows never get a Tag, unlike real trade rows (TradeRowTag) — use that
+    // to strip them out right before a real row is added, so blanks never sit above real data.
+    private static void RemoveBlankPlaceholderRows(DataGridView grid)
+    {
+        for (int i = grid.Rows.Count - 1; i >= 0; i--)
+        {
+            if (grid.Rows[i].Tag == null)
+                grid.Rows.RemoveAt(i);
+        }
+    }
+
+    private static void SetTradeTypeColor(DataGridViewRow row, string optionType)
+    {
+        row.Cells["colTradeType"].Style.ForeColor =
+            optionType.Equals("CALL", StringComparison.OrdinalIgnoreCase) ? Color.Green : Color.Red;
     }
 
     private void TradeRadioButton_CheckedChanged(object? sender, EventArgs e)
@@ -722,7 +756,12 @@ public partial class Form1 : Form
 
             // Primary chain (current ExpDate)
             if (chkSaveToCsv.Checked)
+            {
                 _csvLogger?.AppendRows(allQuotes);
+                // Try right away (not just on the 5-min scheduler tick) so the IVR/IVP opening
+                // snapshot is captured on the very poll where the 9:30-9:35 window fills in.
+                TryAppendIvHistorialSnapshot();
+            }
 
             PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true);
 
@@ -913,7 +952,17 @@ public partial class Form1 : Form
             grid.Rows[grid.Rows.Count - 1].Tag = "PUT";
         }
 
+        PadWithBlankRows(grid, 8);
+
         return (otmCalls, otmPuts);
+    }
+
+    // Fills the grid with empty rows up to targetTotal so it still looks like a full table
+    // when there aren't enough real quotes to fill the visible area.
+    private static void PadWithBlankRows(DataGridView grid, int targetTotal)
+    {
+        for (int i = grid.Rows.Count; i < targetTotal; i++)
+            grid.Rows.Add();
     }
 
     private void DgvQuotesNext_CellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
@@ -1090,6 +1139,8 @@ public partial class Form1 : Form
         var entryTime = DateTime.Now;
         var now       = entryTime.ToString("HH:mm:ss");
 
+        RemoveBlankPlaceholderRows(dgvTrades);
+
         dgvTrades.Rows.Add(
             now, rowType, strike,
             bid.ToString("F2"), ask.ToString("F2"), contracts,
@@ -1101,6 +1152,7 @@ public partial class Form1 : Form
         newRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
         newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
         newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
+        SetTradeTypeColor(newRow, rowType);
 
         LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
@@ -1111,6 +1163,7 @@ public partial class Form1 : Form
         int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose);
+        PadWithBlankRows(dgvTrades, 4);
 
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         OpenTradesStore.Add(new PersistedTrade(
