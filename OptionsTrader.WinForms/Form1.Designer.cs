@@ -15,6 +15,8 @@ partial class Form1
 
     private void InitializeComponent()
     {
+        statusStrip1 = new StatusStrip();
+        lblStatusUser = new ToolStripStatusLabel();
         tabControl = new TabControl();
         tabQuotes = new TabPage();
         grpLogger = new GroupBox();
@@ -77,7 +79,6 @@ partial class Form1
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
-        lblWelcome = new Label();
         grpBalance = new GroupBox();
         txtBalance = new TextBox();
         lblPositionAmount = new Label();
@@ -200,6 +201,7 @@ partial class Form1
         grpAccounts.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvAccounts).BeginInit();
         grpAwsSettings.SuspendLayout();
+        statusStrip1.SuspendLayout();
         SuspendLayout();
         // 
         // tabControl
@@ -222,7 +224,6 @@ partial class Form1
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
-        tabQuotes.Controls.Add(lblWelcome);
         tabQuotes.Controls.Add(grpBalance);
         tabQuotes.Controls.Add(grpTickerButtons);
         tabQuotes.Controls.Add(grpTrade);
@@ -703,6 +704,7 @@ partial class Form1
         chkStopAt11.Size = new Size(115, 19);
         chkStopAt11.TabIndex = 3;
         chkStopAt11.Text = "Stop at 11:00 AM";
+        chkStopAt11.Visible = false;
         //
         // chkSaveToCsv
         //
@@ -758,16 +760,6 @@ partial class Form1
         lblLastUpdate.Size = new Size(0, 13);
         lblLastUpdate.TabIndex = 5;
         //
-        // lblWelcome
-        //
-        lblWelcome.AutoSize = true;
-        lblWelcome.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
-        lblWelcome.ForeColor = Color.DarkSlateGray;
-        lblWelcome.Location = new Point(8, 84);
-        lblWelcome.Name = "lblWelcome";
-        lblWelcome.Size = new Size(0, 13);
-        lblWelcome.TabIndex = 6;
-        //
         // grpBalance
         // 
         grpBalance.Controls.Add(txtBalance);
@@ -819,9 +811,9 @@ partial class Form1
         grpTrade.Controls.Add(rbNoTrade);
         grpTrade.Controls.Add(rbTrade);
         grpTrade.Controls.Add(rbTradeTarget);
-        grpTrade.Location = new Point(895, 4);
+        grpTrade.Location = new Point(850, 4);
         grpTrade.Name = "grpTrade";
-        grpTrade.Size = new Size(110, 90);
+        grpTrade.Size = new Size(150, 96);
         grpTrade.TabIndex = 7;
         grpTrade.TabStop = false;
         grpTrade.Text = "Trade";
@@ -849,10 +841,10 @@ partial class Form1
         rbTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
         // 
         // rbTradeTarget
-        // 
-        rbTradeTarget.Location = new Point(12, 66);
+        //
+        rbTradeTarget.AutoSize = true;
+        rbTradeTarget.Location = new Point(12, 62);
         rbTradeTarget.Name = "rbTradeTarget";
-        rbTradeTarget.Size = new Size(90, 20);
         rbTradeTarget.TabIndex = 2;
         rbTradeTarget.Text = "Trade-Target";
         rbTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
@@ -868,7 +860,7 @@ partial class Form1
         grpContracts.Controls.Add(rbContractsPositionSize);
         grpContracts.Location = new Point(1008, 4);
         grpContracts.Name = "grpContracts";
-        grpContracts.Size = new Size(105, 90);
+        grpContracts.Size = new Size(105, 96);
         grpContracts.TabIndex = 8;
         grpContracts.TabStop = false;
         grpContracts.Text = "Contracts";
@@ -955,7 +947,7 @@ partial class Form1
         grpCounts.Controls.Add(rbCountsInRange);
         grpCounts.Location = new Point(545, 4);
         grpCounts.Name = "grpCounts";
-        grpCounts.Size = new Size(265, 90);
+        grpCounts.Size = new Size(265, 96);
         grpCounts.TabIndex = 9;
         grpCounts.TabStop = false;
         grpCounts.Text = "Counts";
@@ -1659,14 +1651,30 @@ partial class Form1
         lblAwsSaved.Text = "Settings Saved";
         lblAwsSaved.Visible = false;
         //
+        // statusStrip1
+        //
+        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser });
+        statusStrip1.Location = new Point(0, 578);
+        statusStrip1.Name = "statusStrip1";
+        statusStrip1.Size = new Size(1181, 22);
+        statusStrip1.TabIndex = 1;
+        //
+        // lblStatusUser
+        //
+        lblStatusUser.Name = "lblStatusUser";
+        lblStatusUser.Size = new Size(0, 17);
+        //
         // Form1
         //
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
         ClientSize = new Size(1181, 600);
+        Controls.Add(statusStrip1);
         Controls.Add(tabControl);
         Name = "Form1";
         Text = "Options Trader";
+        statusStrip1.ResumeLayout(false);
+        statusStrip1.PerformLayout();
         tabControl.ResumeLayout(false);
         tabQuotes.ResumeLayout(false);
         tabQuotes.PerformLayout();
@@ -1706,6 +1714,8 @@ partial class Form1
 
     #endregion
 
+    private StatusStrip statusStrip1;
+    private ToolStripStatusLabel lblStatusUser;
     private TabControl tabControl;
     private TabPage tabQuotes;
     private TabPage tabSettings;
@@ -1795,7 +1805,6 @@ partial class Form1
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;
-    private Label lblWelcome;
     private GroupBox grpBalance;
     private TextBox txtBalance;
     private Label lblPositionAmount;
