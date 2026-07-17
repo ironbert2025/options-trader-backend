@@ -4,14 +4,15 @@ Guion de narración en español para el video general de presentación del siste
 
 Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se usan dentro de la secuencia general (no en el orden en que fueron grabados) — cada uno valida una unidad funcional independiente del sistema completo:
 
-| # | Unidad validada | Video temático | Link |
+| # | Unidad validada | Duración | Link |
 |---|---|---|---|
-| 1 | Problema (latencia app móvil) | Video 6 | [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link) |
-| 2 | Arquitectura (EC2, API, BD, Frontend) | Video 1 | [Ver en Google Drive](https://drive.google.com/file/d/18NINnvj5l4r6Ng3eLJrGT7lyHDyf8PP1/view?usp=drive_link) |
-| 3 | Configuración inicial | Video 2 | *(pendiente)* |
-| 4 | Trade Demo (manual + Target) | Video 3 | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
-| 5 | Trade Real (manual + Target) | Video 4 | [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link) |
-| 6 | Frontend / histórico | Video 5 | *(pendiente)* |
+| 1 | Problema (latencia app móvil) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link) |
+| 2 | Arquitectura (EC2, API, BD, Frontend) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/18NINnvj5l4r6Ng3eLJrGT7lyHDyf8PP1/view?usp=drive_link) |
+| 3 | Configuración inicial | *(pendiente)* | *(pendiente)* |
+| 4 | Trade Demo (manual + Target) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
+| 5 | Trade Real (manual + Target) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link) |
+| 6 | Frontend / histórico | *(pendiente)* | *(pendiente)* |
+| **Total** | | *(pendiente)* | |
 
 📹 **Video general (edición final, todos los clips unidos):** *(pendiente)*
 
