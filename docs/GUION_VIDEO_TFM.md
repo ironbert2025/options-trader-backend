@@ -70,7 +70,11 @@ Puedo cerrar la posición manualmente en cualquier momento, o usar Trade-Target,
 
 "El mismo flujo, ahora con una operación real contra el broker: la orden se envía, se confirma vía HTTP y el precio de llenado se sincroniza en tiempo real. Cierro una posición manualmente y otra vía Trade-Target, para demostrar que ambos mecanismos de salida funcionan igual con dinero real que en el modo simulado."
 
-📹 [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link)
+📹 [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link) (26:50)
+
+**Momentos clave (para ir directo sin ver el video completo):**
+- **SPY** — entrada: `11:20` · salida manual: `20:18`
+- **QQQ** — entrada: `16:46` · salida automática por Trade-Target (cruce del % objetivo): `23:24`
 
 ### 6. Frontend — Video histórico de trades
 
