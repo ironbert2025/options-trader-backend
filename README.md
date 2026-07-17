@@ -103,6 +103,8 @@ Ver [`docs/FUNCIONALIDADES.md`](docs/FUNCIONALIDADES.md) para el detalle complet
 
 ## f. Usuario y contraseña de prueba
 
+El frontend Angular (solo lectura, trazabilidad de operaciones) está desplegado en: **http://3.133.58.172/**
+
 El sistema tiene 5 usuarios fijos sembrados en la base de datos (`user1` a `user5`), todos con el mismo rol y la misma contraseña de prueba:
 
 | Usuario | Contraseña | Uso |
