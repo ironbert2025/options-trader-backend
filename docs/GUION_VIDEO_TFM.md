@@ -6,7 +6,7 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 
 | # | Unidad validada | Video temático | Link |
 |---|---|---|---|
-| 1 | Problema (latencia app móvil) | Video 6 | *(pendiente)* |
+| 1 | Problema (latencia app móvil) | Video 6 | [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link) |
 | 2 | Arquitectura (EC2, API, BD, Frontend) | Video 1 | *(pendiente)* |
 | 3 | Configuración inicial | Video 2 | *(pendiente)* |
 | 4 | Trade Demo (manual + Target) | Video 3 | *(pendiente)* |
@@ -39,7 +39,7 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 
 "Este es el flujo actual: login, búsqueda del símbolo, selección del strike, armado de la orden, revisión y envío. Desde que se toma la decisión hasta que la orden llega al mercado pasan no menos de veinte segundos — tiempo suficiente para que el precio se mueva de forma significativa."
 
-📹 *(pendiente — link video 6, recortado)*
+📹 [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link)
 
 ### 2. Arquitectura del sistema — Video EC2/API/BD/Frontend
 
