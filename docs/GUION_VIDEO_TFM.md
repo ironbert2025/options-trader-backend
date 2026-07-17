@@ -9,7 +9,7 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 | 1 | Problema (latencia app móvil) | Video 6 | [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link) |
 | 2 | Arquitectura (EC2, API, BD, Frontend) | Video 1 | [Ver en Google Drive](https://drive.google.com/file/d/18NINnvj5l4r6Ng3eLJrGT7lyHDyf8PP1/view?usp=drive_link) |
 | 3 | Configuración inicial | Video 2 | *(pendiente)* |
-| 4 | Trade Demo (manual + Target) | Video 3 | *(pendiente)* |
+| 4 | Trade Demo (manual + Target) | Video 3 | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
 | 5 | Trade Real (manual + Target) | Video 4 | *(pendiente)* |
 | 6 | Frontend / histórico | Video 5 | *(pendiente)* |
 
@@ -63,7 +63,7 @@ La autenticación es JWT Bearer, con cinco usuarios fijos sembrados en base de d
 
 Puedo cerrar la posición manualmente en cualquier momento, o usar Trade-Target, que coloca automáticamente una orden límite de salida al porcentaje de ganancia predefinido y la ejecuta sin intervención."
 
-📹 *(pendiente — link video 3)*
+📹 [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link)
 
 ### 5. Trade real — Video real (salida manual + Target automático)
 
