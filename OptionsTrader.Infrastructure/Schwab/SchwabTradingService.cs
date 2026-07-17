@@ -142,6 +142,22 @@ public class SchwabTradingService : ISchwabTradingService
         return long.TryParse(lastSegment, out var orderId) ? orderId : 0;
     }
 
+    public async Task CancelOrderAsync(string accountHash, long orderId)
+    {
+        var token = await GetTokenAsync();
+        var request = new HttpRequestMessage(HttpMethod.Delete, $"{BaseUrl}/accounts/{accountHash}/orders/{orderId}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var response = await _httpClient.SendAsync(request);
+        // Already filled/cancelled orders return 404 here — not fatal, we're about to
+        // market-close the position regardless, so only throw on other failures.
+        if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
+        {
+            var error = await response.Content.ReadAsStringAsync();
+            throw new InvalidOperationException($"Cancel failed ({(int)response.StatusCode}): {error}");
+        }
+    }
+
     public async Task<OrderResultDto> GetOrderAsync(string accountHash, long orderId)
     {
         var token = await GetTokenAsync();

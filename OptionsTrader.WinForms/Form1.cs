@@ -8,7 +8,11 @@ using System.Text.Json;
 
 namespace OptionsTrader.WinForms;
 
-file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false);
+// AccountHash/OccSymbol/Quantity are only set for REAL broker trades — that's what tells
+// CloseTradeRowAsync it needs to actually send a SELL_TO_CLOSE order, not just update the log.
+// ExitOrderId is the pending Trade-Target LIMIT exit (if any), cancelled before a manual close.
+file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false,
+    string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null);
 
 public partial class Form1 : Form
 {
@@ -1131,7 +1135,8 @@ public partial class Form1 : Form
     // Records an opened position in the Trades grid + backend API + local persistence + entry screenshot.
     // Shared by simulated trades and real (broker) trades. Returns the API trade id and the new grid row.
     private async Task<(int TradeId, DataGridViewRow Row)> RecordEntryAsync(string symbol, string rowType, string strike, string level,
-        decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool suppressAutoClose = false)
+        decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool suppressAutoClose = false,
+        string? accountHash = null, string? occSymbol = null, int quantity = 0)
     {
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var tBid      = Math.Round(ask * (1 + targetPct / 100m), 2);
@@ -1162,7 +1167,7 @@ public partial class Form1 : Form
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
-        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose);
+        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity);
         PadWithBlankRows(dgvTrades, 4);
 
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
@@ -1271,7 +1276,8 @@ public partial class Form1 : Form
             // Record the real position in grid + backend + screenshot.
             // Trade-Target rows still auto-close in the log (mirrors the real LIMIT order closing
             // on the server); plain Trade rows are manual-close only.
-            var (_, tradeRow) = await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false, suppressAutoClose: !withTarget);
+            var (_, tradeRow) = await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false, suppressAutoClose: !withTarget,
+                accountHash: account.HashValue, occSymbol: occ, quantity: qty);
 
             // Poll for the real fill, sync it into the log, then (if Trade-Target) send the LIMIT exit.
             _ = FinalizeRealEntryAsync(trading, account.HashValue, occ, qty, entryOrderId, targetPct, withTarget, tradeRow);
@@ -1318,6 +1324,12 @@ public partial class Form1 : Form
         {
             var exitOrderId = await trading.PlaceOptionLimitOrderAsync(accountHash, occ, "SELL_TO_CLOSE", qty, targetPrice);
             LogLine($"{DateTime.Now:HH:mm:ss} [Order] Target exit LIMIT {targetPrice:F2} sent — order id {exitOrderId}", Color.LimeGreen);
+
+            Invoke(() =>
+            {
+                if (row.Tag is TradeRowTag tag)
+                    row.Tag = tag with { ExitOrderId = exitOrderId };
+            });
         }
     }
 
@@ -1413,6 +1425,36 @@ public partial class Form1 : Form
         var now       = DateTime.Now;
         var nowStr    = now.ToString("HH:mm:ss");
         var type      = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
+
+        // Real broker trades need an actual SELL_TO_CLOSE order sent to Schwab — updating the log
+        // alone never touched the market (that was the bug: log said "Closed" but the position
+        // stayed open at the broker). "TARGET" closes are exempt: that path only fires for
+        // Trade-Target, where the LIMIT exit already resting at the broker is what's actually
+        // closing the position, so sending another order here would just double-sell it.
+        if (closeType == "MANUAL" && row.Tag is TradeRowTag { AccountHash: not null, OccSymbol: not null, Quantity: > 0 } realTag)
+        {
+            try
+            {
+                var trading = CreateTradingService();
+                if (realTag.ExitOrderId is { } pendingExitId)
+                {
+                    await trading.CancelOrderAsync(realTag.AccountHash, pendingExitId);
+                    LogLine($"{nowStr} [Order] Cancelled pending target exit — order id {pendingExitId}", Color.Orange);
+                }
+
+                var closeOrderId = await trading.PlaceOptionMarketOrderAsync(realTag.AccountHash, realTag.OccSymbol, "SELL_TO_CLOSE", realTag.Quantity);
+                LogLine($"{nowStr} [Order] Sending MARKET SELL_TO_CLOSE x{realTag.Quantity} — order id {closeOrderId}", Color.Cyan);
+            }
+            catch (Exception ex)
+            {
+                LogLine($"{nowStr} [Order] FAILED to close at broker: {ex.Message}", Color.Red);
+                MessageBox.Show(
+                    $"The position could NOT be closed at the broker:\n\n{ex.Message}\n\nThe trade stays open here — close it manually in Schwab and try again, or retry Close.",
+                    "Close Order Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return; // leave the row open — don't lie in the log about the position being closed
+            }
+        }
+
         var strike    = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
         var cBid      = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
         var pnl       = row.Cells["colTradePnL"].Value?.ToString() ?? string.Empty;

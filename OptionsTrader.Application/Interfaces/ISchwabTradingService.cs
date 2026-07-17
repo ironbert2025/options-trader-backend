@@ -17,4 +17,7 @@ public interface ISchwabTradingService
 
     // Queries an order to read its status and fill price.
     Task<OrderResultDto> GetOrderAsync(string accountHash, long orderId);
+
+    // Cancels a working order (e.g. a pending Trade-Target LIMIT exit) before replacing it.
+    Task CancelOrderAsync(string accountHash, long orderId);
 }
