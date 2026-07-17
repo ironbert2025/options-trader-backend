@@ -4,7 +4,7 @@ Este documento muestra, paso a paso, el flujo real que sigue un trader al enviar
 
 Esta es precisamente la razón de ser de la **Windows App** de este proyecto: automatizar y comprimir este mismo flujo a **menos de 3 segundos**.
 
-📹 **Video de la secuencia completa (~20 segundos):** *(pendiente — se agregará el link a Google Drive una vez subido el video)*
+📹 **Video de la secuencia completa (~20 segundos):** [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link)
 
 ---
 
