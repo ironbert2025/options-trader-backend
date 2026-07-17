@@ -6,7 +6,7 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 
 | # | Unidad validada | Duración | Link |
 |---|---|---|---|
-| 1 | Problema (latencia app móvil) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link) |
+| 1 | Problema (latencia app móvil) | 3:02 | [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link) |
 | 2 | Arquitectura (EC2, API, BD, Frontend) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/18NINnvj5l4r6Ng3eLJrGT7lyHDyf8PP1/view?usp=drive_link) |
 | 3 | Configuración inicial | *(pendiente)* | *(pendiente)* |
 | 4 | Trade Demo (manual + Target) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
