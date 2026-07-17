@@ -1,6 +1,6 @@
 # Options Trader
 
-Documentación completa y detallada del proyecto. Para el detalle técnico de cada funcionalidad ver [`docs/FUNCIONALIDADES.md`](docs/FUNCIONALIDADES.md); para la guía de uso paso a paso ver [`docs/GUIA_USUARIO.md`](docs/GUIA_USUARIO.md).
+Documentación completa y detallada del proyecto. Para el detalle técnico de cada funcionalidad ver [`docs/FUNCIONALIDADES.md`](docs/FUNCIONALIDADES.md); para la guía de uso paso a paso ver [`docs/GUIA_USUARIO.md`](docs/GUIA_USUARIO.md); para la presentación en PowerPoint ver [`docs/OptionsTrader_Presentacion.pptx`](docs/OptionsTrader_Presentacion.pptx).
 
 ---
 
@@ -68,6 +68,8 @@ dotnet run --project OptionsTrader.WinForms
 
 Al abrir la WinForms se muestra primero una ventana de **login** (ver sección f); luego, en la pestaña **Settings**, se configuran las credenciales de Schwab, cuentas del broker, tickers y demás ajustes (ver [`docs/GUIA_USUARIO.md`](docs/GUIA_USUARIO.md)).
 
+> **Nota sobre credenciales de API:** para correr la app con datos y órdenes reales se necesitan 4 valores sensibles que **no están incluidos en este repositorio** (Schwab API Key, Schwab API Secret, AWS Access Key y AWS Secret Key). Las cuentas de Schwab vinculadas operan con **dinero real**, por lo que estas credenciales solo se comparten bajo solicitud directa y no se publican en ningún medio. Si es estrictamente necesario ejecutar la aplicación end-to-end durante la evaluación, **por favor solicítalas por correo** y se enviarán de forma privada (no por chat ni por ningún canal público). Sin estas credenciales, el código, la arquitectura y el resto de la documentación (incluyendo los videos demostrativos) pueden revisarse igualmente sin restricción.
+
 ---
 
 ## d. Estructura del proyecto
@@ -102,6 +104,8 @@ Ver [`docs/FUNCIONALIDADES.md`](docs/FUNCIONALIDADES.md) para el detalle complet
 ---
 
 ## f. Usuario y contraseña de prueba
+
+El frontend Angular (solo lectura, trazabilidad de operaciones) está desplegado en: **http://3.133.58.172/**
 
 El sistema tiene 5 usuarios fijos sembrados en la base de datos (`user1` a `user5`), todos con el mismo rol y la misma contraseña de prueba:
 
