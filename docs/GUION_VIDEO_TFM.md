@@ -10,7 +10,7 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 | 2 | Arquitectura (EC2, API, BD, Frontend) | Video 1 | [Ver en Google Drive](https://drive.google.com/file/d/18NINnvj5l4r6Ng3eLJrGT7lyHDyf8PP1/view?usp=drive_link) |
 | 3 | Configuración inicial | Video 2 | *(pendiente)* |
 | 4 | Trade Demo (manual + Target) | Video 3 | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
-| 5 | Trade Real (manual + Target) | Video 4 | *(pendiente)* |
+| 5 | Trade Real (manual + Target) | Video 4 | [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link) |
 | 6 | Frontend / histórico | Video 5 | *(pendiente)* |
 
 📹 **Video general (edición final, todos los clips unidos):** *(pendiente)*
@@ -69,7 +69,7 @@ Puedo cerrar la posición manualmente en cualquier momento, o usar Trade-Target,
 
 "El mismo flujo, ahora con una operación real contra el broker: la orden se envía, se confirma vía HTTP y el precio de llenado se sincroniza en tiempo real. Cierro una posición manualmente y otra vía Trade-Target, para demostrar que ambos mecanismos de salida funcionan igual con dinero real que en el modo simulado."
 
-📹 *(pendiente — link video 4)*
+📹 [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link)
 
 ### 6. Frontend — Video histórico de trades
 
