@@ -12,6 +12,9 @@ using OptionsTrader.Infrastructure.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Local-only overrides (Jwt key, connection strings) — gitignored, never committed.
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.Logging.AddDebug();
