@@ -115,3 +115,34 @@ El sistema tiene 5 usuarios fijos sembrados en la base de datos (`user1` a `user
 | `user2` | `Pass1234!` | Usuario de prueba para que BigSchool use la aplicación e inyecte datos de prueba a la base de datos. |
 
 *(`user2`–`user5` usan la misma contraseña; sirven para distinguir sesiones simultáneas, no roles distintos.)*
+
+---
+
+## g. Pasos para el evaluador — correr la Windows App en su PC
+
+**Requisitos previos**
+1. Instalar [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+2. Tener Git instalado
+
+**Pasos**
+1. Clonar el repositorio:
+   ```bash
+   git clone https://github.com/ironbert2025/options-trader-backend.git
+   cd options-trader-backend
+   ```
+2. Compilar la solución:
+   ```bash
+   dotnet build OptionsTrader.slnx
+   ```
+3. Ejecutar la aplicación de escritorio:
+   ```bash
+   dotnet run --project OptionsTrader.WinForms
+   ```
+4. En la ventana de **login**, ingresar:
+   - Usuario: `user2`
+   - Contraseña: `Pass1234!`
+
+   (Es el usuario de prueba destinado específicamente a la evaluación — ver sección f.)
+5. La app se conecta automáticamente a la API ya desplegada en AWS — no requiere levantar nada más localmente.
+
+**Nota importante:** para ver cotizaciones en tiempo real y probar el envío de órdenes (pestaña Quotes, ejecución de trades), la app necesita credenciales de la API de Schwab cargadas en la pestaña **Settings**. Esas credenciales corresponden a una cuenta con dinero real y **no están incluidas en el repositorio** (ver sección c) — si es necesario probar ese flujo completo, deben solicitarse por correo. Sin esas credenciales, igual puede revisarse la UI, la configuración, el login, y el resto de la documentación y videos demostrativos sin restricción.
