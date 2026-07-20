@@ -1114,16 +1114,18 @@ partial class Form1
         rbSchwab.CheckedChanged += BrokerRadioButton_CheckedChanged;
         // 
         // rbIBKR
-        // 
+        //
+        rbIBKR.Enabled = false;
         rbIBKR.Location = new Point(12, 46);
         rbIBKR.Name = "rbIBKR";
         rbIBKR.Size = new Size(135, 20);
         rbIBKR.TabIndex = 1;
         rbIBKR.Text = "Interactive Broker";
         rbIBKR.CheckedChanged += BrokerRadioButton_CheckedChanged;
-        // 
+        //
         // rbETrade
-        // 
+        //
+        rbETrade.Enabled = false;
         rbETrade.Location = new Point(12, 70);
         rbETrade.Name = "rbETrade";
         rbETrade.Size = new Size(135, 20);

@@ -8,7 +8,7 @@ namespace OptionsTrader.Infrastructure.Schwab;
 
 // Talks to the Schwab Trader API (accounts + order placement). Mirrors the token-handling
 // pattern of SchwabMarketDataService: a stored access token is passed in and renewed on demand.
-public class SchwabTradingService : ISchwabTradingService
+public class SchwabTradingService : ITradingService
 {
     private const string BaseUrl = "https://api.schwabapi.com/trader/v1";
 
@@ -55,7 +55,7 @@ public class SchwabTradingService : ISchwabTradingService
             _storedAccessToken, _storedExpiresAt,
             _refreshToken, OnTokenRenewedInternal);
 
-    public async Task<IEnumerable<SchwabAccountDto>> GetAccountNumbersAsync()
+    public async Task<IEnumerable<BrokerAccountDto>> GetAccountNumbersAsync()
     {
         var token = await GetTokenAsync();
         var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/accounts/accountNumbers");
@@ -67,13 +67,13 @@ public class SchwabTradingService : ISchwabTradingService
         var json = await response.Content.ReadAsStringAsync();
         var doc  = JsonDocument.Parse(json);
 
-        var accounts = new List<SchwabAccountDto>();
+        var accounts = new List<BrokerAccountDto>();
         foreach (var el in doc.RootElement.EnumerateArray())
         {
-            accounts.Add(new SchwabAccountDto
+            accounts.Add(new BrokerAccountDto
             {
                 AccountNumber = el.TryGetProperty("accountNumber", out var an) ? an.GetString() ?? string.Empty : string.Empty,
-                HashValue     = el.TryGetProperty("hashValue", out var hv)     ? hv.GetString() ?? string.Empty : string.Empty
+                AccountId     = el.TryGetProperty("hashValue", out var hv)     ? hv.GetString() ?? string.Empty : string.Empty
             });
         }
         return accounts;
