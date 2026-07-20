@@ -11,7 +11,7 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 | 3 | Configuración inicial | *(pendiente)* | *(pendiente)* |
 | 4 | Trade Demo (manual + Target) | 11:00 | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
 | 5 | Trade Real (manual + Target) | 26:50 | [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link) |
-| 6 | Frontend / histórico | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link) |
+| 6 | Frontend / histórico | 2:21 | [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link) |
 | **Total** | | *(pendiente)* | |
 
 📹 **Video general (edición final, todos los clips unidos):** *(pendiente)*
