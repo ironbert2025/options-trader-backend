@@ -6,7 +6,7 @@ using OptionsTrader.Domain.Enums;
 
 namespace OptionsTrader.Infrastructure.Schwab;
 
-public class SchwabMarketDataService : ISchwabMarketDataService
+public class SchwabMarketDataService : IMarketDataService
 {
     private const string BaseUrl = "https://api.schwabapi.com/marketdata/v1/chains";
     private const int StrikePriceCount = 40; // 20 calls + 20 puts

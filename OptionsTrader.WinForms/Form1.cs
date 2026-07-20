@@ -2,6 +2,8 @@ using Amazon.S3;
 using Amazon.S3.Model;
 using OptionsTrader.Application.DTOs.Options;
 using OptionsTrader.Application.DTOs.Trading;
+using OptionsTrader.Application.Interfaces;
+using OptionsTrader.Domain.Enums;
 using OptionsTrader.Infrastructure.Schwab;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -38,7 +40,7 @@ public partial class Form1 : Form
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
-    private List<SchwabAccountDto> _accounts = new();
+    private List<BrokerAccountDto> _accounts = new();
     private string _selectedCounts = "In Range"; // session-only, always defaults to In Range on launch
     private List<OptionQuoteDto> _lastAllQuotes = new(); // current-expiration chain from the last fetch, for instant re-filtering
 
@@ -60,7 +62,8 @@ public partial class Form1 : Form
         ApplyRadioStyle(grpCounts);
         chkSaveDumps.Checked = DumpSettingsStore.Load();
         grpOptionsChainNext.Visible = !chkHideNextExpDate.Checked;
-        LoadSchwabCredentials();
+        if (BrokerSettingsStore.Load() == BrokerName.Schwab)
+            LoadSchwabCredentials();
         LoadAwsSettings();
         LoadScreenCoords();
         LoadBalance();
@@ -127,12 +130,18 @@ public partial class Form1 : Form
         _autoCaptureTimer.Start();
     }
 
+    // Maps each broker radio button to its BrokerName via its control Name (rbSchwab → Schwab,
+    // rbIBKR → IBKR, rbETrade → ETrade) rather than its display Text, so relabeling the UI
+    // doesn't silently break broker selection.
+    private static BrokerName? BrokerNameForRadio(RadioButton rb) =>
+        Enum.TryParse<BrokerName>(rb.Name.Replace("rb", string.Empty), out var broker) ? broker : null;
+
     private void LoadBrokerSelection()
     {
         var saved = BrokerSettingsStore.Load();
         var match = grpBroker.Controls
             .OfType<RadioButton>()
-            .FirstOrDefault(rb => rb.Text == saved);
+            .FirstOrDefault(rb => BrokerNameForRadio(rb) == saved);
 
         if (match != null)
         {
@@ -140,6 +149,17 @@ public partial class Form1 : Form
             match.ForeColor = Color.Green;
             match.Font = new Font(match.Font, FontStyle.Bold);
         }
+
+        UpdateSchwabGroupsVisibility(saved);
+    }
+
+    // Schwab Credentials / Broker Accounts only make sense for the active broker — IBKR/ETrade
+    // have no implementation yet, so there's nothing to configure for them.
+    private void UpdateSchwabGroupsVisibility(BrokerName broker)
+    {
+        var isSchwab = broker == BrokerName.Schwab;
+        grpSchwabCredentials.Visible = isSchwab;
+        grpAccounts.Visible = isSchwab;
     }
 
     private static void LoadRadioSelection(GroupBox group, string saved)
@@ -159,8 +179,11 @@ public partial class Form1 : Form
     private void BrokerRadioButton_CheckedChanged(object? sender, EventArgs e)
     {
         ApplyRadioStyle(grpBroker);
-        if (sender is RadioButton { Checked: true } selected)
-            BrokerSettingsStore.Save(selected.Text);
+        if (sender is RadioButton { Checked: true } selected && BrokerNameForRadio(selected) is { } broker)
+        {
+            BrokerSettingsStore.Save(broker);
+            UpdateSchwabGroupsVisibility(broker);
+        }
     }
 
     private void PositionSizeRadioButton_CheckedChanged(object? sender, EventArgs e)
@@ -712,38 +735,13 @@ public partial class Form1 : Form
     {
         if (_selectedTicker == null) return;
 
-        var creds = SchwabCredentialsStore.Load();
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
         lblExpDate.Text = $"ExpDate: {expDate:yyyy-MM-dd}";
         lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
 
         try
         {
-            var tokens           = SchwabTokenStore.Load();
-            var refreshToken     = tokens?.RefreshToken ?? string.Empty;
-            var storedAccess     = tokens?.AccessToken ?? string.Empty;
-            var storedExpiresAt  = tokens?.AccessTokenExpiresAt ?? DateTime.MinValue;
-
-            async Task OnTokenRenewed(string newAccess, DateTime newExpires)
-            {
-                var current = SchwabTokenStore.Load();
-                if (current != null)
-                {
-                    var updated = current with { AccessToken = newAccess, AccessTokenExpiresAt = newExpires };
-                    SchwabTokenStore.Save(updated);
-                    Invoke(() =>
-                    {
-                        lblTokenStatus.Text = $"Token renewed — expires {newExpires.ToLocalTime():HH:mm:ss}";
-                        lblTokenStatus.ForeColor = Color.Green;
-                    });
-                }
-            }
-
-            var service = new SchwabMarketDataService(
-                _marketHttpClient, _schwabAuth,
-                creds.ApiKey, creds.ApiSecret,
-                refreshToken, storedAccess, storedExpiresAt,
-                OnTokenRenewed, chkSaveDumps.Checked);
+            var service = CreateMarketDataService(chkSaveDumps.Checked);
 
             var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
             lblExpDateNext.Text = $"ExpDate: {nextExpDate:yyyy-MM-dd}";
@@ -1206,7 +1204,20 @@ public partial class Form1 : Form
             });
     }
 
-    private SchwabTradingService CreateTradingService()
+    // Resolves the trading service for whichever broker is selected in Settings. IBKR/ETrade
+    // are recognized brokers (BrokerName enum) but have no implementation yet — selecting them
+    // throws a clear error instead of silently falling back to Schwab.
+    private ITradingService CreateTradingService()
+    {
+        var broker = BrokerSettingsStore.Load();
+        return broker switch
+        {
+            BrokerName.Schwab => CreateSchwabTradingService(),
+            _ => throw new NotSupportedException($"Broker '{broker}' is not implemented yet. Select Charles Schwab in Settings.")
+        };
+    }
+
+    private SchwabTradingService CreateSchwabTradingService()
     {
         var creds  = SchwabCredentialsStore.Load();
         var tokens = SchwabTokenStore.Load();
@@ -1217,6 +1228,30 @@ public partial class Form1 : Form
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
             OnSchwabTokenRenewed);
+    }
+
+    // Same broker-dispatch pattern as CreateTradingService, for the market-data (quotes) side.
+    private IMarketDataService CreateMarketDataService(bool enableDumps)
+    {
+        var broker = BrokerSettingsStore.Load();
+        return broker switch
+        {
+            BrokerName.Schwab => CreateSchwabMarketDataService(enableDumps),
+            _ => throw new NotSupportedException($"Broker '{broker}' is not implemented yet. Select Charles Schwab in Settings.")
+        };
+    }
+
+    private SchwabMarketDataService CreateSchwabMarketDataService(bool enableDumps)
+    {
+        var creds  = SchwabCredentialsStore.Load();
+        var tokens = SchwabTokenStore.Load();
+        return new SchwabMarketDataService(
+            _marketHttpClient, _schwabAuth,
+            creds.ApiKey, creds.ApiSecret,
+            tokens?.RefreshToken ?? string.Empty,
+            tokens?.AccessToken ?? string.Empty,
+            tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
+            OnSchwabTokenRenewed, enableDumps);
     }
 
     private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)
@@ -1292,7 +1327,7 @@ public partial class Form1 : Form
     // Waits for the entry order to fill, syncs the real EntryPrice/Target into the Trades grid, and —
     // for Trade-Target — sends the SELL_TO_CLOSE LIMIT order so the position closes itself on the server.
     // The Trades grid will auto-close the same row once PnL_Percent reaches PnL_Target (see UpdateTradesPnL).
-    private async Task FinalizeRealEntryAsync(SchwabTradingService trading, string accountHash, string occ,
+    private async Task FinalizeRealEntryAsync(ITradingService trading, string accountHash, string occ,
         int qty, long entryOrderId, decimal targetPct, bool withTarget, DataGridViewRow row)
     {
         decimal? fill = null;
@@ -1368,7 +1403,7 @@ public partial class Form1 : Form
         }
     }
 
-    private void PopulateAccountsGrid(List<SchwabAccountDto> accounts, bool persist = true)
+    private void PopulateAccountsGrid(List<BrokerAccountDto> accounts, bool persist = true)
     {
         _accounts = accounts;
         dgvAccounts.Rows.Clear();
@@ -1378,15 +1413,15 @@ public partial class Form1 : Form
 
         foreach (var acct in accounts)
         {
-            var isDefault = selected != null && selected.HashValue == acct.HashValue;
-            dgvAccounts.Rows.Add(isDefault, MaskAccount(acct.AccountNumber), acct.HashValue);
+            var isDefault = selected != null && selected.HashValue == acct.AccountId;
+            dgvAccounts.Rows.Add(isDefault, MaskAccount(acct.AccountNumber), acct.AccountId);
         }
 
         // Default to the first account if none was persisted.
         if (selected == null && accounts.Count > 0)
         {
             dgvAccounts.Rows[0].Cells["colAccountDefault"].Value = true;
-            SelectedAccountStore.Save(new SelectedAccount(accounts[0].AccountNumber, accounts[0].HashValue));
+            SelectedAccountStore.Save(new SelectedAccount(accounts[0].AccountNumber, accounts[0].AccountId));
         }
     }
 
@@ -1401,7 +1436,7 @@ public partial class Form1 : Form
             dgvAccounts.Rows[i].Cells["colAccountDefault"].Value = (i == e.RowIndex);
 
         var hash   = dgvAccounts.Rows[e.RowIndex].Cells["colAccountHash"].Value?.ToString() ?? string.Empty;
-        var number = _accounts.FirstOrDefault(a => a.HashValue == hash)?.AccountNumber ?? string.Empty;
+        var number = _accounts.FirstOrDefault(a => a.AccountId == hash)?.AccountNumber ?? string.Empty;
         SelectedAccountStore.Save(new SelectedAccount(number, hash));
         // LogLine($"{DateTime.Now:HH:mm:ss} [Accounts] Default account set to {MaskAccount(number)}", Color.Yellow);
     }

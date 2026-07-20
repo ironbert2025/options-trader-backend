@@ -2,9 +2,11 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
+using OptionsTrader.Application.Interfaces;
+
 namespace OptionsTrader.Infrastructure.Schwab;
 
-public class SchwabAuthService
+public class SchwabAuthService : IBrokerAuthService
 {
     private const string TokenUrl = "https://api.schwabapi.com/v1/oauth/token";
     public const int RefreshTokenLifetimeDays = 7;

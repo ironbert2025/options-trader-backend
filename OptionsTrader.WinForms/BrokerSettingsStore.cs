@@ -1,4 +1,5 @@
 using System.Text.Json;
+using OptionsTrader.Domain.Enums;
 
 namespace OptionsTrader.WinForms;
 
@@ -9,29 +10,34 @@ internal static class BrokerSettingsStore
         "OptionsTrader",
         "settings.json");
 
-    public static string Load()
+    // Defaults to Schwab (the only implemented broker) when nothing was ever saved or the
+    // saved value doesn't match a known BrokerName.
+    public static BrokerName Load()
     {
         if (!File.Exists(SettingsPath))
-            return string.Empty;
+            return BrokerName.Schwab;
 
         try
         {
             var json = File.ReadAllText(SettingsPath);
             var doc = JsonDocument.Parse(json);
-            return doc.RootElement.TryGetProperty("SelectedBroker", out var val)
-                ? val.GetString() ?? string.Empty
-                : string.Empty;
+            if (doc.RootElement.TryGetProperty("SelectedBroker", out var val)
+                && Enum.TryParse<BrokerName>(val.GetString(), out var broker))
+            {
+                return broker;
+            }
+            return BrokerName.Schwab;
         }
         catch
         {
-            return string.Empty;
+            return BrokerName.Schwab;
         }
     }
 
-    public static void Save(string brokerName)
+    public static void Save(BrokerName broker)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-        var json = JsonSerializer.Serialize(new { SelectedBroker = brokerName });
+        var json = JsonSerializer.Serialize(new { SelectedBroker = broker.ToString() });
         File.WriteAllText(SettingsPath, json);
     }
 }

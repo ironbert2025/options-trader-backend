@@ -9,21 +9,21 @@ internal static class AccountsCacheStore
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "OptionsTrader", "accounts_cache.json");
 
-    public static List<SchwabAccountDto> Load()
+    public static List<BrokerAccountDto> Load()
     {
-        if (!File.Exists(SettingsPath)) return new List<SchwabAccountDto>();
+        if (!File.Exists(SettingsPath)) return new List<BrokerAccountDto>();
         try
         {
-            return JsonSerializer.Deserialize<List<SchwabAccountDto>>(File.ReadAllText(SettingsPath))
-                   ?? new List<SchwabAccountDto>();
+            return JsonSerializer.Deserialize<List<BrokerAccountDto>>(File.ReadAllText(SettingsPath))
+                   ?? new List<BrokerAccountDto>();
         }
         catch
         {
-            return new List<SchwabAccountDto>();
+            return new List<BrokerAccountDto>();
         }
     }
 
-    public static void Save(List<SchwabAccountDto> accounts)
+    public static void Save(List<BrokerAccountDto> accounts)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
         File.WriteAllText(SettingsPath, JsonSerializer.Serialize(accounts));
