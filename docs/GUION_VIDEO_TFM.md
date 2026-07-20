@@ -11,7 +11,7 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 | 3 | Configuración inicial | *(pendiente)* | *(pendiente)* |
 | 4 | Trade Demo (manual + Target) | 11:00 | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
 | 5 | Trade Real (manual + Target) | 26:50 | [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link) |
-| 6 | Frontend / histórico | *(pendiente)* | *(pendiente)* |
+| 6 | Frontend / histórico | 2:21 | [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link) |
 | **Total** | | *(pendiente)* | |
 
 📹 **Video general (edición final, todos los clips unidos):** *(pendiente)*
@@ -80,7 +80,7 @@ Puedo cerrar la posición manualmente en cualquier momento, o usar Trade-Target,
 
 "Cada trade queda asociado al usuario que lo ejecutó y persistido en base de datos junto con sus capturas de pantalla. El frontend en Angular expone esta información en modo solo lectura: precio de entrada y salida, resultado, fecha, y las imágenes capturadas automáticamente en el momento de la apertura y el cierre de la operación."
 
-📹 *(pendiente — link video 5)*
+📹 [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link)
 
 ### Cierre (10-15s, sin video o con logo/diagrama final)
 
