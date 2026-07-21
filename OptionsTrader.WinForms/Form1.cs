@@ -1460,6 +1460,12 @@ public partial class Form1 : Form
         var now       = DateTime.Now;
         var nowStr    = now.ToString("HH:mm:ss");
         var type      = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
+        var cBid      = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
+
+        // Confirmed fill price of the real SELL_TO_CLOSE order (MANUAL close only). Null means
+        // either this isn't a real-broker MANUAL close, or the fill wasn't confirmed in time —
+        // both cases fall back to cBid (the last polled bid shown on screen) for the PnL math.
+        decimal? realClosePrice = null;
 
         // Real broker trades need an actual SELL_TO_CLOSE order sent to Schwab — updating the log
         // alone never touched the market (that was the bug: log said "Closed" but the position
@@ -1477,8 +1483,24 @@ public partial class Form1 : Form
                     LogLine($"{nowStr} [Order] Cancelled pending target exit — order id {pendingExitId}", Color.Orange);
                 }
 
+                LogLine($"{nowStr} [Order] Precio en pantalla al hacer click: {cBid}", Color.Cyan);
+
                 var closeOrderId = await trading.PlaceOptionMarketOrderAsync(realTag.AccountHash, realTag.OccSymbol, "SELL_TO_CLOSE", realTag.Quantity);
                 LogLine($"{nowStr} [Order] Sending MARKET SELL_TO_CLOSE x{realTag.Quantity} — order id {closeOrderId}", Color.Cyan);
+
+                // Poll for the real fill price — same pattern as FinalizeRealEntryAsync uses for entries.
+                for (int i = 0; i < 5 && realClosePrice == null; i++)
+                {
+                    await Task.Delay(1500);
+                    var order = await trading.GetOrderAsync(realTag.AccountHash, closeOrderId);
+                    if (order.Status.Equals("FILLED", StringComparison.OrdinalIgnoreCase) && order.FilledPrice.HasValue)
+                        realClosePrice = order.FilledPrice;
+                }
+
+                if (realClosePrice.HasValue)
+                    LogLine($"{DateTime.Now:HH:mm:ss} [Order] Precio real de cierre confirmado: {realClosePrice.Value:F2}", Color.LimeGreen);
+                else
+                    LogLine($"{DateTime.Now:HH:mm:ss} [Order] Cierre no confirmado a tiempo — usando último Bid visible como referencia.", Color.Orange);
             }
             catch (Exception ex)
             {
@@ -1491,7 +1513,6 @@ public partial class Form1 : Form
         }
 
         var strike    = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
-        var cBid      = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
         var pnl       = row.Cells["colTradePnL"].Value?.ToString() ?? string.Empty;
         var pnlPct    = row.Cells["colTradePnLPercent"].Value?.ToString() ?? string.Empty;
         var spotPrice = _lastSpotPrice > 0 ? _lastSpotPrice.ToString("F2") : string.Empty;
@@ -1505,10 +1526,13 @@ public partial class Form1 : Form
             tradeId  = tag.TradeId;
         }
 
-        // Recalculate PnL at close time using current bid
+        // Recalculate PnL at close time using the confirmed real fill price when we have one
+        // (real MANUAL close), otherwise fall back to the last polled bid shown on screen —
+        // same behavior as before this change for demo trades / TARGET closes / unconfirmed fills.
         var entryPriceStr = row.Cells["colTradeEntryPrice"].Value?.ToString() ?? "0";
         var contractsStr  = row.Cells["colTradeContracts"].Value?.ToString() ?? "0";
-        decimal.TryParse(cBid, out var exitBid);
+        decimal.TryParse(cBid, out var cBidParsed);
+        var exitBid = realClosePrice ?? cBidParsed;
         decimal.TryParse(entryPriceStr, out var entryPrice);
         decimal.TryParse(contractsStr, out var contractsForPnl);
         var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);
@@ -1524,8 +1548,9 @@ public partial class Form1 : Form
 
         var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
 
+        var realCloseLog = realClosePrice.HasValue ? $"  RealClose: {realClosePrice.Value:F2}" : string.Empty;
         LogLine(string.Empty, Color.White);
-        LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}", Color.White);
+        LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}{realCloseLog}", Color.White);
         LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
         LogLine($"{nowStr} Duration: {duration:hh\\:mm\\:ss}", Color.White);
         System.Windows.Forms.Application.DoEvents();
@@ -1537,7 +1562,7 @@ public partial class Form1 : Form
         // Close trade in API
         if (tradeId > 0)
         {
-            decimal.TryParse(cBid, out var exitPrice);
+            var exitPrice = exitBid;
             await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
         }
 
