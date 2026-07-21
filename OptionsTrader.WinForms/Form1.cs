@@ -1804,7 +1804,11 @@ public partial class Form1 : Form
         try
         {
             var aws = AwsSettingsStore.Load();
-            if (string.IsNullOrEmpty(aws.AccessKey)) return;
+            if (string.IsNullOrEmpty(aws.AccessKey))
+            {
+                this.Invoke(() => LogLine($"{timeStr} Screenshot NOT uploaded — AWS credentials missing in Settings.", Color.Orange));
+                return;
+            }
 
             var s3Client = new AmazonS3Client(
                 aws.AccessKey, aws.SecretKey,
@@ -1836,11 +1840,11 @@ public partial class Form1 : Form
                 }
             }
 
-            // this.Invoke(() => LogLine($"{timeStr} Uploaded: {s3Url}", Color.DimGray));
+            this.Invoke(() => LogLine($"{timeStr} Uploaded: {s3Url}", Color.DimGray));
         }
         catch (Exception ex)
         {
-            // this.Invoke(() => LogLine($"{timeStr} S3 upload failed: {ex.Message}", Color.Red));
+            this.Invoke(() => LogLine($"{timeStr} S3 upload failed: {ex.Message}", Color.Red));
         }
     }
 
