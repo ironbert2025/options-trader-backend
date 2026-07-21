@@ -12,9 +12,9 @@ public static class AwsSettingsStore
 
     public static AwsSettings Load()
     {
-        if (!File.Exists(FilePath)) return new AwsSettings(string.Empty, string.Empty, "options-trader-screenshots", "us-east-1");
+        if (!File.Exists(FilePath)) return new AwsSettings(string.Empty, string.Empty, "options-trader-screenshots", "us-east-2");
         var json = File.ReadAllText(FilePath);
-        return JsonSerializer.Deserialize<AwsSettings>(json) ?? new AwsSettings(string.Empty, string.Empty, "options-trader-screenshots", "us-east-1");
+        return JsonSerializer.Deserialize<AwsSettings>(json) ?? new AwsSettings(string.Empty, string.Empty, "options-trader-screenshots", "us-east-2");
     }
 
     public static void Save(AwsSettings settings)
