@@ -1111,7 +1111,7 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: false, suppressAutoClose: false);
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false);
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
