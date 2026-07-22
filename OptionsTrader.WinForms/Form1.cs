@@ -1995,7 +1995,9 @@ public partial class Form1 : Form
     private static string CalcContracts(decimal positionSize, decimal ask)
     {
         if (ask <= 0 || positionSize <= 0) return string.Empty;
-        var contracts = Math.Round(positionSize / (ask * 100));
+        // Floor, not round — Position Size % is a risk cap, so rounding up could spend more
+        // than the configured budget (e.g. $300 @ 1.18 = 2.54 contracts must stay at 2, not 3).
+        var contracts = Math.Floor(positionSize / (ask * 100));
         return contracts > 0 ? contracts.ToString("F0") : string.Empty;
     }
 
