@@ -75,16 +75,17 @@ internal static class IvHistorialWriter
         for (int i = 1; i < lines.Length; i++)
         {
             var parts = lines[i].Split(',');
-            if (parts.Length < 15) continue;
+            if (parts.Length < 12) continue;
             if (!TimeOnly.TryParse(parts[0], out var time)) continue;
             if (time < WindowStart || time > WindowEnd) continue;
 
             firstTimeInWindow ??= parts[0];
             if (parts[0] != firstTimeInWindow) continue; // only the earliest snapshot in the window
 
-            if (!decimal.TryParse(parts[4], NumberStyles.Any, CultureInfo.InvariantCulture, out var spot)) continue;
-            if (!decimal.TryParse(parts[5], NumberStyles.Any, CultureInfo.InvariantCulture, out var strike)) continue;
-            if (!decimal.TryParse(parts[14], NumberStyles.Any, CultureInfo.InvariantCulture, out var iv)) continue;
+            // Columns: Time,SpotPrice,StrikePrice,Bid,Ask,IntValue,ExtValue,Delta,Gamma,Theta,Vega,IV
+            if (!decimal.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var spot)) continue;
+            if (!decimal.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out var strike)) continue;
+            if (!decimal.TryParse(parts[11], NumberStyles.Any, CultureInfo.InvariantCulture, out var iv)) continue;
 
             var distance = Math.Abs(strike - spot);
             if (distance < bestDistance)
