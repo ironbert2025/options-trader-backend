@@ -1865,11 +1865,11 @@ public partial class Form1 : Form
                 }
             }
 
-            this.Invoke(() => LogLine($"{timeStr} Uploaded: {s3Url}", Color.DimGray));
+            // this.Invoke(() => LogLine($"{timeStr} Uploaded: {s3Url}", Color.DimGray));
         }
         catch (Exception ex)
         {
-            this.Invoke(() => LogLine($"{timeStr} S3 upload failed: {ex.Message}", Color.Red));
+            // this.Invoke(() => LogLine($"{timeStr} S3 upload failed: {ex.Message}", Color.Red));
         }
     }
 
