@@ -8,7 +8,7 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 |---|---|---|---|
 | 1 | Problema (latencia app móvil) | 3:02 | [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link) |
 | 2 | Arquitectura (EC2, API, BD, Frontend) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/18NINnvj5l4r6Ng3eLJrGT7lyHDyf8PP1/view?usp=drive_link) |
-| 3 | Configuración inicial | *(pendiente)* | *(pendiente)* |
+| 3 | Configuración inicial | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/1UfKnCQHXm6t8L5TMtxPKqsDTK2qp-dVp/view?usp=drive_link) |
 | 4 | Trade Demo (manual + Target) | 11:00 | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
 | 5 | Trade Real (manual + Target) | 26:50 | [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link) |
 | 6 | Frontend / histórico | 2:21 | [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link) |
@@ -56,7 +56,7 @@ La autenticación es JWT Bearer, con cinco usuarios fijos sembrados en base de d
 
 "La aplicación es configurable por usuario: credenciales de Schwab, cuentas del broker, lista de tickers con sus rangos y expiración, tamaño de posición y porcentaje de target de salida — todo se persiste localmente y se recupera al reabrir la app."
 
-📹 *(pendiente — link video 2)*
+📹 [Ver en Google Drive](https://drive.google.com/file/d/1UfKnCQHXm6t8L5TMtxPKqsDTK2qp-dVp/view?usp=drive_link)
 
 ### 4. Demo trade — Video simulado (salida manual + Target automático)
 
