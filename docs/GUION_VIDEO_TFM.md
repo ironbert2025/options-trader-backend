@@ -7,36 +7,34 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 | # | Unidad validada | Duración | Link |
 |---|---|---|---|
 | 1 | Problema (latencia app móvil) | 3:02 | [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link) |
-| 2 | Arquitectura (EC2, API, BD, Frontend) | *(pendiente)* | [Ver en Google Drive](https://drive.google.com/file/d/18NINnvj5l4r6Ng3eLJrGT7lyHDyf8PP1/view?usp=drive_link) |
-| 3 | Configuración inicial | *(pendiente)* | *(pendiente)* |
+| 2 | Arquitectura (EC2, API, BD, Frontend) | 3:35 | [Ver en Google Drive](https://drive.google.com/file/d/18NINnvj5l4r6Ng3eLJrGT7lyHDyf8PP1/view?usp=drive_link) |
+| 3 | Configuración inicial | 10:30 | [Ver en Google Drive](https://drive.google.com/file/d/1UfKnCQHXm6t8L5TMtxPKqsDTK2qp-dVp/view?usp=drive_link) |
 | 4 | Trade Demo (manual + Target) | 11:00 | [Ver en Google Drive](https://drive.google.com/file/d/1h6SgEcapmUeXq-Pj9rqyZHXs5XLwC_rQ/view?usp=drive_link) |
 | 5 | Trade Real (manual + Target) | 26:50 | [Ver en Google Drive](https://drive.google.com/file/d/1YYPI0IUAyQmQBwjAmUzbsx_zLg1j6YIH/view?usp=drive_link) |
 | 6 | Frontend / histórico | 2:21 | [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link) |
-| **Total** | | *(pendiente)* | |
-
-📹 **Video general (edición final, todos los clips unidos):** *(pendiente)*
+| **Total** | | **57:18** | |
 
 ---
 
 ## Secuencia sugerida
 
-1. **Problema** (clip móvil recortado, video 6) — plantea el problema medible que origina el proyecto.
-2. **Arquitectura del sistema** (video 1) — alcance técnico completo: Clean Architecture, EC2, API, BD, Frontend.
-3. **Configuración inicial** (video 2) — evidencia de diseño configurable.
-4. **Demo trade** (video 3) — solución al problema planteado, con ambos tipos de salida.
-5. **Trade real** (video 4) — prueba de funcionamiento con dinero real.
-6. **Frontend / histórico** (video 5) — trazabilidad completa de cada operación.
+1. **Problema** (clip móvil recortado — fila 1 de la tabla) — plantea el problema medible que origina el proyecto.
+2. **Arquitectura del sistema** (fila 2) — alcance técnico completo: Clean Architecture, EC2, API, BD, Frontend.
+3. **Configuración inicial** (fila 3) — evidencia de diseño configurable.
+4. **Demo trade** (fila 4) — solución al problema planteado, con ambos tipos de salida.
+5. **Trade real** (fila 5) — prueba de funcionamiento con dinero real.
+6. **Frontend / histórico** (fila 6) — trazabilidad completa de cada operación.
 7. **Cierre** — resumen técnico sin video.
 
 ---
 
 ## Guion
 
-### Intro (5s, antes del clip móvil)
+### Intro
 
 "Este proyecto nace de un problema real que observé en una academia de trading de opciones en Miami, donde los estudiantes envían sus órdenes al broker desde el móvil."
 
-### 1. Problema — clip móvil recortado (15-20s)
+### 1. Problema
 
 "Este es el flujo actual: login, búsqueda del símbolo, selección del strike, armado de la orden, revisión y envío. Desde que se toma la decisión hasta que la orden llega al mercado pasan no menos de veinte segundos — tiempo suficiente para que el precio se mueva de forma significativa."
 
@@ -56,7 +54,7 @@ La autenticación es JWT Bearer, con cinco usuarios fijos sembrados en base de d
 
 "La aplicación es configurable por usuario: credenciales de Schwab, cuentas del broker, lista de tickers con sus rangos y expiración, tamaño de posición y porcentaje de target de salida — todo se persiste localmente y se recupera al reabrir la app."
 
-📹 *(pendiente — link video 2)*
+📹 [Ver en Google Drive](https://drive.google.com/file/d/1UfKnCQHXm6t8L5TMtxPKqsDTK2qp-dVp/view?usp=drive_link)
 
 ### 4. Demo trade — Video simulado (salida manual + Target automático)
 
@@ -82,15 +80,10 @@ Puedo cerrar la posición manualmente en cualquier momento, o usar Trade-Target,
 
 📹 [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link)
 
-### Cierre (10-15s, sin video o con logo/diagrama final)
+### Cierre
 
 "Stack: .NET 8, ASP.NET Core, SQL Server, Angular, desplegado en AWS EC2 con S3 para almacenamiento. El resultado es una plataforma que resuelve un problema medible de latencia operativa, con trazabilidad completa de cada operación y una arquitectura preparada para escalar a otros brokers. Gracias."
 
 ---
 
-## Notas de edición
 
-- Los segmentos 1 y 6 deben ser los más cortos (15-20s) — son contexto/evidencia, no el foco técnico.
-- Los segmentos 2 y 5 son los de mayor peso técnico — ahí es donde se juzga la profundidad de arquitectura y el funcionamiento real.
-- Evitar palabras como "vender", "cliente", "interesados" — este guion es para evaluación académica, no pitch comercial.
-- Si el tiempo total se ajusta, recortar primero el cierre, no el segmento de arquitectura (2) ni el de trade real (5).
