@@ -30,11 +30,11 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 
 ## Guion
 
-### Intro (5s, antes del clip móvil)
+### Intro
 
 "Este proyecto nace de un problema real que observé en una academia de trading de opciones en Miami, donde los estudiantes envían sus órdenes al broker desde el móvil."
 
-### 1. Problema — clip móvil recortado (15-20s)
+### 1. Problema
 
 "Este es el flujo actual: login, búsqueda del símbolo, selección del strike, armado de la orden, revisión y envío. Desde que se toma la decisión hasta que la orden llega al mercado pasan no menos de veinte segundos — tiempo suficiente para que el precio se mueva de forma significativa."
 
@@ -80,15 +80,10 @@ Puedo cerrar la posición manualmente en cualquier momento, o usar Trade-Target,
 
 📹 [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link)
 
-### Cierre (10-15s, sin video o con logo/diagrama final)
+### Cierre
 
 "Stack: .NET 8, ASP.NET Core, SQL Server, Angular, desplegado en AWS EC2 con S3 para almacenamiento. El resultado es una plataforma que resuelve un problema medible de latencia operativa, con trazabilidad completa de cada operación y una arquitectura preparada para escalar a otros brokers. Gracias."
 
 ---
 
-## Notas de edición
 
-- Los segmentos 1 y 6 deben ser los más cortos (15-20s) — son contexto/evidencia, no el foco técnico.
-- Los segmentos 2 y 5 son los de mayor peso técnico — ahí es donde se juzga la profundidad de arquitectura y el funcionamiento real.
-- Evitar palabras como "vender", "cliente", "interesados" — este guion es para evaluación académica, no pitch comercial.
-- Si el tiempo total se ajusta, recortar primero el cierre, no el segmento de arquitectura (2) ni el de trade real (5).
