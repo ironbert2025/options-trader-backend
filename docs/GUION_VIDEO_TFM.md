@@ -20,12 +20,12 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 
 ## Secuencia sugerida
 
-1. **Problema** (clip móvil recortado, video 6) — plantea el problema medible que origina el proyecto.
-2. **Arquitectura del sistema** (video 1) — alcance técnico completo: Clean Architecture, EC2, API, BD, Frontend.
-3. **Configuración inicial** (video 2) — evidencia de diseño configurable.
-4. **Demo trade** (video 3) — solución al problema planteado, con ambos tipos de salida.
-5. **Trade real** (video 4) — prueba de funcionamiento con dinero real.
-6. **Frontend / histórico** (video 5) — trazabilidad completa de cada operación.
+1. **Problema** (clip móvil recortado — fila 1 de la tabla) — plantea el problema medible que origina el proyecto.
+2. **Arquitectura del sistema** (fila 2) — alcance técnico completo: Clean Architecture, EC2, API, BD, Frontend.
+3. **Configuración inicial** (fila 3) — evidencia de diseño configurable.
+4. **Demo trade** (fila 4) — solución al problema planteado, con ambos tipos de salida.
+5. **Trade real** (fila 5) — prueba de funcionamiento con dinero real.
+6. **Frontend / histórico** (fila 6) — trazabilidad completa de cada operación.
 7. **Cierre** — resumen técnico sin video.
 
 ---
