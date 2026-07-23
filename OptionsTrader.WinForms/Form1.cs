@@ -64,6 +64,7 @@ public partial class Form1 : Form
         LoadRadioSelection(grpContracts, ContractsSettingsStore.Load());
         ApplyRadioStyle(grpCounts);
         chkSaveDumps.Checked = DumpSettingsStore.Load();
+        chkShowOrderConfirmation.Checked = OrderConfirmationSettingsStore.Load();
         grpOptionsChainNext.Visible = !chkHideNextExpDate.Checked;
         if (BrokerSettingsStore.Load() == BrokerName.Schwab)
             LoadSchwabCredentials();
@@ -200,6 +201,11 @@ public partial class Form1 : Form
     private void ChkSaveDumps_CheckedChanged(object? sender, EventArgs e)
     {
         DumpSettingsStore.Save(chkSaveDumps.Checked);
+    }
+
+    private void ChkShowOrderConfirmation_CheckedChanged(object? sender, EventArgs e)
+    {
+        OrderConfirmationSettingsStore.Save(chkShowOrderConfirmation.Checked);
     }
 
     private void ChkHideNextExpDate_CheckedChanged(object? sender, EventArgs e)
@@ -1290,17 +1296,22 @@ public partial class Form1 : Form
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var targetLine = withTarget ? $"\nExit: SELL_TO_CLOSE LIMIT at +{targetPct:F0}% of fill" : string.Empty;
 
-        var confirm = MessageBox.Show(
-            $"Send a REAL market order to Schwab?\n\n" +
-            $"Account: {masked}\n" +
-            $"Symbol:  {symbol} {rowType}\n" +
-            $"Strike:  {strikeStr}\n" +
-            $"Expiry:  {expDate:yyyy-MM-dd}\n" +
-            $"Qty:     {qty} contract(s)\n" +
-            $"Entry:   MARKET BUY_TO_OPEN{targetLine}\n\n" +
-            $"OCC: {occ}",
-            "Confirm REAL Order", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
-        if (confirm != DialogResult.Yes) return;
+        // Show the confirmation dialog unless the user opted out in Settings — either way, this
+        // is a REAL order (with or without a target), never a demo trade.
+        if (chkShowOrderConfirmation.Checked)
+        {
+            var confirm = MessageBox.Show(
+                $"Send a REAL market order to Schwab?\n\n" +
+                $"Account: {masked}\n" +
+                $"Symbol:  {symbol} {rowType}\n" +
+                $"Strike:  {strikeStr}\n" +
+                $"Expiry:  {expDate:yyyy-MM-dd}\n" +
+                $"Qty:     {qty} contract(s)\n" +
+                $"Entry:   MARKET BUY_TO_OPEN{targetLine}\n\n" +
+                $"OCC: {occ}",
+                "Confirm REAL Order", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+            if (confirm != DialogResult.Yes) return;
+        }
 
         try
         {

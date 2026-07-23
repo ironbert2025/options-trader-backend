@@ -133,6 +133,7 @@ partial class Form1
         rbPosition5 = new RadioButton();
         rbPosition10 = new RadioButton();
         chkSaveDumps = new CheckBox();
+        chkShowOrderConfirmation = new CheckBox();
         grpTarget = new GroupBox();
         rbTarget10 = new RadioButton();
         rbTarget35 = new RadioButton();
@@ -1083,6 +1084,7 @@ partial class Form1
         tabSettings.Controls.Add(chkSaveDumps);
         tabSettings.Controls.Add(chkSaveToCsv);
         tabSettings.Controls.Add(chkHideNextExpDate);
+        tabSettings.Controls.Add(chkShowOrderConfirmation);
         tabSettings.Controls.Add(grpTarget);
         tabSettings.Controls.Add(grpSchwabCredentials);
         tabSettings.Controls.Add(grpRefreshToken);
@@ -1275,6 +1277,18 @@ partial class Form1
         chkSaveDumps.TabIndex = 3;
         chkSaveDumps.Text = "Save Dumps";
         chkSaveDumps.CheckedChanged += ChkSaveDumps_CheckedChanged;
+        //
+        // chkShowOrderConfirmation
+        //
+        chkShowOrderConfirmation.AutoSize = true;
+        chkShowOrderConfirmation.Checked = true;
+        chkShowOrderConfirmation.CheckState = CheckState.Checked;
+        chkShowOrderConfirmation.Location = new Point(800, 190);
+        chkShowOrderConfirmation.Name = "chkShowOrderConfirmation";
+        chkShowOrderConfirmation.Size = new Size(160, 19);
+        chkShowOrderConfirmation.TabIndex = 5;
+        chkShowOrderConfirmation.Text = "Show Order Confirmation";
+        chkShowOrderConfirmation.CheckedChanged += ChkShowOrderConfirmation_CheckedChanged;
         //
         // grpTarget
         // 
@@ -1759,6 +1773,7 @@ partial class Form1
     private Button btnSaveTickers;
     private GroupBox grpPositionSize;
     private CheckBox chkSaveDumps;
+    private CheckBox chkShowOrderConfirmation;
     private RadioButton rbPosition25;
     private RadioButton rbPosition5;
     private RadioButton rbPosition10;
