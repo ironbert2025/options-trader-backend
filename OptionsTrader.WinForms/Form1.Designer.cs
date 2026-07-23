@@ -1281,8 +1281,8 @@ partial class Form1
         // chkShowOrderConfirmation
         //
         chkShowOrderConfirmation.AutoSize = true;
-        chkShowOrderConfirmation.Checked = true;
-        chkShowOrderConfirmation.CheckState = CheckState.Checked;
+        chkShowOrderConfirmation.Checked = false;
+        chkShowOrderConfirmation.CheckState = CheckState.Unchecked;
         chkShowOrderConfirmation.Location = new Point(800, 190);
         chkShowOrderConfirmation.Name = "chkShowOrderConfirmation";
         chkShowOrderConfirmation.Size = new Size(160, 19);
