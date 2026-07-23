@@ -14,8 +14,6 @@ Basado en 6 videos temáticos ya grabados. Se listan aquí en el orden en que se
 | 6 | Frontend / histórico | 2:21 | [Ver en Google Drive](https://drive.google.com/file/d/1chPR6KzGCo6LwpNI0QiIeOuSonI22ot8/view?usp=drive_link) |
 | **Total** | | **57:18** | |
 
-📹 **Video general (edición final, todos los clips unidos):** *(pendiente)*
-
 ---
 
 ## Secuencia sugerida
