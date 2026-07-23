@@ -111,6 +111,8 @@ En la tabla **Trades** verás, actualizándose solo:
 - **No Trade** y **Trade-Target**: se cierran **solas** cuando el PnL_Percent alcanza tu Target — no tienes que hacer nada. En Trade-Target, además, la venta ya está puesta en el broker desde el Paso 6, así que se cierra también ahí.
 - **Trade**: no se cierra sola — tú decides cuándo, pulsando el botón **Close** de la fila. El programa calcula la ganancia/pérdida final, la duración, y guarda todo.
 
+> Si el trade era **real** y lo cerraste con **Trade** (Close manual), el programa envía la orden de cierre y luego **confirma con el broker el precio exacto al que se ejecutó** — el PnL final y lo que queda guardado se calculan con ese precio real, no con el último precio que estabas viendo en pantalla al hacer click.
+
 ### Paso 9 — Detén los precios cuando termines
 Pulsa **Stop Polling** (el mismo botón de Start) para dejar de recibir precios.
 
