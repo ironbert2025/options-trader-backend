@@ -44,7 +44,7 @@ public partial class Form1 : Form
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
     private List<BrokerAccountDto> _accounts = new();
-    private string _selectedCounts = "In Range"; // session-only, always defaults to In Range on launch
+    private string _selectedCounts = "6"; // session-only, always defaults to 6 on launch
     private List<OptionQuoteDto> _lastAllQuotes = new(); // current-expiration chain from the last fetch, for instant re-filtering
 
     public Form1()

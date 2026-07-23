@@ -107,10 +107,6 @@ partial class Form1
         rbCounts8 = new RadioButton();
         rbCounts9 = new RadioButton();
         rbCounts10 = new RadioButton();
-        rbCounts11 = new RadioButton();
-        rbCounts12 = new RadioButton();
-        rbCounts13 = new RadioButton();
-        rbCounts14 = new RadioButton();
         rbCountsInRange = new RadioButton();
         tabSettings = new TabPage();
         grpBroker = new GroupBox();
@@ -944,10 +940,6 @@ partial class Form1
         grpCounts.Controls.Add(rbCounts8);
         grpCounts.Controls.Add(rbCounts9);
         grpCounts.Controls.Add(rbCounts10);
-        grpCounts.Controls.Add(rbCounts11);
-        grpCounts.Controls.Add(rbCounts12);
-        grpCounts.Controls.Add(rbCounts13);
-        grpCounts.Controls.Add(rbCounts14);
         grpCounts.Controls.Add(rbCountsInRange);
         grpCounts.Location = new Point(545, 4);
         grpCounts.Name = "grpCounts";
@@ -985,16 +977,18 @@ partial class Form1
         //
         // rbCounts6
         //
+        rbCounts6.Checked = true;
         rbCounts6.Location = new Point(132, 20);
         rbCounts6.Name = "rbCounts6";
         rbCounts6.Size = new Size(36, 18);
         rbCounts6.TabIndex = 3;
+        rbCounts6.TabStop = true;
         rbCounts6.Text = "6";
         rbCounts6.CheckedChanged += CountsRadioButton_CheckedChanged;
         //
         // rbCounts7
         //
-        rbCounts7.Location = new Point(174, 20);
+        rbCounts7.Location = new Point(6, 42);
         rbCounts7.Name = "rbCounts7";
         rbCounts7.Size = new Size(36, 18);
         rbCounts7.TabIndex = 4;
@@ -1003,7 +997,7 @@ partial class Form1
         //
         // rbCounts8
         //
-        rbCounts8.Location = new Point(216, 20);
+        rbCounts8.Location = new Point(48, 42);
         rbCounts8.Name = "rbCounts8";
         rbCounts8.Size = new Size(36, 18);
         rbCounts8.TabIndex = 5;
@@ -1012,7 +1006,7 @@ partial class Form1
         //
         // rbCounts9
         //
-        rbCounts9.Location = new Point(6, 42);
+        rbCounts9.Location = new Point(90, 42);
         rbCounts9.Name = "rbCounts9";
         rbCounts9.Size = new Size(42, 18);
         rbCounts9.TabIndex = 6;
@@ -1021,56 +1015,19 @@ partial class Form1
         //
         // rbCounts10
         //
-        rbCounts10.Location = new Point(48, 42);
+        rbCounts10.Location = new Point(132, 42);
         rbCounts10.Name = "rbCounts10";
         rbCounts10.Size = new Size(42, 18);
         rbCounts10.TabIndex = 7;
         rbCounts10.Text = "10";
         rbCounts10.CheckedChanged += CountsRadioButton_CheckedChanged;
         //
-        // rbCounts11
-        //
-        rbCounts11.Location = new Point(90, 42);
-        rbCounts11.Name = "rbCounts11";
-        rbCounts11.Size = new Size(42, 18);
-        rbCounts11.TabIndex = 8;
-        rbCounts11.Text = "11";
-        rbCounts11.CheckedChanged += CountsRadioButton_CheckedChanged;
-        //
-        // rbCounts12
-        //
-        rbCounts12.Location = new Point(132, 42);
-        rbCounts12.Name = "rbCounts12";
-        rbCounts12.Size = new Size(42, 18);
-        rbCounts12.TabIndex = 9;
-        rbCounts12.Text = "12";
-        rbCounts12.CheckedChanged += CountsRadioButton_CheckedChanged;
-        //
-        // rbCounts13
-        //
-        rbCounts13.Location = new Point(174, 42);
-        rbCounts13.Name = "rbCounts13";
-        rbCounts13.Size = new Size(42, 18);
-        rbCounts13.TabIndex = 10;
-        rbCounts13.Text = "13";
-        rbCounts13.CheckedChanged += CountsRadioButton_CheckedChanged;
-        //
-        // rbCounts14
-        //
-        rbCounts14.Location = new Point(216, 42);
-        rbCounts14.Name = "rbCounts14";
-        rbCounts14.Size = new Size(42, 18);
-        rbCounts14.TabIndex = 11;
-        rbCounts14.Text = "14";
-        rbCounts14.CheckedChanged += CountsRadioButton_CheckedChanged;
-        //
         // rbCountsInRange
         //
-        rbCountsInRange.Checked = true;
         rbCountsInRange.Location = new Point(6, 64);
         rbCountsInRange.Name = "rbCountsInRange";
         rbCountsInRange.Size = new Size(90, 18);
-        rbCountsInRange.TabIndex = 12;
+        rbCountsInRange.TabIndex = 8;
         rbCountsInRange.TabStop = true;
         rbCountsInRange.Text = "In Range";
         rbCountsInRange.CheckedChanged += CountsRadioButton_CheckedChanged;
@@ -1708,10 +1665,6 @@ partial class Form1
     private RadioButton rbCounts8;
     private RadioButton rbCounts9;
     private RadioButton rbCounts10;
-    private RadioButton rbCounts11;
-    private RadioButton rbCounts12;
-    private RadioButton rbCounts13;
-    private RadioButton rbCounts14;
     private RadioButton rbCountsInRange;
     private GroupBox grpOptionsChain;
     private GroupBox grpOptionsChainNext;
