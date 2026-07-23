@@ -1545,6 +1545,8 @@ public partial class Form1 : Form
 
         row.Cells["colTradePnL"].Value        = pnl;
         row.Cells["colTradePnLPercent"].Value = pnlPct;
+        // Closing PnL (real fill price) can be a new low/high the live ticks never saw.
+        UpdatePnLMinMax(row, pnlVal);
         row.Cells["colTradeExitTime"].Value   = nowStr;
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
@@ -1895,6 +1897,26 @@ public partial class Form1 : Form
         rtbLogger.ScrollToCaret();
     }
 
+    // Extends the row's Min/Max PnL columns if the given value is a new low/high. Session-only —
+    // not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
+    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnl)
+    {
+        var minCell = row.Cells["colTradePnLMin"];
+        var maxCell = row.Cells["colTradePnLMax"];
+
+        if (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnl < min)
+        {
+            minCell.Value             = pnl.ToString("F2");
+            minCell.Style.ForeColor   = Color.Red;
+        }
+
+        if (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnl > max)
+        {
+            maxCell.Value             = pnl.ToString("F2");
+            maxCell.Style.ForeColor   = Color.Green;
+        }
+    }
+
     private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
                                   Dictionary<(string, decimal), OptionQuoteDto> putMap)
     {
@@ -1930,6 +1952,8 @@ public partial class Form1 : Form
             // Color PnL
             row.Cells["colTradePnL"].Style.ForeColor        = pnl >= 0 ? Color.Green : Color.Red;
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
+
+            UpdatePnLMinMax(row, pnl);
 
             // Auto-close when the current bid reaches the target price (T_Bid).
             // Plain real trades (no target order) are manual-close only; Trade-Target rows still

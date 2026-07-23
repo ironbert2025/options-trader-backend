@@ -37,6 +37,8 @@ partial class Form1
         colTradePnLTarget = new DataGridViewTextBoxColumn();
         colTradeExitTime = new DataGridViewTextBoxColumn();
         colTradeClose = new DataGridViewButtonColumn();
+        colTradePnLMin = new DataGridViewTextBoxColumn();
+        colTradePnLMax = new DataGridViewTextBoxColumn();
         grpOptionsChain = new GroupBox();
         dgvQuotes = new DataGridView();
         colSymbolQ = new DataGridViewTextBoxColumn();
@@ -266,7 +268,7 @@ partial class Form1
         dgvTrades.AllowUserToDeleteRows = false;
         dgvTrades.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         dgvTrades.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        dgvTrades.Columns.AddRange(new DataGridViewColumn[] { colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk, colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid, colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose });
+        dgvTrades.Columns.AddRange(new DataGridViewColumn[] { colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk, colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid, colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose, colTradePnLMin, colTradePnLMax });
         dgvTrades.Dock = DockStyle.Fill;
         dgvTrades.Location = new Point(3, 19);
         dgvTrades.Name = "dgvTrades";
@@ -359,7 +361,19 @@ partial class Form1
         colTradeClose.FlatStyle = FlatStyle.Flat;
         colTradeClose.HeaderText = "Close";
         colTradeClose.Name = "colTradeClose";
-        // 
+        //
+        // colTradePnLMin
+        //
+        colTradePnLMin.HeaderText = "Min PnL";
+        colTradePnLMin.Name = "colTradePnLMin";
+        colTradePnLMin.ReadOnly = true;
+        //
+        // colTradePnLMax
+        //
+        colTradePnLMax.HeaderText = "Max PnL";
+        colTradePnLMax.Name = "colTradePnLMax";
+        colTradePnLMax.ReadOnly = true;
+        //
         // grpOptionsChain
         // 
         grpOptionsChain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
@@ -1721,6 +1735,8 @@ partial class Form1
     private DataGridViewTextBoxColumn colTradePnLTarget;
     private DataGridViewTextBoxColumn colTradeExitTime;
     private DataGridViewButtonColumn colTradeClose;
+    private DataGridViewTextBoxColumn colTradePnLMin;
+    private DataGridViewTextBoxColumn colTradePnLMax;
     private Button btnFetchQuotes;
     private Button btnStartPolling;
     private Label lblExpDate;
