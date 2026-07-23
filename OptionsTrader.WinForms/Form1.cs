@@ -35,6 +35,9 @@ public partial class Form1 : Form
     private TextBox? _coordsTarget2;
     private int      _coordsClickCount;
     private System.Windows.Forms.Timer? _coordsCaptureTimer;
+    // One row per Tickers-table symbol, rebuilt by LoadCoordsButtons() whenever tickers change.
+    private readonly Dictionary<string, (TextBox T1, TextBox T2)> _coordsTextboxes = new();
+    private readonly List<Button> _coordsButtons = new();
 
     private TickerEntry? _selectedTicker;
     private decimal _lastSpotPrice;
@@ -65,7 +68,7 @@ public partial class Form1 : Form
         if (BrokerSettingsStore.Load() == BrokerName.Schwab)
             LoadSchwabCredentials();
         LoadAwsSettings();
-        LoadScreenCoords();
+        LoadCoordsButtons();
         LoadBalance();
         LoadTickerButtons();
         LoadCachedAccounts();
@@ -1111,7 +1114,7 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: false, suppressAutoClose: false);
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false);
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
@@ -1460,6 +1463,12 @@ public partial class Form1 : Form
         var now       = DateTime.Now;
         var nowStr    = now.ToString("HH:mm:ss");
         var type      = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
+        var cBid      = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
+
+        // Confirmed fill price of the real SELL_TO_CLOSE order (MANUAL close only). Null means
+        // either this isn't a real-broker MANUAL close, or the fill wasn't confirmed in time —
+        // both cases fall back to cBid (the last polled bid shown on screen) for the PnL math.
+        decimal? realClosePrice = null;
 
         // Real broker trades need an actual SELL_TO_CLOSE order sent to Schwab — updating the log
         // alone never touched the market (that was the bug: log said "Closed" but the position
@@ -1477,8 +1486,24 @@ public partial class Form1 : Form
                     LogLine($"{nowStr} [Order] Cancelled pending target exit — order id {pendingExitId}", Color.Orange);
                 }
 
+                LogLine($"{nowStr} [Order] Precio en pantalla al hacer click: {cBid}", Color.Cyan);
+
                 var closeOrderId = await trading.PlaceOptionMarketOrderAsync(realTag.AccountHash, realTag.OccSymbol, "SELL_TO_CLOSE", realTag.Quantity);
                 LogLine($"{nowStr} [Order] Sending MARKET SELL_TO_CLOSE x{realTag.Quantity} — order id {closeOrderId}", Color.Cyan);
+
+                // Poll for the real fill price — same pattern as FinalizeRealEntryAsync uses for entries.
+                for (int i = 0; i < 5 && realClosePrice == null; i++)
+                {
+                    await Task.Delay(1500);
+                    var order = await trading.GetOrderAsync(realTag.AccountHash, closeOrderId);
+                    if (order.Status.Equals("FILLED", StringComparison.OrdinalIgnoreCase) && order.FilledPrice.HasValue)
+                        realClosePrice = order.FilledPrice;
+                }
+
+                if (realClosePrice.HasValue)
+                    LogLine($"{DateTime.Now:HH:mm:ss} [Order] Precio real de cierre confirmado: {realClosePrice.Value:F2}", Color.LimeGreen);
+                else
+                    LogLine($"{DateTime.Now:HH:mm:ss} [Order] Cierre no confirmado a tiempo — usando último Bid visible como referencia.", Color.Orange);
             }
             catch (Exception ex)
             {
@@ -1491,7 +1516,6 @@ public partial class Form1 : Form
         }
 
         var strike    = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
-        var cBid      = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
         var pnl       = row.Cells["colTradePnL"].Value?.ToString() ?? string.Empty;
         var pnlPct    = row.Cells["colTradePnLPercent"].Value?.ToString() ?? string.Empty;
         var spotPrice = _lastSpotPrice > 0 ? _lastSpotPrice.ToString("F2") : string.Empty;
@@ -1505,10 +1529,13 @@ public partial class Form1 : Form
             tradeId  = tag.TradeId;
         }
 
-        // Recalculate PnL at close time using current bid
+        // Recalculate PnL at close time using the confirmed real fill price when we have one
+        // (real MANUAL close), otherwise fall back to the last polled bid shown on screen —
+        // same behavior as before this change for demo trades / TARGET closes / unconfirmed fills.
         var entryPriceStr = row.Cells["colTradeEntryPrice"].Value?.ToString() ?? "0";
         var contractsStr  = row.Cells["colTradeContracts"].Value?.ToString() ?? "0";
-        decimal.TryParse(cBid, out var exitBid);
+        decimal.TryParse(cBid, out var cBidParsed);
+        var exitBid = realClosePrice ?? cBidParsed;
         decimal.TryParse(entryPriceStr, out var entryPrice);
         decimal.TryParse(contractsStr, out var contractsForPnl);
         var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);
@@ -1524,8 +1551,9 @@ public partial class Form1 : Form
 
         var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
 
+        var realCloseLog = realClosePrice.HasValue ? $"  RealClose: {realClosePrice.Value:F2}" : string.Empty;
         LogLine(string.Empty, Color.White);
-        LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}", Color.White);
+        LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}{realCloseLog}", Color.White);
         LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
         LogLine($"{nowStr} Duration: {duration:hh\\:mm\\:ss}", Color.White);
         System.Windows.Forms.Application.DoEvents();
@@ -1537,7 +1565,7 @@ public partial class Form1 : Form
         // Close trade in API
         if (tradeId > 0)
         {
-            decimal.TryParse(cBid, out var exitPrice);
+            var exitPrice = exitBid;
             await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
         }
 
@@ -1596,14 +1624,7 @@ public partial class Form1 : Form
     private static Rectangle GetCaptureRect(string symbol)
     {
         var coords = ScreenCoordsStore.Load();
-        TickerCoords? tc = symbol.ToUpperInvariant() switch
-        {
-            "AAPL" => coords.AAPL,
-            "TSLA" => coords.TSLA,
-            "SPY"  => coords.SPY,
-            "QQQ"  => coords.QQQ,
-            _      => null
-        };
+        coords.TryGetValue(symbol.ToUpperInvariant(), out var tc);
 
         if (tc is not null &&
             !string.IsNullOrWhiteSpace(tc.Coords1) &&
@@ -1628,57 +1649,81 @@ public partial class Form1 : Form
         return Screen.PrimaryScreen!.Bounds;
     }
 
-    private void LoadScreenCoords()
+    // (Re)builds one row (button + 2 coord textboxes) per symbol currently in the Tickers table,
+    // preloading whatever coordinates were already saved for that symbol. Called at startup and
+    // whenever the Tickers table is saved, so adding/removing a ticker keeps this in sync.
+    private void LoadCoordsButtons()
     {
-        var c = ScreenCoordsStore.Load();
-        txtCoords1AAPL.Text = c.AAPL.Coords1; txtCoords2AAPL.Text = c.AAPL.Coords2;
-        txtCoords1TSLA.Text = c.TSLA.Coords1; txtCoords2TSLA.Text = c.TSLA.Coords2;
-        txtCoords1SPY.Text  = c.SPY.Coords1;  txtCoords2SPY.Text  = c.SPY.Coords2;
-        txtCoords1QQQ.Text  = c.QQQ.Coords1;  txtCoords2QQQ.Text  = c.QQQ.Coords2;
+        pnlCoordsRows.Controls.Clear();
+        _coordsTextboxes.Clear();
+        _coordsButtons.Clear();
+
+        var saved = ScreenCoordsStore.Load();
+        var symbols = TickerSettingsStore.Load()
+            .Select(t => t.Symbol.ToUpperInvariant())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct()
+            .ToList();
+
+        var y = 2;
+        foreach (var symbol in symbols)
+        {
+            var btn = new Button
+            {
+                Text     = symbol,
+                Location = new Point(5, y),
+                Size     = new Size(60, 23),
+                Tag      = symbol
+            };
+            btn.Click += BtnCoords_Click;
+
+            var t1 = new TextBox { Location = new Point(73, y),  Size = new Size(80, 23), ReadOnly = true };
+            var t2 = new TextBox { Location = new Point(161, y), Size = new Size(80, 23), ReadOnly = true };
+            if (saved.TryGetValue(symbol, out var tc))
+            {
+                t1.Text = tc.Coords1;
+                t2.Text = tc.Coords2;
+            }
+
+            pnlCoordsRows.Controls.Add(btn);
+            pnlCoordsRows.Controls.Add(t1);
+            pnlCoordsRows.Controls.Add(t2);
+
+            _coordsTextboxes[symbol] = (t1, t2);
+            _coordsButtons.Add(btn);
+
+            y += 32;
+        }
     }
 
     private void BtnSaveCoords_Click(object? sender, EventArgs e)
     {
-        ScreenCoordsStore.Save(new ScreenCoords(
-            new TickerCoords(txtCoords1AAPL.Text, txtCoords2AAPL.Text),
-            new TickerCoords(txtCoords1TSLA.Text, txtCoords2TSLA.Text),
-            new TickerCoords(txtCoords1SPY.Text,  txtCoords2SPY.Text),
-            new TickerCoords(txtCoords1QQQ.Text,  txtCoords2QQQ.Text)));
+        var coords = _coordsTextboxes.ToDictionary(
+            kv => kv.Key,
+            kv => new TickerCoords(kv.Value.T1.Text, kv.Value.T2.Text));
+        ScreenCoordsStore.Save(coords);
 
         MessageBox.Show("Coordinates saved.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void BtnResetCoords_Click(object? sender, EventArgs e)
     {
-        txtCoords1AAPL.Text = txtCoords2AAPL.Text = string.Empty;
-        txtCoords1TSLA.Text = txtCoords2TSLA.Text = string.Empty;
-        txtCoords1SPY.Text  = txtCoords2SPY.Text  = string.Empty;
-        txtCoords1QQQ.Text  = txtCoords2QQQ.Text  = string.Empty;
-        ScreenCoordsStore.Save(ScreenCoordsStore.Load() with
-        {
-            AAPL = new TickerCoords(string.Empty, string.Empty),
-            TSLA = new TickerCoords(string.Empty, string.Empty),
-            SPY  = new TickerCoords(string.Empty, string.Empty),
-            QQQ  = new TickerCoords(string.Empty, string.Empty)
-        });
+        foreach (var (t1, t2) in _coordsTextboxes.Values)
+            t1.Text = t2.Text = string.Empty;
+
+        var current = ScreenCoordsStore.Load();
+        foreach (var symbol in _coordsTextboxes.Keys)
+            current[symbol] = new TickerCoords(string.Empty, string.Empty);
+        ScreenCoordsStore.Save(current);
     }
 
     private void BtnCoords_Click(object? sender, EventArgs e)
     {
-        if (sender is not Button btn) return;
+        if (sender is not Button btn || btn.Tag is not string symbol) return;
+        if (!_coordsTextboxes.TryGetValue(symbol, out var targets)) return;
 
-        // Map button to its two textboxes
-        (TextBox t1, TextBox t2) = btn.Name switch
-        {
-            "btnCoordsAAPL" => (txtCoords1AAPL, txtCoords2AAPL),
-            "btnCoordsTSLA" => (txtCoords1TSLA, txtCoords2TSLA),
-            "btnCoordsSPY"  => (txtCoords1SPY,  txtCoords2SPY),
-            "btnCoordsQQQ"  => (txtCoords1QQQ,  txtCoords2QQQ),
-            _               => (txtCoords1AAPL, txtCoords2AAPL)
-        };
-
-        _coordsTarget1    = t1;
-        _coordsTarget2    = t2;
+        _coordsTarget1    = targets.T1;
+        _coordsTarget2    = targets.T2;
         _coordsClickCount = 0;
 
         // Change cursor to crosshair to indicate capture mode
@@ -1692,7 +1737,6 @@ public partial class Form1 : Form
 
         btn.BackColor = Color.Yellow;
         btn.Text = btn.Text + " ...";
-        _coordsCaptureTimer.Tag = btn;
     }
 
     private void CoordsCaptureTick(object? sender, EventArgs e)
@@ -1723,14 +1767,8 @@ public partial class Form1 : Form
         _coordsCaptureTimer = null;
         this.Cursor = Cursors.Default;
 
-        if (_coordsCaptureTimer?.Tag is Button btn)
-        {
-            btn.BackColor = SystemColors.Control;
-            btn.Text = btn.Text.Replace(" ...", string.Empty);
-        }
-
-        // Reset all buttons appearance
-        foreach (var b in new[] { btnCoordsAAPL, btnCoordsTSLA, btnCoordsSPY, btnCoordsQQQ })
+        // Reset every dynamically-generated coords button's appearance.
+        foreach (var b in _coordsButtons)
         {
             b.BackColor = SystemColors.Control;
             b.Text = b.Text.Replace(" ...", string.Empty);
@@ -1804,7 +1842,11 @@ public partial class Form1 : Form
         try
         {
             var aws = AwsSettingsStore.Load();
-            if (string.IsNullOrEmpty(aws.AccessKey)) return;
+            if (string.IsNullOrEmpty(aws.AccessKey))
+            {
+                this.Invoke(() => LogLine($"{timeStr} Screenshot NOT uploaded — AWS credentials missing in Settings.", Color.Orange));
+                return;
+            }
 
             var s3Client = new AmazonS3Client(
                 aws.AccessKey, aws.SecretKey,
@@ -1966,7 +2008,9 @@ public partial class Form1 : Form
     private static string CalcContracts(decimal positionSize, decimal ask)
     {
         if (ask <= 0 || positionSize <= 0) return string.Empty;
-        var contracts = Math.Round(positionSize / (ask * 100));
+        // Floor, not round — Position Size % is a risk cap, so rounding up could spend more
+        // than the configured budget (e.g. $300 @ 1.18 = 2.54 contracts must stay at 2, not 3).
+        var contracts = Math.Floor(positionSize / (ask * 100));
         return contracts > 0 ? contracts.ToString("F0") : string.Empty;
     }
 
@@ -1990,5 +2034,7 @@ public partial class Form1 : Form
             .ToList();
 
         TickerSettingsStore.Save(tickers);
+        LoadTickerButtons();
+        LoadCoordsButtons();
     }
 }

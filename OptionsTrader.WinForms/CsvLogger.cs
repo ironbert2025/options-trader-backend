@@ -11,7 +11,7 @@ namespace OptionsTrader.WinForms;
 public sealed class CsvLogger : IDisposable
 {
     private const string OutputFolder = @"C:\OptionsData";
-    private const string Header = "Time,Hour,Minutes,Seconds,SpotPrice,StrikePrice,Bid,Ask,IntValue,ExtValue,Delta,Gamma,Theta,Vega,IV";
+    private const string Header = "Time,SpotPrice,StrikePrice,Bid,Ask,IntValue,ExtValue,Delta,Gamma,Theta,Vega,IV";
 
     private StreamWriter? _callWriter;
     private StreamWriter? _putWriter;
@@ -39,18 +39,14 @@ public sealed class CsvLogger : IDisposable
     {
         if (_callWriter == null || _putWriter == null) return;
 
-        var now = DateTime.Now;
-        var timeStr = now.ToString("HH:mm:ss");
-        var hour    = now.Hour;
-        var min     = now.Minute;
-        var sec     = now.Second;
+        var timeStr = DateTime.Now.ToString("HH:mm:ss");
 
         foreach (var q in quotes)
         {
             // Skip rows where Bid == 0
             if (q.Bid == 0) continue;
 
-            var line = $"{timeStr},{hour},{min},{sec},{q.SpotPrice},{q.StrikePrice},{q.Bid},{q.Ask},{q.IntrinsicValue},{q.ExtrinsicValue},{q.Delta},{q.Gamma},{q.Theta},{q.Vega},{q.ImpliedVolatility}";
+            var line = $"{timeStr},{q.SpotPrice},{q.StrikePrice},{q.Bid},{q.Ask},{q.IntrinsicValue},{q.ExtrinsicValue},{q.Delta},{q.Gamma},{q.Theta},{q.Vega},{q.ImpliedVolatility}";
 
             if (q.OptionType == OptionType.Call)
                 _callWriter.WriteLine(line);

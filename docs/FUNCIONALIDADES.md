@@ -51,7 +51,7 @@ Toda la configuración del operador vive en la pestaña **Settings** y se persis
 |---|---|---|
 | **Broker** | Selección del broker activo: Charles Schwab (activo), Interactive Broker, ETrade (futuros). Solo uno activo a la vez. | `BrokerSettingsStore` |
 | **Tickers** | Tabla editable de símbolos con su rango `Low`/`High` (filtro por precio de Ask) y `ExpDate` (código de expiración: `D` diario, `F` viernes, `MWF` lun-mié-vie, o fecha fija). | `TickerSettingsStore` |
-| **Screen Coordinates** | Dos coordenadas de pantalla por símbolo (AAPL, TSLA, SPY, QQQ) para recortar la región del screenshot. Se capturan con un botón "apuntar y clickear". | `ScreenCoordsStore` |
+| **Screen Coordinates** | Dos coordenadas de pantalla por símbolo, para recortar la región del screenshot. Se capturan con un botón "apuntar y clickear". **La fila de cada símbolo se genera automáticamente a partir de la tabla Tickers** — agregar o quitar un ticker agrega o quita su fila de coordenadas, sin limitarse a un conjunto fijo de símbolos. | `ScreenCoordsStore` |
 | **Position Size (%)** | Porcentaje del balance a arriesgar por operación (2.5 / 5 / 10). Alimenta el cálculo de tamaño de posición. | `PositionSizeSettingsStore` |
 | **Target (%)** | Objetivo de ganancia (10 / 35 / 100) usado para calcular el precio objetivo de cada trade. | `TargetSettingsStore` |
 | **Contracts** | Número fijo de contratos (1–6) o modo `PositionSize` (cálculo automático según balance y % de posición). | `ContractsSettingsStore` |
@@ -158,6 +158,12 @@ A partir del radio **Trade** / **Trade-Target**, el click en un Strike envía un
 - Tras enviar la orden, el programa **consulta el estado de la orden** (hasta 5 intentos, cada 1.5 s) hasta confirmar el fill.
 - Al confirmarlo, **reemplaza el EntryPrice provisional (Ask) por el precio real de llenado** en la fila de Trades, y recalcula `T_Bid = fill × (1 + target% / 100)` con ese valor real — el PnL/PnL% de ahí en adelante se calcula sobre el fill real, no sobre el Ask original.
 - Si el fill no se confirma a tiempo, se registra un aviso y **no se envía** la orden de salida (si aplica); el EntryPrice queda con el Ask como estimado.
+
+### Precio real de cierre (`CloseTradeRowAsync`, cierre MANUAL)
+- Al cerrar manualmente un trade real, tras enviar la orden **MARKET SELL_TO_CLOSE** el programa **consulta el estado de la orden** (mismo patrón: hasta 5 intentos, cada 1.5 s) hasta confirmar el fill de cierre.
+- Se registran **ambos precios en el Logger**: el bid que estaba en pantalla en el momento del click (referencia), y el precio real de cierre confirmado por el broker.
+- El **PnL/PnL% final y el precio que se guarda en la API usan el precio real confirmado**, no el bid de pantalla — si el fill no se confirma a tiempo, se cae de vuelta al último bid visible como estimado.
+- Este cierre real no aplica al cierre automático por `Trade-Target` (esa salida ya es la orden LIMIT que se resuelve sola en el broker; no se envía una segunda orden).
 
 ### Comportamiento por modo
 | Modo | Orden(es) enviadas | Cierre automático en el log |
