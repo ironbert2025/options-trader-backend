@@ -943,7 +943,7 @@ partial class Form1
         grpCounts.Controls.Add(rbCountsInRange);
         grpCounts.Location = new Point(545, 4);
         grpCounts.Name = "grpCounts";
-        grpCounts.Size = new Size(265, 96);
+        grpCounts.Size = new Size(185, 96);
         grpCounts.TabIndex = 9;
         grpCounts.TabStop = false;
         grpCounts.Text = "Counts";
