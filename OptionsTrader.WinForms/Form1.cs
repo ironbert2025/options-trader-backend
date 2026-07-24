@@ -337,27 +337,15 @@ public partial class Form1 : Form
 
             if (t.ExpirationDate < today)
             {
-                // Expired — close with Bid = 0
+                // Expired — close it out in the backend (PnL = 0, since it's worthless past
+                // expiration) but don't add a row to the grid at all; the user only wants to see
+                // trades that are still open/valid, not a "Closed" row for something that just
+                // expired unattended.
                 var entryTime = t.EntryTime;
                 var now       = DateTime.Now;
                 var duration  = now - entryTime;
                 var pnl       = Math.Round((0m - t.EntryPrice) * decimal.Parse(t.Contracts) * 100, 2);
                 var pnlPct    = t.EntryPrice > 0 ? Math.Round(pnl / (t.EntryPrice * decimal.Parse(t.Contracts) * 100) * 100, 1) : 0m;
-
-                dgvTrades.Rows.Add(
-                    t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
-                    string.Empty, t.EntryPrice.ToString("F2"), t.Contracts,
-                    t.EntryPrice.ToString("F2"), "0.00", string.Empty,
-                    pnl.ToString("F2"), pnlPct.ToString("F1"), t.PnlTarget,
-                    now.ToString("HH:mm:ss"), "Closed");
-
-                var expiredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                expiredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime);
-                expiredRow.DefaultCellStyle.ForeColor = Color.Gray;
-                expiredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
-                SetTradeTypeColor(expiredRow, t.OptionType);
-
-                // LogLine($"{now:HH:mm:ss} Restored EXPIRED trade ({t.OptionType}) Strike: {t.StrikePrice}  Closed with Bid=0  PnL: {pnl:F2}", Color.Gray);
 
                 OpenTradesStore.Remove(t.TradeId);
                 if (t.TradeId > 0)
