@@ -33,10 +33,26 @@ internal static class IvHistorialWriter
             if (TryAppendSnapshot(symbol, ExpirationDateResolver.Resolve(expDateCode), today))
                 _confirmedToday.Add(key);
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort background job — a failure this cycle (e.g. file locked by another
-            // instance writing the same symbol) is silently retried on the next scheduler tick.
+            // instance/process) is retried on the next scheduler tick. Log it instead of staying
+            // silent, so a persistent failure is actually diagnosable instead of just "never wrote".
+            LogError(symbol, ex);
+        }
+    }
+
+    private static void LogError(string symbol, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(OutputFolder);
+            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{symbol}] {ex.GetType().Name}: {ex.Message}{Environment.NewLine}";
+            File.AppendAllText(Path.Combine(OutputFolder, "iv_historial_errors.log"), line);
+        }
+        catch
+        {
+            // Logging itself must never crash the scheduler.
         }
     }
 
