@@ -813,7 +813,7 @@ partial class Form1
         grpTrade.Controls.Add(rbTradeTarget);
         grpTrade.Location = new Point(740, 4);
         grpTrade.Name = "grpTrade";
-        grpTrade.Size = new Size(110, 96);
+        grpTrade.Size = new Size(125, 96);
         grpTrade.TabIndex = 7;
         grpTrade.TabStop = false;
         grpTrade.Text = "Trade";
@@ -858,7 +858,7 @@ partial class Form1
         grpContracts.Controls.Add(rbContracts5);
         grpContracts.Controls.Add(rbContracts6);
         grpContracts.Controls.Add(rbContractsPositionSize);
-        grpContracts.Location = new Point(1008, 4);
+        grpContracts.Location = new Point(875, 4);
         grpContracts.Name = "grpContracts";
         grpContracts.Size = new Size(105, 96);
         grpContracts.TabIndex = 8;
