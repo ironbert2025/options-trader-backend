@@ -811,9 +811,9 @@ partial class Form1
         grpTrade.Controls.Add(rbNoTrade);
         grpTrade.Controls.Add(rbTrade);
         grpTrade.Controls.Add(rbTradeTarget);
-        grpTrade.Location = new Point(850, 4);
+        grpTrade.Location = new Point(740, 4);
         grpTrade.Name = "grpTrade";
-        grpTrade.Size = new Size(150, 96);
+        grpTrade.Size = new Size(110, 96);
         grpTrade.TabIndex = 7;
         grpTrade.TabStop = false;
         grpTrade.Text = "Trade";
