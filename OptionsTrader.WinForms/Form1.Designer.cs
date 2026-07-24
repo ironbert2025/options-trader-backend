@@ -361,13 +361,13 @@ partial class Form1
         //
         // colTradePnLMin
         //
-        colTradePnLMin.HeaderText = "Min PnL";
+        colTradePnLMin.HeaderText = "Min PnL%";
         colTradePnLMin.Name = "colTradePnLMin";
         colTradePnLMin.ReadOnly = true;
         //
         // colTradePnLMax
         //
-        colTradePnLMax.HeaderText = "Max PnL";
+        colTradePnLMax.HeaderText = "Max PnL%";
         colTradePnLMax.Name = "colTradePnLMax";
         colTradePnLMax.ReadOnly = true;
         //

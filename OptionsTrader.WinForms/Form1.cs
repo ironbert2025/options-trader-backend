@@ -1528,13 +1528,16 @@ public partial class Form1 : Form
             tradeId  = tag.TradeId;
         }
 
-        // Recalculate PnL at close time using the confirmed real fill price when we have one
-        // (real MANUAL close), otherwise fall back to the last polled bid shown on screen —
-        // same behavior as before this change for demo trades / TARGET closes / unconfirmed fills.
+        // Recalculate PnL at close time. Priority: confirmed real fill price (real MANUAL close)
+        // > T_Bid (TARGET close — the position closes AT the target price by definition, whether
+        // that's the real LIMIT order resting at the broker or just the auto-close trigger for a
+        // demo trade) > last polled bid shown on screen (plain manual close fallback).
         var entryPriceStr = row.Cells["colTradeEntryPrice"].Value?.ToString() ?? "0";
         var contractsStr  = row.Cells["colTradeContracts"].Value?.ToString() ?? "0";
+        var tBidStr       = row.Cells["colTradeTBid"].Value?.ToString() ?? string.Empty;
         decimal.TryParse(cBid, out var cBidParsed);
-        var exitBid = realClosePrice ?? cBidParsed;
+        decimal? targetClosePrice = closeType == "TARGET" && decimal.TryParse(tBidStr, out var tBidParsed) ? tBidParsed : null;
+        var exitBid = realClosePrice ?? targetClosePrice ?? cBidParsed;
         decimal.TryParse(entryPriceStr, out var entryPrice);
         decimal.TryParse(contractsStr, out var contractsForPnl);
         var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);
@@ -1544,15 +1547,18 @@ public partial class Form1 : Form
 
         row.Cells["colTradePnL"].Value        = pnl;
         row.Cells["colTradePnLPercent"].Value = pnlPct;
-        // Closing PnL (real fill price) can be a new low/high the live ticks never saw.
-        UpdatePnLMinMax(row, pnlVal);
+        // Closing PnL% (real fill price, or target price for TARGET closes) can be a new
+        // low/high the live ticks never saw.
+        UpdatePnLMinMax(row, pnlPctVal);
         row.Cells["colTradeExitTime"].Value   = nowStr;
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
 
         var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
 
-        var realCloseLog = realClosePrice.HasValue ? $"  RealClose: {realClosePrice.Value:F2}" : string.Empty;
+        var realCloseLog = realClosePrice.HasValue ? $"  RealClose: {realClosePrice.Value:F2}"
+            : targetClosePrice.HasValue ? $"  TargetClose: {targetClosePrice.Value:F2}"
+            : string.Empty;
         LogLine(string.Empty, Color.White);
         LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}{realCloseLog}", Color.White);
         LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
@@ -1896,22 +1902,22 @@ public partial class Form1 : Form
         rtbLogger.ScrollToCaret();
     }
 
-    // Extends the row's Min/Max PnL columns if the given value is a new low/high. Session-only —
+    // Extends the row's Min/Max PnL% columns if the given value is a new low/high. Session-only —
     // not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
-    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnl)
+    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
     {
         var minCell = row.Cells["colTradePnLMin"];
         var maxCell = row.Cells["colTradePnLMax"];
 
-        if (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnl < min)
+        if (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min)
         {
-            minCell.Value             = pnl.ToString("F2");
+            minCell.Value             = pnlPct.ToString("F1");
             minCell.Style.ForeColor   = Color.Red;
         }
 
-        if (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnl > max)
+        if (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max)
         {
-            maxCell.Value             = pnl.ToString("F2");
+            maxCell.Value             = pnlPct.ToString("F1");
             maxCell.Style.ForeColor   = Color.Green;
         }
     }
@@ -1952,7 +1958,7 @@ public partial class Form1 : Form
             row.Cells["colTradePnL"].Style.ForeColor        = pnl >= 0 ? Color.Green : Color.Red;
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
 
-            UpdatePnLMinMax(row, pnl);
+            UpdatePnLMinMax(row, pnlPct);
 
             // Auto-close when the current bid reaches the target price (T_Bid).
             // Plain real trades (no target order) are manual-close only; Trade-Target rows still
