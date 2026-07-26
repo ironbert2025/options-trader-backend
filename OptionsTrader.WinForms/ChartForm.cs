@@ -19,9 +19,11 @@ public partial class ChartForm : Form
         _symbol   = symbol;
         _streamer = streamer;
 
+        // Narrower/taller than before — sized so 3 of these can sit side by side on screen once
+        // the 1h / 15m-RTH / 15m-RTH+Overnight panels all exist.
         Text          = $"Live Chart — {symbol}";
-        Width         = 900;
-        Height        = 600;
+        Width         = 580;
+        Height        = 620;
         StartPosition = FormStartPosition.CenterScreen;
 
         InitializeWebView();
