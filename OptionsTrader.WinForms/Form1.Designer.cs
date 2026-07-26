@@ -78,6 +78,7 @@ partial class Form1
         chkSaveToCsv = new CheckBox();
         chkHideNextExpDate = new CheckBox();
         btnFetchQuotes = new Button();
+        btnLiveChart = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
@@ -210,6 +211,7 @@ partial class Form1
         tabQuotes.Controls.Add(grpOptionsChain);
         tabQuotes.Controls.Add(grpOptionsChainNext);
         tabQuotes.Controls.Add(btnFetchQuotes);
+        tabQuotes.Controls.Add(btnLiveChart);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -736,7 +738,16 @@ partial class Form1
         btnFetchQuotes.TabIndex = 1;
         btnFetchQuotes.Text = "Fetch Quotes";
         btnFetchQuotes.Click += BtnFetchQuotes_Click;
-        // 
+        //
+        // btnLiveChart
+        //
+        btnLiveChart.Location = new Point(420, 87);
+        btnLiveChart.Name = "btnLiveChart";
+        btnLiveChart.Size = new Size(95, 25);
+        btnLiveChart.TabIndex = 2;
+        btnLiveChart.Text = "Live Chart";
+        btnLiveChart.Click += BtnLiveChart_Click;
+        //
         // btnStartPolling
         // 
         btnStartPolling.BackColor = Color.DarkGreen;
@@ -1705,6 +1716,7 @@ partial class Form1
     private DataGridViewTextBoxColumn colTradePnLMin;
     private DataGridViewTextBoxColumn colTradePnLMax;
     private Button btnFetchQuotes;
+    private Button btnLiveChart;
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;

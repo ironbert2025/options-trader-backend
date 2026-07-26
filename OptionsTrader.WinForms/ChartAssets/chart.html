@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #131722; overflow: hidden; }
+  #chart { width: 100%; height: 100%; }
+</style>
+<script src="lightweight-charts.js"></script>
+</head>
+<body>
+<div id="chart"></div>
+<script>
+  const container = document.getElementById('chart');
+
+  const chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: {
+      background: { color: '#131722' },
+      textColor: '#d1d4dc',
+    },
+    grid: {
+      vertLines: { color: '#1f2530' },
+      horzLines: { color: '#1f2530' },
+    },
+    timeScale: {
+      timeVisible: true,
+      secondsVisible: false,
+      borderColor: '#2a2e39',
+    },
+    rightPriceScale: {
+      borderColor: '#2a2e39',
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+    },
+  });
+
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: '#26a69a',
+    downColor: '#ef5350',
+    borderVisible: false,
+    wickUpColor: '#26a69a',
+    wickDownColor: '#ef5350',
+  });
+
+  window.addEventListener('resize', () => {
+    chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+  });
+
+  // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
+
+  // Replaces the whole dataset (used once at startup to seed historical candles).
+  function cargarHistorial(velas) {
+    candleSeries.setData(velas);
+    chart.timeScale().fitContent();
+  }
+
+  // Updates the still-forming candle (same Time as the last one) without redrawing everything.
+  function actualizarUltimaVela(vela) {
+    candleSeries.update(vela);
+  }
+
+  // A new candle period started — same call as update; Lightweight Charts appends automatically
+  // when the Time is newer than the last point.
+  function agregarVelaCompleta(vela) {
+    candleSeries.update(vela);
+  }
+</script>
+</body>
+</html>

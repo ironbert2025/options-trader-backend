@@ -1,0 +1,346 @@
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using OptionsTrader.Application.DTOs.Streaming;
+
+namespace OptionsTrader.Infrastructure.Schwab;
+
+// Hand-rolled client for Schwab's streaming (WebSocket) API — there is no official .NET SDK for
+// it. Handles: fetching streamer connection info via REST, connecting, logging in, subscribing
+// to CHART_EQUITY (underlying candles), and reconnecting with backoff if the socket drops.
+//
+// IMPORTANT: Schwab's streaming protocol (message shapes for LOGIN/ADD requests and the
+// CHART_EQUITY response fields) is reconstructed here from Schwab's publicly documented Trader
+// API streaming spec, but has NOT been exercised against a live connection in this environment —
+// treat the exact JSON field names/request numbers as a first draft to validate and adjust
+// against real traffic (e.g. via Save Dumps-style logging) the first time this runs live.
+public class SchwabStreamerClient : IAsyncDisposable
+{
+    private const string UserPreferenceUrl = "https://api.schwabapi.com/trader/v1/userPreference";
+    private const string PriceHistoryUrl   = "https://api.schwabapi.com/marketdata/v1/pricehistory";
+
+    private readonly HttpClient _httpClient;
+    private readonly SchwabAuthService _authService;
+    private readonly string _apiKey;
+    private readonly string _apiSecret;
+    private readonly string _refreshToken;
+    private readonly Func<string, DateTime, Task> _onTokenRenewed;
+
+    private string _storedAccessToken;
+    private DateTime _storedExpiresAt;
+
+    private ClientWebSocket? _socket;
+    private CancellationTokenSource? _receiveLoopCts;
+    private Task? _receiveLoopTask;
+
+    private string _streamerSocketUrl = string.Empty;
+    private string _schwabClientCustomerId = string.Empty;
+    private string _schwabClientCorrelId = string.Empty;
+    private string _schwabClientChannel = string.Empty;
+    private string _schwabClientFunctionId = string.Empty;
+    private int _requestId;
+    private volatile bool _stopRequested;
+
+    // Fires once per candle update the streamer sends (Schwab's CHART_EQUITY service pushes a
+    // new/updated 1-minute candle for the subscribed symbol).
+    public event Action<CandleData>? OnNewCandle;
+
+    // Fires when the socket disconnects unexpectedly (not via StopAsync), before a reconnect
+    // attempt — useful for surfacing a status message in the UI.
+    public event Action<string>? OnDisconnected;
+
+    public SchwabStreamerClient(
+        HttpClient httpClient,
+        SchwabAuthService authService,
+        string apiKey,
+        string apiSecret,
+        string refreshToken,
+        string storedAccessToken,
+        DateTime storedExpiresAt,
+        Func<string, DateTime, Task> onTokenRenewed)
+    {
+        _httpClient        = httpClient;
+        _authService       = authService;
+        _apiKey            = apiKey;
+        _apiSecret         = apiSecret;
+        _refreshToken      = refreshToken;
+        _storedAccessToken = storedAccessToken;
+        _storedExpiresAt   = storedExpiresAt;
+        _onTokenRenewed    = onTokenRenewed;
+    }
+
+    private async Task OnTokenRenewedInternal(string newAccessToken, DateTime newExpiresAt)
+    {
+        _storedAccessToken = newAccessToken;
+        _storedExpiresAt   = newExpiresAt;
+        await _onTokenRenewed(newAccessToken, newExpiresAt);
+    }
+
+    private Task<string> GetTokenAsync() =>
+        _authService.GetAccessTokenAsync(
+            _apiKey, _apiSecret,
+            _storedAccessToken, _storedExpiresAt,
+            _refreshToken, OnTokenRenewedInternal);
+
+    // Fetches streamerSocketUrl + streamer credentials via the REST "User Preference" endpoint,
+    // then opens the WebSocket and logs in. Call SubscribeChartEquity afterwards.
+    public async Task ConnectAsync(CancellationToken ct = default)
+    {
+        await FetchStreamerInfoAsync(ct);
+
+        _socket = new ClientWebSocket();
+        await _socket.ConnectAsync(new Uri(_streamerSocketUrl), ct);
+
+        _receiveLoopCts = new CancellationTokenSource();
+        _receiveLoopTask = Task.Run(() => ReceiveLoopAsync(_receiveLoopCts.Token));
+
+        await LoginAsync(ct);
+    }
+
+    // Seeds the chart with today's 1-minute candles so it isn't empty when first opened (the
+    // streamer only pushes candles going forward from the moment it connects).
+    public async Task<List<CandleData>> GetTodaysHistoricalCandlesAsync(string symbol, CancellationToken ct = default)
+    {
+        var token = await GetTokenAsync();
+        var url = $"{PriceHistoryUrl}?symbol={symbol}&periodType=day&period=1&frequencyType=minute&frequency=1";
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+        var response = await _httpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        var root = JsonDocument.Parse(json).RootElement;
+
+        var candles = new List<CandleData>();
+        if (!root.TryGetProperty("candles", out var candlesArray)) return candles;
+
+        foreach (var c in candlesArray.EnumerateArray())
+        {
+            candles.Add(new CandleData
+            {
+                Open  = c.GetProperty("open").GetDecimal(),
+                High  = c.GetProperty("high").GetDecimal(),
+                Low   = c.GetProperty("low").GetDecimal(),
+                Close = c.GetProperty("close").GetDecimal(),
+                Time  = DateTimeOffset.FromUnixTimeMilliseconds(c.GetProperty("datetime").GetInt64()).LocalDateTime
+            });
+        }
+        return candles;
+    }
+
+    private async Task FetchStreamerInfoAsync(CancellationToken ct)
+    {
+        var token = await GetTokenAsync();
+        var request = new HttpRequestMessage(HttpMethod.Get, UserPreferenceUrl);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+        var response = await _httpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        var root = JsonDocument.Parse(json).RootElement;
+
+        // { "streamerInfo": [ { "streamerSocketUrl": "...", "schwabClientCustomerId": "...",
+        //   "schwabClientCorrelId": "...", "schwabClientChannel": "...", "schwabClientFunctionId": "..." } ] }
+        var info = root.GetProperty("streamerInfo")[0];
+        _streamerSocketUrl          = info.GetProperty("streamerSocketUrl").GetString() ?? string.Empty;
+        _schwabClientCustomerId     = info.GetProperty("schwabClientCustomerId").GetString() ?? string.Empty;
+        _schwabClientCorrelId       = info.GetProperty("schwabClientCorrelId").GetString() ?? string.Empty;
+        _schwabClientChannel        = info.GetProperty("schwabClientChannel").GetString() ?? string.Empty;
+        _schwabClientFunctionId     = info.GetProperty("schwabClientFunctionId").GetString() ?? string.Empty;
+    }
+
+    private async Task LoginAsync(CancellationToken ct)
+    {
+        var token = await GetTokenAsync();
+        var payload = new
+        {
+            requests = new[]
+            {
+                new
+                {
+                    service   = "ADMIN",
+                    command   = "LOGIN",
+                    requestid = NextRequestId(),
+                    SchwabClientCustomerId = _schwabClientCustomerId,
+                    SchwabClientCorrelId   = _schwabClientCorrelId,
+                    parameters = new
+                    {
+                        Authorization = token,
+                        SchwabClientChannel    = _schwabClientChannel,
+                        SchwabClientFunctionId = _schwabClientFunctionId
+                    }
+                }
+            }
+        };
+
+        await SendAsync(payload, ct);
+    }
+
+    // Subscribes to 1-minute candles for the underlying. Schwab's CHART_EQUITY fields (per the
+    // documented field-number scheme): 0=key/symbol, 1=open, 2=high, 3=low, 4=close, 5=volume,
+    // 6=sequence, 7=chartTime (epoch ms), 8=chartDay.
+    public Task SubscribeChartEquity(string symbol, CancellationToken ct = default)
+    {
+        var payload = new
+        {
+            requests = new[]
+            {
+                new
+                {
+                    service   = "CHART_EQUITY",
+                    command   = "ADD",
+                    requestid = NextRequestId(),
+                    SchwabClientCustomerId = _schwabClientCustomerId,
+                    SchwabClientCorrelId   = _schwabClientCorrelId,
+                    parameters = new
+                    {
+                        keys   = symbol,
+                        fields = "0,1,2,3,4,5,6,7,8"
+                    }
+                }
+            }
+        };
+        return SendAsync(payload, ct);
+    }
+
+    private int NextRequestId() => Interlocked.Increment(ref _requestId);
+
+    private async Task SendAsync(object payload, CancellationToken ct)
+    {
+        if (_socket is not { State: WebSocketState.Open })
+            throw new InvalidOperationException("Streamer socket is not connected.");
+
+        var json  = JsonSerializer.Serialize(payload);
+        var bytes = Encoding.UTF8.GetBytes(json);
+        await _socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct);
+    }
+
+    private async Task ReceiveLoopAsync(CancellationToken ct)
+    {
+        var buffer = new byte[16 * 1024];
+        try
+        {
+            while (_socket is { State: WebSocketState.Open } && !ct.IsCancellationRequested)
+            {
+                using var messageStream = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
+                {
+                    result = await _socket.ReceiveAsync(buffer, ct);
+                    if (result.MessageType == WebSocketMessageType.Close) break;
+                    messageStream.Write(buffer, 0, result.Count);
+                } while (!result.EndOfMessage);
+
+                if (result.MessageType == WebSocketMessageType.Close) break;
+
+                var json = Encoding.UTF8.GetString(messageStream.ToArray());
+                HandleMessage(json);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on StopAsync/Dispose — not a real disconnect.
+            return;
+        }
+        catch
+        {
+            // Any other failure means the socket dropped unexpectedly — reconnect below.
+        }
+
+        if (!_stopRequested)
+            await ReconnectWithBackoffAsync();
+    }
+
+    private void HandleMessage(string json)
+    {
+        try
+        {
+            var root = JsonDocument.Parse(json).RootElement;
+
+            // Data payload shape: { "data": [ { "service": "CHART_EQUITY", "content": [ {...} ] } ] }
+            if (!root.TryGetProperty("data", out var dataArray)) return;
+
+            foreach (var entry in dataArray.EnumerateArray())
+            {
+                if (!entry.TryGetProperty("service", out var svc) || svc.GetString() != "CHART_EQUITY")
+                    continue;
+                if (!entry.TryGetProperty("content", out var content)) continue;
+
+                foreach (var item in content.EnumerateArray())
+                {
+                    var candle = new CandleData
+                    {
+                        Open  = GetDecimal(item, "1"),
+                        High  = GetDecimal(item, "2"),
+                        Low   = GetDecimal(item, "3"),
+                        Close = GetDecimal(item, "4"),
+                        Time  = item.TryGetProperty("7", out var t) && t.TryGetInt64(out var epochMs)
+                            ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).LocalDateTime
+                            : DateTime.Now
+                    };
+                    OnNewCandle?.Invoke(candle);
+                }
+            }
+        }
+        catch
+        {
+            // Malformed/unexpected message (e.g. heartbeat, notify) — ignore, not fatal.
+        }
+    }
+
+    private static decimal GetDecimal(JsonElement item, string field) =>
+        item.TryGetProperty(field, out var v) && v.TryGetDecimal(out var d) ? d : 0m;
+
+    private async Task ReconnectWithBackoffAsync()
+    {
+        OnDisconnected?.Invoke("Streamer disconnected — reconnecting...");
+        var delays = new[] { 2000, 5000, 10000, 20000, 30000 };
+        foreach (var delay in delays)
+        {
+            if (_stopRequested) return;
+            await Task.Delay(delay);
+            try
+            {
+                await ConnectAsync();
+                return; // caller must re-subscribe (SubscribeChartEquity) after reconnecting —
+                        // ChartForm's OnDisconnected handler is responsible for that.
+            }
+            catch
+            {
+                // Keep retrying with the next backoff step.
+            }
+        }
+    }
+
+    public async Task StopAsync()
+    {
+        _stopRequested = true;
+        _receiveLoopCts?.Cancel();
+
+        if (_socket is { State: WebSocketState.Open })
+        {
+            try
+            {
+                await _socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Client closing", CancellationToken.None);
+            }
+            catch
+            {
+                // Best-effort close — socket may already be in a bad state.
+            }
+        }
+
+        if (_receiveLoopTask != null)
+        {
+            try { await _receiveLoopTask; } catch { /* already handled inside the loop */ }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync();
+        _socket?.Dispose();
+        _receiveLoopCts?.Dispose();
+    }
+}

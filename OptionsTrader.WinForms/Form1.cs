@@ -1251,6 +1251,42 @@ public partial class Form1 : Form
             OnSchwabTokenRenewed, enableDumps);
     }
 
+    private SchwabStreamerClient CreateSchwabStreamerClient()
+    {
+        var creds  = SchwabCredentialsStore.Load();
+        var tokens = SchwabTokenStore.Load();
+        return new SchwabStreamerClient(
+            _marketHttpClient, _schwabAuth,
+            creds.ApiKey, creds.ApiSecret,
+            tokens?.RefreshToken ?? string.Empty,
+            tokens?.AccessToken ?? string.Empty,
+            tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
+            OnSchwabTokenRenewed);
+    }
+
+    // Opens a new live-chart window (candles only, streamed via WebSocket) for the currently
+    // selected ticker. Fully separate from the existing polling-based Quotes tab — doesn't touch
+    // any of that state.
+    private void BtnLiveChart_Click(object? sender, EventArgs e)
+    {
+        if (_selectedTicker == null)
+        {
+            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var streamer  = CreateSchwabStreamerClient();
+        var chartForm = new ChartForm(_selectedTicker.Symbol, streamer);
+        chartForm.Show();
+    }
+
     private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)
     {
         var account = SelectedAccountStore.Load();
