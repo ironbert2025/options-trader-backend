@@ -60,10 +60,13 @@ public partial class ChartForm : Form
         {
             var history = await _streamer.GetTodaysHistoricalCandlesAsync(_symbol);
 
-            // Only show last Friday's regular session (9:30 AM - 4:00 PM ET) for now.
+            // Only show last Friday's regular session (9:30 AM - 4:00 PM ET), resampled into
+            // 1-hour candles — Schwab's pricehistory endpoint doesn't offer a 60-min frequency
+            // directly, so we aggregate the 1-minute candles ourselves (7 candles for a 6.5h
+            // session: 9:30-10:30 ... 15:30-16:00).
             if (history.Count > 0)
             {
-                history = FilterLastFridayRegularSession(history);
+                history = AggregateToHourly(FilterLastFridayRegularSession(history));
                 if (history.Count > 0)
                     await RunScriptAsync("cargarHistorial", history);
             }
@@ -93,6 +96,40 @@ public partial class ChartForm : Form
             {
                 var eastern = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
                 return eastern >= sessionStart && eastern <= sessionEnd;
+            })
+            .ToList();
+    }
+
+    // Groups 1-minute candles into 1-hour buckets starting at 9:30 AM ET (9:30-10:30,
+    // 10:30-11:30, ..., 15:30-16:00 — 7 buckets for a 6.5h session). Open = first minute's open,
+    // Close = last minute's close, High/Low = extremes across the bucket.
+    private static List<CandleData> AggregateToHourly(List<CandleData> minuteCandles)
+    {
+        if (minuteCandles.Count == 0) return minuteCandles;
+
+        var sessionStartUtc = minuteCandles
+            .Select(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))
+            .Min(t => t.Date.AddHours(9).AddMinutes(30));
+
+        return minuteCandles
+            .GroupBy(c =>
+            {
+                var eastern    = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
+                var minutesIn  = (eastern - sessionStartUtc).TotalMinutes;
+                return (int)Math.Floor(minutesIn / 60.0);
+            })
+            .OrderBy(g => g.Key)
+            .Select(g =>
+            {
+                var ordered = g.OrderBy(c => c.Time).ToList();
+                return new CandleData
+                {
+                    Time  = ordered[0].Time,
+                    Open  = ordered[0].Open,
+                    Close = ordered[^1].Close,
+                    High  = ordered.Max(c => c.High),
+                    Low   = ordered.Min(c => c.Low)
+                };
             })
             .ToList();
     }
