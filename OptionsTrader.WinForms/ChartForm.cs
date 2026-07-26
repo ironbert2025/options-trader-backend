@@ -59,8 +59,15 @@ public partial class ChartForm : Form
         try
         {
             var history = await _streamer.GetTodaysHistoricalCandlesAsync(_symbol);
+
+            // Only show the last hour for now — the full day (pre/regular/after-hours) was too
+            // dense/wide to read while the live streaming side is still being debugged.
             if (history.Count > 0)
+            {
+                var cutoff = history.Max(c => c.Time).AddHours(-1);
+                history = history.Where(c => c.Time >= cutoff).ToList();
                 await RunScriptAsync("cargarHistorial", history);
+            }
 
             await _streamer.ConnectAsync();
             await _streamer.SubscribeChartEquity(_symbol);
