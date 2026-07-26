@@ -60,13 +60,12 @@ public partial class ChartForm : Form
         {
             var history = await _streamer.GetTodaysHistoricalCandlesAsync(_symbol);
 
-            // Only show the last hour for now — the full day (pre/regular/after-hours) was too
-            // dense/wide to read while the live streaming side is still being debugged.
+            // Only show last Friday's regular session (9:30 AM - 4:00 PM ET) for now.
             if (history.Count > 0)
             {
-                var cutoff = history.Max(c => c.Time).AddHours(-1);
-                history = history.Where(c => c.Time >= cutoff).ToList();
-                await RunScriptAsync("cargarHistorial", history);
+                history = FilterLastFridayRegularSession(history);
+                if (history.Count > 0)
+                    await RunScriptAsync("cargarHistorial", history);
             }
 
             await _streamer.ConnectAsync();
@@ -77,6 +76,25 @@ public partial class ChartForm : Form
             MessageBox.Show($"Could not start the live chart for {_symbol}:\n\n{ex.Message}",
                 "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    // Keeps only candles from the most recent Friday (relative to now, ET), between 9:30 AM and
+    // 4:00 PM ET — the regular session, no pre/after-hours.
+    private static List<CandleData> FilterLastFridayRegularSession(List<CandleData> candles)
+    {
+        var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
+        var daysSinceFriday = ((int)nowEastern.DayOfWeek - (int)DayOfWeek.Friday + 7) % 7;
+        var lastFriday = nowEastern.Date.AddDays(-daysSinceFriday);
+        var sessionStart = lastFriday.AddHours(9).AddMinutes(30);
+        var sessionEnd   = lastFriday.AddHours(16);
+
+        return candles
+            .Where(c =>
+            {
+                var eastern = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
+                return eastern >= sessionStart && eastern <= sessionEnd;
+            })
+            .ToList();
     }
 
     private void Streamer_OnNewCandle(CandleData candle)
