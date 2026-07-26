@@ -123,7 +123,7 @@ public class SchwabStreamerClient : IAsyncDisposable
                 High  = c.GetProperty("high").GetDecimal(),
                 Low   = c.GetProperty("low").GetDecimal(),
                 Close = c.GetProperty("close").GetDecimal(),
-                Time  = DateTimeOffset.FromUnixTimeMilliseconds(c.GetProperty("datetime").GetInt64()).LocalDateTime
+                Time  = DateTimeOffset.FromUnixTimeMilliseconds(c.GetProperty("datetime").GetInt64()).UtcDateTime
             });
         }
         return candles;
@@ -277,8 +277,8 @@ public class SchwabStreamerClient : IAsyncDisposable
                         Low   = GetDecimal(item, "3"),
                         Close = GetDecimal(item, "4"),
                         Time  = item.TryGetProperty("7", out var t) && t.TryGetInt64(out var epochMs)
-                            ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).LocalDateTime
-                            : DateTime.Now
+                            ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime
+                            : DateTime.UtcNow
                     };
                     OnNewCandle?.Invoke(candle);
                 }

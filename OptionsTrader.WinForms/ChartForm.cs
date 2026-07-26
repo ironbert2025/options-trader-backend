@@ -104,16 +104,27 @@ public partial class ChartForm : Form
         await _webView.CoreWebView2.ExecuteScriptAsync($"{jsFunction}({ToChartJson(payload)});");
     }
 
+    // Lightweight Charts renders the Unix timestamp we give it as literal UTC digits — it does
+    // NOT convert to the browser's local timezone. So instead of sending the true UTC instant, we
+    // convert to US Eastern wall-clock time first, then lie and mark THAT as UTC — the digits the
+    // chart displays then read as New York time, regardless of what timezone the PC is set to.
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
     private static string ToChartJson(object payload)
     {
-        static object Map(CandleData c) => new
+        static object Map(CandleData c)
         {
-            time  = new DateTimeOffset(c.Time).ToUnixTimeSeconds(),
-            open  = c.Open,
-            high  = c.High,
-            low   = c.Low,
-            close = c.Close
-        };
+            var easternWallClock = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(c.Time, DateTimeKind.Utc), EasternZone);
+            var fakeUtcForDisplay = DateTime.SpecifyKind(easternWallClock, DateTimeKind.Utc);
+            return new
+            {
+                time  = new DateTimeOffset(fakeUtcForDisplay).ToUnixTimeSeconds(),
+                open  = c.Open,
+                high  = c.High,
+                low   = c.Low,
+                close = c.Close
+            };
+        }
 
         return payload switch
         {
