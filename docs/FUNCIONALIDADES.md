@@ -196,7 +196,7 @@ A partir del radio **Trade** / **Trade-Target**, el click en un Strike envía un
 
 - **CSV de cotizaciones** (`CsvLogger`): cuando *Quotes to CSV* está activo, cada ciclo agrega filas a `C:\OptionsData`, **un archivo para Calls y otro para Puts**, por símbolo y expiración.
 - Se generan **CSV de ambas expiraciones** (actual y próxima) simultáneamente — **salvo** que *Hide Next ExpDate* esté marcado (default), en cuyo caso solo se escribe el CSV de la expiración actual (ver §2 y §4).
-- Columnas: `Time, Hour, Minutes, Seconds, SpotPrice, StrikePrice, Bid, Ask, IntValue, ExtValue, Delta, Gamma, Theta, Vega, IV` — incluye **griegos y volatilidad implícita**.
+- Columnas: `Time, SpotPrice, StrikePrice, Bid, Ask, IntValue, ExtValue, Delta, Gamma, Theta, Vega, IV` — incluye **griegos y volatilidad implícita**.
 - Filas con `Bid = 0` se omiten.
 - **Dumps JSON** opcionales (`C:\Dumps`) con la respuesta cruda de Schwab.
 
@@ -283,6 +283,14 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 - **JWT Bearer** + **BCrypt** (autenticación)
 - **Swagger / NSwag** (generación de cliente TypeScript)
 - **Angular** (frontend de historial, repo `options-trader-web`)
+
+---
+
+## 14. Gráfico de velas en vivo (en desarrollo)
+
+Botón **"Live Chart"** en Quotes abre una ventana con **3 gráficos de velas lado a lado** (1h / 15m RTH / 15m RTH+Overnight) del subyacente, alimentados por streaming WebSocket directo a Schwab (`SchwabStreamerClient`) + WebView2 con Lightweight Charts (local, sin CDN). Completamente aislado del resto de la app — no toca el polling ni el trading existentes.
+
+**⚠️ Streaming en vivo todavía no validado contra tráfico real** — ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md) para el contexto completo, decisiones de diseño, y lo que falta.
 
 ---
 
