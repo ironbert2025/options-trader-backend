@@ -5,26 +5,36 @@ using OptionsTrader.Infrastructure.Schwab;
 
 namespace OptionsTrader.WinForms;
 
+// Which candle interval and session window a given ChartForm shows — each panel of the 3-panel
+// side-by-side layout uses a different one.
+public enum ChartPanelMode
+{
+    Hourly15,       // 1h candles, regular session only (9:30 AM - 4:00 PM ET)
+    Fifteen_RTH,    // 15m candles, regular session only
+    Fifteen_Full    // 15m candles, regular session + pre/after-hours (whatever Schwab returns)
+}
+
 // Standalone window showing a live candlestick chart of the underlying (spot), fed by Schwab's
 // streaming WebSocket API — completely separate from the existing polling-based Quotes tab.
 public partial class ChartForm : Form
 {
     private readonly string _symbol;
     private readonly SchwabStreamerClient _streamer;
+    private readonly ChartPanelMode _mode;
     private WebView2 _webView = null!;
     private bool _closing;
 
-    public ChartForm(string symbol, SchwabStreamerClient streamer)
+    public ChartForm(string symbol, SchwabStreamerClient streamer, ChartPanelMode mode)
     {
         _symbol   = symbol;
         _streamer = streamer;
+        _mode     = mode;
 
-        // Narrower/taller than before — sized so 3 of these can sit side by side on screen once
-        // the 1h / 15m-RTH / 15m-RTH+Overnight panels all exist.
-        Text          = $"Live Chart — {symbol}";
+        // Narrow/tall so 3 of these fit side by side on screen.
+        Text          = $"Live Chart — {symbol} ({ModeLabel(mode)})";
         Width         = 580;
         Height        = 620;
-        StartPosition = FormStartPosition.CenterScreen;
+        StartPosition = FormStartPosition.Manual;
 
         InitializeWebView();
 
@@ -33,6 +43,14 @@ public partial class ChartForm : Form
 
         FormClosing += ChartForm_FormClosing;
     }
+
+    private static string ModeLabel(ChartPanelMode mode) => mode switch
+    {
+        ChartPanelMode.Hourly15    => "1h",
+        ChartPanelMode.Fifteen_RTH => "15m RTH",
+        ChartPanelMode.Fifteen_Full => "15m RTH+Overnight",
+        _ => mode.ToString()
+    };
 
     private void InitializeWebView()
     {
@@ -62,13 +80,17 @@ public partial class ChartForm : Form
         {
             var history = await _streamer.GetTodaysHistoricalCandlesAsync(_symbol);
 
-            // Only show last Friday's regular session (9:30 AM - 4:00 PM ET), resampled into
-            // 1-hour candles — Schwab's pricehistory endpoint doesn't offer a 60-min frequency
-            // directly, so we aggregate the 1-minute candles ourselves (7 candles for a 6.5h
-            // session: 9:30-10:30 ... 15:30-16:00).
             if (history.Count > 0)
             {
-                history = AggregateToHourly(FilterLastFridayRegularSession(history));
+                var (intervalMinutes, rthOnly) = _mode switch
+                {
+                    ChartPanelMode.Hourly15     => (60, true),
+                    ChartPanelMode.Fifteen_RTH  => (15, true),
+                    ChartPanelMode.Fifteen_Full => (15, false),
+                    _ => (60, true)
+                };
+
+                history = AggregateToInterval(FilterLastFriday(history, rthOnly), intervalMinutes, rthOnly);
                 if (history.Count > 0)
                     await RunScriptAsync("cargarHistorial", history);
             }
@@ -83,15 +105,17 @@ public partial class ChartForm : Form
         }
     }
 
-    // Keeps only candles from the most recent Friday (relative to now, ET), between 9:30 AM and
-    // 4:00 PM ET — the regular session, no pre/after-hours.
-    private static List<CandleData> FilterLastFridayRegularSession(List<CandleData> candles)
+    // Keeps only candles from the most recent Friday (relative to now, ET). rthOnly restricts to
+    // 9:30 AM - 4:00 PM ET (regular session); otherwise keeps the whole calendar day (regular +
+    // whatever pre/after-hours Schwab's pricehistory response included).
+    private static List<CandleData> FilterLastFriday(List<CandleData> candles, bool rthOnly)
     {
         var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
         var daysSinceFriday = ((int)nowEastern.DayOfWeek - (int)DayOfWeek.Friday + 7) % 7;
         var lastFriday = nowEastern.Date.AddDays(-daysSinceFriday);
-        var sessionStart = lastFriday.AddHours(9).AddMinutes(30);
-        var sessionEnd   = lastFriday.AddHours(16);
+
+        var sessionStart = rthOnly ? lastFriday.AddHours(9).AddMinutes(30) : lastFriday;
+        var sessionEnd   = rthOnly ? lastFriday.AddHours(16) : lastFriday.AddDays(1).AddTicks(-1);
 
         return candles
             .Where(c =>
@@ -102,23 +126,23 @@ public partial class ChartForm : Form
             .ToList();
     }
 
-    // Groups 1-minute candles into 1-hour buckets starting at 9:30 AM ET (9:30-10:30,
-    // 10:30-11:30, ..., 15:30-16:00 — 7 buckets for a 6.5h session). Open = first minute's open,
-    // Close = last minute's close, High/Low = extremes across the bucket.
-    private static List<CandleData> AggregateToHourly(List<CandleData> minuteCandles)
+    // Groups 1-minute candles into fixed-size buckets. RTH buckets anchor at 9:30 AM ET (matching
+    // the regular session open); full-day buckets anchor at midnight ET. Open = first minute's
+    // open, Close = last minute's close, High/Low = extremes across the bucket.
+    private static List<CandleData> AggregateToInterval(List<CandleData> minuteCandles, int intervalMinutes, bool rthOnly)
     {
         if (minuteCandles.Count == 0) return minuteCandles;
 
-        var sessionStartUtc = minuteCandles
+        var anchor = minuteCandles
             .Select(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))
-            .Min(t => t.Date.AddHours(9).AddMinutes(30));
+            .Min(t => rthOnly ? t.Date.AddHours(9).AddMinutes(30) : t.Date);
 
         return minuteCandles
             .GroupBy(c =>
             {
-                var eastern    = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
-                var minutesIn  = (eastern - sessionStartUtc).TotalMinutes;
-                return (int)Math.Floor(minutesIn / 60.0);
+                var eastern   = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
+                var minutesIn = (eastern - anchor).TotalMinutes;
+                return (int)Math.Floor(minutesIn / intervalMinutes);
             })
             .OrderBy(g => g.Key)
             .Select(g =>
@@ -145,17 +169,13 @@ public partial class ChartForm : Form
     private void Streamer_OnDisconnected(string message)
     {
         if (_closing || !IsHandleCreated) return;
-        Invoke(() => Text = $"Live Chart — {_symbol} ({message})");
+        Invoke(() => Text = $"Live Chart — {_symbol} ({ModeLabel(_mode)}) — {message}");
     }
 
     // Serializes the payload as JSON and calls the given JS function with it — used for both
     // cargarHistorial(velas[]) and actualizarUltimaVela(vela).
     private async Task RunScriptAsync(string jsFunction, object payload)
     {
-        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = null // Lightweight Charts expects lowercase "time"/"open"/etc.
-        });
         // CandleData's C# PascalCase properties need to map to Lightweight Charts' lowercase
         // fields — remap explicitly rather than relying on serializer naming policy tricks.
         await _webView.CoreWebView2.ExecuteScriptAsync($"{jsFunction}({ToChartJson(payload)});");

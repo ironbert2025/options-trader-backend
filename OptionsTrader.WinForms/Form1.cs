@@ -1282,9 +1282,21 @@ public partial class Form1 : Form
             return;
         }
 
-        var streamer  = CreateSchwabStreamerClient();
-        var chartForm = new ChartForm(_selectedTicker.Symbol, streamer);
-        chartForm.Show();
+        // 3 side-by-side windows, each its own streamer connection (separate subscription),
+        // showing the same symbol at different candle intervals/sessions.
+        var modes = new[] { ChartPanelMode.Hourly15, ChartPanelMode.Fifteen_RTH, ChartPanelMode.Fifteen_Full };
+        var workArea = Screen.PrimaryScreen!.WorkingArea;
+        const int gap = 8;
+
+        for (int i = 0; i < modes.Length; i++)
+        {
+            var streamer  = CreateSchwabStreamerClient();
+            var chartForm = new ChartForm(_selectedTicker.Symbol, streamer, modes[i]);
+            chartForm.Location = new Point(
+                workArea.Left + i * (chartForm.Width + gap),
+                workArea.Top);
+            chartForm.Show();
+        }
     }
 
     private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)
