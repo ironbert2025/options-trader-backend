@@ -1282,21 +1282,10 @@ public partial class Form1 : Form
             return;
         }
 
-        // 3 side-by-side windows, each its own streamer connection (separate subscription),
-        // showing the same symbol at different candle intervals/sessions.
-        var modes = new[] { ChartPanelMode.Hourly15, ChartPanelMode.Fifteen_RTH, ChartPanelMode.Fifteen_Full };
-        var workArea = Screen.PrimaryScreen!.WorkingArea;
-        const int gap = 8;
-
-        for (int i = 0; i < modes.Length; i++)
-        {
-            var streamer  = CreateSchwabStreamerClient();
-            var chartForm = new ChartForm(_selectedTicker.Symbol, streamer, modes[i]);
-            chartForm.Location = new Point(
-                workArea.Left + i * (chartForm.Width + gap),
-                workArea.Top);
-            chartForm.Show();
-        }
+        // One window, 3 chart panels side by side (1h / 15m RTH / 15m RTH+Overnight) — each
+        // panel gets its own streamer connection/subscription.
+        var multiChartForm = new MultiChartForm(_selectedTicker.Symbol, CreateSchwabStreamerClient);
+        multiChartForm.Show();
     }
 
     private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)

@@ -5,8 +5,7 @@ using OptionsTrader.Infrastructure.Schwab;
 
 namespace OptionsTrader.WinForms;
 
-// Which candle interval and session window a given ChartForm shows — each panel of the 3-panel
-// side-by-side layout uses a different one.
+// Which candle interval and session window a given ChartPanel shows.
 public enum ChartPanelMode
 {
     Hourly15,       // 1h candles, regular session only (9:30 AM - 4:00 PM ET)
@@ -14,40 +13,51 @@ public enum ChartPanelMode
     Fifteen_Full    // 15m candles, regular session + pre/after-hours (whatever Schwab returns)
 }
 
-// Standalone window showing a live candlestick chart of the underlying (spot), fed by Schwab's
-// streaming WebSocket API — completely separate from the existing polling-based Quotes tab.
-public partial class ChartForm : Form
+// One WebView2-hosted candlestick chart, fed by its own Schwab streaming connection. Embeddable
+// as a plain panel — MultiChartForm hosts 3 of these side by side.
+public class ChartPanel : Panel
 {
     private readonly string _symbol;
     private readonly SchwabStreamerClient _streamer;
     private readonly ChartPanelMode _mode;
+    private readonly Label _header;
     private WebView2 _webView = null!;
     private bool _closing;
 
-    public ChartForm(string symbol, SchwabStreamerClient streamer, ChartPanelMode mode)
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
+    public ChartPanel(string symbol, SchwabStreamerClient streamer, ChartPanelMode mode)
     {
         _symbol   = symbol;
         _streamer = streamer;
         _mode     = mode;
 
-        // Narrow/tall so 3 of these fit side by side on screen.
-        Text          = $"Live Chart — {symbol} ({ModeLabel(mode)})";
-        Width         = 580;
-        Height        = 620;
-        StartPosition = FormStartPosition.Manual;
+        _header = new Label
+        {
+            Dock      = DockStyle.Top,
+            Height    = 22,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = Color.White,
+            BackColor = Color.FromArgb(19, 23, 34),
+            Text      = $"{symbol} — {ModeLabel(mode)}"
+        };
 
         InitializeWebView();
+
+        Controls.Add(_webView);
+        Controls.Add(_header);
 
         _streamer.OnNewCandle    += Streamer_OnNewCandle;
         _streamer.OnDisconnected += Streamer_OnDisconnected;
 
-        FormClosing += ChartForm_FormClosing;
+        HandleCreated += async (s, e) => await LoadHistoryAndConnectAsync();
+        Disposed += async (s, e) => await StopStreamerAsync();
     }
 
     private static string ModeLabel(ChartPanelMode mode) => mode switch
     {
-        ChartPanelMode.Hourly15    => "1h",
-        ChartPanelMode.Fifteen_RTH => "15m RTH",
+        ChartPanelMode.Hourly15     => "1h",
+        ChartPanelMode.Fifteen_RTH  => "15m RTH",
         ChartPanelMode.Fifteen_Full => "15m RTH+Overnight",
         _ => mode.ToString()
     };
@@ -55,31 +65,24 @@ public partial class ChartForm : Form
     private void InitializeWebView()
     {
         _webView = new WebView2 { Dock = DockStyle.Fill };
-        Controls.Add(_webView);
-    }
-
-    protected override async void OnLoad(EventArgs e)
-    {
-        base.OnLoad(e);
-
-        await _webView.EnsureCoreWebView2Async();
-
-        var chartPath = Path.Combine(AppContext.BaseDirectory, "ChartAssets", "chart.html");
-        _webView.CoreWebView2.Navigate(new Uri(chartPath).AbsoluteUri);
-
-        _webView.CoreWebView2.NavigationCompleted += async (s, args) =>
-        {
-            if (!args.IsSuccess) return;
-            await LoadHistoryAndConnectAsync();
-        };
     }
 
     private async Task LoadHistoryAndConnectAsync()
     {
         try
         {
-            var history = await _streamer.GetTodaysHistoricalCandlesAsync(_symbol);
+            await _webView.EnsureCoreWebView2Async();
 
+            var chartPath = Path.Combine(AppContext.BaseDirectory, "ChartAssets", "chart.html");
+            var navDone = new TaskCompletionSource();
+            _webView.CoreWebView2.NavigationCompleted += (s, args) =>
+            {
+                if (args.IsSuccess) navDone.TrySetResult();
+            };
+            _webView.CoreWebView2.Navigate(new Uri(chartPath).AbsoluteUri);
+            await navDone.Task;
+
+            var history = await _streamer.GetTodaysHistoricalCandlesAsync(_symbol);
             if (history.Count > 0)
             {
                 var (intervalMinutes, rthOnly) = _mode switch
@@ -100,7 +103,8 @@ public partial class ChartForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Could not start the live chart for {_symbol}:\n\n{ex.Message}",
+            if (_closing) return;
+            MessageBox.Show($"Could not start the live chart for {_symbol} ({ModeLabel(_mode)}):\n\n{ex.Message}",
                 "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
@@ -163,13 +167,13 @@ public partial class ChartForm : Form
     private void Streamer_OnNewCandle(CandleData candle)
     {
         if (_closing || !IsHandleCreated) return;
-        Invoke(async () => await RunScriptAsync("actualizarUltimaVela", candle));
+        BeginInvoke(async () => await RunScriptAsync("actualizarUltimaVela", candle));
     }
 
     private void Streamer_OnDisconnected(string message)
     {
         if (_closing || !IsHandleCreated) return;
-        Invoke(() => Text = $"Live Chart — {_symbol} ({ModeLabel(_mode)}) — {message}");
+        BeginInvoke(() => _header.Text = $"{_symbol} — {ModeLabel(_mode)} — {message}");
     }
 
     // Serializes the payload as JSON and calls the given JS function with it — used for both
@@ -185,8 +189,6 @@ public partial class ChartForm : Form
     // NOT convert to the browser's local timezone. So instead of sending the true UTC instant, we
     // convert to US Eastern wall-clock time first, then lie and mark THAT as UTC — the digits the
     // chart displays then read as New York time, regardless of what timezone the PC is set to.
-    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-
     private static string ToChartJson(object payload)
     {
         static object Map(CandleData c)
@@ -211,7 +213,7 @@ public partial class ChartForm : Form
         };
     }
 
-    private async void ChartForm_FormClosing(object? sender, FormClosingEventArgs e)
+    private async Task StopStreamerAsync()
     {
         _closing = true;
         _streamer.OnNewCandle    -= Streamer_OnNewCandle;
