@@ -421,6 +421,12 @@ public class ChartPanel : Panel
     // cargarHistorial(velas[]) and actualizarUltimaVela(vela).
     private async Task RunScriptAsync(string jsFunction, object payload)
     {
+        // With the shared streamer, ticks for this panel's symbol can start arriving before this
+        // panel's own WebView2 has finished initializing (LoadHistoryAsync's
+        // EnsureCoreWebView2Async/Navigate hasn't completed yet) — just drop those, the historical
+        // seed load will catch the chart up once it's ready.
+        if (_webView.CoreWebView2 == null) return;
+
         // CandleData's C# PascalCase properties need to map to Lightweight Charts' lowercase
         // fields — remap explicitly rather than relying on serializer naming policy tricks.
         await _webView.CoreWebView2.ExecuteScriptAsync($"{jsFunction}({ToChartJson(payload)});");
