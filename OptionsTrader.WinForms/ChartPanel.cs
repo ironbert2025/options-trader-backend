@@ -113,6 +113,10 @@ public class ChartPanel : Panel
             if (_mode == ChartPanelMode.Fifteen_RTH)
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarBollinger(20, 2);");
 
+            // Gray shading for overnight/weekend gaps — only on the 15m RTH+Overnight panel.
+            if (_mode == ChartPanelMode.Fifteen_Full)
+                await _webView.CoreWebView2.ExecuteScriptAsync("configurarOvernightBands();");
+
             // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
             // 1h panel shows the full 10 days; the two 15m panels show the last 3 days.
             var requestDays = _mode == ChartPanelMode.Hourly15 ? 10 : 3;

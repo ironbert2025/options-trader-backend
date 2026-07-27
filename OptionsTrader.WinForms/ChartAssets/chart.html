@@ -138,6 +138,73 @@
     bollingerSeries.lower.setData(lowerData);
   }
 
+  // ---- Overnight shading (optional — only enabled on panels that call configurarOvernightBands) ----
+  // Draws a gray rectangle behind the candles for each gap between one day's RTH close (4:00 PM
+  // ET) and the next available day's RTH open (9:30 AM ET) — highlights overnight/weekend gaps,
+  // like the reference screenshot. Uses the Series Primitives API (custom canvas overlay), since
+  // Lightweight Charts has no built-in "shade this time range" feature.
+  let overnightBandsEnabled = false;
+
+  class OvernightBandsPrimitive {
+    constructor() { this._bands = []; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                ctx.fillStyle = 'rgba(150, 150, 150, 0.18)';
+                self._bands.forEach(b => {
+                  const x1 = ts.timeToCoordinate(b.from);
+                  const x2 = ts.timeToCoordinate(b.to);
+                  if (x1 == null || x2 == null) return;
+                  const left  = Math.min(x1, x2) * scope.horizontalPixelRatio;
+                  const width = Math.abs(x2 - x1) * scope.horizontalPixelRatio;
+                  ctx.fillRect(left, 0, width, scope.bitmapSize.height);
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const overnightPrimitive = new OvernightBandsPrimitive();
+
+  function configurarOvernightBands() {
+    overnightBandsEnabled = true;
+    candleSeries.attachPrimitive(overnightPrimitive);
+    recalcularOvernightBands();
+  }
+
+  function recalcularOvernightBands() {
+    if (!overnightBandsEnabled || allCandles.length === 0) return;
+
+    // Each candle's "time" is already ET wall-clock digits disguised as UTC (see C# ToChartJson)
+    // — read it back with the UTC getters to recover the real ET date/hour cheaply, no library.
+    const dayStart = t => {
+      const d = new Date(t * 1000);
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
+    };
+
+    const days = [...new Set(allCandles.map(c => dayStart(c.time)))].sort((a, b) => a - b);
+    const bands = [];
+    for (let i = 0; i < days.length - 1; i++) {
+      bands.push({
+        from: days[i] + 16 * 3600,        // 4:00 PM ET that day
+        to:   days[i + 1] + 9.5 * 3600,   // 9:30 AM ET the next available day
+      });
+    }
+    overnightPrimitive._bands = bands;
+  }
+
   // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
 
   // Replaces the whole dataset (used once at startup to seed historical candles).
@@ -147,6 +214,7 @@
     chart.timeScale().fitContent();
     recalcularSMAs();
     recalcularBollinger();
+    recalcularOvernightBands();
   }
 
   // Updates the still-forming candle (same Time as the last one) without redrawing everything.
@@ -155,6 +223,7 @@
     candleSeries.update(vela);
     recalcularSMAs();
     recalcularBollinger();
+    recalcularOvernightBands();
   }
 
   // A new candle period started — same call as update; Lightweight Charts appends automatically
@@ -164,6 +233,7 @@
     candleSeries.update(vela);
     recalcularSMAs();
     recalcularBollinger();
+    recalcularOvernightBands();
   }
 </script>
 </body>
