@@ -44,9 +44,14 @@ public class SchwabStreamerClient : IAsyncDisposable
     // — sending ADD before LOGIN is acknowledged gets rejected with "STREAM CONNECTION NOT FOUND".
     private TaskCompletionSource? _loginTcs;
 
+    // Every symbol ever passed to SubscribeChartEquity, so a reconnect can automatically
+    // re-ADD all of them on the new socket — Schwab drops all subscriptions on disconnect.
+    private readonly HashSet<string> _subscribedSymbols = new();
+
     // Fires once per candle update the streamer sends (Schwab's CHART_EQUITY service pushes a
-    // new/updated 1-minute candle for the subscribed symbol).
-    public event Action<CandleData>? OnNewCandle;
+    // new/updated 1-minute candle per subscribed symbol — one connection can carry several
+    // symbols at once, so the symbol is included for the caller to route on).
+    public event Action<string, CandleData>? OnNewCandle;
 
     // Fires when the socket disconnects unexpectedly (not via StopAsync), before a reconnect
     // attempt — useful for surfacing a status message in the UI.
@@ -222,11 +227,16 @@ public class SchwabStreamerClient : IAsyncDisposable
         await SendAsync(payload, ct);
     }
 
-    // Subscribes to 1-minute candles for the underlying. CHART_EQUITY field mapping confirmed
+    // Subscribes to 1-minute candles for one or more underlyings on this SAME connection —
+    // Schwab's CHART_EQUITY ADD accepts a comma-separated "keys" list, so all symbols share the
+    // one streaming connection Schwab allows per account. CHART_EQUITY field mapping confirmed
     // against live traffic (key/seq come back as named properties, not numbered fields):
     // 1=duplicate of seq (unused), 2=open, 3=high, 4=low, 5=close, 6=volume, 7=chartTime (epoch ms), 8=chartDay.
-    public Task SubscribeChartEquity(string symbol, CancellationToken ct = default)
+    public Task SubscribeChartEquity(IEnumerable<string> symbols, CancellationToken ct = default)
     {
+        var symbolList = symbols.ToList();
+        foreach (var s in symbolList) _subscribedSymbols.Add(s);
+
         var payload = new
         {
             requests = new[]
@@ -240,7 +250,7 @@ public class SchwabStreamerClient : IAsyncDisposable
                     SchwabClientCorrelId   = _schwabClientCorrelId,
                     parameters = new
                     {
-                        keys   = symbol,
+                        keys   = string.Join(",", symbolList),
                         fields = "0,1,2,3,4,5,6,7,8"
                     }
                 }
@@ -248,6 +258,9 @@ public class SchwabStreamerClient : IAsyncDisposable
         };
         return SendAsync(payload, ct);
     }
+
+    public Task SubscribeChartEquity(string symbol, CancellationToken ct = default) =>
+        SubscribeChartEquity(new[] { symbol }, ct);
 
     private int NextRequestId() => Interlocked.Increment(ref _requestId);
 
@@ -357,6 +370,9 @@ public class SchwabStreamerClient : IAsyncDisposable
 
                 foreach (var item in content.EnumerateArray())
                 {
+                    var symbol = item.TryGetProperty("key", out var keyEl) ? keyEl.GetString() : null;
+                    if (string.IsNullOrEmpty(symbol)) continue;
+
                     var candle = new CandleData
                     {
                         Open  = GetDecimal(item, "2"),
@@ -367,7 +383,7 @@ public class SchwabStreamerClient : IAsyncDisposable
                             ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime
                             : DateTime.UtcNow
                     };
-                    OnNewCandle?.Invoke(candle);
+                    OnNewCandle?.Invoke(symbol, candle);
                 }
             }
         }
@@ -391,8 +407,9 @@ public class SchwabStreamerClient : IAsyncDisposable
             try
             {
                 await ConnectAsync();
-                return; // caller must re-subscribe (SubscribeChartEquity) after reconnecting —
-                        // ChartForm's OnDisconnected handler is responsible for that.
+                if (_subscribedSymbols.Count > 0)
+                    await SubscribeChartEquity(_subscribedSymbols.ToList());
+                return;
             }
             catch
             {

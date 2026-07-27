@@ -368,8 +368,9 @@ public class ChartPanel : Panel
     // Every 1-minute tick from the shared streamer lands here for all 3 panels. Each panel
     // decides independently whether the tick belongs to its current bucket (extend it) or starts
     // a new one (append) — this is what lets one WebSocket connection feed 3 different intervals.
-    private void Streamer_OnNewCandle(CandleData candle)
+    private void Streamer_OnNewCandle(string symbol, CandleData candle)
     {
+        if (symbol != _symbol) return; // one shared connection carries all 4 tickers — ignore ticks for the others
         if (_closing || !IsHandleCreated) return;
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);

@@ -2,10 +2,11 @@ using OptionsTrader.Infrastructure.Schwab;
 
 namespace OptionsTrader.WinForms;
 
-// Single window hosting the 3 live-chart panels (1h / 15m RTH / 15m RTH+Overnight) side by side
-// horizontally. All 3 share ONE Schwab streaming connection/subscription — Schwab's CHART_EQUITY
-// service only ever pushes 1-minute candles regardless of the interval you display, so each
-// panel just aggregates the same incoming ticks into its own bucket size independently.
+// Single window (one per ticker) hosting the 3 live-chart panels (1h / 15m RTH / 15m
+// RTH+Overnight) side by side horizontally. The SchwabStreamerClient passed in is shared across
+// EVERY open ticker window in the app — Form1 owns connecting it once and subscribing it to all
+// configured tickers (Schwab allows only one streaming connection per account); each ChartPanel
+// filters the shared OnNewCandle stream down to its own symbol before aggregating.
 public class MultiChartForm : Form
 {
     private readonly SchwabStreamerClient _streamer;
@@ -205,24 +206,8 @@ public class MultiChartForm : Form
         Controls.Add(layout);
         Controls.Add(toolbar);
 
-        FormClosing += async (s, e) => await _streamer.DisposeAsync();
-    }
-
-    protected override async void OnLoad(EventArgs e)
-    {
-        base.OnLoad(e);
-
-        // Connect + subscribe ONCE for all 3 panels — their OnNewCandle handlers are already
-        // wired up (each ChartPanel subscribes in its own constructor, which already ran).
-        try
-        {
-            await _streamer.ConnectAsync();
-            await _streamer.SubscribeChartEquity(_symbol);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Could not start live streaming for {_symbol}:\n\n{ex.Message}",
-                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        // The streamer is shared across every open ticker window (Schwab allows only one
+        // streaming connection per account) — Form1 owns connecting/subscribing/disposing it
+        // for the app's whole lifetime, not this window.
     }
 }

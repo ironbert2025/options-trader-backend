@@ -40,7 +40,13 @@ public partial class Form1 : Form
     private readonly List<Button> _coordsButtons = new();
 
     private TickerEntry? _selectedTicker;
-    private MultiChartForm? _liveChartForm; // at most one at a time — Schwab allows only one streaming connection per account
+
+    // Live-chart streaming: ONE SchwabStreamerClient for the whole app (Schwab allows only one
+    // streaming connection per account) feeding as many per-ticker chart windows as are open, at
+    // most one window per symbol. Created lazily on the first "Live Chart" click.
+    private SchwabStreamerClient? _liveStreamer;
+    private readonly Dictionary<string, MultiChartForm> _liveChartForms = new();
+
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
@@ -51,7 +57,11 @@ public partial class Form1 : Form
     public Form1()
     {
         InitializeComponent();
-        FormClosing += (s, e) => { _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose(); };
+        FormClosing += async (s, e) =>
+        {
+            _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose();
+            if (_liveStreamer != null) await _liveStreamer.DisposeAsync();
+        };
 
         // Start with blank placeholder rows (no data, just empty cells) so the grids look like
         // ready spreadsheets instead of a solid gray box before the user picks a ticker.
@@ -1283,25 +1293,22 @@ public partial class Form1 : Form
             OnSchwabTokenRenewed);
     }
 
-    // Opens a new live-chart window (candles only, streamed via WebSocket) for the currently
+    // Opens a live-chart window (candles only, streamed via WebSocket) for the currently
     // selected ticker. Fully separate from the existing polling-based Quotes tab — doesn't touch
-    // any of that state.
-    private void BtnLiveChart_Click(object? sender, EventArgs e)
+    // any of that state. Reuses one shared streaming connection across all 4 tickers.
+    private async void BtnLiveChart_Click(object? sender, EventArgs e)
     {
-        // Schwab only allows ONE streaming connection per account — a second concurrent
-        // SchwabStreamerClient (from clicking this button again without closing the first
-        // window) makes both connections repeatedly kick each other with "Invalid Service:
-        // another connection for this username and password" and never recover. Reuse/refocus
-        // the existing window instead of opening a second one.
-        if (_liveChartForm is { IsDisposed: false })
-        {
-            _liveChartForm.Activate();
-            return;
-        }
-
         if (_selectedTicker == null)
         {
             MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        // Already have a window open for this symbol — just bring it forward instead of
+        // touching the streamer again.
+        if (_liveChartForms.TryGetValue(_selectedTicker.Symbol, out var existing) && !existing.IsDisposed)
+        {
+            existing.Activate();
             return;
         }
 
@@ -1312,13 +1319,42 @@ public partial class Form1 : Form
             return;
         }
 
-        // One window, 3 chart panels side by side (1h / 15m RTH / 15m RTH+Overnight) — each
-        // panel gets its own streamer connection/subscription.
-        var streamer      = CreateSchwabStreamerClient();
-        var multiChartForm = new MultiChartForm(_selectedTicker.Symbol, streamer);
-        multiChartForm.FormClosed += (s, e2) => _liveChartForm = null;
-        _liveChartForm = multiChartForm;
+        try
+        {
+            await EnsureLiveStreamerReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        // One window, 3 chart panels side by side (1h / 15m RTH / 15m RTH+Overnight), all fed by
+        // the single shared streamer — SubscribeChartEquity was already called for every ticker
+        // in EnsureLiveStreamerReadyAsync, so this window just needs to filter for its symbol.
+        var symbol = _selectedTicker.Symbol;
+        var multiChartForm = new MultiChartForm(symbol, _liveStreamer!);
+        multiChartForm.FormClosed += (s, e2) => _liveChartForms.Remove(symbol);
+        _liveChartForms[symbol] = multiChartForm;
         multiChartForm.Show();
+    }
+
+    // Lazily creates and connects the single shared streamer, then subscribes it to every
+    // configured ticker (SPY/QQQ/TSLA/AAPL, from TickerSettingsStore) in one ADD request — cheap
+    // to call repeatedly, does nothing once already connected.
+    private async Task EnsureLiveStreamerReadyAsync()
+    {
+        if (_liveStreamer != null) return;
+
+        var streamer = CreateSchwabStreamerClient();
+        await streamer.ConnectAsync();
+
+        var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).Distinct().ToList();
+        if (symbols.Count == 0) symbols = new List<string> { _selectedTicker!.Symbol };
+        await streamer.SubscribeChartEquity(symbols);
+
+        _liveStreamer = streamer;
     }
 
     private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)
