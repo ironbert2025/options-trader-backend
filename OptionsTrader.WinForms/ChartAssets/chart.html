@@ -92,6 +92,51 @@
     else allCandles.push(vela);
   }
 
+  // ---- Bollinger Bands overlay (optional — only enabled on panels that call configurarBollinger) ----
+
+  let bollingerConfig = null; // { period, mult }
+  let bollingerSeries = null; // { upper, middle, lower }
+
+  function configurarBollinger(periodo, desviaciones) {
+    bollingerConfig = { period: periodo, mult: desviaciones };
+    if (!bollingerSeries) {
+      const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false };
+      bollingerSeries = {
+        upper:  chart.addLineSeries({ ...opts, color: '#787b86' }),
+        middle: chart.addLineSeries({ ...opts, color: '#787b86', lineStyle: LightweightCharts.LineStyle.Dashed }),
+        lower:  chart.addLineSeries({ ...opts, color: '#787b86' }),
+      };
+    }
+    recalcularBollinger();
+  }
+
+  function recalcularBollinger() {
+    if (!bollingerConfig || !bollingerSeries) return;
+    const { period: p, mult } = bollingerConfig;
+    if (allCandles.length < p) {
+      bollingerSeries.upper.setData([]);
+      bollingerSeries.middle.setData([]);
+      bollingerSeries.lower.setData([]);
+      return;
+    }
+    const upperData = [], midData = [], lowerData = [];
+    for (let i = p - 1; i < allCandles.length; i++) {
+      let sum = 0;
+      for (let j = i - p + 1; j <= i; j++) sum += allCandles[j].close;
+      const mean = sum / p;
+      let variance = 0;
+      for (let j = i - p + 1; j <= i; j++) variance += Math.pow(allCandles[j].close - mean, 2);
+      const stdDev = Math.sqrt(variance / p);
+      const t = allCandles[i].time;
+      upperData.push({ time: t, value: mean + mult * stdDev });
+      midData.push({ time: t, value: mean });
+      lowerData.push({ time: t, value: mean - mult * stdDev });
+    }
+    bollingerSeries.upper.setData(upperData);
+    bollingerSeries.middle.setData(midData);
+    bollingerSeries.lower.setData(lowerData);
+  }
+
   // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
 
   // Replaces the whole dataset (used once at startup to seed historical candles).
@@ -100,6 +145,7 @@
     candleSeries.setData(allCandles);
     chart.timeScale().fitContent();
     recalcularSMAs();
+    recalcularBollinger();
   }
 
   // Updates the still-forming candle (same Time as the last one) without redrawing everything.
@@ -107,6 +153,7 @@
     upsertCandle(vela);
     candleSeries.update(vela);
     recalcularSMAs();
+    recalcularBollinger();
   }
 
   // A new candle period started — same call as update; Lightweight Charts appends automatically
@@ -115,6 +162,7 @@
     upsertCandle(vela);
     candleSeries.update(vela);
     recalcularSMAs();
+    recalcularBollinger();
   }
 </script>
 </body>

@@ -109,6 +109,10 @@ public class ChartPanel : Panel
             if (_mode == ChartPanelMode.Hourly15)
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarSMAs([20,40]);");
 
+            // Bollinger Bands (20, 2 std devs) — only on the 15m RTH panel for now.
+            if (_mode == ChartPanelMode.Fifteen_RTH)
+                await _webView.CoreWebView2.ExecuteScriptAsync("configurarBollinger(20, 2);");
+
             // 1h RTH panel shows the last 7 days; the two 15m panels show the last 3 days.
             var days = _mode == ChartPanelMode.Hourly15 ? 7 : 3;
             var history = await _streamer.GetHistoricalCandlesAsync(_symbol, days);
