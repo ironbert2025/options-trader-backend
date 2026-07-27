@@ -40,6 +40,7 @@ public partial class Form1 : Form
     private readonly List<Button> _coordsButtons = new();
 
     private TickerEntry? _selectedTicker;
+    private MultiChartForm? _liveChartForm; // at most one at a time — Schwab allows only one streaming connection per account
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
@@ -1287,6 +1288,17 @@ public partial class Form1 : Form
     // any of that state.
     private void BtnLiveChart_Click(object? sender, EventArgs e)
     {
+        // Schwab only allows ONE streaming connection per account — a second concurrent
+        // SchwabStreamerClient (from clicking this button again without closing the first
+        // window) makes both connections repeatedly kick each other with "Invalid Service:
+        // another connection for this username and password" and never recover. Reuse/refocus
+        // the existing window instead of opening a second one.
+        if (_liveChartForm is { IsDisposed: false })
+        {
+            _liveChartForm.Activate();
+            return;
+        }
+
         if (_selectedTicker == null)
         {
             MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1304,6 +1316,8 @@ public partial class Form1 : Form
         // panel gets its own streamer connection/subscription.
         var streamer      = CreateSchwabStreamerClient();
         var multiChartForm = new MultiChartForm(_selectedTicker.Symbol, streamer);
+        multiChartForm.FormClosed += (s, e2) => _liveChartForm = null;
+        _liveChartForm = multiChartForm;
         multiChartForm.Show();
     }
 
