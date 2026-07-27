@@ -113,10 +113,20 @@ public class SchwabStreamerClient : IAsyncDisposable
 
     // Seeds the chart with the last `days` days of 1-minute candles so it isn't empty when first
     // opened (the streamer only pushes candles going forward from the moment it connects).
+    //
+    // Uses explicit startDate/endDate (epoch ms) instead of periodType=day&period=N — Schwab
+    // documents that period-based day ranges compute startDate as "endDate - period, EXCLUDING
+    // weekends and holidays", which silently drops Saturday/Sunday overnight-session candles no
+    // matter how large `days` is. Explicit start/end dates are a real calendar range, so the
+    // weekend overnight session (now part of Schwab's extended trading hours) comes through.
     public async Task<List<CandleData>> GetHistoricalCandlesAsync(string symbol, int days, CancellationToken ct = default)
     {
         var token = await GetTokenAsync();
-        var url = $"{PriceHistoryUrl}?symbol={symbol}&periodType=day&period={days}&frequencyType=minute&frequency=1";
+        var endDate   = DateTimeOffset.UtcNow;
+        var startDate = endDate.AddDays(-days);
+        var url = $"{PriceHistoryUrl}?symbol={symbol}&periodType=day&frequencyType=minute&frequency=1" +
+                  $"&startDate={startDate.ToUnixTimeMilliseconds()}&endDate={endDate.ToUnixTimeMilliseconds()}" +
+                  $"&needExtendedHoursData=true";
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
