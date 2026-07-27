@@ -9,11 +9,9 @@ namespace OptionsTrader.Infrastructure.Schwab;
 // it. Handles: fetching streamer connection info via REST, connecting, logging in, subscribing
 // to CHART_EQUITY (underlying candles), and reconnecting with backoff if the socket drops.
 //
-// IMPORTANT: Schwab's streaming protocol (message shapes for LOGIN/ADD requests and the
-// CHART_EQUITY response fields) is reconstructed here from Schwab's publicly documented Trader
-// API streaming spec, but has NOT been exercised against a live connection in this environment —
-// treat the exact JSON field names/request numbers as a first draft to validate and adjust
-// against real traffic (e.g. via Save Dumps-style logging) the first time this runs live.
+// Message shapes (LOGIN/ADD request/response, CHART_EQUITY content field numbers) have been
+// confirmed against live traffic — see LogRawMessage/ws_raw.log for the raw dump this was
+// validated with.
 public class SchwabStreamerClient : IAsyncDisposable
 {
     private const string UserPreferenceUrl = "https://api.schwabapi.com/trader/v1/userPreference";
@@ -194,9 +192,9 @@ public class SchwabStreamerClient : IAsyncDisposable
         await SendAsync(payload, ct);
     }
 
-    // Subscribes to 1-minute candles for the underlying. Schwab's CHART_EQUITY fields (per the
-    // documented field-number scheme): 0=key/symbol, 1=open, 2=high, 3=low, 4=close, 5=volume,
-    // 6=sequence, 7=chartTime (epoch ms), 8=chartDay.
+    // Subscribes to 1-minute candles for the underlying. CHART_EQUITY field mapping confirmed
+    // against live traffic (key/seq come back as named properties, not numbered fields):
+    // 1=duplicate of seq (unused), 2=open, 3=high, 4=low, 5=close, 6=volume, 7=chartTime (epoch ms), 8=chartDay.
     public Task SubscribeChartEquity(string symbol, CancellationToken ct = default)
     {
         var payload = new
@@ -331,10 +329,10 @@ public class SchwabStreamerClient : IAsyncDisposable
                 {
                     var candle = new CandleData
                     {
-                        Open  = GetDecimal(item, "1"),
-                        High  = GetDecimal(item, "2"),
-                        Low   = GetDecimal(item, "3"),
-                        Close = GetDecimal(item, "4"),
+                        Open  = GetDecimal(item, "2"),
+                        High  = GetDecimal(item, "3"),
+                        Low   = GetDecimal(item, "4"),
+                        Close = GetDecimal(item, "5"),
                         Time  = item.TryGetProperty("7", out var t) && t.TryGetInt64(out var epochMs)
                             ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime
                             : DateTime.UtcNow
