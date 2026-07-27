@@ -152,6 +152,15 @@ public class ChartPanel : Panel
             {
                 var filtered = FilterSession(history, _rthOnly);
                 var aggregated = AggregateToInterval(filtered, _intervalMinutes, _rthOnly);
+
+                // 1h panel: persist today's fetch to disk and merge with everything saved from
+                // previous sessions, so SMA 100/200 can accumulate beyond Schwab's 10-day limit.
+                if (_mode == ChartPanelMode.Hourly15 && aggregated.Count > 0)
+                {
+                    HourlyCandleStore.AppendIfMissing(_symbol, aggregated);
+                    aggregated = HourlyCandleStore.Load(_symbol);
+                }
+
                 if (aggregated.Count > 0)
                 {
                     await RunScriptAsync("cargarHistorial", aggregated);
