@@ -75,7 +75,9 @@ public class MultiChartForm : Form
         };
         btnDzSz.Click += async (s, e) =>
         {
-            if (overnightPanel != null) await overnightPanel.ArmDzSzModeAsync();
+            if (overnightPanel == null) return;
+            var on = await overnightPanel.ToggleDzSzModeAsync();
+            btnDzSz.BackColor = on ? Color.LightGreen : SystemColors.Control;
         };
         toolbar.Controls.Add(btnDzSz, 2, 0);
 

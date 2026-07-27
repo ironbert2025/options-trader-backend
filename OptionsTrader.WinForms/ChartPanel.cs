@@ -88,13 +88,14 @@ public class ChartPanel : Panel
         _webView = new WebView2 { Dock = DockStyle.Fill };
     }
 
-    // Arms DZ/SZ drawing mode: next click on this panel's chart draws the green Demand Zone
-    // line, the click after that draws the red Supply Zone line. Called from the "DZ/SZ" toolbar
-    // button in MultiChartForm, wired to whichever panel should support it.
-    public async Task ArmDzSzModeAsync()
+    // Toggles DZ/SZ drawing mode on/off. While on, every pair of clicks on this panel's chart
+    // draws a new demand (green) + supply (red) line pair — keeps going until toggled off.
+    // Called from the "DZ/SZ" toolbar button in MultiChartForm. Returns the new on/off state.
+    public async Task<bool> ToggleDzSzModeAsync()
     {
-        if (_webView.CoreWebView2 == null) return;
-        await _webView.CoreWebView2.ExecuteScriptAsync("activarDZSZ();");
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarDZSZ();");
+        return result == "true";
     }
 
     // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is

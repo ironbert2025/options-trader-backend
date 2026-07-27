@@ -96,10 +96,13 @@
 
   const zoneLinesPrimitive = new ZoneLinesPrimitive();
 
+  // Toggle: one click on the button turns drawing mode ON — every 2 clicks on the chart from then
+  // on draws a new demand+supply pair, forever, until the button is pressed again to turn it OFF.
   function activarDZSZ() {
     if (!dzSzAttached) { candleSeries.attachPrimitive(zoneLinesPrimitive); dzSzAttached = true; }
-    dzSzArmed = true;
+    dzSzArmed = !dzSzArmed;
     dzSzNextIsSupply = false;
+    return dzSzArmed;
   }
 
   chart.subscribeClick(param => {
@@ -115,7 +118,6 @@
       price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
     }));
 
-    if (dzSzNextIsSupply) dzSzArmed = false;
     dzSzNextIsSupply = !dzSzNextIsSupply;
   });
 
