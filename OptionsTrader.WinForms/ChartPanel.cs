@@ -105,9 +105,9 @@ public class ChartPanel : Panel
             _webView.CoreWebView2.Navigate(new Uri(chartPath).AbsoluteUri);
             await navDone.Task;
 
-            // SMA 20/40 overlay — only on the 1h panel for now.
+            // SMA 20/40/100/200 overlay — only on the 1h panel for now.
             if (_mode == ChartPanelMode.Hourly15)
-                await _webView.CoreWebView2.ExecuteScriptAsync("configurarSMAs([20,40]);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configurarSMAs([20,40,100,200]);");
 
             // Bollinger Bands (20, 2 std devs) — only on the 15m RTH panel for now.
             if (_mode == ChartPanelMode.Fifteen_RTH)

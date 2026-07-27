@@ -55,14 +55,15 @@
   let smaSeries = {};            // period -> LineSeries
   let smaPeriods = [];
 
-  const smaColors = { 20: '#f5a623', 40: '#4a90e2', 100: '#bd10e0', 200: '#ffffff' };
+  const smaColors = { 20: '#f5a623', 40: '#ef5350', 100: '#26a69a', 200: '#a259ff' };
+  const smaWidths = { 20: 1, 40: 1, 100: 2, 200: 2 };
 
   function configurarSMAs(periodos) {
     periodos.forEach(p => {
       if (!smaSeries[p]) {
         smaSeries[p] = chart.addLineSeries({
           color: smaColors[p] || '#888888',
-          lineWidth: 1,
+          lineWidth: smaWidths[p] || 1,
           priceLineVisible: false,
           lastValueVisible: false,
         });
