@@ -113,18 +113,13 @@ public class ChartPanel : Panel
             if (_mode == ChartPanelMode.Fifteen_RTH)
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarBollinger(20, 2);");
 
-            // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day — 7 is
-            // NOT valid (400 Bad Request). Request 10 (the smallest valid value >= 7) for the 1h
-            // panel and trim to the last 7 trading days client-side; the 15m panels' period=3 is
-            // already a valid value, no trimming needed there.
+            // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
+            // 1h panel shows the full 10 days; the two 15m panels show the last 3 days.
             var requestDays = _mode == ChartPanelMode.Hourly15 ? 10 : 3;
             var history = await _streamer.GetHistoricalCandlesAsync(_symbol, requestDays);
             if (history.Count > 0)
             {
                 var filtered = FilterSession(history, _rthOnly);
-                if (_mode == ChartPanelMode.Hourly15)
-                    filtered = TrimToLastNDays(filtered, 7);
-
                 var aggregated = AggregateToInterval(filtered, _intervalMinutes, _rthOnly);
                 if (aggregated.Count > 0)
                 {
@@ -144,22 +139,6 @@ public class ChartPanel : Panel
             MessageBox.Show($"Could not load the live chart for {_symbol} ({ModeLabel(_mode)}):\n\n{ex.Message}",
                 "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-    }
-
-    // Keeps only candles from the most recent N distinct trading days (ET calendar date)
-    // present in the data — used to trim Schwab's period=10 response down to "last 7 days".
-    private static List<CandleData> TrimToLastNDays(List<CandleData> candles, int days)
-    {
-        var keepDates = candles
-            .Select(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date)
-            .Distinct()
-            .OrderByDescending(d => d)
-            .Take(days)
-            .ToHashSet();
-
-        return candles
-            .Where(c => keepDates.Contains(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date))
-            .ToList();
     }
 
     // rthOnly keeps only 9:30 AM - 4:00 PM ET on each day present in the data (regular session);
