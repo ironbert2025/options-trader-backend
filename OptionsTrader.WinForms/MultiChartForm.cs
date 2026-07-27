@@ -50,6 +50,7 @@ public class MultiChartForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         ChartPanel? overnightPanel = null;
+        ChartPanel? hourlyPanel = null;
         var modes = new[] { ChartPanelMode.Hourly15, ChartPanelMode.Fifteen_RTH, ChartPanelMode.Fifteen_Full };
         for (int i = 0; i < modes.Length; i++)
         {
@@ -62,7 +63,34 @@ public class MultiChartForm : Form
             };
             layout.Controls.Add(panel, i, 0);
             if (modes[i] == ChartPanelMode.Fifteen_Full) overnightPanel = panel;
+            if (modes[i] == ChartPanelMode.Hourly15) hourlyPanel = panel;
         }
+
+        // Push: captures the 1h chart (WebView2 native preview capture) and sends it to the
+        // configured Telegram channel. Lives in the toolbar column above that panel (column 0).
+        var btnPush = new Button
+        {
+            Text     = "Push",
+            Anchor   = AnchorStyles.Top | AnchorStyles.Left,
+            Location = new Point(0, 4),
+            Size     = new Size(70, 24)
+        };
+        btnPush.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            btnPush.Enabled = false;
+            try
+            {
+                var (ok, detail) = await hourlyPanel.PushToTelegramAsync();
+                MessageBox.Show(ok ? "Chart enviado a Telegram." : $"Falló el envío:\n{detail}",
+                    "Push — Telegram", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+            }
+            finally
+            {
+                btnPush.Enabled = true;
+            }
+        };
+        toolbar.Controls.Add(btnPush, 0, 0);
 
         // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the
         // toolbar column above that panel (column index 2, matching Fifteen_Full's position in

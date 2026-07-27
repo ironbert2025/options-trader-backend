@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using OptionsTrader.Application.DTOs.Streaming;
 using OptionsTrader.Infrastructure.Schwab;
@@ -113,6 +114,35 @@ public class ChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync("limpiarDibujos();");
+    }
+
+    // Captures this panel's chart as a PNG (via WebView2's native preview capture — pixel-exact,
+    // doesn't depend on the window being visible/on top, unlike a screen-coordinate capture) and
+    // pushes it to the configured Telegram channel.
+    public async Task<(bool Ok, string Detail)> PushToTelegramAsync()
+    {
+        if (_webView.CoreWebView2 == null) return (false, "Chart not loaded yet.");
+
+        try
+        {
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_{ModeLabel(_mode)}_{DateTime.Now:yyyyMMdd_HHmmss}.png".Replace(' ', '_'));
+
+            using (var stream = File.Create(path))
+            {
+                await _webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
+            }
+
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            var caption = $"{_symbol} — {ModeLabel(_mode)} — {DateTime.Now:HH:mm:ss}";
+            var (ok, detail, _) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, caption);
+            return (ok, detail);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
     }
 
     // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is
