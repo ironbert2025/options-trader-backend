@@ -18,7 +18,7 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 1740;
-        Height        = 688;
+        Height        = 714;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -27,7 +27,7 @@ public class MultiChartForm : Form
         var toolbar = new TableLayoutPanel
         {
             Dock        = DockStyle.Top,
-            Height      = 64,
+            Height      = 90,
             ColumnCount = 3,
             RowCount    = 1,
             Padding     = new Padding(6, 4, 6, 0)
@@ -104,6 +104,52 @@ public class MultiChartForm : Form
             crossHost.Controls.Add(btnUp);
             crossHost.Controls.Add(btnDown);
         }
+
+        // T-Line / H-Line drawing tools, also on the 1h panel — placed to the right of the 8
+        // Cross-SMA toggles, one on each row so they line up visually with that grid.
+        var btnTLine = new Button
+        {
+            Text     = "T-Line",
+            Location = new Point(periods.Length * 42 + 6, 2),
+            Size     = new Size(60, 24)
+        };
+        btnTLine.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            var on = await hourlyPanel.ToggleTLineModeAsync();
+            btnTLine.BackColor = on ? Color.Orange : SystemColors.Control;
+        };
+
+        var btnHLine = new Button
+        {
+            Text     = "H-Line",
+            Location = new Point(periods.Length * 42 + 6, 30),
+            Size     = new Size(60, 24)
+        };
+        btnHLine.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            var on = await hourlyPanel.ToggleHLineModeAsync();
+            btnHLine.BackColor = on ? Color.LightSalmon : SystemColors.Control;
+        };
+
+        var btnHourlyClear = new Button
+        {
+            Text     = "Clear",
+            Location = new Point(periods.Length * 42 + 6, 58),
+            Size     = new Size(60, 24)
+        };
+        btnHourlyClear.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            await hourlyPanel.ClearDrawingsAsync();
+            btnTLine.BackColor = SystemColors.Control;
+            btnHLine.BackColor = SystemColors.Control;
+        };
+
+        crossHost.Controls.Add(btnTLine);
+        crossHost.Controls.Add(btnHLine);
+        crossHost.Controls.Add(btnHourlyClear);
         toolbar.Controls.Add(crossHost, 0, 0);
 
         // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the

@@ -190,6 +190,15 @@
     rectanglesPrimitive._preview = null;
     rectArmed = false;
     rectPending = null;
+
+    tLinePrimitive._lines = [];
+    tLinePrimitive._preview = null;
+    tLineArmed = false;
+    tLinePending = null;
+
+    hLinePrimitive._segments = [];
+    hLineArmed = false;
+
     forceRepaint();
   }
 
@@ -226,21 +235,142 @@
         forceRepaint();
       }
     }
+
+    if (tLineArmed) {
+      if (!tLinePending) {
+        tLinePending = { time: param.time, price };
+      } else {
+        tLinePrimitive._lines.push({ t1: tLinePending.time, p1: tLinePending.price, t2: param.time, p2: price });
+        tLinePrimitive._preview = null;
+        tLinePending = null;
+        forceRepaint();
+      }
+    }
+
+    if (hLineArmed) {
+      hLinePrimitive._segments.push({ time: param.time, price });
+      forceRepaint();
+    }
   });
 
-  // Live preview of the rectangle while the mouse moves between the 1st and 2nd click.
+  // Live preview of the rectangle/T-Line while the mouse moves between the 1st and 2nd click.
   chart.subscribeCrosshairMove(param => {
     if (!rectArmed || !rectPending) {
       if (rectanglesPrimitive._preview) { rectanglesPrimitive._preview = null; forceRepaint(); }
-      return;
+    } else if (param.point && param.time !== undefined) {
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price != null) {
+        rectanglesPrimitive._preview = { t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price };
+        forceRepaint();
+      }
     }
-    if (!param.point || param.time === undefined) return;
-    const price = candleSeries.coordinateToPrice(param.point.y);
-    if (price == null) return;
 
-    rectanglesPrimitive._preview = { t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price };
-    forceRepaint();
+    if (!tLineArmed || !tLinePending) {
+      if (tLinePrimitive._preview) { tLinePrimitive._preview = null; forceRepaint(); }
+    } else if (param.point && param.time !== undefined) {
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price != null) {
+        tLinePrimitive._preview = { t1: tLinePending.time, p1: tLinePending.price, t2: param.time, p2: price };
+        forceRepaint();
+      }
+    }
   });
+
+  // ---- T-Line tool: orange line segment between 2 clicks (not extended to the edges) ----
+
+  class TLinePrimitive {
+    constructor() { this._lines = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2 }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const drawLine = (l, alpha) => {
+                  const x1 = ts.timeToCoordinate(l.t1);
+                  const x2 = ts.timeToCoordinate(l.t2);
+                  const y1 = candleSeries.priceToCoordinate(l.p1);
+                  const y2 = candleSeries.priceToCoordinate(l.p2);
+                  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+                  ctx.strokeStyle = `rgba(255, 152, 0, ${alpha})`; // orange
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x1 * scope.horizontalPixelRatio, y1 * scope.verticalPixelRatio);
+                  ctx.lineTo(x2 * scope.horizontalPixelRatio, y2 * scope.verticalPixelRatio);
+                  ctx.stroke();
+                };
+                self._lines.forEach(l => drawLine(l, 1));
+                if (self._preview) drawLine(self._preview, 0.6);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const tLinePrimitive = new TLinePrimitive();
+  let tLineAttached = false;
+  let tLineArmed = false;
+  let tLinePending = null; // { time, price } of the first click of the current segment
+
+  function activarTLine() {
+    if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }
+    tLineArmed = !tLineArmed;
+    tLinePending = null;
+    return tLineArmed;
+  }
+
+  // ---- H-Line tool: red line from the click point to the right edge of the chart ----
+
+  class HLinePrimitive {
+    constructor() { this._segments = []; this._chart = null; } // [{ time, price }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                self._segments.forEach(seg => {
+                  const x = ts.timeToCoordinate(seg.time);
+                  const y = candleSeries.priceToCoordinate(seg.price);
+                  if (x == null || y == null) return;
+                  ctx.strokeStyle = '#ef5350'; // red
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const hLinePrimitive = new HLinePrimitive();
+  let hLineAttached = false;
+  let hLineArmed = false;
+
+  function activarHLine() {
+    if (!hLineAttached) { candleSeries.attachPrimitive(hLinePrimitive); hLineAttached = true; }
+    hLineArmed = !hLineArmed;
+    return hLineArmed;
+  }
 
   // ---- SMA overlay (optional — only enabled on panels that call configurarSMAs) ----
 

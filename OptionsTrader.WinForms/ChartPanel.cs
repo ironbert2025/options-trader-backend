@@ -118,8 +118,26 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Clears every DZ/SZ pair and every rectangle drawn on this panel, and turns both drawing
-    // modes off.
+    // Toggles T-Line drawing mode on/off. While on, every pair of clicks draws a new orange line
+    // segment between them (not extended to the chart edges). Same toggle pattern as Rect.
+    public async Task<bool> ToggleTLineModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarTLine();");
+        return result == "true";
+    }
+
+    // Toggles H-Line drawing mode on/off. While on, every click draws a new red horizontal line
+    // from the click point to the right edge of the chart. Same toggle pattern as DZ/SZ.
+    public async Task<bool> ToggleHLineModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarHLine();");
+        return result == "true";
+    }
+
+    // Clears every DZ/SZ pair, rectangle, T-Line and H-Line drawn on this panel, and turns all
+    // drawing modes off.
     public async Task ClearDrawingsAsync()
     {
         if (_webView.CoreWebView2 == null) return;
