@@ -105,10 +105,12 @@ public class ChartPanel : Panel
             _webView.CoreWebView2.Navigate(new Uri(chartPath).AbsoluteUri);
             await navDone.Task;
 
-            var history = await _streamer.GetTodaysHistoricalCandlesAsync(_symbol);
+            // 1h RTH panel shows the last 7 days; the two 15m panels show the last 3 days.
+            var days = _mode == ChartPanelMode.Hourly15 ? 7 : 3;
+            var history = await _streamer.GetHistoricalCandlesAsync(_symbol, days);
             if (history.Count > 0)
             {
-                var aggregated = AggregateToInterval(FilterLastFriday(history, _rthOnly), _intervalMinutes, _rthOnly);
+                var aggregated = AggregateToInterval(FilterSession(history, _rthOnly), _intervalMinutes, _rthOnly);
                 if (aggregated.Count > 0)
                 {
                     await RunScriptAsync("cargarHistorial", aggregated);
@@ -129,23 +131,21 @@ public class ChartPanel : Panel
         }
     }
 
-    // Keeps only candles from the most recent Friday (relative to now, ET). rthOnly restricts to
-    // 9:30 AM - 4:00 PM ET (regular session); otherwise keeps the whole calendar day (regular +
-    // whatever pre/after-hours Schwab's pricehistory response included).
-    private static List<CandleData> FilterLastFriday(List<CandleData> candles, bool rthOnly)
+    // rthOnly keeps only 9:30 AM - 4:00 PM ET on each day present in the data (regular session);
+    // otherwise keeps everything Schwab returned (regular + pre/after-hours). No longer
+    // restricted to a single day — covers however many days were requested.
+    private static List<CandleData> FilterSession(List<CandleData> candles, bool rthOnly)
     {
-        var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
-        var daysSinceFriday = ((int)nowEastern.DayOfWeek - (int)DayOfWeek.Friday + 7) % 7;
-        var lastFriday = nowEastern.Date.AddDays(-daysSinceFriday);
+        if (!rthOnly) return candles;
 
-        var sessionStart = rthOnly ? lastFriday.AddHours(9).AddMinutes(30) : lastFriday;
-        var sessionEnd   = rthOnly ? lastFriday.AddHours(16) : lastFriday.AddDays(1).AddTicks(-1);
+        var rthStart = new TimeSpan(9, 30, 0);
+        var rthEnd   = new TimeSpan(16, 0, 0);
 
         return candles
             .Where(c =>
             {
                 var eastern = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
-                return eastern >= sessionStart && eastern <= sessionEnd;
+                return eastern.TimeOfDay >= rthStart && eastern.TimeOfDay <= rthEnd;
             })
             .ToList();
     }

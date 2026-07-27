@@ -97,12 +97,12 @@ public class SchwabStreamerClient : IAsyncDisposable
         await LoginAsync(ct);
     }
 
-    // Seeds the chart with today's 1-minute candles so it isn't empty when first opened (the
-    // streamer only pushes candles going forward from the moment it connects).
-    public async Task<List<CandleData>> GetTodaysHistoricalCandlesAsync(string symbol, CancellationToken ct = default)
+    // Seeds the chart with the last `days` days of 1-minute candles so it isn't empty when first
+    // opened (the streamer only pushes candles going forward from the moment it connects).
+    public async Task<List<CandleData>> GetHistoricalCandlesAsync(string symbol, int days, CancellationToken ct = default)
     {
         var token = await GetTokenAsync();
-        var url = $"{PriceHistoryUrl}?symbol={symbol}&periodType=day&period=1&frequencyType=minute&frequency=1";
+        var url = $"{PriceHistoryUrl}?symbol={symbol}&periodType=day&period={days}&frequencyType=minute&frequency=1";
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
