@@ -13,16 +13,25 @@ public enum ChartPanelMode
     Fifteen_Full    // 15m candles, regular session + pre/after-hours (whatever Schwab returns)
 }
 
-// One WebView2-hosted candlestick chart, fed by its own Schwab streaming connection. Embeddable
-// as a plain panel — MultiChartForm hosts 3 of these side by side.
+// One WebView2-hosted candlestick chart. Does NOT own a streaming connection — it's handed a
+// shared SchwabStreamerClient (one connection feeds all 3 panels in MultiChartForm) and
+// aggregates the incoming 1-minute candles into its own interval/session on the fly.
 public class ChartPanel : Panel
 {
     private readonly string _symbol;
     private readonly SchwabStreamerClient _streamer;
     private readonly ChartPanelMode _mode;
+    private readonly int _intervalMinutes;
+    private readonly bool _rthOnly;
     private readonly Label _header;
     private WebView2 _webView = null!;
     private bool _closing;
+
+    // The bucket currently being built from live 1-min ticks, and which bucket index it belongs
+    // to (so we know when a new tick starts a new bucket vs. extends the current one).
+    private CandleData? _liveBucket;
+    private int? _liveBucketIndex;
+    private DateTime _liveAnchor;
 
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
@@ -31,6 +40,13 @@ public class ChartPanel : Panel
         _symbol   = symbol;
         _streamer = streamer;
         _mode     = mode;
+        (_intervalMinutes, _rthOnly) = mode switch
+        {
+            ChartPanelMode.Hourly15     => (60, true),
+            ChartPanelMode.Fifteen_RTH  => (15, true),
+            ChartPanelMode.Fifteen_Full => (15, false),
+            _ => (60, true)
+        };
 
         _header = new Label
         {
@@ -50,8 +66,13 @@ public class ChartPanel : Panel
         _streamer.OnNewCandle    += Streamer_OnNewCandle;
         _streamer.OnDisconnected += Streamer_OnDisconnected;
 
-        HandleCreated += async (s, e) => await LoadHistoryAndConnectAsync();
-        Disposed += async (s, e) => await StopStreamerAsync();
+        HandleCreated += async (s, e) => await LoadHistoryAsync();
+        Disposed += (s, e) =>
+        {
+            _closing = true;
+            _streamer.OnNewCandle    -= Streamer_OnNewCandle;
+            _streamer.OnDisconnected -= Streamer_OnDisconnected;
+        };
     }
 
     private static string ModeLabel(ChartPanelMode mode) => mode switch
@@ -67,7 +88,9 @@ public class ChartPanel : Panel
         _webView = new WebView2 { Dock = DockStyle.Fill };
     }
 
-    private async Task LoadHistoryAndConnectAsync()
+    // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is
+    // MultiChartForm's job (once for all 3 panels), not each panel's.
+    private async Task LoadHistoryAsync()
     {
         try
         {
@@ -85,26 +108,23 @@ public class ChartPanel : Panel
             var history = await _streamer.GetTodaysHistoricalCandlesAsync(_symbol);
             if (history.Count > 0)
             {
-                var (intervalMinutes, rthOnly) = _mode switch
+                var aggregated = AggregateToInterval(FilterLastFriday(history, _rthOnly), _intervalMinutes, _rthOnly);
+                if (aggregated.Count > 0)
                 {
-                    ChartPanelMode.Hourly15     => (60, true),
-                    ChartPanelMode.Fifteen_RTH  => (15, true),
-                    ChartPanelMode.Fifteen_Full => (15, false),
-                    _ => (60, true)
-                };
-
-                history = AggregateToInterval(FilterLastFriday(history, rthOnly), intervalMinutes, rthOnly);
-                if (history.Count > 0)
-                    await RunScriptAsync("cargarHistorial", history);
+                    await RunScriptAsync("cargarHistorial", aggregated);
+                    // Seed the live aggregator with the last historical bucket so the first live
+                    // tick extends it correctly instead of starting a spurious new one.
+                    var last = aggregated[^1];
+                    _liveAnchor      = BucketAnchor(new[] { last }, _rthOnly);
+                    _liveBucketIndex = BucketIndex(last.Time, _liveAnchor, _intervalMinutes);
+                    _liveBucket      = last;
+                }
             }
-
-            await _streamer.ConnectAsync();
-            await _streamer.SubscribeChartEquity(_symbol);
         }
         catch (Exception ex)
         {
             if (_closing) return;
-            MessageBox.Show($"Could not start the live chart for {_symbol} ({ModeLabel(_mode)}):\n\n{ex.Message}",
+            MessageBox.Show($"Could not load the live chart for {_symbol} ({ModeLabel(_mode)}):\n\n{ex.Message}",
                 "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
@@ -130,24 +150,31 @@ public class ChartPanel : Panel
             .ToList();
     }
 
-    // Groups 1-minute candles into fixed-size buckets. RTH buckets anchor at 9:30 AM ET (matching
-    // the regular session open); full-day buckets anchor at midnight ET. Open = first minute's
-    // open, Close = last minute's close, High/Low = extremes across the bucket.
+    // RTH buckets anchor at 9:30 AM ET (matching the regular session open); full-day buckets
+    // anchor at midnight ET. Same anchor logic used for both historical batch aggregation and
+    // live incremental aggregation, so bucket boundaries always agree.
+    private static DateTime BucketAnchor(IEnumerable<CandleData> candles, bool rthOnly) =>
+        candles
+            .Select(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))
+            .Min(t => rthOnly ? t.Date.AddHours(9).AddMinutes(30) : t.Date);
+
+    private static int BucketIndex(DateTime utcTime, DateTime anchorEastern, int intervalMinutes)
+    {
+        var eastern   = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        var minutesIn = (eastern - anchorEastern).TotalMinutes;
+        return (int)Math.Floor(minutesIn / intervalMinutes);
+    }
+
+    // Groups 1-minute candles into fixed-size buckets for the historical seed. Open = first
+    // minute's open, Close = last minute's close, High/Low = extremes across the bucket.
     private static List<CandleData> AggregateToInterval(List<CandleData> minuteCandles, int intervalMinutes, bool rthOnly)
     {
         if (minuteCandles.Count == 0) return minuteCandles;
 
-        var anchor = minuteCandles
-            .Select(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))
-            .Min(t => rthOnly ? t.Date.AddHours(9).AddMinutes(30) : t.Date);
+        var anchor = BucketAnchor(minuteCandles, rthOnly);
 
         return minuteCandles
-            .GroupBy(c =>
-            {
-                var eastern   = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
-                var minutesIn = (eastern - anchor).TotalMinutes;
-                return (int)Math.Floor(minutesIn / intervalMinutes);
-            })
+            .GroupBy(c => BucketIndex(c.Time, anchor, intervalMinutes))
             .OrderBy(g => g.Key)
             .Select(g =>
             {
@@ -164,10 +191,43 @@ public class ChartPanel : Panel
             .ToList();
     }
 
+    // Every 1-minute tick from the shared streamer lands here for all 3 panels. Each panel
+    // decides independently whether the tick belongs to its current bucket (extend it) or starts
+    // a new one (append) — this is what lets one WebSocket connection feed 3 different intervals.
     private void Streamer_OnNewCandle(CandleData candle)
     {
         if (_closing || !IsHandleCreated) return;
-        BeginInvoke(async () => await RunScriptAsync("actualizarUltimaVela", candle));
+
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
+        if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
+            return; // outside this panel's session — ignore the tick entirely
+
+        if (_liveBucket == null)
+        {
+            _liveAnchor      = eastern.Date.AddHours(_rthOnly ? 9 : 0).AddMinutes(_rthOnly ? 30 : 0);
+            _liveBucketIndex = BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
+            _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
+        }
+        else
+        {
+            var index = BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
+            if (index != _liveBucketIndex)
+            {
+                // New bucket — start fresh (the previous bucket stays on the chart as-is; its
+                // last update already reflects its final close).
+                _liveBucketIndex = index;
+                _liveBucket = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
+            }
+            else
+            {
+                _liveBucket.High  = Math.Max(_liveBucket.High, candle.High);
+                _liveBucket.Low   = Math.Min(_liveBucket.Low, candle.Low);
+                _liveBucket.Close = candle.Close;
+            }
+        }
+
+        var toSend = _liveBucket;
+        BeginInvoke(async () => await RunScriptAsync("actualizarUltimaVela", toSend));
     }
 
     private void Streamer_OnDisconnected(string message)
@@ -211,13 +271,5 @@ public class ChartPanel : Panel
             List<CandleData> many => JsonSerializer.Serialize(many.Select(Map)),
             _ => "null"
         };
-    }
-
-    private async Task StopStreamerAsync()
-    {
-        _closing = true;
-        _streamer.OnNewCandle    -= Streamer_OnNewCandle;
-        _streamer.OnDisconnected -= Streamer_OnDisconnected;
-        await _streamer.DisposeAsync();
     }
 }

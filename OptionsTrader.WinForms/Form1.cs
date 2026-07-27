@@ -1284,7 +1284,8 @@ public partial class Form1 : Form
 
         // One window, 3 chart panels side by side (1h / 15m RTH / 15m RTH+Overnight) — each
         // panel gets its own streamer connection/subscription.
-        var multiChartForm = new MultiChartForm(_selectedTicker.Symbol, CreateSchwabStreamerClient);
+        var streamer      = CreateSchwabStreamerClient();
+        var multiChartForm = new MultiChartForm(_selectedTicker.Symbol, streamer);
         multiChartForm.Show();
     }
 

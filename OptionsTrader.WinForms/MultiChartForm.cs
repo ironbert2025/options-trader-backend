@@ -3,11 +3,19 @@ using OptionsTrader.Infrastructure.Schwab;
 namespace OptionsTrader.WinForms;
 
 // Single window hosting the 3 live-chart panels (1h / 15m RTH / 15m RTH+Overnight) side by side
-// horizontally — each panel has its own WebView2 + independent Schwab streaming connection.
+// horizontally. All 3 share ONE Schwab streaming connection/subscription — Schwab's CHART_EQUITY
+// service only ever pushes 1-minute candles regardless of the interval you display, so each
+// panel just aggregates the same incoming ticks into its own bucket size independently.
 public class MultiChartForm : Form
 {
-    public MultiChartForm(string symbol, Func<SchwabStreamerClient> createStreamer)
+    private readonly SchwabStreamerClient _streamer;
+    private readonly string _symbol;
+
+    public MultiChartForm(string symbol, SchwabStreamerClient streamer)
     {
+        _symbol   = symbol;
+        _streamer = streamer;
+
         Text          = $"Live Charts — {symbol}";
         Width         = 1740;
         Height        = 640;
@@ -28,14 +36,36 @@ public class MultiChartForm : Form
         var modes = new[] { ChartPanelMode.Hourly15, ChartPanelMode.Fifteen_RTH, ChartPanelMode.Fifteen_Full };
         for (int i = 0; i < modes.Length; i++)
         {
-            var panel = new ChartPanel(symbol, createStreamer(), modes[i])
+            // All 3 panels get the SAME streamer instance — they only ever read its events /
+            // call its (stateless) REST history method, never each other's connection state.
+            var panel = new ChartPanel(symbol, _streamer, modes[i])
             {
-                Dock    = DockStyle.Fill,
-                Margin  = new Padding(i == 0 ? 0 : 2, 0, i == modes.Length - 1 ? 0 : 2, 0)
+                Dock   = DockStyle.Fill,
+                Margin = new Padding(i == 0 ? 0 : 2, 0, i == modes.Length - 1 ? 0 : 2, 0)
             };
             layout.Controls.Add(panel, i, 0);
         }
 
         Controls.Add(layout);
+
+        FormClosing += async (s, e) => await _streamer.DisposeAsync();
+    }
+
+    protected override async void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+
+        // Connect + subscribe ONCE for all 3 panels — their OnNewCandle handlers are already
+        // wired up (each ChartPanel subscribes in its own constructor, which already ran).
+        try
+        {
+            await _streamer.ConnectAsync();
+            await _streamer.SubscribeChartEquity(_symbol);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not start live streaming for {_symbol}:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 }
