@@ -78,21 +78,39 @@ public partial class Form1 : Form
         StartIvHistorialScheduler();
     }
 
-    // Prompts for one of the 5 fixed app users on startup instead of auto-logging in as a
-    // hardcoded account. Canceling the login closes the whole app immediately.
-    private void Form1_Load(object? sender, EventArgs e)
+    // Anchored user — logs straight in against the API on startup, no LoginForm prompt.
+    // Change these two constants to switch which of the 5 fixed app users this instance runs as.
+    private const string AnchoredUsername = "user1";
+    private const string AnchoredPassword = "Pass1234!";
+
+    private async void Form1_Load(object? sender, EventArgs e)
     {
-        using var loginForm = new LoginForm(_apiHttpClient, ApiBaseUrl);
-        if (loginForm.ShowDialog(this) != DialogResult.OK || loginForm.AccessToken == null)
+        try
         {
-            Environment.Exit(0);
-            return;
+            var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/auth/login",
+                new { username = AnchoredUsername, password = AnchoredPassword });
+
+            var result = response.IsSuccessStatusCode
+                ? await response.Content.ReadFromJsonAsync<LoginResult>()
+                : null;
+
+            if (result?.AccessToken == null)
+            {
+                MessageBox.Show($"Login failed for anchored user '{AnchoredUsername}'.", "Login Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(0);
+                return;
+            }
+
+            _apiHttpClient.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", result.AccessToken);
+
+            lblStatusUser.Text = $"User: {result.Name} {result.LastName}";
         }
-
-        _apiHttpClient.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", loginForm.AccessToken);
-
-        lblStatusUser.Text = $"User: {loginForm.FirstName} {loginForm.LastName}";
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Login failed: {ex.Message}", "Login Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Environment.Exit(0);
+        }
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
