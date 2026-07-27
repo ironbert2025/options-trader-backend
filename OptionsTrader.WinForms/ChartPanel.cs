@@ -34,6 +34,16 @@ public class ChartPanel : Panel
     private int? _liveBucketIndex;
     private DateTime _liveAnchor;
 
+    // Cross-SMA monitoring (Hourly15 panel only) — closed 1h candles kept for computing SMA
+    // ourselves in C# (same simple-average formula as the JS overlay), and which (period, up)
+    // combinations are currently armed to push to Telegram on a genuine crossover.
+    private readonly List<CandleData> _closedCandles = new();
+    private readonly HashSet<(int Period, bool Up)> _armedCrossMonitors = new();
+    private static readonly Dictionary<int, string> SmaColorNames = new()
+    {
+        [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
+    };
+
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
     public ChartPanel(string symbol, SchwabStreamerClient streamer, ChartPanelMode mode)
@@ -116,10 +126,24 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync("limpiarDibujos();");
     }
 
+    // Toggles a "Cross UP/DOWN SMA(period)" monitor on/off. While armed, every 1h candle that
+    // closes and forms a genuine crossover of that SMA triggers a chart capture + Telegram push.
+    // Returns the new on/off state.
+    public bool ToggleCrossMonitor(int period, bool up)
+    {
+        var key = (period, up);
+        if (!_armedCrossMonitors.Remove(key))
+        {
+            _armedCrossMonitors.Add(key);
+            return true;
+        }
+        return false;
+    }
+
     // Captures this panel's chart as a PNG (via WebView2's native preview capture — pixel-exact,
     // doesn't depend on the window being visible/on top, unlike a screen-coordinate capture) and
     // pushes it to the configured Telegram channel.
-    public async Task<(bool Ok, string Detail)> PushToTelegramAsync()
+    private async Task<(bool Ok, string Detail)> SendChartToTelegramAsync(string caption)
     {
         if (_webView.CoreWebView2 == null) return (false, "Chart not loaded yet.");
 
@@ -135,7 +159,6 @@ public class ChartPanel : Panel
             }
 
             var (botToken, chatId) = TelegramSettingsStore.Load();
-            var caption = $"{_symbol} — {ModeLabel(_mode)} — {DateTime.Now:HH:mm:ss}";
             var (ok, detail, _) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, caption);
             return (ok, detail);
         }
@@ -143,6 +166,50 @@ public class ChartPanel : Panel
         {
             return (false, ex.Message);
         }
+    }
+
+    // Evaluates every armed Cross monitor against the candle that just closed. "Genuine crossover"
+    // means: candle color matches the direction (green for UP, red for DOWN), its close ends up on
+    // the crossed side of the SMA(period) computed as of this candle, AND the previous candle was
+    // still on the other side (or exactly on the line) — so it only fires once per actual cross,
+    // not on every candle that happens to stay above/below the SMA.
+    private void EvaluateCrossings(CandleData justClosed)
+    {
+        if (_armedCrossMonitors.Count == 0) return;
+
+        foreach (var (period, up) in _armedCrossMonitors.ToList())
+        {
+            if (_closedCandles.Count < period + 1) continue; // not enough history for this + the prior SMA
+
+            var currentSma  = Sma(period, _closedCandles.Count - 1);
+            var previousSma = Sma(period, _closedCandles.Count - 2);
+            if (currentSma == null || previousSma == null) continue;
+
+            var previousClose = _closedCandles[^2].Close;
+            var isGreen = justClosed.Close > justClosed.Open;
+            var isRed   = justClosed.Close < justClosed.Open;
+
+            var crossed = up
+                ? isGreen && justClosed.Close > currentSma && previousClose <= previousSma
+                : isRed   && justClosed.Close < currentSma && previousClose >= previousSma;
+
+            if (!crossed) continue;
+
+            var direction = up ? "UP" : "DOWN";
+            var colorName = SmaColorNames.TryGetValue(period, out var c) ? c : string.Empty;
+            var caption = $"Crossing {direction} SMA {period}({colorName})";
+            _ = SendChartToTelegramAsync(caption);
+        }
+    }
+
+    // Simple moving average of Close over the `period` candles ending at _closedCandles[endIndex].
+    private decimal? Sma(int period, int endIndex)
+    {
+        if (endIndex < period - 1 || endIndex >= _closedCandles.Count) return null;
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += _closedCandles[i].Close;
+        return sum / period;
     }
 
     // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is
@@ -200,6 +267,15 @@ public class ChartPanel : Panel
                     _liveAnchor      = BucketAnchor(new[] { last }, _rthOnly);
                     _liveBucketIndex = BucketIndex(last.Time, _liveAnchor, _intervalMinutes);
                     _liveBucket      = last;
+
+                    // Seed Cross-SMA monitoring's closed-candle history — everything fetched here
+                    // is already closed (it's historical data); the live aggregator (above) owns
+                    // the currently-forming candle separately.
+                    if (_mode == ChartPanelMode.Hourly15)
+                    {
+                        _closedCandles.Clear();
+                        _closedCandles.AddRange(aggregated);
+                    }
                 }
             }
         }
@@ -293,8 +369,14 @@ public class ChartPanel : Panel
             var index = BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
             if (index != _liveBucketIndex)
             {
-                // New bucket — start fresh (the previous bucket stays on the chart as-is; its
-                // last update already reflects its final close).
+                // New bucket started — the previous one is now definitively closed (its last
+                // update already reflects its final close). Feed Cross-SMA monitoring with it.
+                if (_mode == ChartPanelMode.Hourly15)
+                {
+                    _closedCandles.Add(_liveBucket);
+                    EvaluateCrossings(_liveBucket);
+                }
+
                 _liveBucketIndex = index;
                 _liveBucket = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
             }

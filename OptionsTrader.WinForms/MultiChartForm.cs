@@ -18,7 +18,7 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 1740;
-        Height        = 660;
+        Height        = 688;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -27,7 +27,7 @@ public class MultiChartForm : Form
         var toolbar = new TableLayoutPanel
         {
             Dock        = DockStyle.Top,
-            Height      = 36,
+            Height      = 64,
             ColumnCount = 3,
             RowCount    = 1,
             Padding     = new Padding(6, 4, 6, 0)
@@ -66,31 +66,45 @@ public class MultiChartForm : Form
             if (modes[i] == ChartPanelMode.Hourly15) hourlyPanel = panel;
         }
 
-        // Push: captures the 1h chart (WebView2 native preview capture) and sends it to the
-        // configured Telegram channel. Lives in the toolbar column above that panel (column 0).
-        var btnPush = new Button
+        // Cross-SMA monitors: 8 small toggles (UP/DOWN x 20/40/100/200), 2 rows x 4 columns, in
+        // the toolbar column above the 1h panel (column 0). While armed, each one pushes the 1h
+        // chart to Telegram the moment a candle closes with a genuine crossover of that SMA.
+        var crossHost = new Panel { Dock = DockStyle.Fill };
+        var periods = new[] { 20, 40, 100, 200 };
+        for (int col = 0; col < periods.Length; col++)
         {
-            Text     = "Push",
-            Anchor   = AnchorStyles.Top | AnchorStyles.Left,
-            Location = new Point(0, 4),
-            Size     = new Size(70, 24)
-        };
-        btnPush.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            btnPush.Enabled = false;
-            try
+            var period = periods[col];
+
+            var btnUp = new Button
             {
-                var (ok, detail) = await hourlyPanel.PushToTelegramAsync();
-                MessageBox.Show(ok ? "Chart enviado a Telegram." : $"Falló el envío:\n{detail}",
-                    "Push — Telegram", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Error);
-            }
-            finally
+                Text     = $"↑{period}",
+                Location = new Point(col * 42, 2),
+                Size     = new Size(40, 24)
+            };
+            btnUp.Click += (s, e) =>
             {
-                btnPush.Enabled = true;
-            }
-        };
-        toolbar.Controls.Add(btnPush, 0, 0);
+                if (hourlyPanel == null) return;
+                var on = hourlyPanel.ToggleCrossMonitor(period, up: true);
+                btnUp.BackColor = on ? Color.LightGreen : SystemColors.Control;
+            };
+
+            var btnDown = new Button
+            {
+                Text     = $"↓{period}",
+                Location = new Point(col * 42, 30),
+                Size     = new Size(40, 24)
+            };
+            btnDown.Click += (s, e) =>
+            {
+                if (hourlyPanel == null) return;
+                var on = hourlyPanel.ToggleCrossMonitor(period, up: false);
+                btnDown.BackColor = on ? Color.LightSalmon : SystemColors.Control;
+            };
+
+            crossHost.Controls.Add(btnUp);
+            crossHost.Controls.Add(btnDown);
+        }
+        toolbar.Controls.Add(crossHost, 0, 0);
 
         // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the
         // toolbar column above that panel (column index 2, matching Fifteen_Full's position in
