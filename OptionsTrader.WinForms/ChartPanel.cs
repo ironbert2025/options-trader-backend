@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using OptionsTrader.Application.DTOs.Streaming;
+using OptionsTrader.Application.Interfaces;
 using OptionsTrader.Infrastructure.Schwab;
 
 namespace OptionsTrader.WinForms;
@@ -15,12 +16,17 @@ public enum ChartPanelMode
 }
 
 // One WebView2-hosted candlestick chart. Does NOT own a streaming connection — it's handed a
-// shared SchwabStreamerClient (one connection feeds all 3 panels in MultiChartForm) and
-// aggregates the incoming 1-minute candles into its own interval/session on the fly.
+// SchwabStreamerClient for one-off REST history fetches (GetHistoricalCandlesAsync, no per-
+// account limit on that) and a separate ICandleFeed for live ticks. In this app instance's own
+// process the live feed might be that SAME SchwabStreamerClient (if this instance is the "hub"
+// that owns the one Schwab streaming connection allowed per account) or a CandleHubClient
+// relaying another instance's connection over localhost (if it isn't) — ChartPanel doesn't need
+// to know which.
 public class ChartPanel : Panel
 {
     private readonly string _symbol;
-    private readonly SchwabStreamerClient _streamer;
+    private readonly SchwabStreamerClient _historyClient;
+    private readonly ICandleFeed _liveFeed;
     private readonly ChartPanelMode _mode;
     private readonly int _intervalMinutes;
     private readonly bool _rthOnly;
@@ -46,11 +52,12 @@ public class ChartPanel : Panel
 
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
-    public ChartPanel(string symbol, SchwabStreamerClient streamer, ChartPanelMode mode)
+    public ChartPanel(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, ChartPanelMode mode)
     {
-        _symbol   = symbol;
-        _streamer = streamer;
-        _mode     = mode;
+        _symbol        = symbol;
+        _historyClient = historyClient;
+        _liveFeed      = liveFeed;
+        _mode          = mode;
         (_intervalMinutes, _rthOnly) = mode switch
         {
             ChartPanelMode.Hourly15     => (60, true),
@@ -74,15 +81,15 @@ public class ChartPanel : Panel
         Controls.Add(_webView);
         Controls.Add(_header);
 
-        _streamer.OnNewCandle    += Streamer_OnNewCandle;
-        _streamer.OnDisconnected += Streamer_OnDisconnected;
+        _liveFeed.OnNewCandle    += Streamer_OnNewCandle;
+        _liveFeed.OnDisconnected += Streamer_OnDisconnected;
 
         HandleCreated += async (s, e) => await LoadHistoryAsync();
         Disposed += (s, e) =>
         {
             _closing = true;
-            _streamer.OnNewCandle    -= Streamer_OnNewCandle;
-            _streamer.OnDisconnected -= Streamer_OnDisconnected;
+            _liveFeed.OnNewCandle    -= Streamer_OnNewCandle;
+            _liveFeed.OnDisconnected -= Streamer_OnDisconnected;
         };
     }
 
@@ -262,7 +269,7 @@ public class ChartPanel : Panel
             // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
             // 1h panel shows the full 10 days; the two 15m panels show the last 3 days.
             var requestDays = _mode == ChartPanelMode.Hourly15 ? 10 : 3;
-            var history = await _streamer.GetHistoricalCandlesAsync(_symbol, requestDays);
+            var history = await _historyClient.GetHistoricalCandlesAsync(_symbol, requestDays);
             if (history.Count > 0)
             {
                 var filtered = FilterSession(history, _rthOnly);

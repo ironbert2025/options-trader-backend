@@ -41,10 +41,20 @@ public partial class Form1 : Form
 
     private TickerEntry? _selectedTicker;
 
-    // Live-chart streaming: ONE SchwabStreamerClient for the whole app (Schwab allows only one
-    // streaming connection per account) feeding as many per-ticker chart windows as are open, at
-    // most one window per symbol. Created lazily on the first "Live Chart" click.
-    private SchwabStreamerClient? _liveStreamer;
+    // Live-chart streaming: Schwab allows only ONE streaming connection per account, but running
+    // one app instance per ticker means several PROCESSES need candle data at once. The first
+    // instance to bind LiveHubPort becomes the "hub" — it owns the real SchwabStreamerClient
+    // (WebSocket) and rebroadcasts every candle over that local port. Every other instance is a
+    // "client" — it connects to the hub via CandleHubClient instead of touching Schwab's socket
+    // itself. Either way, _historyClient still does its own REST history fetches directly (no
+    // per-account limit on that), and _liveFeed is whichever of the two is actually feeding ticks.
+    // No cross-instance failover: if the hub instance closes, clients just show "disconnected"
+    // until that instance (or another) is reopened.
+    private const int LiveHubPort = 51919;
+    private CandleHubServer? _candleHubServer;
+    private CandleHubClient? _candleHubClient;
+    private SchwabStreamerClient? _historyClient;
+    private ICandleFeed? _liveFeed;
     private readonly Dictionary<string, MultiChartForm> _liveChartForms = new();
 
     private decimal _lastSpotPrice;
@@ -60,7 +70,9 @@ public partial class Form1 : Form
         FormClosing += async (s, e) =>
         {
             _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose();
-            if (_liveStreamer != null) await _liveStreamer.DisposeAsync();
+            if (_historyClient != null) await _historyClient.DisposeAsync();
+            if (_candleHubClient != null) await _candleHubClient.DisposeAsync();
+            _candleHubServer?.Dispose();
         };
 
         // Start with blank placeholder rows (no data, just empty cells) so the grids look like
@@ -1321,54 +1333,72 @@ public partial class Form1 : Form
 
         try
         {
-            await EnsureLiveStreamerReadyAsync();
+            await EnsureLiveFeedReadyAsync();
         }
         catch (Exception ex)
         {
-            _liveStreamerReadyTask = null; // let the next click retry instead of staying stuck on a faulted attempt
+            _liveFeedReadyTask = null; // let the next click retry instead of staying stuck on a faulted attempt
             MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
                 "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
         // One window, 3 chart panels side by side (1h / 15m RTH / 15m RTH+Overnight), all fed by
-        // the single shared streamer — SubscribeChartEquity was already called for every ticker
-        // in EnsureLiveStreamerReadyAsync, so this window just needs to filter for its symbol.
+        // _historyClient (REST) + _liveFeed (hub or relay) set up in EnsureLiveFeedReadyAsync.
         var symbol = _selectedTicker.Symbol;
-        var multiChartForm = new MultiChartForm(symbol, _liveStreamer!);
+        var multiChartForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!);
         multiChartForm.FormClosed += (s, e2) => _liveChartForms.Remove(symbol);
         _liveChartForms[symbol] = multiChartForm;
         multiChartForm.Show();
     }
 
-    // Lazily creates and connects the single shared streamer, then subscribes it to every
-    // configured ticker (SPY/QQQ/TSLA/AAPL, from TickerSettingsStore) in one ADD request — cheap
-    // to call repeatedly, does nothing once already connected.
+    // Lazily decides whether this instance is the hub or a client, then sets up _historyClient +
+    // _liveFeed accordingly — cheap to call repeatedly, does nothing once already set up.
     //
-    // Caches the in-flight Task itself (not just checking "_liveStreamer != null" after the
-    // fact) so clicking "Live Chart" for two different tickers in quick succession can't race:
-    // without this, both calls would see _liveStreamer still null while the first connect is
-    // awaiting, and each would create its OWN SchwabStreamerClient — two connections under the
-    // same Schwab account, which repeatedly kick each other off forever (confirmed in
-    // ws_raw.log: two interleaved requestid sequences fighting over the same login).
-    private Task? _liveStreamerReadyTask;
+    // Caches the in-flight Task itself (not just checking "_liveFeed != null" after the fact) so
+    // clicking "Live Chart" for two different tickers in quick succession can't race: without
+    // this, both calls would see _liveFeed still null while the first attempt is awaiting, and
+    // each would try to become the hub / connect independently (confirmed in ws_raw.log: two
+    // interleaved requestid sequences fighting over the same Schwab login).
+    private Task? _liveFeedReadyTask;
 
-    private Task EnsureLiveStreamerReadyAsync()
+    private Task EnsureLiveFeedReadyAsync()
     {
-        _liveStreamerReadyTask ??= ConnectAndSubscribeLiveStreamerAsync();
-        return _liveStreamerReadyTask;
+        _liveFeedReadyTask ??= SetUpLiveFeedAsync();
+        return _liveFeedReadyTask;
     }
 
-    private async Task ConnectAndSubscribeLiveStreamerAsync()
+    private async Task SetUpLiveFeedAsync()
     {
-        var streamer = CreateSchwabStreamerClient();
-        await streamer.ConnectAsync();
-
         var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).Distinct().ToList();
         if (symbols.Count == 0) symbols = new List<string> { _selectedTicker!.Symbol };
-        await streamer.SubscribeChartEquity(symbols);
 
-        _liveStreamer = streamer;
+        // Try to become the hub first — whichever app instance/process gets there first binds
+        // the local port and owns the real Schwab connection for as long as it stays open.
+        var hubServer = new CandleHubServer();
+        if (hubServer.TryStart(LiveHubPort))
+        {
+            _candleHubServer = hubServer;
+
+            var streamer = CreateSchwabStreamerClient();
+            await streamer.ConnectAsync();
+            await streamer.SubscribeChartEquity(symbols);
+            streamer.OnNewCandle += (symbol, candle) => hubServer.Broadcast(symbol, candle);
+
+            _historyClient = streamer;
+            _liveFeed      = streamer; // this instance's own connection IS the live feed
+            return;
+        }
+
+        // Another instance already owns the port — connect to it as a client instead. Still
+        // need our OWN SchwabStreamerClient for REST history fetches (no per-account limit on
+        // that, unlike the streaming socket) — it's never connected/subscribed.
+        var hubClient = new CandleHubClient();
+        await hubClient.ConnectAsync(LiveHubPort);
+
+        _candleHubClient = hubClient;
+        _historyClient   = CreateSchwabStreamerClient();
+        _liveFeed        = hubClient;
     }
 
     private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)

@@ -1,21 +1,28 @@
+using OptionsTrader.Application.Interfaces;
 using OptionsTrader.Infrastructure.Schwab;
 
 namespace OptionsTrader.WinForms;
 
 // Single window (one per ticker) hosting the 3 live-chart panels (1h / 15m RTH / 15m
-// RTH+Overnight) side by side horizontally. The SchwabStreamerClient passed in is shared across
-// EVERY open ticker window in the app — Form1 owns connecting it once and subscribing it to all
-// configured tickers (Schwab allows only one streaming connection per account); each ChartPanel
-// filters the shared OnNewCandle stream down to its own symbol before aggregating.
+// RTH+Overnight) side by side horizontally.
+//
+// historyClient is used only for one-off REST history fetches (no per-account limit on that —
+// every app instance/process can freely call it). liveFeed is the actual source of live ticks:
+// in the app instance that owns the one Schwab streaming connection allowed per account (the
+// "hub"), it's the same SchwabStreamerClient; in every OTHER running instance, it's a
+// CandleHubClient relaying the hub instance's connection over a local loopback socket — this
+// form/ChartPanel don't need to know which.
 public class MultiChartForm : Form
 {
-    private readonly SchwabStreamerClient _streamer;
+    private readonly SchwabStreamerClient _historyClient;
+    private readonly ICandleFeed _liveFeed;
     private readonly string _symbol;
 
-    public MultiChartForm(string symbol, SchwabStreamerClient streamer)
+    public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed)
     {
-        _symbol   = symbol;
-        _streamer = streamer;
+        _symbol        = symbol;
+        _historyClient = historyClient;
+        _liveFeed      = liveFeed;
 
         Text          = $"Live Charts — {symbol}";
         Width         = 1740;
@@ -55,9 +62,9 @@ public class MultiChartForm : Form
         var modes = new[] { ChartPanelMode.Hourly15, ChartPanelMode.Fifteen_RTH, ChartPanelMode.Fifteen_Full };
         for (int i = 0; i < modes.Length; i++)
         {
-            // All 3 panels get the SAME streamer instance — they only ever read its events /
-            // call its (stateless) REST history method, never each other's connection state.
-            var panel = new ChartPanel(symbol, _streamer, modes[i])
+            // All 3 panels share the SAME historyClient/liveFeed — they only ever read events /
+            // call the stateless REST history method, never each other's connection state.
+            var panel = new ChartPanel(symbol, _historyClient, _liveFeed, modes[i])
             {
                 Dock   = DockStyle.Fill,
                 Margin = new Padding(6)
@@ -206,8 +213,7 @@ public class MultiChartForm : Form
         Controls.Add(layout);
         Controls.Add(toolbar);
 
-        // The streamer is shared across every open ticker window (Schwab allows only one
-        // streaming connection per account) — Form1 owns connecting/subscribing/disposing it
-        // for the app's whole lifetime, not this window.
+        // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
+        // subscribing, and disposing them) — not this window.
     }
 }

@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using OptionsTrader.Application.DTOs.Streaming;
+using OptionsTrader.Application.Interfaces;
 
 namespace OptionsTrader.Infrastructure.Schwab;
 
@@ -12,7 +13,7 @@ namespace OptionsTrader.Infrastructure.Schwab;
 // Message shapes (LOGIN/ADD request/response, CHART_EQUITY content field numbers) have been
 // confirmed against live traffic — see LogRawMessage/ws_raw.log for the raw dump this was
 // validated with.
-public class SchwabStreamerClient : IAsyncDisposable
+public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
 {
     private const string UserPreferenceUrl = "https://api.schwabapi.com/trader/v1/userPreference";
     private const string PriceHistoryUrl   = "https://api.schwabapi.com/marketdata/v1/pricehistory";
