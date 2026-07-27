@@ -18,15 +18,23 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 1740;
-        Height        = 640;
+        Height        = 660;
         StartPosition = FormStartPosition.CenterScreen;
+        BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
+
+        // Reserved strip on top for buttons (not added yet).
+        var toolbar = new Panel
+        {
+            Dock   = DockStyle.Top,
+            Height = 36
+        };
 
         var layout = new TableLayoutPanel
         {
             Dock        = DockStyle.Fill,
             ColumnCount = 3,
             RowCount    = 1,
-            BackColor   = Color.FromArgb(19, 23, 34)
+            Padding     = new Padding(6)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
@@ -41,12 +49,13 @@ public class MultiChartForm : Form
             var panel = new ChartPanel(symbol, _streamer, modes[i])
             {
                 Dock   = DockStyle.Fill,
-                Margin = new Padding(i == 0 ? 0 : 2, 0, i == modes.Length - 1 ? 0 : 2, 0)
+                Margin = new Padding(6)
             };
             layout.Controls.Add(panel, i, 0);
         }
 
         Controls.Add(layout);
+        Controls.Add(toolbar);
 
         FormClosing += async (s, e) => await _streamer.DisposeAsync();
     }
