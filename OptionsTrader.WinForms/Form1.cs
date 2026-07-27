@@ -1325,6 +1325,7 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
+            _liveStreamerReadyTask = null; // let the next click retry instead of staying stuck on a faulted attempt
             MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
                 "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
@@ -1343,10 +1344,23 @@ public partial class Form1 : Form
     // Lazily creates and connects the single shared streamer, then subscribes it to every
     // configured ticker (SPY/QQQ/TSLA/AAPL, from TickerSettingsStore) in one ADD request — cheap
     // to call repeatedly, does nothing once already connected.
-    private async Task EnsureLiveStreamerReadyAsync()
-    {
-        if (_liveStreamer != null) return;
+    //
+    // Caches the in-flight Task itself (not just checking "_liveStreamer != null" after the
+    // fact) so clicking "Live Chart" for two different tickers in quick succession can't race:
+    // without this, both calls would see _liveStreamer still null while the first connect is
+    // awaiting, and each would create its OWN SchwabStreamerClient — two connections under the
+    // same Schwab account, which repeatedly kick each other off forever (confirmed in
+    // ws_raw.log: two interleaved requestid sequences fighting over the same login).
+    private Task? _liveStreamerReadyTask;
 
+    private Task EnsureLiveStreamerReadyAsync()
+    {
+        _liveStreamerReadyTask ??= ConnectAndSubscribeLiveStreamerAsync();
+        return _liveStreamerReadyTask;
+    }
+
+    private async Task ConnectAndSubscribeLiveStreamerAsync()
+    {
         var streamer = CreateSchwabStreamerClient();
         await streamer.ConnectAsync();
 
