@@ -55,13 +55,14 @@
   // on the right axis (no text label). createPriceLine always spans the FULL width, so it's only
   // used here for the axis label (lineVisible:false); the visible line segment itself is drawn by
   // a custom primitive anchored to the clicked time, so it stays correct across pan/zoom.
+  // Every activation ADDS a new pair — previous ones are kept, not replaced.
   let dzSzArmed = false;
   let dzSzNextIsSupply = false; // false = next click draws Demand (green), true = Supply (red)
-  const dzSzAxisLabels = { demand: null, supply: null };
+  const dzSzAxisLabels = []; // all createPriceLine handles, one per drawn line
   let dzSzAttached = false;
 
   class ZoneLinesPrimitive {
-    constructor() { this._segments = {}; this._chart = null; } // key -> { time, price, color }
+    constructor() { this._segments = []; this._chart = null; } // [{ time, price, color }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -74,7 +75,7 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
-                Object.values(self._segments).forEach(seg => {
+                self._segments.forEach(seg => {
                   const x = ts.timeToCoordinate(seg.time);
                   const y = candleSeries.priceToCoordinate(seg.price);
                   if (x == null || y == null) return;
@@ -106,15 +107,13 @@
     const price = candleSeries.coordinateToPrice(param.point.y);
     if (price == null) return;
 
-    const key   = dzSzNextIsSupply ? 'supply' : 'demand';
     const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
 
-    zoneLinesPrimitive._segments[key] = { time: param.time, price, color };
+    zoneLinesPrimitive._segments.push({ time: param.time, price, color });
 
-    if (dzSzAxisLabels[key]) candleSeries.removePriceLine(dzSzAxisLabels[key]);
-    dzSzAxisLabels[key] = candleSeries.createPriceLine({
+    dzSzAxisLabels.push(candleSeries.createPriceLine({
       price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
-    });
+    }));
 
     if (dzSzNextIsSupply) dzSzArmed = false;
     dzSzNextIsSupply = !dzSzNextIsSupply;
