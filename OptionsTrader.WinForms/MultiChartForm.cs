@@ -22,7 +22,7 @@ public class MultiChartForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
-        // Reserved strip on top for buttons (not added yet).
+        // Toolbar strip on top.
         var toolbar = new Panel
         {
             Dock   = DockStyle.Top,
@@ -41,6 +41,7 @@ public class MultiChartForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
+        ChartPanel? overnightPanel = null;
         var modes = new[] { ChartPanelMode.Hourly15, ChartPanelMode.Fifteen_RTH, ChartPanelMode.Fifteen_Full };
         for (int i = 0; i < modes.Length; i++)
         {
@@ -52,7 +53,22 @@ public class MultiChartForm : Form
                 Margin = new Padding(6)
             };
             layout.Controls.Add(panel, i, 0);
+            if (modes[i] == ChartPanelMode.Fifteen_Full) overnightPanel = panel;
         }
+
+        // DZ/SZ: click-to-draw Demand Zone (green) / Supply Zone (red) price lines — only on the
+        // 15m RTH+Overnight panel.
+        var btnDzSz = new Button
+        {
+            Text     = "DZ/SZ",
+            Location = new Point(6, 6),
+            Size     = new Size(70, 24)
+        };
+        btnDzSz.Click += async (s, e) =>
+        {
+            if (overnightPanel != null) await overnightPanel.ArmDzSzModeAsync();
+        };
+        toolbar.Controls.Add(btnDzSz);
 
         Controls.Add(layout);
         Controls.Add(toolbar);

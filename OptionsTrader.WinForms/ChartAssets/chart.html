@@ -49,6 +49,44 @@
     chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
   });
 
+  // ---- DZ/SZ (Demand Zone / Supply Zone) price lines ----
+  // activarDZSZ() arms the next 2 clicks on the chart: first click -> green horizontal line
+  // (Demand Zone), second click -> red horizontal line (Supply Zone). Uses Lightweight Charts'
+  // native createPriceLine — a full-width horizontal line with the price shown on the right axis,
+  // no custom drawing needed. Each new activation replaces the previous DZ/SZ pair.
+  let dzSzArmed = false;
+  let dzSzNextIsSupply = false; // false = next click draws Demand (green), true = Supply (red)
+  const dzSzLines = { demand: null, supply: null };
+
+  function activarDZSZ() {
+    dzSzArmed = true;
+    dzSzNextIsSupply = false;
+  }
+
+  chart.subscribeClick(param => {
+    if (!dzSzArmed || !param.point) return;
+    const price = candleSeries.coordinateToPrice(param.point.y);
+    if (price == null) return;
+
+    if (!dzSzNextIsSupply) {
+      if (dzSzLines.demand) candleSeries.removePriceLine(dzSzLines.demand);
+      dzSzLines.demand = candleSeries.createPriceLine({
+        price, color: '#26a69a', lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true, title: 'DZ',
+      });
+      dzSzNextIsSupply = true;
+    } else {
+      if (dzSzLines.supply) candleSeries.removePriceLine(dzSzLines.supply);
+      dzSzLines.supply = candleSeries.createPriceLine({
+        price, color: '#ef5350', lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true, title: 'SZ',
+      });
+      dzSzArmed = false;
+    }
+  });
+
   // ---- SMA overlay (optional — only enabled on panels that call configurarSMAs) ----
 
   let allCandles = [];           // mirrors what's on the candle series, kept sorted by time
