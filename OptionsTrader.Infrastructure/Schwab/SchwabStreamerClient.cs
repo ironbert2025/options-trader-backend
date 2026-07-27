@@ -111,19 +111,24 @@ public class SchwabStreamerClient : IAsyncDisposable
         }
     }
 
-    // Seeds the chart with the last `days` days of 1-minute candles so it isn't empty when first
-    // opened (the streamer only pushes candles going forward from the moment it connects).
+    // Seeds the chart with the last `days` TRADING days of 1-minute candles so it isn't empty
+    // when first opened (the streamer only pushes candles going forward from the moment it
+    // connects).
     //
     // Uses explicit startDate/endDate (epoch ms) instead of periodType=day&period=N — Schwab
     // documents that period-based day ranges compute startDate as "endDate - period, EXCLUDING
     // weekends and holidays", which silently drops Saturday/Sunday overnight-session candles no
-    // matter how large `days` is. Explicit start/end dates are a real calendar range, so the
-    // weekend overnight session (now part of Schwab's extended trading hours) comes through.
+    // matter how large `days` is. But a plain calendar-day startDate has the opposite problem:
+    // requesting "3 days" from a Monday would land on Friday, giving only ~1 trading day of
+    // actual session data plus 2 weekend days with no regular session. So startDate is computed
+    // by walking back `days` WEEKDAYS (Mon-Fri) — e.g. "3 days" from a Monday reaches back to
+    // Wednesday — while the explicit date range still naturally includes any weekend overnight
+    // session that falls inside it.
     public async Task<List<CandleData>> GetHistoricalCandlesAsync(string symbol, int days, CancellationToken ct = default)
     {
         var token = await GetTokenAsync();
         var endDate   = DateTimeOffset.UtcNow;
-        var startDate = endDate.AddDays(-days);
+        var startDate = ComputeStartDate(endDate, days);
         var url = $"{PriceHistoryUrl}?symbol={symbol}&periodType=day&frequencyType=minute&frequency=1" +
                   $"&startDate={startDate.ToUnixTimeMilliseconds()}&endDate={endDate.ToUnixTimeMilliseconds()}" +
                   $"&needExtendedHoursData=true";
@@ -151,6 +156,21 @@ public class SchwabStreamerClient : IAsyncDisposable
             });
         }
         return candles;
+    }
+
+    // Walks back `tradingDays` weekdays (Mon-Fri) from `from`, so the resulting range always
+    // covers that many actual trading sessions regardless of how many weekend days it spans.
+    private static DateTimeOffset ComputeStartDate(DateTimeOffset from, int tradingDays)
+    {
+        var date = from.Date;
+        var counted = 0;
+        while (counted < tradingDays)
+        {
+            date = date.AddDays(-1);
+            if (date.DayOfWeek != DayOfWeek.Saturday && date.DayOfWeek != DayOfWeek.Sunday)
+                counted++;
+        }
+        return new DateTimeOffset(date, from.Offset);
     }
 
     private async Task FetchStreamerInfoAsync(CancellationToken ct)
