@@ -126,20 +126,94 @@
     return dzSzArmed;
   }
 
+  // ---- Rect tool: sky-blue rectangle between 2 clicks (opposite corners, no value labels) ----
+
+  class RectanglesPrimitive {
+    constructor() { this._rects = []; this._chart = null; } // [{ t1, p1, t2, p2 }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                self._rects.forEach(r => {
+                  const x1 = ts.timeToCoordinate(r.t1);
+                  const x2 = ts.timeToCoordinate(r.t2);
+                  const y1 = candleSeries.priceToCoordinate(r.p1);
+                  const y2 = candleSeries.priceToCoordinate(r.p2);
+                  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+                  const left  = Math.min(x1, x2) * scope.horizontalPixelRatio;
+                  const right = Math.max(x1, x2) * scope.horizontalPixelRatio;
+                  const top    = Math.min(y1, y2) * scope.verticalPixelRatio;
+                  const bottom = Math.max(y1, y2) * scope.verticalPixelRatio;
+                  ctx.fillStyle = 'rgba(135, 206, 235, 0.35)'; // sky blue
+                  ctx.fillRect(left, top, right - left, bottom - top);
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const rectanglesPrimitive = new RectanglesPrimitive();
+  let rectAttached = false;
+  let rectArmed = false;
+  let rectPending = null; // { time, price } of the first click of the current rectangle
+
+  // Same toggle pattern as DZ/SZ: one click arms it, every 2 chart clicks draws a new rectangle,
+  // forever, until pressed again to disarm.
+  function activarRect() {
+    if (!rectAttached) { candleSeries.attachPrimitive(rectanglesPrimitive); rectAttached = true; }
+    rectArmed = !rectArmed;
+    rectPending = null;
+    return rectArmed;
+  }
+
+  function limpiarDibujos() {
+    zoneLinesPrimitive._segments = [];
+    dzSzAxisLabels.forEach(l => candleSeries.removePriceLine(l));
+    dzSzAxisLabels.length = 0;
+    dzSzArmed = false;
+    dzSzNextIsSupply = false;
+
+    rectanglesPrimitive._rects = [];
+    rectArmed = false;
+    rectPending = null;
+  }
+
   chart.subscribeClick(param => {
-    if (!dzSzArmed || !param.point || param.time === undefined) return;
+    if (!param.point || param.time === undefined) return;
     const price = candleSeries.coordinateToPrice(param.point.y);
     if (price == null) return;
 
-    const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
+    if (dzSzArmed) {
+      const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
 
-    zoneLinesPrimitive._segments.push({ time: param.time, price, color });
+      zoneLinesPrimitive._segments.push({ time: param.time, price, color });
 
-    dzSzAxisLabels.push(candleSeries.createPriceLine({
-      price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
-    }));
+      dzSzAxisLabels.push(candleSeries.createPriceLine({
+        price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
+      }));
 
-    dzSzNextIsSupply = !dzSzNextIsSupply;
+      dzSzNextIsSupply = !dzSzNextIsSupply;
+    }
+
+    if (rectArmed) {
+      if (!rectPending) {
+        rectPending = { time: param.time, price };
+      } else {
+        rectanglesPrimitive._rects.push({ t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price });
+        rectPending = null;
+      }
+    }
   });
 
   // ---- SMA overlay (optional — only enabled on panels that call configurarSMAs) ----

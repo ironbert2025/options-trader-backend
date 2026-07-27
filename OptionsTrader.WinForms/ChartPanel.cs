@@ -98,6 +98,23 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Toggles Rect drawing mode on/off. While on, every pair of clicks draws a new sky-blue
+    // rectangle between them (opposite corners, no value labels). Same toggle pattern as DZ/SZ.
+    public async Task<bool> ToggleRectModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarRect();");
+        return result == "true";
+    }
+
+    // Clears every DZ/SZ pair and every rectangle drawn on this panel, and turns both drawing
+    // modes off.
+    public async Task ClearDrawingsAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("limpiarDibujos();");
+    }
+
     // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is
     // MultiChartForm's job (once for all 3 panels), not each panel's.
     private async Task LoadHistoryAsync()

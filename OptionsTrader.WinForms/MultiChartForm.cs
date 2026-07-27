@@ -64,22 +64,55 @@ public class MultiChartForm : Form
             if (modes[i] == ChartPanelMode.Fifteen_Full) overnightPanel = panel;
         }
 
-        // DZ/SZ: click-to-draw Demand Zone (green) / Supply Zone (red) price lines — only on the
-        // 15m RTH+Overnight panel, so the button sits in the toolbar column above that panel
-        // (column index 2, matching Fifteen_Full's position in the layout below).
+        // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the
+        // toolbar column above that panel (column index 2, matching Fifteen_Full's position in
+        // the layout below). A plain Dock=Fill Panel holds them so Clear can anchor to the right.
+        var toolsHost = new Panel { Dock = DockStyle.Fill };
+
         var btnDzSz = new Button
         {
-            Text   = "DZ/SZ",
-            Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            Text     = "DZ/SZ",
+            Location = new Point(0, 4),
+            Size     = new Size(70, 24)
+        };
+        var btnRect = new Button
+        {
+            Text     = "Rect",
+            Location = new Point(76, 4),
+            Size     = new Size(70, 24)
+        };
+        var btnClear = new Button
+        {
+            Text   = "Clear",
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
             Size   = new Size(70, 24)
         };
+        btnClear.Location = new Point(toolsHost.Width - btnClear.Width, 4);
+
         btnDzSz.Click += async (s, e) =>
         {
             if (overnightPanel == null) return;
             var on = await overnightPanel.ToggleDzSzModeAsync();
             btnDzSz.BackColor = on ? Color.LightGreen : SystemColors.Control;
         };
-        toolbar.Controls.Add(btnDzSz, 2, 0);
+        btnRect.Click += async (s, e) =>
+        {
+            if (overnightPanel == null) return;
+            var on = await overnightPanel.ToggleRectModeAsync();
+            btnRect.BackColor = on ? Color.LightSkyBlue : SystemColors.Control;
+        };
+        btnClear.Click += async (s, e) =>
+        {
+            if (overnightPanel == null) return;
+            await overnightPanel.ClearDrawingsAsync();
+            btnDzSz.BackColor = SystemColors.Control;
+            btnRect.BackColor = SystemColors.Control;
+        };
+
+        toolsHost.Controls.Add(btnDzSz);
+        toolsHost.Controls.Add(btnRect);
+        toolsHost.Controls.Add(btnClear);
+        toolbar.Controls.Add(toolsHost, 2, 0);
 
         Controls.Add(layout);
         Controls.Add(toolbar);
