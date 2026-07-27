@@ -62,7 +62,7 @@
   let dzSzAttached = false;
 
   class ZoneLinesPrimitive {
-    constructor() { this._segments = []; this._chart = null; } // [{ time, price, color }, ...]
+    constructor() { this._segments = []; this._chart = null; } // [{ time, price, color }, ...] — pairs at (2i, 2i+1) = (demand, supply)
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -75,6 +75,27 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
+
+                // Fill between each completed demand/supply pair — light red if supply (2nd
+                // click) ended up above demand, light green if demand ended up above supply.
+                for (let i = 0; i + 1 < self._segments.length; i += 2) {
+                  const demand = self._segments[i];
+                  const supply = self._segments[i + 1];
+                  const xd = ts.timeToCoordinate(demand.time);
+                  const xs = ts.timeToCoordinate(supply.time);
+                  const yd = candleSeries.priceToCoordinate(demand.price);
+                  const ys = candleSeries.priceToCoordinate(supply.price);
+                  if (xd == null || xs == null || yd == null || ys == null) continue;
+
+                  const left   = Math.max(xd, xs) * scope.horizontalPixelRatio;
+                  const top    = Math.min(yd, ys) * scope.verticalPixelRatio;
+                  const bottom = Math.max(yd, ys) * scope.verticalPixelRatio;
+                  ctx.fillStyle = supply.price > demand.price
+                    ? 'rgba(239, 83, 80, 0.15)'   // supply above demand -> light red
+                    : 'rgba(38, 166, 154, 0.15)'; // demand above supply -> light green
+                  ctx.fillRect(left, top, scope.bitmapSize.width - left, bottom - top);
+                }
+
                 self._segments.forEach(seg => {
                   const x = ts.timeToCoordinate(seg.time);
                   const y = candleSeries.priceToCoordinate(seg.price);
