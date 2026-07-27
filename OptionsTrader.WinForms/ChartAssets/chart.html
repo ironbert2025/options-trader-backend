@@ -49,42 +49,75 @@
     chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
   });
 
-  // ---- DZ/SZ (Demand Zone / Supply Zone) price lines ----
-  // activarDZSZ() arms the next 2 clicks on the chart: first click -> green horizontal line
-  // (Demand Zone), second click -> red horizontal line (Supply Zone). Uses Lightweight Charts'
-  // native createPriceLine — a full-width horizontal line with the price shown on the right axis,
-  // no custom drawing needed. Each new activation replaces the previous DZ/SZ pair.
+  // ---- DZ/SZ (Demand Zone / Supply Zone) partial lines ----
+  // activarDZSZ() arms the next 2 clicks: first click -> green line (Demand Zone) from the click
+  // point to the right edge, second click -> red line (Supply Zone), same. The price value shows
+  // on the right axis (no text label). createPriceLine always spans the FULL width, so it's only
+  // used here for the axis label (lineVisible:false); the visible line segment itself is drawn by
+  // a custom primitive anchored to the clicked time, so it stays correct across pan/zoom.
   let dzSzArmed = false;
   let dzSzNextIsSupply = false; // false = next click draws Demand (green), true = Supply (red)
-  const dzSzLines = { demand: null, supply: null };
+  const dzSzAxisLabels = { demand: null, supply: null };
+  let dzSzAttached = false;
+
+  class ZoneLinesPrimitive {
+    constructor() { this._segments = {}; this._chart = null; } // key -> { time, price, color }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                Object.values(self._segments).forEach(seg => {
+                  const x = ts.timeToCoordinate(seg.time);
+                  const y = candleSeries.priceToCoordinate(seg.price);
+                  if (x == null || y == null) return;
+                  ctx.strokeStyle = seg.color;
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const zoneLinesPrimitive = new ZoneLinesPrimitive();
 
   function activarDZSZ() {
+    if (!dzSzAttached) { candleSeries.attachPrimitive(zoneLinesPrimitive); dzSzAttached = true; }
     dzSzArmed = true;
     dzSzNextIsSupply = false;
   }
 
   chart.subscribeClick(param => {
-    if (!dzSzArmed || !param.point) return;
+    if (!dzSzArmed || !param.point || param.time === undefined) return;
     const price = candleSeries.coordinateToPrice(param.point.y);
     if (price == null) return;
 
-    if (!dzSzNextIsSupply) {
-      if (dzSzLines.demand) candleSeries.removePriceLine(dzSzLines.demand);
-      dzSzLines.demand = candleSeries.createPriceLine({
-        price, color: '#26a69a', lineWidth: 2,
-        lineStyle: LightweightCharts.LineStyle.Solid,
-        axisLabelVisible: true, title: 'DZ',
-      });
-      dzSzNextIsSupply = true;
-    } else {
-      if (dzSzLines.supply) candleSeries.removePriceLine(dzSzLines.supply);
-      dzSzLines.supply = candleSeries.createPriceLine({
-        price, color: '#ef5350', lineWidth: 2,
-        lineStyle: LightweightCharts.LineStyle.Solid,
-        axisLabelVisible: true, title: 'SZ',
-      });
-      dzSzArmed = false;
-    }
+    const key   = dzSzNextIsSupply ? 'supply' : 'demand';
+    const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
+
+    zoneLinesPrimitive._segments[key] = { time: param.time, price, color };
+
+    if (dzSzAxisLabels[key]) candleSeries.removePriceLine(dzSzAxisLabels[key]);
+    dzSzAxisLabels[key] = candleSeries.createPriceLine({
+      price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
+    });
+
+    if (dzSzNextIsSupply) dzSzArmed = false;
+    dzSzNextIsSupply = !dzSzNextIsSupply;
   });
 
   // ---- SMA overlay (optional — only enabled on panels that call configurarSMAs) ----

@@ -22,12 +22,20 @@ public class MultiChartForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
-        // Toolbar strip on top.
-        var toolbar = new Panel
+        // Toolbar strip on top — same 3-column layout as the charts below, so each column's
+        // controls line up with the chart panel directly beneath it.
+        var toolbar = new TableLayoutPanel
         {
-            Dock   = DockStyle.Top,
-            Height = 36
+            Dock        = DockStyle.Top,
+            Height      = 36,
+            ColumnCount = 3,
+            RowCount    = 1,
+            Padding     = new Padding(6, 4, 6, 0)
         };
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         var layout = new TableLayoutPanel
         {
@@ -57,18 +65,19 @@ public class MultiChartForm : Form
         }
 
         // DZ/SZ: click-to-draw Demand Zone (green) / Supply Zone (red) price lines — only on the
-        // 15m RTH+Overnight panel.
+        // 15m RTH+Overnight panel, so the button sits in the toolbar column above that panel
+        // (column index 2, matching Fifteen_Full's position in the layout below).
         var btnDzSz = new Button
         {
-            Text     = "DZ/SZ",
-            Location = new Point(6, 6),
-            Size     = new Size(70, 24)
+            Text   = "DZ/SZ",
+            Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            Size   = new Size(70, 24)
         };
         btnDzSz.Click += async (s, e) =>
         {
             if (overnightPanel != null) await overnightPanel.ArmDzSzModeAsync();
         };
-        toolbar.Controls.Add(btnDzSz);
+        toolbar.Controls.Add(btnDzSz, 2, 0);
 
         Controls.Add(layout);
         Controls.Add(toolbar);
