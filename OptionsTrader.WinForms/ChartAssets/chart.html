@@ -49,23 +49,72 @@
     chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
   });
 
+  // ---- SMA overlay (optional — only enabled on panels that call configurarSMAs) ----
+
+  let allCandles = [];           // mirrors what's on the candle series, kept sorted by time
+  let smaSeries = {};            // period -> LineSeries
+  let smaPeriods = [];
+
+  const smaColors = { 20: '#f5a623', 40: '#4a90e2', 100: '#bd10e0', 200: '#ffffff' };
+
+  function configurarSMAs(periodos) {
+    periodos.forEach(p => {
+      if (!smaSeries[p]) {
+        smaSeries[p] = chart.addLineSeries({
+          color: smaColors[p] || '#888888',
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+      }
+    });
+    smaPeriods = periodos;
+    recalcularSMAs();
+  }
+
+  function recalcularSMAs() {
+    smaPeriods.forEach(p => {
+      if (allCandles.length < p) { smaSeries[p].setData([]); return; }
+      const data = [];
+      let sum = 0;
+      for (let i = 0; i < allCandles.length; i++) {
+        sum += allCandles[i].close;
+        if (i >= p) sum -= allCandles[i - p].close;
+        if (i >= p - 1) data.push({ time: allCandles[i].time, value: sum / p });
+      }
+      smaSeries[p].setData(data);
+    });
+  }
+
+  function upsertCandle(vela) {
+    const idx = allCandles.findIndex(c => c.time === vela.time);
+    if (idx >= 0) allCandles[idx] = vela;
+    else allCandles.push(vela);
+  }
+
   // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
 
   // Replaces the whole dataset (used once at startup to seed historical candles).
   function cargarHistorial(velas) {
-    candleSeries.setData(velas);
+    allCandles = velas.slice().sort((a, b) => a.time - b.time);
+    candleSeries.setData(allCandles);
     chart.timeScale().fitContent();
+    recalcularSMAs();
   }
 
   // Updates the still-forming candle (same Time as the last one) without redrawing everything.
   function actualizarUltimaVela(vela) {
+    upsertCandle(vela);
     candleSeries.update(vela);
+    recalcularSMAs();
   }
 
   // A new candle period started — same call as update; Lightweight Charts appends automatically
   // when the Time is newer than the last point.
   function agregarVelaCompleta(vela) {
+    upsertCandle(vela);
     candleSeries.update(vela);
+    recalcularSMAs();
   }
 </script>
 </body>
