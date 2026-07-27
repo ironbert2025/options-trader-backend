@@ -94,6 +94,16 @@ public class SchwabStreamerClient : IAsyncDisposable
     // then opens the WebSocket and logs in. Call SubscribeChartEquity afterwards.
     public async Task ConnectAsync(CancellationToken ct = default)
     {
+        // A previous socket left open (e.g. from a reconnect after a drop) still counts as "a
+        // connection" on Schwab's side — logging in again before it's actually torn down gets
+        // rejected with "another connection for this username and password", which then makes
+        // THIS attempt fail too, in a self-inflicted loop. Abort() is used instead of a graceful
+        // CloseAsync because the old socket may already be in a broken state that can't complete
+        // a close handshake.
+        try { _socket?.Abort(); } catch { /* best effort */ }
+        try { _socket?.Dispose(); } catch { /* best effort */ }
+        _socket = null;
+
         await FetchStreamerInfoAsync(ct);
 
         _socket = new ClientWebSocket();
@@ -396,24 +406,36 @@ public class SchwabStreamerClient : IAsyncDisposable
     private static decimal GetDecimal(JsonElement item, string field) =>
         item.TryGetProperty(field, out var v) && v.TryGetDecimal(out var d) ? d : 0m;
 
+    // Retries forever (never gives up — the app should keep trying for as long as it's open
+    // during market hours) with a backoff that actually escalates across repeated failures.
+    // Each ReceiveLoopAsync exit calls this as a fresh method invocation, so the step index is
+    // kept on the instance (_reconnectAttempt) instead of a local array walked once per call —
+    // otherwise every failed attempt would restart at the shortest delay forever, hammering the
+    // server every ~2s instead of actually backing off.
+    private static readonly int[] ReconnectDelaysMs = { 2000, 5000, 10000, 20000, 30000 };
+    private int _reconnectAttempt;
+
     private async Task ReconnectWithBackoffAsync()
     {
         OnDisconnected?.Invoke("Streamer disconnected — reconnecting...");
-        var delays = new[] { 2000, 5000, 10000, 20000, 30000 };
-        foreach (var delay in delays)
+        while (!_stopRequested)
         {
-            if (_stopRequested) return;
+            var delay = ReconnectDelaysMs[Math.Min(_reconnectAttempt, ReconnectDelaysMs.Length - 1)];
+            _reconnectAttempt++;
             await Task.Delay(delay);
+            if (_stopRequested) return;
+
             try
             {
                 await ConnectAsync();
                 if (_subscribedSymbols.Count > 0)
                     await SubscribeChartEquity(_subscribedSymbols.ToList());
+                _reconnectAttempt = 0;
                 return;
             }
             catch
             {
-                // Keep retrying with the next backoff step.
+                // Keep retrying at the (now escalated) next delay step.
             }
         }
     }
