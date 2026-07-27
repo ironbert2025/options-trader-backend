@@ -236,6 +236,7 @@ public class SchwabStreamerClient : IAsyncDisposable
                 if (result.MessageType == WebSocketMessageType.Close) break;
 
                 var json = Encoding.UTF8.GetString(messageStream.ToArray());
+                LogRawMessage(json);
                 HandleMessage(json);
             }
         }
@@ -251,6 +252,28 @@ public class SchwabStreamerClient : IAsyncDisposable
 
         if (!_stopRequested)
             await ReconnectWithBackoffAsync();
+    }
+
+    // TEMPORARY: dumps every raw message received from the streamer to disk, one line per
+    // message, so the actual Schwab wire format can be inspected and compared against the
+    // documented shape this client's parsing assumes. Remove once confirmed against live traffic.
+    private const string RawLogPath = @"C:\OptionsTraderPush\ws_raw.log";
+    private static readonly object RawLogLock = new();
+
+    private static void LogRawMessage(string json)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(RawLogPath)!);
+            lock (RawLogLock)
+            {
+                File.AppendAllText(RawLogPath, $"[{DateTime.Now:O}] {json}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Never let logging break the receive loop.
+        }
     }
 
     private void HandleMessage(string json)
