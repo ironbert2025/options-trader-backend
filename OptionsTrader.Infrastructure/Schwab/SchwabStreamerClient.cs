@@ -41,6 +41,11 @@ public class SchwabStreamerClient : IAsyncDisposable
     private int _requestId;
     private volatile bool _stopRequested;
 
+    // Completed by HandleMessage when the LOGIN response arrives, so ConnectAsync can wait for
+    // an actual server-side ack instead of just firing the LOGIN request and returning immediately
+    // — sending ADD before LOGIN is acknowledged gets rejected with "STREAM CONNECTION NOT FOUND".
+    private TaskCompletionSource? _loginTcs;
+
     // Fires once per candle update the streamer sends (Schwab's CHART_EQUITY service pushes a
     // new/updated 1-minute candle for the subscribed symbol).
     public event Action<CandleData>? OnNewCandle;
@@ -94,7 +99,18 @@ public class SchwabStreamerClient : IAsyncDisposable
         _receiveLoopCts = new CancellationTokenSource();
         _receiveLoopTask = Task.Run(() => ReceiveLoopAsync(_receiveLoopCts.Token));
 
+        _loginTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await LoginAsync(ct);
+
+        // Wait for the server's LOGIN response before returning — SubscribeChartEquity called
+        // too early (before LOGIN is acknowledged) gets rejected with "STREAM CONNECTION NOT
+        // FOUND - Please login again." even though the request was sent successfully.
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        using (linkedCts.Token.Register(() => _loginTcs.TrySetCanceled()))
+        {
+            await _loginTcs.Task;
+        }
     }
 
     // Seeds the chart with the last `days` days of 1-minute candles so it isn't empty when first
@@ -281,6 +297,26 @@ public class SchwabStreamerClient : IAsyncDisposable
         try
         {
             var root = JsonDocument.Parse(json).RootElement;
+
+            // Command ack payload shape (confirmed against live traffic):
+            // { "response": [ { "service": "ADMIN", "command": "LOGIN", "content": { "code": 0, "msg": "..." } } ] }
+            if (root.TryGetProperty("response", out var responseArray))
+            {
+                foreach (var entry in responseArray.EnumerateArray())
+                {
+                    if (!entry.TryGetProperty("service", out var svc) || svc.GetString() != "ADMIN") continue;
+                    if (!entry.TryGetProperty("command", out var cmd) || cmd.GetString() != "LOGIN") continue;
+
+                    var code = entry.TryGetProperty("content", out var c) && c.TryGetProperty("code", out var codeEl)
+                        ? codeEl.GetInt32() : -1;
+                    var msg = entry.TryGetProperty("content", out var c2) && c2.TryGetProperty("msg", out var msgEl)
+                        ? msgEl.GetString() : null;
+
+                    if (code == 0) _loginTcs?.TrySetResult();
+                    else _loginTcs?.TrySetException(new InvalidOperationException($"Streamer LOGIN failed ({code}): {msg}"));
+                }
+                return;
+            }
 
             // Data payload shape: { "data": [ { "service": "CHART_EQUITY", "content": [ {...} ] } ] }
             if (!root.TryGetProperty("data", out var dataArray)) return;
