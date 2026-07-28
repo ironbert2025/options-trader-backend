@@ -526,18 +526,16 @@
     recalcularOvernightBands();
   }
 
-  // Converts the real current time to the same "ET digits disguised as UTC" scheme the candle
-  // data uses (see ToChartJson in ChartPanel.cs), so it can be compared directly against
-  // candle.time / dayStart() values below.
-  function nowAsFakeUtcSeconds() {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    }).formatToParts(new Date());
-    const get = type => parseInt(parts.find(p => p.type === type).value, 10);
-    let hour = get('hour');
-    if (hour === 24) hour = 0; // some locales report midnight as "24"
-    return Date.UTC(get('year'), get('month') - 1, get('day'), hour, get('minute'), get('second')) / 1000;
+  // Next 9:30 AM (in the same "ET digits disguised as UTC" seconds as dayStart()/candle.time)
+  // strictly after the given day-start, skipping Saturday/Sunday.
+  function next930(dayStartSec) {
+    let next = dayStartSec + 24 * 3600;
+    let day = new Date(next * 1000).getUTCDay(); // 0=Sun, 6=Sat
+    while (day === 0 || day === 6) {
+      next += 24 * 3600;
+      day = new Date(next * 1000).getUTCDay();
+    }
+    return next + 9.5 * 3600;
   }
 
   function recalcularOvernightBands() {
@@ -559,14 +557,12 @@
       });
     }
 
-    // The overnight session currently in progress (last day's close -> right now) has no "next
-    // day" yet, so the loop above never covers it — extend the last band up to the real current
-    // time instead of waiting for tomorrow's first candle to define where it ends.
-    const lastClose = days[days.length - 1] + 16 * 3600;
-    const nowFake = nowAsFakeUtcSeconds();
-    if (nowFake > lastClose) {
-      bands.push({ from: lastClose, to: nowFake });
-    }
+    // The overnight session currently in progress (last day's close -> the next 9:30 AM RTH
+    // open) has no "next day" candle yet, so the loop above never covers it — draw it up front
+    // using the computed next session boundary instead of waiting for that candle to arrive.
+    // Once real candles land there, the next redraw's day-pair loop takes over identically.
+    const lastDay = days[days.length - 1];
+    bands.push({ from: lastDay + 16 * 3600, to: next930(lastDay) });
 
     overnightPrimitive._bands = bands;
   }
