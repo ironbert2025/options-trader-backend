@@ -70,6 +70,19 @@
   let diasVisibles = null;
   function configurarDiasVisibles(dias) { diasVisibles = dias; }
 
+  // Tracks whether the user has manually changed the visible range (pan OR zoom) since we last
+  // set it ourselves — once true, we stop touching their view entirely, forever (for this chart
+  // instance). Comparing against "is the right edge still near now" isn't enough on its own: a
+  // zoom-out to see more history still has its right edge near now, but must NOT get overridden.
+  let userHasInteracted = false;
+  let lastAppliedRange = null;
+
+  chart.timeScale().subscribeVisibleTimeRangeChange(range => {
+    if (userHasInteracted || !lastAppliedRange || !range) return;
+    const matches = Math.abs(range.from - lastAppliedRange.from) < 1 && Math.abs(range.to - lastAppliedRange.to) < 1;
+    if (!matches) userHasInteracted = true;
+  });
+
   function aplicarRangoVisible() {
     if (!diasVisibles || allCandles.length === 0) return;
     const dayStart = t => {
@@ -86,21 +99,19 @@
     const barDuration = allCandles.length > 1
       ? allCandles[allCandles.length - 1].time - allCandles[allCandles.length - 2].time
       : 900;
-    chart.timeScale().setVisibleRange({
+    const range = {
       from: days[cutoffIdx],
       to: allCandles[allCandles.length - 1].time + barDuration * 3,
-    });
+    };
+    lastAppliedRange = range;
+    chart.timeScale().setVisibleRange(range);
   }
 
-  // Only reapplies the default range (which would also re-pad the right margin) if the user is
-  // still viewing at/near the live edge — if they've manually panned away, leave their view
-  // alone instead of snapping back to the right on every incoming tick.
+  // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
+  // the user hasn't manually panned/zoomed since the last time we set it — see userHasInteracted.
   function reaplicarRangoVisibleSiEnVivo() {
-    if (!diasVisibles || allCandles.length < 2) return;
-    const range = chart.timeScale().getVisibleRange();
-    if (!range) { aplicarRangoVisible(); return; }
-    const secondLastTime = allCandles[allCandles.length - 2].time;
-    if (range.to >= secondLastTime) aplicarRangoVisible();
+    if (!diasVisibles || userHasInteracted) return;
+    aplicarRangoVisible();
   }
 
   // ---- DZ/SZ (Demand Zone / Supply Zone) partial lines ----
