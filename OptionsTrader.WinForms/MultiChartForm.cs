@@ -33,7 +33,7 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 980;
-        Height        = 420;
+        Height        = 392;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -42,7 +42,7 @@ public class MultiChartForm : Form
         var toolbar = new TableLayoutPanel
         {
             Dock        = DockStyle.Top,
-            Height      = 90,
+            Height      = 62,
             ColumnCount = 3,
             RowCount    = 1,
             Padding     = new Padding(6, 4, 6, 0)
@@ -60,12 +60,12 @@ public class MultiChartForm : Form
             Dock        = DockStyle.Fill,
             ColumnCount = 4,
             RowCount    = 1,
-            Padding     = new Padding(6)
+            Padding     = new Padding(6, 2, 6, 6)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         ChartPanel? overnightPanel = null;
@@ -78,7 +78,7 @@ public class MultiChartForm : Form
             var panel = new ChartPanel(symbol, _historyClient, _liveFeed, modes[i])
             {
                 Dock   = DockStyle.Fill,
-                Margin = new Padding(6)
+                Margin = new Padding(6, 2, 6, 6)
             };
             layout.Controls.Add(panel, i, 0);
             if (modes[i] == ChartPanelMode.Fifteen_Full) overnightPanel = panel;
@@ -228,13 +228,13 @@ public class MultiChartForm : Form
         // buttons on top, 6 Put buttons below, closest-to-money first. AutoScroll is a safety net
         // in case the window is short enough that all 12 + labels don't fit.
         var otmPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4), AutoScroll = true };
-        const int btnWidth = 96, btnHeight = 26, btnGap = 2;
+        const int btnWidth = 68, btnHeight = 20, btnGap = 2;
         var y = 2;
         otmPanel.Controls.Add(new Label { Text = "CALL", Location = new Point(4, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.LimeGreen, Font = new Font(Font, FontStyle.Bold) });
         y += 16;
         for (int i = 0; i < _callButtons.Length; i++)
         {
-            var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightGreen, Visible = false };
+            var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightGreen, Visible = false, Font = new Font(Font.FontFamily, 7f) };
             btn.Click += (s, e) => OnOtmButtonClick(btn);
             otmPanel.Controls.Add(btn);
             _callButtons[i] = btn;
@@ -245,7 +245,7 @@ public class MultiChartForm : Form
         y += 16;
         for (int i = 0; i < _putButtons.Length; i++)
         {
-            var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightSalmon, Visible = false };
+            var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightSalmon, Visible = false, Font = new Font(Font.FontFamily, 7f) };
             btn.Click += (s, e) => OnOtmButtonClick(btn);
             otmPanel.Controls.Add(btn);
             _putButtons[i] = btn;
