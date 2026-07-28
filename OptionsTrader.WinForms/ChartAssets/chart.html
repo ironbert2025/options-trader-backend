@@ -532,6 +532,20 @@
     recalcularOvernightBands();
   }
 
+  // Real current time, converted to the same "ET digits disguised as UTC" seconds scheme the
+  // candle data uses (see ToChartJson in ChartPanel.cs), so it can be compared directly against
+  // dayStart()/candle.time values.
+  function nowAsFakeUtcSeconds() {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(new Date());
+    const get = type => parseInt(parts.find(p => p.type === type).value, 10);
+    let hour = get('hour');
+    if (hour === 24) hour = 0; // some locales report midnight as "24"
+    return Date.UTC(get('year'), get('month') - 1, get('day'), hour, get('minute'), get('second')) / 1000;
+  }
+
   // Next 9:30 AM (in the same "ET digits disguised as UTC" seconds as dayStart()/candle.time)
   // strictly after the given day-start, skipping Saturday/Sunday.
   function next930(dayStartSec) {
@@ -567,8 +581,16 @@
     // open) has no "next day" candle yet, so the loop above never covers it — draw it up front
     // using the computed next session boundary instead of waiting for that candle to arrive.
     // Once real candles land there, the next redraw's day-pair loop takes over identically.
+    //
+    // Only add it once that day's session has ACTUALLY closed (real now >= that day's 4:00 PM
+    // ET) — otherwise, as soon as the first candle of a new day arrives, this would immediately
+    // shade a "closing gap" for that day stretching over the rest of TODAY's still-forming RTH
+    // candles, hours before the market has even closed.
     const lastDay = days[days.length - 1];
-    bands.push({ from: lastDay + 16 * 3600, to: next930(lastDay) });
+    const lastClose = lastDay + 16 * 3600;
+    if (nowAsFakeUtcSeconds() >= lastClose) {
+      bands.push({ from: lastClose, to: next930(lastDay) });
+    }
 
     overnightPrimitive._bands = bands;
   }
