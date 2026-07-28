@@ -526,6 +526,20 @@
     recalcularOvernightBands();
   }
 
+  // Converts the real current time to the same "ET digits disguised as UTC" scheme the candle
+  // data uses (see ToChartJson in ChartPanel.cs), so it can be compared directly against
+  // candle.time / dayStart() values below.
+  function nowAsFakeUtcSeconds() {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(new Date());
+    const get = type => parseInt(parts.find(p => p.type === type).value, 10);
+    let hour = get('hour');
+    if (hour === 24) hour = 0; // some locales report midnight as "24"
+    return Date.UTC(get('year'), get('month') - 1, get('day'), hour, get('minute'), get('second')) / 1000;
+  }
+
   function recalcularOvernightBands() {
     if (!overnightBandsEnabled || allCandles.length === 0) return;
 
@@ -544,6 +558,16 @@
         to:   days[i + 1] + 9.5 * 3600,   // 9:30 AM ET the next available day
       });
     }
+
+    // The overnight session currently in progress (last day's close -> right now) has no "next
+    // day" yet, so the loop above never covers it — extend the last band up to the real current
+    // time instead of waiting for tomorrow's first candle to define where it ends.
+    const lastClose = days[days.length - 1] + 16 * 3600;
+    const nowFake = nowAsFakeUtcSeconds();
+    if (nowFake > lastClose) {
+      bands.push({ from: lastClose, to: nowFake });
+    }
+
     overnightPrimitive._bands = bands;
   }
 
