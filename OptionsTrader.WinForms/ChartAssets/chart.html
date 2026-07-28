@@ -264,6 +264,11 @@
     hLinePrimitive._segments = [];
     hLineArmed = false;
 
+    arrowPrimitive._arrows = [];
+    arrowPrimitive._preview = null;
+    arrowArmed = false;
+    arrowPending = null;
+
     forceRepaint();
   }
 
@@ -316,6 +321,18 @@
       hLinePrimitive._segments.push({ time: param.time, price });
       forceRepaint();
     }
+
+    if (arrowArmed) {
+      if (!arrowPending) {
+        arrowPending = { time: param.time, price };
+      } else {
+        const red = arrowPending.price > price; // 1st click above (higher price than) 2nd -> red
+        arrowPrimitive._arrows.push({ t1: arrowPending.time, p1: arrowPending.price, t2: param.time, p2: price, red });
+        arrowPrimitive._preview = null;
+        arrowPending = null;
+        forceRepaint();
+      }
+    }
   });
 
   // Live preview of the rectangle/T-Line while the mouse moves between the 1st and 2nd click.
@@ -336,6 +353,17 @@
       const price = candleSeries.coordinateToPrice(param.point.y);
       if (price != null) {
         tLinePrimitive._preview = { t1: tLinePending.time, p1: tLinePending.price, t2: param.time, p2: price };
+        forceRepaint();
+      }
+    }
+
+    if (!arrowArmed || !arrowPending) {
+      if (arrowPrimitive._preview) { arrowPrimitive._preview = null; forceRepaint(); }
+    } else if (param.point && param.time !== undefined) {
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price != null) {
+        const red = arrowPending.price > price;
+        arrowPrimitive._preview = { t1: arrowPending.time, p1: arrowPending.price, t2: param.time, p2: price, red };
         forceRepaint();
       }
     }
@@ -435,6 +463,75 @@
     if (!hLineAttached) { candleSeries.attachPrimitive(hLinePrimitive); hLineAttached = true; }
     hLineArmed = !hLineArmed;
     return hLineArmed;
+  }
+
+  // ---- Arrow tool: line + arrowhead between 2 clicks — red if the 1st click is ABOVE (higher
+  // price than) the 2nd click, green otherwise ----
+
+  class ArrowPrimitive {
+    constructor() { this._arrows = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, red }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const drawArrow = (a, alpha) => {
+                  const x1 = ts.timeToCoordinate(a.t1);
+                  const x2 = ts.timeToCoordinate(a.t2);
+                  const y1 = candleSeries.priceToCoordinate(a.p1);
+                  const y2 = candleSeries.priceToCoordinate(a.p2);
+                  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+
+                  const X1 = x1 * scope.horizontalPixelRatio, Y1 = y1 * scope.verticalPixelRatio;
+                  const X2 = x2 * scope.horizontalPixelRatio, Y2 = y2 * scope.verticalPixelRatio;
+                  const color = a.red ? `rgba(239, 83, 80, ${alpha})` : `rgba(38, 166, 154, ${alpha})`;
+
+                  ctx.strokeStyle = color;
+                  ctx.fillStyle = color;
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(X1, Y1);
+                  ctx.lineTo(X2, Y2);
+                  ctx.stroke();
+
+                  // Arrowhead at the 2nd click, pointing along the line's direction.
+                  const angle = Math.atan2(Y2 - Y1, X2 - X1);
+                  const headLen = 10 * scope.horizontalPixelRatio;
+                  const headAngle = Math.PI / 7;
+                  ctx.beginPath();
+                  ctx.moveTo(X2, Y2);
+                  ctx.lineTo(X2 - headLen * Math.cos(angle - headAngle), Y2 - headLen * Math.sin(angle - headAngle));
+                  ctx.lineTo(X2 - headLen * Math.cos(angle + headAngle), Y2 - headLen * Math.sin(angle + headAngle));
+                  ctx.closePath();
+                  ctx.fill();
+                };
+                self._arrows.forEach(a => drawArrow(a, 1));
+                if (self._preview) drawArrow(self._preview, 0.6);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const arrowPrimitive = new ArrowPrimitive();
+  let arrowAttached = false;
+  let arrowArmed = false;
+  let arrowPending = null; // { time, price } of the first click of the current arrow
+
+  function activarArrow() {
+    if (!arrowAttached) { candleSeries.attachPrimitive(arrowPrimitive); arrowAttached = true; }
+    arrowArmed = !arrowArmed;
+    arrowPending = null;
+    return arrowArmed;
   }
 
   // ---- SMA overlay (optional — only enabled on panels that call configurarSMAs) ----

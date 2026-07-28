@@ -197,6 +197,15 @@ public class MultiChartForm : Form
             Size     = new Size(70, 24)
         };
 
+        // Draws a line + arrowhead between 2 clicks — red if the 1st click is above the 2nd,
+        // green otherwise. Same toggle pattern as the rest.
+        var btnArrow = new Button
+        {
+            Text     = "Arrow",
+            Location = new Point(76, 30),
+            Size     = new Size(70, 24)
+        };
+
         btnDzSz.Click += async (s, e) =>
         {
             if (overnightPanel == null) return;
@@ -215,6 +224,7 @@ public class MultiChartForm : Form
             await overnightPanel.ClearDrawingsAsync();
             btnDzSz.BackColor = SystemColors.Control;
             btnRect.BackColor = SystemColors.Control;
+            btnArrow.BackColor = SystemColors.Control;
         };
         btn5Min.Click += async (s, e) =>
         {
@@ -222,11 +232,18 @@ public class MultiChartForm : Form
             var is5Min = await overnightPanel.ToggleIntervalAsync();
             btn5Min.BackColor = is5Min ? Color.LightBlue : SystemColors.Control;
         };
+        btnArrow.Click += async (s, e) =>
+        {
+            if (overnightPanel == null) return;
+            var on = await overnightPanel.ToggleArrowModeAsync();
+            btnArrow.BackColor = on ? Color.LightYellow : SystemColors.Control;
+        };
 
         toolsHost.Controls.Add(btnDzSz);
         toolsHost.Controls.Add(btnRect);
         toolsHost.Controls.Add(btnClear);
         toolsHost.Controls.Add(btn5Min);
+        toolsHost.Controls.Add(btnArrow);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
         Controls.Add(layout);

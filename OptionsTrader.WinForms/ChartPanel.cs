@@ -147,8 +147,18 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Clears every DZ/SZ pair, rectangle, T-Line and H-Line drawn on this panel, and turns all
-    // drawing modes off.
+    // Toggles Arrow drawing mode on/off. While on, every pair of clicks draws a line + arrowhead
+    // between them — red if the 1st click is above (higher price than) the 2nd, green otherwise.
+    // Same toggle pattern as Rect/T-Line.
+    public async Task<bool> ToggleArrowModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarArrow();");
+        return result == "true";
+    }
+
+    // Clears every DZ/SZ pair, rectangle, T-Line, H-Line and Arrow drawn on this panel, and turns
+    // all drawing modes off.
     public async Task ClearDrawingsAsync()
     {
         if (_webView.CoreWebView2 == null) return;
