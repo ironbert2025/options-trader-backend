@@ -79,16 +79,31 @@ internal static class IvHistorialWriter
 
     // Reads the earliest snapshot (poll cycle) within the 09:30-09:35 window and returns the
     // strike closest to the spot price from that snapshot (the ATM strike).
+    //
+    // CsvLogger keeps this exact file open all day with a StreamWriter (FileAccess.Write,
+    // FileShare.Read) while the polling session is running. File.ReadAllLines only requests
+    // FileShare.Read for itself, which isn't enough — Windows also requires the READER's share
+    // mode to explicitly tolerate the WRITER's already-open access, so it gets rejected with
+    // "used by another process" on every single attempt until CsvLogger closes the file (e.g. on
+    // Stop Polling), which is why this snapshot used to only succeed hours late. Opening
+    // explicitly with FileShare.ReadWrite fixes that.
     private static AtmRow? FindAtmRow(string csvPath)
     {
-        var lines = File.ReadAllLines(csvPath);
-        if (lines.Length < 2) return null;
+        List<string> lines;
+        using (var stream = new FileStream(csvPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var reader = new StreamReader(stream))
+        {
+            lines = new List<string>();
+            string? line;
+            while ((line = reader.ReadLine()) != null) lines.Add(line);
+        }
+        if (lines.Count < 2) return null;
 
         string? firstTimeInWindow = null;
         AtmRow? best = null;
         var bestDistance = decimal.MaxValue;
 
-        for (int i = 1; i < lines.Length; i++)
+        for (int i = 1; i < lines.Count; i++)
         {
             var parts = lines[i].Split(',');
             if (parts.Length < 12) continue;
