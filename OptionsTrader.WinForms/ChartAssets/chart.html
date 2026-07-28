@@ -92,6 +92,17 @@
     });
   }
 
+  // Only reapplies the default range (which would also re-pad the right margin) if the user is
+  // still viewing at/near the live edge — if they've manually panned away, leave their view
+  // alone instead of snapping back to the right on every incoming tick.
+  function reaplicarRangoVisibleSiEnVivo() {
+    if (!diasVisibles || allCandles.length < 2) return;
+    const range = chart.timeScale().getVisibleRange();
+    if (!range) { aplicarRangoVisible(); return; }
+    const secondLastTime = allCandles[allCandles.length - 2].time;
+    if (range.to >= secondLastTime) aplicarRangoVisible();
+  }
+
   // ---- DZ/SZ (Demand Zone / Supply Zone) partial lines ----
   // activarDZSZ() arms the next 2 clicks: first click -> green line (Demand Zone) from the click
   // point to the right edge, second click -> red line (Supply Zone), same. The price value shows
@@ -654,8 +665,11 @@
     recalcularBollinger();
     recalcularOvernightBands();
     // series.update() auto-scrolls the time scale to keep following the latest bar, which eats
-    // into the right-edge margin set at load time — reapply it on every live tick so it sticks.
-    if (diasVisibles) aplicarRangoVisible();
+    // into the right-edge margin set at load time — reapply it on every live tick so it sticks,
+    // but only while the user is actually following the live edge (see
+    // reaplicarRangoVisibleSiEnVivo): otherwise a manual pan to the left would get overridden by
+    // the very next tick.
+    reaplicarRangoVisibleSiEnVivo();
   }
 
   // A new candle period started — same call as update; Lightweight Charts appends automatically
@@ -666,7 +680,7 @@
     recalcularSMAs();
     recalcularBollinger();
     recalcularOvernightBands();
-    if (diasVisibles) aplicarRangoVisible();
+    reaplicarRangoVisibleSiEnVivo();
   }
 </script>
 </body>
