@@ -32,7 +32,7 @@ public class MultiChartForm : Form
         _tradeGateway  = tradeGateway;
 
         Text          = $"Live Charts — {symbol}";
-        Width         = 980;
+        Width         = 1050;
         Height        = 392;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
@@ -65,7 +65,7 @@ public class MultiChartForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         ChartPanel? overnightPanel = null;
@@ -224,31 +224,30 @@ public class MultiChartForm : Form
         toolbar.Controls.Add(toolsHost, 2, 0);
 
         // OTM Call/Put buttons — native WinForms controls in their own column (added to `layout`
-        // below, so their height matches the charts' height, not the whole window). 6 Call
-        // buttons on top, 6 Put buttons below, closest-to-money first. AutoScroll is a safety net
-        // in case the window is short enough that all 12 + labels don't fit.
+        // below, so their height matches the charts' height, not the whole window). Call and Put
+        // sit side by side in 2 sub-columns (rank i lines up horizontally between them), instead
+        // of Call stacked above Put. AutoScroll is a safety net in case the window is short
+        // enough that all 12 + labels don't fit.
         var otmPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4), AutoScroll = true };
-        const int btnWidth = 68, btnHeight = 20, btnGap = 2;
+        const int btnWidth = 68, btnHeight = 20, btnGap = 2, colGap = 6;
+        var callX = 4;
+        var putX = callX + btnWidth + colGap;
         var y = 2;
-        otmPanel.Controls.Add(new Label { Text = "CALL", Location = new Point(4, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.LimeGreen, Font = new Font(Font, FontStyle.Bold) });
+        otmPanel.Controls.Add(new Label { Text = "CALL", Location = new Point(callX, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.LimeGreen, Font = new Font(Font, FontStyle.Bold) });
+        otmPanel.Controls.Add(new Label { Text = "PUT", Location = new Point(putX, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.OrangeRed, Font = new Font(Font, FontStyle.Bold) });
         y += 16;
         for (int i = 0; i < _callButtons.Length; i++)
         {
-            var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightGreen, Visible = false, Font = new Font(Font.FontFamily, 7f) };
-            btn.Click += (s, e) => OnOtmButtonClick(btn);
-            otmPanel.Controls.Add(btn);
-            _callButtons[i] = btn;
-            y += btnHeight + btnGap;
-        }
-        y += 6;
-        otmPanel.Controls.Add(new Label { Text = "PUT", Location = new Point(4, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.OrangeRed, Font = new Font(Font, FontStyle.Bold) });
-        y += 16;
-        for (int i = 0; i < _putButtons.Length; i++)
-        {
-            var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightSalmon, Visible = false, Font = new Font(Font.FontFamily, 7f) };
-            btn.Click += (s, e) => OnOtmButtonClick(btn);
-            otmPanel.Controls.Add(btn);
-            _putButtons[i] = btn;
+            var callBtn = new Button { Location = new Point(callX, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightGreen, Visible = false, Font = new Font(Font.FontFamily, 7f) };
+            callBtn.Click += (s, e) => OnOtmButtonClick(callBtn);
+            otmPanel.Controls.Add(callBtn);
+            _callButtons[i] = callBtn;
+
+            var putBtn = new Button { Location = new Point(putX, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightSalmon, Visible = false, Font = new Font(Font.FontFamily, 7f) };
+            putBtn.Click += (s, e) => OnOtmButtonClick(putBtn);
+            otmPanel.Controls.Add(putBtn);
+            _putButtons[i] = putBtn;
+
             y += btnHeight + btnGap;
         }
         layout.Controls.Add(otmPanel, 3, 0);

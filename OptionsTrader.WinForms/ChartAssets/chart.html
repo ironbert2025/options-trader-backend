@@ -570,56 +570,65 @@
     return Date.UTC(get('year'), get('month') - 1, get('day'), hour, get('minute'), get('second')) / 1000;
   }
 
-  // Next 9:30 AM (in the same "ET digits disguised as UTC" seconds as dayStart()/candle.time)
-  // strictly after the given day-start, skipping Saturday/Sunday.
-  function next930(dayStartSec) {
-    let next = dayStartSec + 24 * 3600;
-    let day = new Date(next * 1000).getUTCDay(); // 0=Sun, 6=Sat
-    while (day === 0 || day === 6) {
-      next += 24 * 3600;
-      day = new Date(next * 1000).getUTCDay();
-    }
-    return next + 9.5 * 3600;
+  // Each candle's "time" is already ET wall-clock digits disguised as UTC (see C# ToChartJson) —
+  // read it back with the UTC getters to recover the real ET date/hour cheaply, no library.
+  function dayStartOf(t) {
+    const d = new Date(t * 1000);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
   }
 
+  function isRthTime(t) {
+    const d = new Date(t * 1000);
+    const minutesOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
+    return minutesOfDay >= 9 * 60 + 30 && minutesOfDay < 16 * 60;
+  }
+
+  // Next 9:30 AM strictly after `t` (skips to the next calendar day if `t` is already past that
+  // day's 9:30), skipping Saturday/Sunday.
+  function next930After(t) {
+    let day = dayStartOf(t);
+    let candidate = day + 9.5 * 3600;
+    if (candidate <= t) { day += 24 * 3600; candidate = day + 9.5 * 3600; }
+    while (true) {
+      const weekday = new Date(candidate * 1000).getUTCDay(); // 0=Sun, 6=Sat
+      if (weekday !== 0 && weekday !== 6) break;
+      day += 24 * 3600;
+      candidate = day + 9.5 * 3600;
+    }
+    return candidate;
+  }
+
+  // Shades every stretch where the ACTUAL candles fall outside RTH hours (9:30 AM-4:00 PM ET) —
+  // driven directly by real candle timestamps rather than inferred from a "days present" list,
+  // so it can't accidentally shade a day that's entirely within RTH due to a day-boundary mixup.
   function recalcularOvernightBands() {
     if (!overnightBandsEnabled || allCandles.length === 0) return;
 
-    // Each candle's "time" is already ET wall-clock digits disguised as UTC (see C# ToChartJson)
-    // — read it back with the UTC getters to recover the real ET date/hour cheaply, no library.
-    const dayStart = t => {
-      const d = new Date(t * 1000);
-      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
-    };
-
-    const days = [...new Set(allCandles.map(c => dayStart(c.time)))].sort((a, b) => a - b);
     const bands = [];
-    for (let i = 0; i < days.length - 1; i++) {
-      bands.push({
-        from: days[i] + 16 * 3600,        // 4:00 PM ET that day
-        to:   days[i + 1] + 9.5 * 3600,   // 9:30 AM ET the next available day
-      });
+    let bandStart = null;
+    for (const c of allCandles) {
+      if (!isRthTime(c.time)) {
+        if (bandStart == null) bandStart = c.time;
+      } else if (bandStart != null) {
+        bands.push({ from: bandStart, to: c.time });
+        bandStart = null;
+      }
     }
 
-    // The overnight session currently in progress (last day's close -> the next 9:30 AM RTH
-    // open) has no "next day" candle yet, so the loop above never covers it — draw it up front
-    // using the computed next session boundary instead of waiting for that candle to arrive.
-    // Once real candles land there, the next redraw's day-pair loop takes over identically.
-    //
-    // Only add it once that day's session has ACTUALLY closed (real now >= that day's 4:00 PM
-    // ET) — otherwise, as soon as the first candle of a new day arrives, this would immediately
-    // shade a "closing gap" for that day stretching over the rest of TODAY's still-forming RTH
-    // candles, hours before the market has even closed.
-    const lastDay = days[days.length - 1];
-    const lastClose = lastDay + 16 * 3600;
-    if (nowAsFakeUtcSeconds() >= lastClose) {
-      // Never start the shading earlier than the actual last plotted candle — whatever the
-      // cause of a mismatch between the assumed 16:00 close and where real data actually ends
-      // (DST edge case, a slightly-late last tick, etc.), this guarantees the band can't cover
-      // real candles regardless.
-      const lastCandleTime = allCandles[allCandles.length - 1].time;
-      const from = Math.max(lastClose, lastCandleTime);
-      bands.push({ from, to: next930(lastDay) });
+    const lastCandle = allCandles[allCandles.length - 1];
+    if (bandStart != null) {
+      // Real overnight/weekend ticks are already coming in right now — extend that open band up
+      // to the next RTH open instead of stopping at the last tick received so far.
+      bands.push({ from: bandStart, to: next930After(lastCandle.time) });
+    } else {
+      // Last candle was RTH. If that day's session has genuinely closed (real now past 4:00 PM
+      // ET) but no overnight ticks have arrived yet, anticipate the gap instead of waiting for
+      // the first one — same reasoning as before, just no longer tied to a "days" list.
+      const assumedClose = dayStartOf(lastCandle.time) + 16 * 3600;
+      if (nowAsFakeUtcSeconds() >= assumedClose) {
+        const from = Math.max(assumedClose, lastCandle.time);
+        bands.push({ from, to: next930After(lastCandle.time) });
+      }
     }
 
     overnightPrimitive._bands = bands;
