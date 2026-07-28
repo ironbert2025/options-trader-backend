@@ -28,11 +28,15 @@ public class ChartPanel : Panel
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
     private readonly ChartPanelMode _mode;
-    private readonly int _intervalMinutes;
+    private int _intervalMinutes; // mutable only for Fifteen_Full, via ToggleIntervalAsync (5m <-> 15m)
     private readonly bool _rthOnly;
     private readonly Label _header;
     private WebView2 _webView = null!;
     private bool _closing;
+
+    // The session-filtered 1-minute candles from the last historical fetch, cached so
+    // ToggleIntervalAsync can re-aggregate at a different interval without re-fetching from Schwab.
+    private List<CandleData> _rawHistory = new();
 
     // The bucket currently being built from live 1-min ticks, and which bucket index it belongs
     // to (so we know when a new tick starts a new bucket vs. extends the current one).
@@ -149,6 +153,31 @@ public class ChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync("limpiarDibujos();");
+    }
+
+    // Toggles this panel's candle interval between 15m and 5m — only meaningful for Fifteen_Full
+    // (the only mode MultiChartForm wires this up for). Re-aggregates the cached 1-minute history
+    // (no re-fetch from Schwab needed) at the new interval and reloads the chart + re-seeds the
+    // live bucket aggregator. Returns true if now showing 5m candles.
+    public async Task<bool> ToggleIntervalAsync()
+    {
+        _intervalMinutes = _intervalMinutes == 5 ? 15 : 5;
+        _header.Text = $"{_symbol} — {_intervalMinutes}m RTH+Overnight";
+
+        if (_webView.CoreWebView2 != null && _rawHistory.Count > 0)
+        {
+            var aggregated = AggregateToInterval(_rawHistory, _intervalMinutes, _rthOnly);
+            if (aggregated.Count > 0)
+            {
+                await RunScriptAsync("cargarHistorial", aggregated);
+                var last = aggregated[^1];
+                _liveAnchor      = BucketAnchor(new[] { last }, _rthOnly);
+                _liveBucketIndex = BucketIndex(last.Time, _liveAnchor, _intervalMinutes);
+                _liveBucket      = last;
+            }
+        }
+
+        return _intervalMinutes == 5;
     }
 
     // Toggles a "Cross UP/DOWN SMA(period)" monitor on/off. While armed, every 1h candle that
@@ -286,6 +315,7 @@ public class ChartPanel : Panel
             if (history.Count > 0)
             {
                 var filtered = FilterSession(history, _rthOnly);
+                _rawHistory = filtered; // cached so ToggleIntervalAsync can re-aggregate without re-fetching
                 var aggregated = AggregateToInterval(filtered, _intervalMinutes, _rthOnly);
 
                 // 1h panel: persist today's fetch to disk and merge with everything saved from

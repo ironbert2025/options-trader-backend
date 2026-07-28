@@ -187,6 +187,16 @@ public class MultiChartForm : Form
         };
         btnClear.Location = new Point(toolsHost.Width - btnClear.Width, 4);
 
+        // Toggles the 15m RTH+Overnight panel between 5-minute and 15-minute candles — label
+        // stays "5Min" (same toggle-button convention as DZ/SZ/T-Line/etc.), BackColor shows
+        // whether 5m is currently active.
+        var btn5Min = new Button
+        {
+            Text     = "5Min",
+            Location = new Point(0, 30),
+            Size     = new Size(70, 24)
+        };
+
         btnDzSz.Click += async (s, e) =>
         {
             if (overnightPanel == null) return;
@@ -206,10 +216,17 @@ public class MultiChartForm : Form
             btnDzSz.BackColor = SystemColors.Control;
             btnRect.BackColor = SystemColors.Control;
         };
+        btn5Min.Click += async (s, e) =>
+        {
+            if (overnightPanel == null) return;
+            var is5Min = await overnightPanel.ToggleIntervalAsync();
+            btn5Min.BackColor = is5Min ? Color.LightBlue : SystemColors.Control;
+        };
 
         toolsHost.Controls.Add(btnDzSz);
         toolsHost.Controls.Add(btnRect);
         toolsHost.Controls.Add(btnClear);
+        toolsHost.Controls.Add(btn5Min);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
         Controls.Add(layout);
