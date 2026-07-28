@@ -265,7 +265,14 @@ public class ChartPanel : Panel
             {
                 if (args.IsSuccess) navDone.TrySetResult();
             };
-            _webView.CoreWebView2.Navigate(new Uri(chartPath).AbsoluteUri);
+
+            // Cache-busting query string — WebView2's Chromium engine can serve a cached copy of
+            // chart.html across window instances within the same app process since it's always
+            // the exact same file:// URL, even after the file on disk changed. Appending the
+            // file's last-write time makes every rebuild/deploy get its own distinct URL, forcing
+            // a fresh read instead of a stale cached one.
+            var chartUri = new Uri(chartPath).AbsoluteUri + $"?v={File.GetLastWriteTimeUtc(chartPath).Ticks}";
+            _webView.CoreWebView2.Navigate(chartUri);
             await navDone.Task;
 
             // SMA 20/40/100/200 overlay — only on the 1h panel for now.
