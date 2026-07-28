@@ -244,6 +244,106 @@
     return rectArmed;
   }
 
+  // ---- Gray Rect tool (1h panel): filled gray rectangle marking sideways/consolidation ranges
+  // around price+SMAs. Same 2-click draw as the sky-blue Rect above, but each rectangle can also
+  // be SELECTED by clicking its border (works whether or not the tool is currently armed) and
+  // removed by pressing Delete — the sky-blue Rect tool has no such selection/delete. ----
+
+  class GrayRectPrimitive {
+    constructor() { this._rects = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const drawRect = (r, alpha, selected) => {
+                  const x1 = ts.timeToCoordinate(r.t1);
+                  const x2 = ts.timeToCoordinate(r.t2);
+                  const y1 = candleSeries.priceToCoordinate(r.p1);
+                  const y2 = candleSeries.priceToCoordinate(r.p2);
+                  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+                  const left   = Math.min(x1, x2) * scope.horizontalPixelRatio;
+                  const right  = Math.max(x1, x2) * scope.horizontalPixelRatio;
+                  const top    = Math.min(y1, y2) * scope.verticalPixelRatio;
+                  const bottom = Math.max(y1, y2) * scope.verticalPixelRatio;
+                  ctx.fillStyle = `rgba(150, 150, 150, ${alpha})`;
+                  ctx.fillRect(left, top, right - left, bottom - top);
+                  if (selected) {
+                    ctx.strokeStyle = '#ffeb3b'; // yellow outline = selected, ready to delete
+                    ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                    ctx.strokeRect(left, top, right - left, bottom - top);
+                  }
+                };
+                self._rects.forEach(r => drawRect(r, 0.35, r.selected));
+                if (self._preview) drawRect(self._preview, 0.18, false); // lighter while still dragging
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const grayRectPrimitive = new GrayRectPrimitive();
+  let grayRectAttached = false;
+  let grayRectArmed = false;
+  let grayRectPending = null; // { time, price } of the first click of the current rectangle
+
+  function activarRectGris() {
+    if (!grayRectAttached) { candleSeries.attachPrimitive(grayRectPrimitive); grayRectAttached = true; }
+    grayRectArmed = !grayRectArmed;
+    grayRectPending = null;
+    return grayRectArmed;
+  }
+
+  // Shortest distance from point (px,py) to the line segment (x1,y1)-(x2,y2), in CSS pixels.
+  function distToSegment(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const cx = x1 + t * dx, cy = y1 + t * dy;
+    return Math.hypot(px - cx, py - cy);
+  }
+
+  // Returns the index of the gray rect whose BORDER (not interior) is within a few pixels of
+  // (px,py), or -1. Checked in CSS-pixel space (param.point from chart.subscribeClick), which is
+  // what timeToCoordinate/priceToCoordinate already return outside of the bitmap draw() context.
+  function findGrayRectByBorderClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = grayRectPrimitive._rects.length - 1; i >= 0; i--) {
+      const r = grayRectPrimitive._rects[i];
+      const x1 = ts.timeToCoordinate(r.t1), x2 = ts.timeToCoordinate(r.t2);
+      const y1 = candleSeries.priceToCoordinate(r.p1), y2 = candleSeries.priceToCoordinate(r.p2);
+      if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+      const left = Math.min(x1, x2), right = Math.max(x1, x2);
+      const top = Math.min(y1, y2), bottom = Math.max(y1, y2);
+      const edges = [
+        [left, top, right, top], [right, top, right, bottom],
+        [right, bottom, left, bottom], [left, bottom, left, top],
+      ];
+      if (edges.some(([ex1, ey1, ex2, ey2]) => distToSegment(px, py, ex1, ey1, ex2, ey2) <= tolerance)) return i;
+    }
+    return -1;
+  }
+
+  // Delete removes whichever gray rect is currently selected (border-clicked).
+  window.addEventListener('keydown', e => {
+    if (e.key !== 'Delete') return;
+    const idx = grayRectPrimitive._rects.findIndex(r => r.selected);
+    if (idx === -1) return;
+    grayRectPrimitive._rects.splice(idx, 1);
+    forceRepaint();
+  });
+
   function limpiarDibujos() {
     zoneLinesPrimitive._segments = [];
     dzSzAxisLabels.forEach(l => candleSeries.removePriceLine(l));
@@ -255,6 +355,11 @@
     rectanglesPrimitive._preview = null;
     rectArmed = false;
     rectPending = null;
+
+    grayRectPrimitive._rects = [];
+    grayRectPrimitive._preview = null;
+    grayRectArmed = false;
+    grayRectPending = null;
 
     tLinePrimitive._lines = [];
     tLinePrimitive._preview = null;
@@ -287,6 +392,23 @@
     const price = candleSeries.coordinateToPrice(param.point.y);
     if (price == null) return;
 
+    // Gray rect border-click selection works regardless of whether the tool is currently armed
+    // for drawing — clicking an existing rect's edge selects it (Delete key removes it) and
+    // consumes the click so it doesn't also start a new rectangle.
+    if (grayRectPrimitive._rects.length > 0) {
+      const hitIdx = findGrayRectByBorderClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        grayRectPrimitive._rects.forEach((r, i) => { r.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadSelection = grayRectPrimitive._rects.some(r => r.selected);
+      if (hadSelection) {
+        grayRectPrimitive._rects.forEach(r => { r.selected = false; });
+        forceRepaint();
+      }
+    }
+
     if (dzSzArmed) {
       const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
 
@@ -306,6 +428,17 @@
         rectanglesPrimitive._rects.push({ t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price });
         rectanglesPrimitive._preview = null;
         rectPending = null;
+        forceRepaint();
+      }
+    }
+
+    if (grayRectArmed) {
+      if (!grayRectPending) {
+        grayRectPending = { time: param.time, price };
+      } else {
+        grayRectPrimitive._rects.push({ t1: grayRectPending.time, p1: grayRectPending.price, t2: param.time, p2: price, selected: false });
+        grayRectPrimitive._preview = null;
+        grayRectPending = null;
         forceRepaint();
       }
     }
@@ -362,6 +495,16 @@
       const price = candleSeries.coordinateToPrice(param.point.y);
       if (price != null) {
         rectanglesPrimitive._preview = { t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price };
+        forceRepaint();
+      }
+    }
+
+    if (!grayRectArmed || !grayRectPending) {
+      if (grayRectPrimitive._preview) { grayRectPrimitive._preview = null; forceRepaint(); }
+    } else if (param.point && param.time !== undefined) {
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price != null) {
+        grayRectPrimitive._preview = { t1: grayRectPending.time, p1: grayRectPending.price, t2: param.time, p2: price };
         forceRepaint();
       }
     }

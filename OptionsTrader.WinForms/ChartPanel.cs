@@ -131,6 +131,16 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Toggles the 1h panel's gray Rect tool on/off — same 2-click draw as Rect, but filled gray
+    // (marking sideways/consolidation ranges) and each rectangle can be selected by clicking its
+    // border and removed with the Delete key, independent of whether the tool is armed.
+    public async Task<bool> ToggleRectGrisModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarRectGris();");
+        return result == "true";
+    }
+
     // Toggles T-Line drawing mode on/off. While on, every pair of clicks draws a new orange line
     // segment between them (not extended to the chart edges). Same toggle pattern as Rect.
     public async Task<bool> ToggleTLineModeAsync()

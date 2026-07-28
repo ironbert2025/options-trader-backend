@@ -152,6 +152,21 @@ public class MultiChartForm : Form
             Size     = new Size(60, 24)
         };
 
+        // Filled gray rectangle marking sideways/consolidation ranges around price+SMAs. Click
+        // its border to select (yellow outline), then press Delete to remove just that one.
+        var btnRectGris = new Button
+        {
+            Text     = "Rect",
+            Location = new Point(toolsStartX + 66, 30),
+            Size     = new Size(60, 24)
+        };
+        btnRectGris.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            var on = await hourlyPanel.ToggleRectGrisModeAsync();
+            btnRectGris.BackColor = on ? Color.LightGray : SystemColors.Control;
+        };
+
         // Writes orange "Piso"/"Techo" text at the clicked point — one click per label, both
         // independently toggleable (same pattern as the other drawing tools).
         var btnPiso = new Button
@@ -185,6 +200,7 @@ public class MultiChartForm : Form
             await hourlyPanel.ClearDrawingsAsync();
             btnTLine.BackColor = SystemColors.Control;
             btnHLine.BackColor = SystemColors.Control;
+            btnRectGris.BackColor = SystemColors.Control;
             btnPiso.BackColor = SystemColors.Control;
             btnTecho.BackColor = SystemColors.Control;
         };
@@ -192,6 +208,7 @@ public class MultiChartForm : Form
         crossHost.Controls.Add(btnTLine);
         crossHost.Controls.Add(btnHLine);
         crossHost.Controls.Add(btnHourlyClear);
+        crossHost.Controls.Add(btnRectGris);
         crossHost.Controls.Add(btnPiso);
         crossHost.Controls.Add(btnTecho);
         toolbar.Controls.Add(crossHost, 0, 0);
