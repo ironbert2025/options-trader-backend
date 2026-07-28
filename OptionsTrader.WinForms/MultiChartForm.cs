@@ -52,16 +52,20 @@ public class MultiChartForm : Form
         toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
+        // 4th column (fixed width) holds the OTM Call/Put buttons — part of THIS row so its
+        // height always matches the 3 charts' height exactly, instead of a separate Dock=Right
+        // panel that used to span the whole window including the toolbar area above.
         var layout = new TableLayoutPanel
         {
             Dock        = DockStyle.Fill,
-            ColumnCount = 3,
+            ColumnCount = 4,
             RowCount    = 1,
             Padding     = new Padding(6)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         ChartPanel? overnightPanel = null;
@@ -121,11 +125,13 @@ public class MultiChartForm : Form
         }
 
         // T-Line / H-Line drawing tools, also on the 1h panel — placed to the right of the 8
-        // Cross-SMA toggles, one on each row so they line up visually with that grid.
+        // Cross-SMA toggles. T-Line and H-Line share the top row (side by side); Clear sits
+        // directly below T-Line on the second row.
+        var toolsStartX = periods.Length * 42 + 6;
         var btnTLine = new Button
         {
             Text     = "T-Line",
-            Location = new Point(periods.Length * 42 + 6, 2),
+            Location = new Point(toolsStartX, 2),
             Size     = new Size(60, 24)
         };
         btnTLine.Click += async (s, e) =>
@@ -138,7 +144,7 @@ public class MultiChartForm : Form
         var btnHLine = new Button
         {
             Text     = "H-Line",
-            Location = new Point(periods.Length * 42 + 6, 30),
+            Location = new Point(toolsStartX + 66, 2),
             Size     = new Size(60, 24)
         };
         btnHLine.Click += async (s, e) =>
@@ -151,7 +157,7 @@ public class MultiChartForm : Form
         var btnHourlyClear = new Button
         {
             Text     = "Clear",
-            Location = new Point(periods.Length * 42 + 6, 52),
+            Location = new Point(toolsStartX, 30),
             Size     = new Size(60, 24)
         };
         btnHourlyClear.Click += async (s, e) =>
@@ -217,14 +223,15 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(btnClear);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
-        // OTM Call/Put buttons — native WinForms controls in their own column to the right of
-        // all 3 charts (not drawn inside the WebView2 chart anymore, so the price axis stays
-        // fully visible). 6 Call buttons on top, 6 Put buttons below, closest-to-money first.
-        var otmPanel = new Panel { Dock = DockStyle.Right, Width = 110, Padding = new Padding(4), AutoScroll = true };
-        const int btnWidth = 96, btnHeight = 32, btnGap = 3;
-        var y = 4;
-        otmPanel.Controls.Add(new Label { Text = "CALL", Location = new Point(4, y), Size = new Size(btnWidth, 16), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.LimeGreen, Font = new Font(Font, FontStyle.Bold) });
-        y += 18;
+        // OTM Call/Put buttons — native WinForms controls in their own column (added to `layout`
+        // below, so their height matches the charts' height, not the whole window). 6 Call
+        // buttons on top, 6 Put buttons below, closest-to-money first. AutoScroll is a safety net
+        // in case the window is short enough that all 12 + labels don't fit.
+        var otmPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4), AutoScroll = true };
+        const int btnWidth = 96, btnHeight = 26, btnGap = 2;
+        var y = 2;
+        otmPanel.Controls.Add(new Label { Text = "CALL", Location = new Point(4, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.LimeGreen, Font = new Font(Font, FontStyle.Bold) });
+        y += 16;
         for (int i = 0; i < _callButtons.Length; i++)
         {
             var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightGreen, Visible = false };
@@ -233,9 +240,9 @@ public class MultiChartForm : Form
             _callButtons[i] = btn;
             y += btnHeight + btnGap;
         }
-        y += 10;
-        otmPanel.Controls.Add(new Label { Text = "PUT", Location = new Point(4, y), Size = new Size(btnWidth, 16), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.OrangeRed, Font = new Font(Font, FontStyle.Bold) });
-        y += 18;
+        y += 6;
+        otmPanel.Controls.Add(new Label { Text = "PUT", Location = new Point(4, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.OrangeRed, Font = new Font(Font, FontStyle.Bold) });
+        y += 16;
         for (int i = 0; i < _putButtons.Length; i++)
         {
             var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightSalmon, Visible = false };
@@ -244,15 +251,13 @@ public class MultiChartForm : Form
             _putButtons[i] = btn;
             y += btnHeight + btnGap;
         }
+        layout.Controls.Add(otmPanel, 3, 0);
 
         _tradeGateway.OtmOptionsUpdated += TradeGateway_OtmOptionsUpdated;
         FormClosed += (s, e) => _tradeGateway.OtmOptionsUpdated -= TradeGateway_OtmOptionsUpdated;
 
-        // Edge-docked controls (Right/Top) added before the Fill-docked layout so it correctly
-        // fills only the remaining space.
-        Controls.Add(otmPanel);
-        Controls.Add(toolbar);
         Controls.Add(layout);
+        Controls.Add(toolbar);
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
         // subscribing, and disposing them) — not this window.
