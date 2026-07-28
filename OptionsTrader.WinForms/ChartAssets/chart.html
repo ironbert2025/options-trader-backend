@@ -314,10 +314,16 @@
       if (!tLinePending) {
         tLinePending = { time: param.time, price };
       } else {
-        tLinePrimitive._lines.push({ t1: tLinePending.time, p1: tLinePending.price, t2: param.time, p2: price });
+        const line = { t1: tLinePending.time, p1: tLinePending.price, t2: param.time, p2: price };
+        tLinePrimitive._lines.push(line);
         tLinePrimitive._preview = null;
         tLinePending = null;
         forceRepaint();
+        // Persisted per-symbol by C# (TLineStore) so it reappears at the same point after
+        // closing and reopening the app — see ChartPanel.CoreWebView2_WebMessageReceived.
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'tline', ...line });
+        }
       }
     }
 
@@ -818,6 +824,13 @@
   }
 
   // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
+
+  // Seeds T-Line drawings persisted from a previous session (1h panel only — see TLineStore.cs).
+  function cargarTLines(lines) {
+    if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }
+    tLinePrimitive._lines = (lines || []).map(l => ({ t1: l.t1, p1: l.p1, t2: l.t2, p2: l.p2 }));
+    forceRepaint();
+  }
 
   // Replaces the whole dataset (used once at startup to seed historical candles).
   function cargarHistorial(velas) {

@@ -94,6 +94,8 @@ public class ChartPanel : Panel
             _closing = true;
             _liveFeed.OnNewCandle    -= Streamer_OnNewCandle;
             _liveFeed.OnDisconnected -= Streamer_OnDisconnected;
+            if (_webView.CoreWebView2 != null)
+                _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
         };
     }
 
@@ -174,11 +176,37 @@ public class ChartPanel : Panel
     }
 
     // Clears every DZ/SZ pair, rectangle, T-Line, H-Line, Arrow and Piso/Techo label drawn on
-    // this panel, and turns all drawing modes off.
+    // this panel, and turns all drawing modes off. Also wipes the persisted T-Line file for this
+    // symbol (1h panel only) — a real "clear" should clear what's saved too.
     public async Task ClearDrawingsAsync()
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync("limpiarDibujos();");
+        if (_mode == ChartPanelMode.Hourly15)
+            TLineStore.Clear(_symbol);
+    }
+
+    // Receives a new T-Line the user just drew on the 1h panel (window.chrome.webview.
+    // postMessage from chart.html) and persists it so it reappears next time this symbol's
+    // chart is opened.
+    private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeEl) || typeEl.GetString() != "tline") return;
+
+            var t1 = root.GetProperty("t1").GetInt64();
+            var p1 = root.GetProperty("p1").GetDecimal();
+            var t2 = root.GetProperty("t2").GetInt64();
+            var p2 = root.GetProperty("p2").GetDecimal();
+            TLineStore.Append(_symbol, t1, p1, t2, p2);
+        }
+        catch
+        {
+            // Malformed/unexpected message from the page — ignore, not fatal.
+        }
     }
 
     // Toggles this panel's candle interval between 15m and 5m — only meaningful for Fifteen_Full
@@ -318,7 +346,20 @@ public class ChartPanel : Panel
 
             // SMA 20/40/100/200 overlay — only on the 1h panel for now.
             if (_mode == ChartPanelMode.Hourly15)
+            {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarSMAs([20,40,100,200]);");
+
+                // T-Line persistence (per symbol) — reload whatever was drawn in a previous
+                // session so it reappears at the same point, and listen for new ones the user
+                // draws now so they get saved too.
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                var savedLines = TLineStore.Load(_symbol);
+                if (savedLines.Count > 0)
+                {
+                    var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"cargarTLines({linesJson});");
+                }
+            }
 
             // Bollinger Bands (20, 2 std devs) — only on the 15m RTH panel for now.
             if (_mode == ChartPanelMode.Fifteen_RTH)
