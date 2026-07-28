@@ -504,10 +504,16 @@
                 ctx.fillStyle = 'rgba(150, 150, 150, 0.18)';
                 self._bands.forEach(b => {
                   const x1 = ts.timeToCoordinate(b.from);
+                  if (x1 == null) return;
+                  // b.to can be a still-future time (the in-progress overnight band's end, before
+                  // any candle at/after that point exists) — timeToCoordinate returns null for
+                  // anything outside the currently visible range, so clip to the chart's right
+                  // edge instead of silently skipping the whole band (same pattern H-Line uses).
                   const x2 = ts.timeToCoordinate(b.to);
-                  if (x1 == null || x2 == null) return;
-                  const left  = Math.min(x1, x2) * scope.horizontalPixelRatio;
-                  const width = Math.abs(x2 - x1) * scope.horizontalPixelRatio;
+                  const leftPx  = x1 * scope.horizontalPixelRatio;
+                  const rightPx = x2 == null ? scope.bitmapSize.width : x2 * scope.horizontalPixelRatio;
+                  const left  = Math.min(leftPx, rightPx);
+                  const width = Math.abs(rightPx - leftPx);
                   ctx.fillRect(left, 0, width, scope.bitmapSize.height);
                 });
               });
