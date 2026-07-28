@@ -644,6 +644,9 @@
     recalcularSMAs();
     recalcularBollinger();
     recalcularOvernightBands();
+    // series.update() auto-scrolls the time scale to keep following the latest bar, which eats
+    // into the right-edge margin set at load time — reapply it on every live tick so it sticks.
+    if (diasVisibles) aplicarRangoVisible();
   }
 
   // A new candle period started — same call as update; Lightweight Charts appends automatically
@@ -654,6 +657,7 @@
     recalcularSMAs();
     recalcularBollinger();
     recalcularOvernightBands();
+    if (diasVisibles) aplicarRangoVisible();
   }
 </script>
 </body>
