@@ -26,7 +26,7 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 900;
-        Height        = 392;
+        Height        = 416;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -35,7 +35,7 @@ public class MultiChartForm : Form
         var toolbar = new TableLayoutPanel
         {
             Dock        = DockStyle.Top,
-            Height      = 62,
+            Height      = 86,
             ColumnCount = 3,
             RowCount    = 1,
             Padding     = new Padding(6, 4, 6, 0)
@@ -149,17 +149,49 @@ public class MultiChartForm : Form
             Location = new Point(toolsStartX, 30),
             Size     = new Size(60, 24)
         };
+
+        // Writes orange "Piso"/"Techo" text at the clicked point — one click per label, both
+        // independently toggleable (same pattern as the other drawing tools).
+        var btnPiso = new Button
+        {
+            Text     = "Piso",
+            Location = new Point(toolsStartX, 56),
+            Size     = new Size(60, 24)
+        };
+        var btnTecho = new Button
+        {
+            Text     = "Techo",
+            Location = new Point(toolsStartX + 66, 56),
+            Size     = new Size(60, 24)
+        };
+        btnPiso.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            var on = await hourlyPanel.TogglePisoModeAsync();
+            btnPiso.BackColor = on ? Color.Orange : SystemColors.Control;
+        };
+        btnTecho.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            var on = await hourlyPanel.ToggleTechoModeAsync();
+            btnTecho.BackColor = on ? Color.Orange : SystemColors.Control;
+        };
+
         btnHourlyClear.Click += async (s, e) =>
         {
             if (hourlyPanel == null) return;
             await hourlyPanel.ClearDrawingsAsync();
             btnTLine.BackColor = SystemColors.Control;
             btnHLine.BackColor = SystemColors.Control;
+            btnPiso.BackColor = SystemColors.Control;
+            btnTecho.BackColor = SystemColors.Control;
         };
 
         crossHost.Controls.Add(btnTLine);
         crossHost.Controls.Add(btnHLine);
         crossHost.Controls.Add(btnHourlyClear);
+        crossHost.Controls.Add(btnPiso);
+        crossHost.Controls.Add(btnTecho);
         toolbar.Controls.Add(crossHost, 0, 0);
 
         // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the

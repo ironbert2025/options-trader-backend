@@ -157,8 +157,24 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Clears every DZ/SZ pair, rectangle, T-Line, H-Line and Arrow drawn on this panel, and turns
-    // all drawing modes off.
+    // Toggles Piso/Techo text-label drawing mode on/off. While on, every click writes the given
+    // orange text at that point (no pairing — one click per label). Same toggle pattern as H-Line.
+    public async Task<bool> TogglePisoModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarPiso();");
+        return result == "true";
+    }
+
+    public async Task<bool> ToggleTechoModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarTecho();");
+        return result == "true";
+    }
+
+    // Clears every DZ/SZ pair, rectangle, T-Line, H-Line, Arrow and Piso/Techo label drawn on
+    // this panel, and turns all drawing modes off.
     public async Task ClearDrawingsAsync()
     {
         if (_webView.CoreWebView2 == null) return;

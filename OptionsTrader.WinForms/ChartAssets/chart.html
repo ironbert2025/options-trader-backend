@@ -269,6 +269,10 @@
     arrowArmed = false;
     arrowPending = null;
 
+    textLabelsPrimitive._labels = [];
+    pisoArmed = false;
+    techoArmed = false;
+
     forceRepaint();
   }
 
@@ -332,6 +336,15 @@
         arrowPending = null;
         forceRepaint();
       }
+    }
+
+    if (pisoArmed) {
+      textLabelsPrimitive._labels.push({ time: param.time, price, text: 'Piso' });
+      forceRepaint();
+    }
+    if (techoArmed) {
+      textLabelsPrimitive._labels.push({ time: param.time, price, text: 'Techo' });
+      forceRepaint();
     }
   });
 
@@ -532,6 +545,57 @@
     arrowArmed = !arrowArmed;
     arrowPending = null;
     return arrowArmed;
+  }
+
+  // ---- Piso/Techo tool: writes orange text at the clicked point (1h panel) — single click per
+  // label, no pairing (unlike the 2-click tools above) ----
+
+  class TextLabelsPrimitive {
+    constructor() { this._labels = []; this._chart = null; } // [{ time, price, text }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                ctx.fillStyle = '#ff9800'; // orange
+                ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.textBaseline = 'middle';
+                self._labels.forEach(l => {
+                  const x = ts.timeToCoordinate(l.time);
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (x == null || y == null) return;
+                  ctx.fillText(l.text, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio);
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const textLabelsPrimitive = new TextLabelsPrimitive();
+  let textLabelsAttached = false;
+  let pisoArmed = false;
+  let techoArmed = false;
+
+  function activarPiso() {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    pisoArmed = !pisoArmed;
+    return pisoArmed;
+  }
+
+  function activarTecho() {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    techoArmed = !techoArmed;
+    return techoArmed;
   }
 
   // ---- SMA overlay (optional — only enabled on panels that call configurarSMAs) ----
