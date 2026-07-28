@@ -79,9 +79,16 @@
     const days = [...new Set(allCandles.map(c => dayStart(c.time)))].sort((a, b) => a - b);
     if (days.length === 0) return;
     const cutoffIdx = Math.max(0, days.length - diasVisibles);
+
+    // setVisibleRange is an EXACT range — it overrides timeScale.rightOffset's usual empty-space
+    // margin, so the last candle would sit flush against the edge. Pad "to" by ~3 bars' worth of
+    // time ourselves (bar spacing taken from the last two candles) to leave that same margin.
+    const barDuration = allCandles.length > 1
+      ? allCandles[allCandles.length - 1].time - allCandles[allCandles.length - 2].time
+      : 900;
     chart.timeScale().setVisibleRange({
       from: days[cutoffIdx],
-      to: allCandles[allCandles.length - 1].time,
+      to: allCandles[allCandles.length - 1].time + barDuration * 3,
     });
   }
 
