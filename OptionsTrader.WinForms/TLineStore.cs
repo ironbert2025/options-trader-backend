@@ -55,4 +55,21 @@ internal static class TLineStore
         var path = PathFor(symbol);
         if (File.Exists(path)) File.Delete(path);
     }
+
+    // Removes the first stored line whose 4 values exactly match (identifies a line since it has
+    // no separate id) — used when the user deletes a T-Line via the Delete key so it doesn't come
+    // back on the next session.
+    public static void Remove(string symbol, long t1, decimal p1, long t2, decimal p2)
+    {
+        var path = PathFor(symbol);
+        var existing = Load(symbol);
+        var idx = existing.FindIndex(l => l.T1 == t1 && l.P1 == p1 && l.T2 == t2 && l.P2 == p2);
+        if (idx == -1) return;
+        existing.RemoveAt(idx);
+
+        using var writer = new StreamWriter(path, append: false);
+        writer.WriteLine(Header);
+        foreach (var l in existing)
+            writer.WriteLine($"{l.T1},{l.P1.ToString(CultureInfo.InvariantCulture)},{l.T2},{l.P2.ToString(CultureInfo.InvariantCulture)}");
+    }
 }

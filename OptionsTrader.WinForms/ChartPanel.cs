@@ -196,22 +196,26 @@ public class ChartPanel : Panel
             TLineStore.Clear(_symbol);
     }
 
-    // Receives a new T-Line the user just drew on the 1h panel (window.chrome.webview.
-    // postMessage from chart.html) and persists it so it reappears next time this symbol's
-    // chart is opened.
+    // Receives T-Line events from the 1h panel (window.chrome.webview.postMessage from
+    // chart.html) — a new line just drawn ("tline") gets appended to the store, and one deleted
+    // via the Delete key ("tline_delete") gets removed from it, so persistence (TLineStore)
+    // always matches what's actually on screen.
     private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
         {
             using var doc = JsonDocument.Parse(e.WebMessageAsJson);
             var root = doc.RootElement;
-            if (!root.TryGetProperty("type", out var typeEl) || typeEl.GetString() != "tline") return;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "tline" && type != "tline_delete") return;
 
             var t1 = root.GetProperty("t1").GetInt64();
             var p1 = root.GetProperty("p1").GetDecimal();
             var t2 = root.GetProperty("t2").GetInt64();
             var p2 = root.GetProperty("p2").GetDecimal();
-            TLineStore.Append(_symbol, t1, p1, t2, p2);
+
+            if (type == "tline") TLineStore.Append(_symbol, t1, p1, t2, p2);
+            else TLineStore.Remove(_symbol, t1, p1, t2, p2);
         }
         catch
         {

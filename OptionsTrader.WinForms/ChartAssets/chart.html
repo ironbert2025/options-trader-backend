@@ -335,13 +335,43 @@
     return -1;
   }
 
-  // Delete removes whichever gray rect is currently selected (border-clicked).
+  // Returns the index of the T-Line whose segment is within a few pixels of (px,py), or -1.
+  // Same distToSegment helper as the gray rect border check above.
+  function findTLineByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = tLinePrimitive._lines.length - 1; i >= 0; i--) {
+      const l = tLinePrimitive._lines[i];
+      const x1 = ts.timeToCoordinate(l.t1), x2 = ts.timeToCoordinate(l.t2);
+      const y1 = candleSeries.priceToCoordinate(l.p1), y2 = candleSeries.priceToCoordinate(l.p2);
+      if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+      if (distToSegment(px, py, x1, y1, x2, y2) <= tolerance) return i;
+    }
+    return -1;
+  }
+
+  // Delete removes whichever gray rect OR T-Line is currently selected (click on its
+  // border/line). A deleted T-Line is also reported to C# (TLineStore) so it doesn't come back
+  // on the next session.
   window.addEventListener('keydown', e => {
     if (e.key !== 'Delete') return;
-    const idx = grayRectPrimitive._rects.findIndex(r => r.selected);
-    if (idx === -1) return;
-    grayRectPrimitive._rects.splice(idx, 1);
-    forceRepaint();
+
+    const rectIdx = grayRectPrimitive._rects.findIndex(r => r.selected);
+    if (rectIdx !== -1) {
+      grayRectPrimitive._rects.splice(rectIdx, 1);
+      forceRepaint();
+      return;
+    }
+
+    const lineIdx = tLinePrimitive._lines.findIndex(l => l.selected);
+    if (lineIdx !== -1) {
+      const removed = tLinePrimitive._lines[lineIdx];
+      tLinePrimitive._lines.splice(lineIdx, 1);
+      forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'tline_delete', t1: removed.t1, p1: removed.p1, t2: removed.t2, p2: removed.p2 });
+      }
+    }
   });
 
   function limpiarDibujos() {
@@ -405,6 +435,23 @@
       const hadSelection = grayRectPrimitive._rects.some(r => r.selected);
       if (hadSelection) {
         grayRectPrimitive._rects.forEach(r => { r.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // T-Line click selection (1h panel) — same idea as the gray rect above: clicking near an
+    // existing line selects it (Delete key removes it), regardless of whether T-Line drawing is
+    // currently armed.
+    if (tLinePrimitive._lines.length > 0) {
+      const hitIdx = findTLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        tLinePrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadLineSelection = tLinePrimitive._lines.some(l => l.selected);
+      if (hadLineSelection) {
+        tLinePrimitive._lines.forEach(l => { l.selected = false; });
         forceRepaint();
       }
     }
@@ -559,6 +606,17 @@
                   ctx.moveTo(x1 * scope.horizontalPixelRatio, y1 * scope.verticalPixelRatio);
                   ctx.lineTo(x2 * scope.horizontalPixelRatio, y2 * scope.verticalPixelRatio);
                   ctx.stroke();
+
+                  if (l.selected) {
+                    ctx.strokeStyle = '#ffeb3b'; // yellow dashed overlay = selected, ready to delete
+                    ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([4 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x1 * scope.horizontalPixelRatio, y1 * scope.verticalPixelRatio);
+                    ctx.lineTo(x2 * scope.horizontalPixelRatio, y2 * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                  }
                 };
                 self._lines.forEach(l => drawLine(l, 1));
                 if (self._preview) drawLine(self._preview, 0.6);
