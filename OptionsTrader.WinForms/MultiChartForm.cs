@@ -59,6 +59,7 @@ public class MultiChartForm : Form
 
         ChartPanel? overnightPanel = null;
         ChartPanel? hourlyPanel = null;
+        ChartPanel? rthPanel = null;
         var modes = new[] { ChartPanelMode.Hourly15, ChartPanelMode.Fifteen_RTH, ChartPanelMode.Fifteen_Full };
         for (int i = 0; i < modes.Length; i++)
         {
@@ -72,6 +73,7 @@ public class MultiChartForm : Form
             layout.Controls.Add(panel, i, 0);
             if (modes[i] == ChartPanelMode.Fifteen_Full) overnightPanel = panel;
             if (modes[i] == ChartPanelMode.Hourly15) hourlyPanel = panel;
+            if (modes[i] == ChartPanelMode.Fifteen_RTH) rthPanel = panel;
         }
 
         // Cross-SMA monitors: 8 small toggles (UP/DOWN x 20/40/100/200), 2 rows x 4 columns, in
@@ -193,6 +195,37 @@ public class MultiChartForm : Form
         crossHost.Controls.Add(btnPiso);
         crossHost.Controls.Add(btnTecho);
         toolbar.Controls.Add(crossHost, 0, 0);
+
+        // T-Line drawing tool for the 15m RTH panel (column 1) — no persistence like the 1h
+        // panel's T-Line, just draw + Clear for this session.
+        var rthToolsHost = new Panel { Dock = DockStyle.Fill };
+        var btnRthTLine = new Button
+        {
+            Text     = "T-Line",
+            Location = new Point(0, 4),
+            Size     = new Size(60, 24)
+        };
+        var btnRthClear = new Button
+        {
+            Text     = "Clear",
+            Location = new Point(66, 4),
+            Size     = new Size(60, 24)
+        };
+        btnRthTLine.Click += async (s, e) =>
+        {
+            if (rthPanel == null) return;
+            var on = await rthPanel.ToggleTLineModeAsync();
+            btnRthTLine.BackColor = on ? Color.Orange : SystemColors.Control;
+        };
+        btnRthClear.Click += async (s, e) =>
+        {
+            if (rthPanel == null) return;
+            await rthPanel.ClearDrawingsAsync();
+            btnRthTLine.BackColor = SystemColors.Control;
+        };
+        rthToolsHost.Controls.Add(btnRthTLine);
+        rthToolsHost.Controls.Add(btnRthClear);
+        toolbar.Controls.Add(rthToolsHost, 1, 0);
 
         // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the
         // toolbar column above that panel (column index 2, matching Fifteen_Full's position in
