@@ -589,7 +589,13 @@
     const lastDay = days[days.length - 1];
     const lastClose = lastDay + 16 * 3600;
     if (nowAsFakeUtcSeconds() >= lastClose) {
-      bands.push({ from: lastClose, to: next930(lastDay) });
+      // Never start the shading earlier than the actual last plotted candle — whatever the
+      // cause of a mismatch between the assumed 16:00 close and where real data actually ends
+      // (DST edge case, a slightly-late last tick, etc.), this guarantees the band can't cover
+      // real candles regardless.
+      const lastCandleTime = allCandles[allCandles.length - 1].time;
+      const from = Math.max(lastClose, lastCandleTime);
+      bands.push({ from, to: next930(lastDay) });
     }
 
     overnightPrimitive._bands = bands;
