@@ -185,6 +185,24 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Toggles the 1h panel's vertical arrow tools on/off. While on, every click places a
+    // fixed-length vertical arrow with its tip at the clicked point — green points up, red points
+    // down. Selectable by clicking the shaft and removable with Delete, same as the gray Rect
+    // tool.
+    public async Task<bool> ToggleFlechaVerdeModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarFlechaVerde();");
+        return result == "true";
+    }
+
+    public async Task<bool> ToggleFlechaRojaModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarFlechaRoja();");
+        return result == "true";
+    }
+
     // Clears every DZ/SZ pair, rectangle, T-Line, H-Line, Arrow and Piso/Techo label drawn on
     // this panel, and turns all drawing modes off. Also wipes the persisted T-Line file for this
     // symbol (1h panel only) — a real "clear" should clear what's saved too.

@@ -26,7 +26,7 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 900;
-        Height        = 416;
+        Height        = 440;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -35,7 +35,7 @@ public class MultiChartForm : Form
         var toolbar = new TableLayoutPanel
         {
             Dock        = DockStyle.Top,
-            Height      = 86,
+            Height      = 110,
             ColumnCount = 3,
             RowCount    = 1,
             Padding     = new Padding(6, 4, 6, 0)
@@ -194,6 +194,33 @@ public class MultiChartForm : Form
             btnTecho.BackColor = on ? Color.Orange : SystemColors.Control;
         };
 
+        // Single-click vertical arrows: green points up, red points down, tip at the click point.
+        // Click the shaft to select (yellow dashed overlay), Delete removes it.
+        var btnFlechaVerde = new Button
+        {
+            Text     = "↑ Verde",
+            Location = new Point(toolsStartX, 82),
+            Size     = new Size(60, 24)
+        };
+        var btnFlechaRoja = new Button
+        {
+            Text     = "↓ Roja",
+            Location = new Point(toolsStartX + 66, 82),
+            Size     = new Size(60, 24)
+        };
+        btnFlechaVerde.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            var on = await hourlyPanel.ToggleFlechaVerdeModeAsync();
+            btnFlechaVerde.BackColor = on ? Color.LightGreen : SystemColors.Control;
+        };
+        btnFlechaRoja.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            var on = await hourlyPanel.ToggleFlechaRojaModeAsync();
+            btnFlechaRoja.BackColor = on ? Color.LightSalmon : SystemColors.Control;
+        };
+
         btnHourlyClear.Click += async (s, e) =>
         {
             if (hourlyPanel == null) return;
@@ -203,12 +230,16 @@ public class MultiChartForm : Form
             btnRectGris.BackColor = SystemColors.Control;
             btnPiso.BackColor = SystemColors.Control;
             btnTecho.BackColor = SystemColors.Control;
+            btnFlechaVerde.BackColor = SystemColors.Control;
+            btnFlechaRoja.BackColor = SystemColors.Control;
         };
 
         crossHost.Controls.Add(btnTLine);
         crossHost.Controls.Add(btnHLine);
         crossHost.Controls.Add(btnHourlyClear);
         crossHost.Controls.Add(btnRectGris);
+        crossHost.Controls.Add(btnFlechaVerde);
+        crossHost.Controls.Add(btnFlechaRoja);
         crossHost.Controls.Add(btnPiso);
         crossHost.Controls.Add(btnTecho);
         toolbar.Controls.Add(crossHost, 0, 0);

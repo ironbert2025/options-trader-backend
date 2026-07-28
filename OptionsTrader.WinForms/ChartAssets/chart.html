@@ -371,6 +371,13 @@
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'tline_delete', t1: removed.t1, p1: removed.p1, t2: removed.t2, p2: removed.p2 });
       }
+      return;
+    }
+
+    const arrowIdx = verticalArrowPrimitive._arrows.findIndex(a => a.selected);
+    if (arrowIdx !== -1) {
+      verticalArrowPrimitive._arrows.splice(arrowIdx, 1);
+      forceRepaint();
     }
   });
 
@@ -407,6 +414,10 @@
     textLabelsPrimitive._labels = [];
     pisoArmed = false;
     techoArmed = false;
+
+    verticalArrowPrimitive._arrows = [];
+    greenArrowArmed = false;
+    redArrowArmed = false;
 
     forceRepaint();
   }
@@ -452,6 +463,21 @@
       const hadLineSelection = tLinePrimitive._lines.some(l => l.selected);
       if (hadLineSelection) {
         tLinePrimitive._lines.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // Vertical arrow click selection (1h panel) — same idea as gray rect/T-Line above.
+    if (verticalArrowPrimitive._arrows.length > 0) {
+      const hitIdx = findVerticalArrowByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        verticalArrowPrimitive._arrows.forEach((a, i) => { a.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadArrowSelection = verticalArrowPrimitive._arrows.some(a => a.selected);
+      if (hadArrowSelection) {
+        verticalArrowPrimitive._arrows.forEach(a => { a.selected = false; });
         forceRepaint();
       }
     }
@@ -530,6 +556,15 @@
     }
     if (techoArmed) {
       textLabelsPrimitive._labels.push({ time: param.time, price, text: 'Techo' });
+      forceRepaint();
+    }
+
+    if (greenArrowArmed) {
+      verticalArrowPrimitive._arrows.push({ time: param.time, price, up: true, selected: false });
+      forceRepaint();
+    }
+    if (redArrowArmed) {
+      verticalArrowPrimitive._arrows.push({ time: param.time, price, up: false, selected: false });
       forceRepaint();
     }
   });
@@ -752,6 +787,112 @@
     arrowArmed = !arrowArmed;
     arrowPending = null;
     return arrowArmed;
+  }
+
+  // ---- Vertical arrow tool (1h panel): single click places a fixed-length vertical arrow, tip
+  // at the clicked point — green pointing UP (tail below), red pointing DOWN (tail above).
+  // Selectable by clicking the shaft, removable with Delete (same pattern as gray Rect/T-Line). ----
+
+  const VERTICAL_ARROW_LENGTH = 40; // CSS pixels, fixed regardless of zoom
+
+  class VerticalArrowPrimitive {
+    constructor() { this._arrows = []; this._chart = null; } // [{ time, price, up, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                self._arrows.forEach(a => {
+                  const x = ts.timeToCoordinate(a.time);
+                  const yTip = candleSeries.priceToCoordinate(a.price);
+                  if (x == null || yTip == null) return;
+
+                  const X = x * scope.horizontalPixelRatio;
+                  const YTip = yTip * scope.verticalPixelRatio;
+                  const lengthPx = VERTICAL_ARROW_LENGTH * scope.verticalPixelRatio;
+                  const YTail = a.up ? YTip + lengthPx : YTip - lengthPx;
+                  const color = a.up ? '#26a69a' : '#ef5350';
+
+                  ctx.strokeStyle = color;
+                  ctx.fillStyle = color;
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(X, YTail);
+                  ctx.lineTo(X, YTip);
+                  ctx.stroke();
+
+                  const headLen = 8 * scope.verticalPixelRatio;
+                  const headWidth = 5 * scope.horizontalPixelRatio;
+                  const headBackY = a.up ? YTip + headLen : YTip - headLen;
+                  ctx.beginPath();
+                  ctx.moveTo(X, YTip);
+                  ctx.lineTo(X - headWidth, headBackY);
+                  ctx.lineTo(X + headWidth, headBackY);
+                  ctx.closePath();
+                  ctx.fill();
+
+                  if (a.selected) {
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([4 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(X, YTail);
+                    ctx.lineTo(X, YTip);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                  }
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const verticalArrowPrimitive = new VerticalArrowPrimitive();
+  let verticalArrowAttached = false;
+  let greenArrowArmed = false;
+  let redArrowArmed = false;
+
+  function activarFlechaVerde() {
+    if (!verticalArrowAttached) { candleSeries.attachPrimitive(verticalArrowPrimitive); verticalArrowAttached = true; }
+    greenArrowArmed = !greenArrowArmed;
+    return greenArrowArmed;
+  }
+
+  function activarFlechaRoja() {
+    if (!verticalArrowAttached) { candleSeries.attachPrimitive(verticalArrowPrimitive); verticalArrowAttached = true; }
+    redArrowArmed = !redArrowArmed;
+    return redArrowArmed;
+  }
+
+  // CSS-pixel endpoints of a vertical arrow's shaft, for hit-testing (same space as
+  // chart.subscribeClick's param.point). Returns null if either coordinate is off-screen.
+  function verticalArrowEndpoints(a) {
+    const ts = chart.timeScale();
+    const x = ts.timeToCoordinate(a.time);
+    const yTip = candleSeries.priceToCoordinate(a.price);
+    if (x == null || yTip == null) return null;
+    const yTail = a.up ? yTip + VERTICAL_ARROW_LENGTH : yTip - VERTICAL_ARROW_LENGTH;
+    return { x, yTip, yTail };
+  }
+
+  function findVerticalArrowByClick(px, py) {
+    const tolerance = 6;
+    for (let i = verticalArrowPrimitive._arrows.length - 1; i >= 0; i--) {
+      const pts = verticalArrowEndpoints(verticalArrowPrimitive._arrows[i]);
+      if (!pts) continue;
+      if (distToSegment(px, py, pts.x, pts.yTip, pts.x, pts.yTail) <= tolerance) return i;
+    }
+    return -1;
   }
 
   // ---- Piso/Techo tool: writes orange text at the clicked point (1h panel) — single click per
