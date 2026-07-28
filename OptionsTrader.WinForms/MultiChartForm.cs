@@ -151,7 +151,7 @@ public class MultiChartForm : Form
         var btnHourlyClear = new Button
         {
             Text     = "Clear",
-            Location = new Point(periods.Length * 42 + 6, 58),
+            Location = new Point(periods.Length * 42 + 6, 52),
             Size     = new Size(60, 24)
         };
         btnHourlyClear.Click += async (s, e) =>
