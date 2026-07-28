@@ -16,23 +16,16 @@ public class MultiChartForm : Form
 {
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
-    private readonly IOtmTradeGateway _tradeGateway;
     private readonly string _symbol;
 
-    // 6 Call + 6 Put buttons, closest-to-money first — created once, just updated in place on
-    // every OtmOptionsUpdated tick instead of being recreated (less flicker).
-    private readonly Button[] _callButtons = new Button[6];
-    private readonly Button[] _putButtons = new Button[6];
-
-    public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, IOtmTradeGateway tradeGateway)
+    public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed)
     {
         _symbol        = symbol;
         _historyClient = historyClient;
         _liveFeed      = liveFeed;
-        _tradeGateway  = tradeGateway;
 
         Text          = $"Live Charts — {symbol}";
-        Width         = 1050;
+        Width         = 900;
         Height        = 392;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
@@ -52,20 +45,16 @@ public class MultiChartForm : Form
         toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-        // 4th column (fixed width) holds the OTM Call/Put buttons — part of THIS row so its
-        // height always matches the 3 charts' height exactly, instead of a separate Dock=Right
-        // panel that used to span the whole window including the toolbar area above.
         var layout = new TableLayoutPanel
         {
             Dock        = DockStyle.Fill,
-            ColumnCount = 4,
+            ColumnCount = 3,
             RowCount    = 1,
             Padding     = new Padding(6, 2, 6, 6)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         ChartPanel? overnightPanel = null;
@@ -223,79 +212,10 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(btnClear);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
-        // OTM Call/Put buttons — native WinForms controls in their own column (added to `layout`
-        // below, so their height matches the charts' height, not the whole window). Call and Put
-        // sit side by side in 2 sub-columns (rank i lines up horizontally between them), instead
-        // of Call stacked above Put. AutoScroll is a safety net in case the window is short
-        // enough that all 12 + labels don't fit.
-        var otmPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4), AutoScroll = true };
-        const int btnWidth = 68, btnHeight = 20, btnGap = 2, colGap = 6;
-        var callX = 4;
-        var putX = callX + btnWidth + colGap;
-        var y = 2;
-        otmPanel.Controls.Add(new Label { Text = "CALL", Location = new Point(callX, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.LimeGreen, Font = new Font(Font, FontStyle.Bold) });
-        otmPanel.Controls.Add(new Label { Text = "PUT", Location = new Point(putX, y), Size = new Size(btnWidth, 14), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.OrangeRed, Font = new Font(Font, FontStyle.Bold) });
-        y += 16;
-        for (int i = 0; i < _callButtons.Length; i++)
-        {
-            var callBtn = new Button { Location = new Point(callX, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightGreen, Visible = false, Font = new Font(Font.FontFamily, 7f) };
-            callBtn.Click += (s, e) => OnOtmButtonClick(callBtn);
-            otmPanel.Controls.Add(callBtn);
-            _callButtons[i] = callBtn;
-
-            var putBtn = new Button { Location = new Point(putX, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightSalmon, Visible = false, Font = new Font(Font.FontFamily, 7f) };
-            putBtn.Click += (s, e) => OnOtmButtonClick(putBtn);
-            otmPanel.Controls.Add(putBtn);
-            _putButtons[i] = putBtn;
-
-            y += btnHeight + btnGap;
-        }
-        layout.Controls.Add(otmPanel, 3, 0);
-
-        _tradeGateway.OtmOptionsUpdated += TradeGateway_OtmOptionsUpdated;
-        FormClosed += (s, e) => _tradeGateway.OtmOptionsUpdated -= TradeGateway_OtmOptionsUpdated;
-
         Controls.Add(layout);
         Controls.Add(toolbar);
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
         // subscribing, and disposing them) — not this window.
-    }
-
-    // Fires after every options-chain poll tick (Form1.OtmOptionsUpdated) — filters by symbol
-    // since one shared gateway instance can be feeding multiple ticker windows.
-    private void TradeGateway_OtmOptionsUpdated(string symbol, IReadOnlyList<OtmOption> calls, IReadOnlyList<OtmOption> puts)
-    {
-        if (symbol != _symbol || IsDisposed || !IsHandleCreated) return;
-        BeginInvoke(() =>
-        {
-            UpdateOtmButtons(_callButtons, calls, "CALL");
-            UpdateOtmButtons(_putButtons, puts, "PUT");
-        });
-    }
-
-    private static void UpdateOtmButtons(Button[] buttons, IReadOnlyList<OtmOption> options, string rowType)
-    {
-        for (int i = 0; i < buttons.Length; i++)
-        {
-            var btn = buttons[i];
-            if (i >= options.Count)
-            {
-                btn.Visible = false;
-                btn.Tag = null;
-                continue;
-            }
-
-            var o = options[i];
-            btn.Text = $"{o.Quote.StrikePrice:0.##}\r\n{o.Quote.Bid:0.00}/{o.Quote.Ask:0.00}";
-            btn.Tag = (RowType: rowType, o.Quote.StrikePrice, o.Quote.Bid, o.Quote.Ask, o.Level);
-            btn.Visible = true;
-        }
-    }
-
-    private void OnOtmButtonClick(Button btn)
-    {
-        if (btn.Tag is not (string rowType, decimal strike, decimal bid, decimal ask, string level)) return;
-        _ = _tradeGateway.ExecuteOtmMarketOrderAsync(rowType, strike, level, bid, ask);
     }
 }

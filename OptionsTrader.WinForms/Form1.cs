@@ -16,7 +16,7 @@ namespace OptionsTrader.WinForms;
 file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false,
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null);
 
-public partial class Form1 : Form, IOtmTradeGateway
+public partial class Form1 : Form
 {
     private readonly SchwabAuthService _schwabAuth = new(new HttpClient());
     private readonly HttpClient _marketHttpClient = new();
@@ -803,20 +803,7 @@ public partial class Form1 : Form, IOtmTradeGateway
                 TryAppendIvHistorialSnapshot();
             }
 
-            var (otmCalls, otmPuts) = PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true);
-
-            // Same "closest to money first" ranking PopulateQuotesGrid used for the grid's Level
-            // column, recomputed here from the (already count-limited) otmCalls/otmPuts so the
-            // OTM chart buttons show the identical rank without needing the full unfiltered lists.
-            var otmCallsRanked = otmCalls
-                .OrderBy(q => q.StrikePrice) // ascending = closest-to-money first for calls
-                .Select((q, i) => new OtmOption(q, (i + 1).ToString()))
-                .ToList();
-            var otmPutsRanked = otmPuts
-                .OrderByDescending(q => q.StrikePrice) // descending = closest-to-money first for puts
-                .Select((q, i) => new OtmOption(q, (i + 1).ToString()))
-                .ToList();
-            OtmOptionsUpdated?.Invoke(_selectedTicker.Symbol, otmCallsRanked, otmPutsRanked);
+            PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true);
 
             // Update PnL for open trades against the FULL chain (not the range-filtered grid),
             // so a trade's current bid keeps updating even after its strike leaves the display range.
@@ -1359,7 +1346,7 @@ public partial class Form1 : Form, IOtmTradeGateway
         // One window, 3 chart panels side by side (1h / 15m RTH / 15m RTH+Overnight), all fed by
         // _historyClient (REST) + _liveFeed (hub or relay) set up in EnsureLiveFeedReadyAsync.
         var symbol = _selectedTicker.Symbol;
-        var multiChartForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!, this);
+        var multiChartForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!);
         multiChartForm.FormClosed += (s, e2) => _liveChartForms.Remove(symbol);
         _liveChartForms[symbol] = multiChartForm;
         multiChartForm.Show();
@@ -1428,9 +1415,8 @@ public partial class Form1 : Form, IOtmTradeGateway
         await PlaceRealTradeCoreAsync(rowType, strike, contractsStr, level, bid, ask, withTarget);
     }
 
-    // Places a REAL market BUY_TO_OPEN order for the given option — shared by the Quotes tab grid
-    // (row click, quantity/level already computed by PopulateQuotesGrid) and the OTM Call/Put
-    // buttons overlaid on the 15m RTH+Overnight live chart (via IOtmTradeGateway).
+    // Places a REAL market BUY_TO_OPEN order for the given option (row click in the Quotes tab
+    // grid; quantity/level already computed by PopulateQuotesGrid).
     private async Task PlaceRealTradeCoreAsync(string rowType, decimal strike, string contractsStr, string level, decimal bid, decimal ask, bool withTarget)
     {
         var account = SelectedAccountStore.Load();
@@ -1498,19 +1484,6 @@ public partial class Form1 : Form, IOtmTradeGateway
             LogLine($"{DateTime.Now:HH:mm:ss} [Order] FAILED: {ex.Message}", Color.Red);
             MessageBox.Show($"Order failed: {ex.Message}", "Order Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-    }
-
-    // IOtmTradeGateway — lets the OTM Call/Put buttons on the 15m RTH+Overnight chart place the
-    // exact same kind of REAL market order as clicking a row in the Quotes tab grid. Always a
-    // plain entry (no auto-exit target), matching the single-click behavior requested for these
-    // buttons; quantity is computed the same way the grid computes it (position-size % or a fixed
-    // count, per Settings).
-    public event Action<string, IReadOnlyList<OtmOption>, IReadOnlyList<OtmOption>>? OtmOptionsUpdated;
-
-    public async Task ExecuteOtmMarketOrderAsync(string rowType, decimal strike, string level, decimal bid, decimal ask)
-    {
-        var contractsStr = GetContractsValue(ask);
-        await PlaceRealTradeCoreAsync(rowType, strike, contractsStr, level, bid, ask, withTarget: false);
     }
 
     // Waits for the entry order to fill, syncs the real EntryPrice/Target into the Trades grid, and —
