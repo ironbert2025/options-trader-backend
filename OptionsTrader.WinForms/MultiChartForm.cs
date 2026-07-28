@@ -16,13 +16,15 @@ public class MultiChartForm : Form
 {
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
+    private readonly IOtmTradeGateway _tradeGateway;
     private readonly string _symbol;
 
-    public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed)
+    public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, IOtmTradeGateway tradeGateway)
     {
         _symbol        = symbol;
         _historyClient = historyClient;
         _liveFeed      = liveFeed;
+        _tradeGateway  = tradeGateway;
 
         Text          = $"Live Charts — {symbol}";
         Width         = 1740;
@@ -63,8 +65,11 @@ public class MultiChartForm : Form
         for (int i = 0; i < modes.Length; i++)
         {
             // All 3 panels share the SAME historyClient/liveFeed — they only ever read events /
-            // call the stateless REST history method, never each other's connection state.
-            var panel = new ChartPanel(symbol, _historyClient, _liveFeed, modes[i])
+            // call the stateless REST history method, never each other's connection state. Only
+            // the 15m RTH+Overnight panel gets the OTM trade gateway (its own OTM Call/Put
+            // buttons) — the other two modes just get null and skip that wiring entirely.
+            var panel = new ChartPanel(symbol, _historyClient, _liveFeed, modes[i],
+                modes[i] == ChartPanelMode.Fifteen_Full ? _tradeGateway : null)
             {
                 Dock   = DockStyle.Fill,
                 Margin = new Padding(6)

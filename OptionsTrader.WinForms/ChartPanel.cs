@@ -5,6 +5,9 @@ using OptionsTrader.Application.DTOs.Streaming;
 using OptionsTrader.Application.Interfaces;
 using OptionsTrader.Infrastructure.Schwab;
 
+// OtmOption/IOtmTradeGateway live in this same file's namespace (OptionsTrader.WinForms), see
+// OtmTradeGateway.cs — no extra using needed.
+
 namespace OptionsTrader.WinForms;
 
 // Which candle interval and session window a given ChartPanel shows.
@@ -27,6 +30,7 @@ public class ChartPanel : Panel
     private readonly string _symbol;
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
+    private readonly IOtmTradeGateway? _tradeGateway;
     private readonly ChartPanelMode _mode;
     private readonly int _intervalMinutes;
     private readonly bool _rthOnly;
@@ -52,11 +56,12 @@ public class ChartPanel : Panel
 
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
-    public ChartPanel(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, ChartPanelMode mode)
+    public ChartPanel(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, ChartPanelMode mode, IOtmTradeGateway? tradeGateway = null)
     {
         _symbol        = symbol;
         _historyClient = historyClient;
         _liveFeed      = liveFeed;
+        _tradeGateway  = tradeGateway;
         _mode          = mode;
         (_intervalMinutes, _rthOnly) = mode switch
         {
@@ -84,12 +89,21 @@ public class ChartPanel : Panel
         _liveFeed.OnNewCandle    += Streamer_OnNewCandle;
         _liveFeed.OnDisconnected += Streamer_OnDisconnected;
 
+        // OTM Call/Put buttons overlaid on the chart (Fifteen_Full only, via tradeGateway being
+        // non-null) — re-render whenever Form1's options polling produces a fresh OTM snapshot.
+        if (_tradeGateway != null)
+            _tradeGateway.OtmOptionsUpdated += TradeGateway_OtmOptionsUpdated;
+
         HandleCreated += async (s, e) => await LoadHistoryAsync();
         Disposed += (s, e) =>
         {
             _closing = true;
             _liveFeed.OnNewCandle    -= Streamer_OnNewCandle;
             _liveFeed.OnDisconnected -= Streamer_OnDisconnected;
+            if (_tradeGateway != null)
+                _tradeGateway.OtmOptionsUpdated -= TradeGateway_OtmOptionsUpdated;
+            if (_webView.CoreWebView2 != null)
+                _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
         };
     }
 
@@ -266,6 +280,13 @@ public class ChartPanel : Panel
             if (_mode == ChartPanelMode.Fifteen_Full)
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarOvernightBands();");
 
+            // OTM Call/Put buttons overlaid on the price axis — only on the 15m RTH+Overnight
+            // panel, and only when a trade gateway was actually handed in (MultiChartForm only
+            // does that for this mode). Listens for clicks posted from the page's JS via
+            // window.chrome.webview.postMessage.
+            if (_mode == ChartPanelMode.Fifteen_Full && _tradeGateway != null)
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+
             // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
             // 1h panel shows the full 10 days; the two 15m panels show the last 3 days.
             var requestDays = _mode == ChartPanelMode.Hourly15 ? 10 : 3;
@@ -422,6 +443,58 @@ public class ChartPanel : Panel
     {
         if (_closing || !IsHandleCreated) return;
         BeginInvoke(() => _header.Text = $"{_symbol} — {ModeLabel(_mode)} — {message}");
+    }
+
+    // Fires after every options-chain poll tick (Form1.OtmOptionsUpdated) — filters by symbol
+    // since one shared gateway instance can be feeding multiple ticker windows, then re-renders
+    // the OTM Call/Put buttons at their strikes' current chart Y-coordinates.
+    private void TradeGateway_OtmOptionsUpdated(string symbol, IReadOnlyList<OtmOption> calls, IReadOnlyList<OtmOption> puts)
+    {
+        if (symbol != _symbol || _closing || !IsHandleCreated) return;
+        BeginInvoke(async () => await RunOtmScriptAsync(calls, puts));
+    }
+
+    private async Task RunOtmScriptAsync(IReadOnlyList<OtmOption> calls, IReadOnlyList<OtmOption> puts)
+    {
+        if (_webView.CoreWebView2 == null) return;
+
+        static object Map(OtmOption o) => new
+        {
+            strike = o.Quote.StrikePrice,
+            bid    = o.Quote.Bid,
+            ask    = o.Quote.Ask,
+            level  = o.Level
+        };
+
+        var callsJson = JsonSerializer.Serialize(calls.Select(Map));
+        var putsJson  = JsonSerializer.Serialize(puts.Select(Map));
+        await _webView.CoreWebView2.ExecuteScriptAsync($"configurarOTM({callsJson},{putsJson});");
+    }
+
+    // Receives the click from an OTM Call/Put button drawn in chart.html (window.chrome.webview.
+    // postMessage) and forwards it to Form1 as a real market order via the trade gateway.
+    private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        if (_tradeGateway == null) return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeEl) || typeEl.GetString() != "otmTrade") return;
+
+            var rowType = root.GetProperty("rowType").GetString() ?? "CALL";
+            var strike  = root.GetProperty("strike").GetDecimal();
+            var level   = root.GetProperty("level").GetString() ?? string.Empty;
+            var bid     = root.GetProperty("bid").GetDecimal();
+            var ask     = root.GetProperty("ask").GetDecimal();
+
+            _ = _tradeGateway.ExecuteOtmMarketOrderAsync(rowType, strike, level, bid, ask);
+        }
+        catch
+        {
+            // Malformed/unexpected message from the page — ignore, not fatal.
+        }
     }
 
     // Serializes the payload as JSON and calls the given JS function with it — used for both
