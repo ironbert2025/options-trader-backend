@@ -5,30 +5,11 @@
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #131722; overflow: hidden; }
   #chart { width: 100%; height: 100%; position: relative; }
-
-  /* OTM Call/Put buttons overlaid on the price axis (Fifteen_Full panel only, via
-     configurarOTM). pointer-events:none on the container so empty space still lets chart
-     pan/zoom through; each button re-enables pointer-events so it stays clickable. */
-  /* z-index forces this above Lightweight Charts' own canvases regardless of DOM insertion
-     order (the library appends its canvases into #chart after this div already exists). */
-  #otmOverlay { position: absolute; top: 0; right: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
-  .otm-btn {
-    position: absolute; right: 4px; width: 64px; height: 26px;
-    pointer-events: auto; cursor: pointer; border-radius: 4px; color: #fff;
-    font-family: sans-serif; font-size: 10px; line-height: 1.1; text-align: center;
-    display: flex; flex-direction: column; justify-content: center; user-select: none;
-  }
-  .otm-call { background: rgba(38, 166, 154, 0.9); }
-  .otm-put  { background: rgba(239, 83, 80, 0.9); }
-  .otm-strike { font-weight: bold; }
-  .otm-baa { opacity: 0.9; }
 </style>
 <script src="lightweight-charts.js"></script>
 </head>
 <body>
-<div id="chart">
-  <div id="otmOverlay"></div>
-</div>
+<div id="chart"></div>
 <script>
   const container = document.getElementById('chart');
 
@@ -62,11 +43,46 @@
     borderVisible: false,
     wickUpColor: '#26a69a',
     wickDownColor: '#ef5350',
+    // Keeps the current price roughly centered vertically: instead of Lightweight Charts'
+    // default autoscale (which just fits min/max of the visible candles), force a price range
+    // symmetric around the LAST close — same margin above and below it, sized to whichever side
+    // needs more room to fit the visible data.
+    autoscaleInfoProvider: original => {
+      const res = original();
+      if (!res || !res.priceRange || allCandles.length === 0) return res;
+      const lastClose = allCandles[allCandles.length - 1].close;
+      const { minValue, maxValue } = res.priceRange;
+      const halfRange = Math.max(maxValue - lastClose, lastClose - minValue);
+      if (!(halfRange > 0)) return res;
+      return { priceRange: { minValue: lastClose - halfRange, maxValue: lastClose + halfRange } };
+    },
   });
 
   window.addEventListener('resize', () => {
     chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
   });
+
+  // ---- Default visible time window (optional — set via configurarDiasVisibles) ----
+  // Historical data is always loaded in full (SMA/Bollinger need the full lookback), but the
+  // chart's initial zoom only shows the most recent N calendar days by default — the user can
+  // still scroll/zoom out manually to see more.
+  let diasVisibles = null;
+  function configurarDiasVisibles(dias) { diasVisibles = dias; }
+
+  function aplicarRangoVisible() {
+    if (!diasVisibles || allCandles.length === 0) return;
+    const dayStart = t => {
+      const d = new Date(t * 1000);
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
+    };
+    const days = [...new Set(allCandles.map(c => dayStart(c.time)))].sort((a, b) => a - b);
+    if (days.length === 0) return;
+    const cutoffIdx = Math.max(0, days.length - diasVisibles);
+    chart.timeScale().setVisibleRange({
+      from: days[cutoffIdx],
+      to: allCandles[allCandles.length - 1].time,
+    });
+  }
 
   // ---- DZ/SZ (Demand Zone / Supply Zone) partial lines ----
   // activarDZSZ() arms the next 2 clicks: first click -> green line (Demand Zone) from the click
@@ -601,62 +617,16 @@
     overnightPrimitive._bands = bands;
   }
 
-  // ---- OTM Call/Put buttons (optional — only enabled on the panel that calls configurarOTM,
-  // the 15m RTH+Overnight one) — one button per strike, positioned at that strike's current
-  // price-axis Y-coordinate, showing "strike" + "bid/ask". Click posts a message to C# (handled
-  // by ChartPanel.CoreWebView2_WebMessageReceived) which places a REAL market order. ----
-  let otmData = { calls: [], puts: [] };
-
-  function configurarOTM(calls, puts) {
-    otmData = { calls: calls || [], puts: puts || [] };
-    renderOTM();
-  }
-
-  function renderOTM() {
-    const overlay = document.getElementById('otmOverlay');
-    if (!overlay) return;
-    overlay.innerHTML = '';
-
-    const addButton = (item, rowType) => {
-      const y = candleSeries.priceToCoordinate(item.strike);
-      if (y == null) return;
-
-      const btn = document.createElement('div');
-      btn.className = 'otm-btn ' + (rowType === 'CALL' ? 'otm-call' : 'otm-put');
-      btn.style.top = Math.round(y - 13) + 'px';
-      btn.innerHTML =
-        `<div class="otm-strike">${item.strike}</div>` +
-        `<div class="otm-baa">${Number(item.bid).toFixed(2)}/${Number(item.ask).toFixed(2)}</div>`;
-      btn.addEventListener('click', () => {
-        if (window.chrome && window.chrome.webview) {
-          window.chrome.webview.postMessage({
-            type: 'otmTrade', rowType, strike: item.strike, bid: item.bid, ask: item.ask, level: item.level,
-          });
-        }
-      });
-      overlay.appendChild(btn);
-    };
-
-    otmData.calls.forEach(c => addButton(c, 'CALL'));
-    otmData.puts.forEach(p => addButton(p, 'PUT'));
-  }
-
-  // The strike->Y mapping shifts whenever the visible price range changes (pan/zoom/autoscale),
-  // so re-render on the same triggers as everything else that depends on chart coordinates.
-  chart.timeScale().subscribeVisibleLogicalRangeChange(() => renderOTM());
-  window.addEventListener('resize', () => renderOTM());
-
   // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
 
   // Replaces the whole dataset (used once at startup to seed historical candles).
   function cargarHistorial(velas) {
     allCandles = velas.slice().sort((a, b) => a.time - b.time);
     candleSeries.setData(allCandles);
-    chart.timeScale().fitContent();
+    if (diasVisibles) aplicarRangoVisible(); else chart.timeScale().fitContent();
     recalcularSMAs();
     recalcularBollinger();
     recalcularOvernightBands();
-    renderOTM();
   }
 
   // Updates the still-forming candle (same Time as the last one) without redrawing everything.
@@ -666,7 +636,6 @@
     recalcularSMAs();
     recalcularBollinger();
     recalcularOvernightBands();
-    renderOTM();
   }
 
   // A new candle period started — same call as update; Lightweight Charts appends automatically
@@ -677,7 +646,6 @@
     recalcularSMAs();
     recalcularBollinger();
     recalcularOvernightBands();
-    renderOTM();
   }
 </script>
 </body>

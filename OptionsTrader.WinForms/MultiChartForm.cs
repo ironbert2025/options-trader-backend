@@ -19,6 +19,11 @@ public class MultiChartForm : Form
     private readonly IOtmTradeGateway _tradeGateway;
     private readonly string _symbol;
 
+    // 6 Call + 6 Put buttons, closest-to-money first — created once, just updated in place on
+    // every OtmOptionsUpdated tick instead of being recreated (less flicker).
+    private readonly Button[] _callButtons = new Button[6];
+    private readonly Button[] _putButtons = new Button[6];
+
     public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, IOtmTradeGateway tradeGateway)
     {
         _symbol        = symbol;
@@ -27,8 +32,8 @@ public class MultiChartForm : Form
         _tradeGateway  = tradeGateway;
 
         Text          = $"Live Charts — {symbol}";
-        Width         = 1740;
-        Height        = 714;
+        Width         = 980;
+        Height        = 420;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -65,11 +70,8 @@ public class MultiChartForm : Form
         for (int i = 0; i < modes.Length; i++)
         {
             // All 3 panels share the SAME historyClient/liveFeed — they only ever read events /
-            // call the stateless REST history method, never each other's connection state. Only
-            // the 15m RTH+Overnight panel gets the OTM trade gateway (its own OTM Call/Put
-            // buttons) — the other two modes just get null and skip that wiring entirely.
-            var panel = new ChartPanel(symbol, _historyClient, _liveFeed, modes[i],
-                modes[i] == ChartPanelMode.Fifteen_Full ? _tradeGateway : null)
+            // call the stateless REST history method, never each other's connection state.
+            var panel = new ChartPanel(symbol, _historyClient, _liveFeed, modes[i])
             {
                 Dock   = DockStyle.Fill,
                 Margin = new Padding(6)
@@ -215,10 +217,81 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(btnClear);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
-        Controls.Add(layout);
+        // OTM Call/Put buttons — native WinForms controls in their own column to the right of
+        // all 3 charts (not drawn inside the WebView2 chart anymore, so the price axis stays
+        // fully visible). 6 Call buttons on top, 6 Put buttons below, closest-to-money first.
+        var otmPanel = new Panel { Dock = DockStyle.Right, Width = 110, Padding = new Padding(4), AutoScroll = true };
+        const int btnWidth = 96, btnHeight = 32, btnGap = 3;
+        var y = 4;
+        otmPanel.Controls.Add(new Label { Text = "CALL", Location = new Point(4, y), Size = new Size(btnWidth, 16), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.LimeGreen, Font = new Font(Font, FontStyle.Bold) });
+        y += 18;
+        for (int i = 0; i < _callButtons.Length; i++)
+        {
+            var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightGreen, Visible = false };
+            btn.Click += (s, e) => OnOtmButtonClick(btn);
+            otmPanel.Controls.Add(btn);
+            _callButtons[i] = btn;
+            y += btnHeight + btnGap;
+        }
+        y += 10;
+        otmPanel.Controls.Add(new Label { Text = "PUT", Location = new Point(4, y), Size = new Size(btnWidth, 16), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.OrangeRed, Font = new Font(Font, FontStyle.Bold) });
+        y += 18;
+        for (int i = 0; i < _putButtons.Length; i++)
+        {
+            var btn = new Button { Location = new Point(4, y), Size = new Size(btnWidth, btnHeight), BackColor = Color.LightSalmon, Visible = false };
+            btn.Click += (s, e) => OnOtmButtonClick(btn);
+            otmPanel.Controls.Add(btn);
+            _putButtons[i] = btn;
+            y += btnHeight + btnGap;
+        }
+
+        _tradeGateway.OtmOptionsUpdated += TradeGateway_OtmOptionsUpdated;
+        FormClosed += (s, e) => _tradeGateway.OtmOptionsUpdated -= TradeGateway_OtmOptionsUpdated;
+
+        // Edge-docked controls (Right/Top) added before the Fill-docked layout so it correctly
+        // fills only the remaining space.
+        Controls.Add(otmPanel);
         Controls.Add(toolbar);
+        Controls.Add(layout);
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
         // subscribing, and disposing them) — not this window.
+    }
+
+    // Fires after every options-chain poll tick (Form1.OtmOptionsUpdated) — filters by symbol
+    // since one shared gateway instance can be feeding multiple ticker windows.
+    private void TradeGateway_OtmOptionsUpdated(string symbol, IReadOnlyList<OtmOption> calls, IReadOnlyList<OtmOption> puts)
+    {
+        if (symbol != _symbol || IsDisposed || !IsHandleCreated) return;
+        BeginInvoke(() =>
+        {
+            UpdateOtmButtons(_callButtons, calls, "CALL");
+            UpdateOtmButtons(_putButtons, puts, "PUT");
+        });
+    }
+
+    private static void UpdateOtmButtons(Button[] buttons, IReadOnlyList<OtmOption> options, string rowType)
+    {
+        for (int i = 0; i < buttons.Length; i++)
+        {
+            var btn = buttons[i];
+            if (i >= options.Count)
+            {
+                btn.Visible = false;
+                btn.Tag = null;
+                continue;
+            }
+
+            var o = options[i];
+            btn.Text = $"{o.Quote.StrikePrice:0.##}\r\n{o.Quote.Bid:0.00}/{o.Quote.Ask:0.00}";
+            btn.Tag = (RowType: rowType, o.Quote.StrikePrice, o.Quote.Bid, o.Quote.Ask, o.Level);
+            btn.Visible = true;
+        }
+    }
+
+    private void OnOtmButtonClick(Button btn)
+    {
+        if (btn.Tag is not (string rowType, decimal strike, decimal bid, decimal ask, string level)) return;
+        _ = _tradeGateway.ExecuteOtmMarketOrderAsync(rowType, strike, level, bid, ask);
     }
 }
