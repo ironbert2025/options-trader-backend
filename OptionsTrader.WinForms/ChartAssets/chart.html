@@ -194,7 +194,7 @@
   // ---- Rect tool: sky-blue rectangle between 2 clicks (opposite corners, no value labels) ----
 
   class RectanglesPrimitive {
-    constructor() { this._rects = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2 }, ...]
+    constructor() { this._rects = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, selected }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -207,7 +207,7 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
-                const drawRect = (r, alpha) => {
+                const drawRect = (r, alpha, selected) => {
                   const x1 = ts.timeToCoordinate(r.t1);
                   const x2 = ts.timeToCoordinate(r.t2);
                   const y1 = candleSeries.priceToCoordinate(r.p1);
@@ -219,9 +219,14 @@
                   const bottom = Math.max(y1, y2) * scope.verticalPixelRatio;
                   ctx.fillStyle = `rgba(135, 206, 235, ${alpha})`; // sky blue
                   ctx.fillRect(left, top, right - left, bottom - top);
+                  if (selected) {
+                    ctx.strokeStyle = '#ffeb3b'; // yellow outline = selected, ready to delete
+                    ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                    ctx.strokeRect(left, top, right - left, bottom - top);
+                  }
                 };
-                self._rects.forEach(r => drawRect(r, 0.35));
-                if (self._preview) drawRect(self._preview, 0.18); // lighter while still dragging
+                self._rects.forEach(r => drawRect(r, 0.35, r.selected));
+                if (self._preview) drawRect(self._preview, 0.18, false); // lighter while still dragging
               });
             }
           };
@@ -316,11 +321,13 @@
   // Returns the index of the gray rect whose BORDER (not interior) is within a few pixels of
   // (px,py), or -1. Checked in CSS-pixel space (param.point from chart.subscribeClick), which is
   // what timeToCoordinate/priceToCoordinate already return outside of the bitmap draw() context.
-  function findGrayRectByBorderClick(px, py) {
+  // Generic border-click hit-test shared by both rectangle tools (gray + sky blue) — returns the
+  // index of the topmost rect (in `rects`) whose border is within a few pixels of (px,py), or -1.
+  function findRectBorderIndex(rects, px, py) {
     const ts = chart.timeScale();
     const tolerance = 6;
-    for (let i = grayRectPrimitive._rects.length - 1; i >= 0; i--) {
-      const r = grayRectPrimitive._rects[i];
+    for (let i = rects.length - 1; i >= 0; i--) {
+      const r = rects[i];
       const x1 = ts.timeToCoordinate(r.t1), x2 = ts.timeToCoordinate(r.t2);
       const y1 = candleSeries.priceToCoordinate(r.p1), y2 = candleSeries.priceToCoordinate(r.p2);
       if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
@@ -334,6 +341,9 @@
     }
     return -1;
   }
+
+  function findGrayRectByBorderClick(px, py) { return findRectBorderIndex(grayRectPrimitive._rects, px, py); }
+  function findBlueRectByBorderClick(px, py) { return findRectBorderIndex(rectanglesPrimitive._rects, px, py); }
 
   // Returns the index of the T-Line whose segment is within a few pixels of (px,py), or -1.
   // Same distToSegment helper as the gray rect border check above.
@@ -359,6 +369,13 @@
     const rectIdx = grayRectPrimitive._rects.findIndex(r => r.selected);
     if (rectIdx !== -1) {
       grayRectPrimitive._rects.splice(rectIdx, 1);
+      forceRepaint();
+      return;
+    }
+
+    const blueRectIdx = rectanglesPrimitive._rects.findIndex(r => r.selected);
+    if (blueRectIdx !== -1) {
+      rectanglesPrimitive._rects.splice(blueRectIdx, 1);
       forceRepaint();
       return;
     }
@@ -446,6 +463,21 @@
       const hadSelection = grayRectPrimitive._rects.some(r => r.selected);
       if (hadSelection) {
         grayRectPrimitive._rects.forEach(r => { r.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // Sky-blue rect border-click selection (15m RTH+Overnight panel) — same idea as gray rect.
+    if (rectanglesPrimitive._rects.length > 0) {
+      const hitIdx = findBlueRectByBorderClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        rectanglesPrimitive._rects.forEach((r, i) => { r.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadBlueSelection = rectanglesPrimitive._rects.some(r => r.selected);
+      if (hadBlueSelection) {
+        rectanglesPrimitive._rects.forEach(r => { r.selected = false; });
         forceRepaint();
       }
     }
