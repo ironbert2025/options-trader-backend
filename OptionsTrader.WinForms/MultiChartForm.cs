@@ -280,10 +280,16 @@ public class MultiChartForm : Form
             Location = new Point(0, 4),
             Size     = new Size(60, 24)
         };
+        var btnRthHLine = new Button
+        {
+            Text     = "H-Line",
+            Location = new Point(66, 4),
+            Size     = new Size(60, 24)
+        };
         var btnRthClear = new Button
         {
             Text     = "Clear",
-            Location = new Point(66, 4),
+            Location = new Point(132, 4),
             Size     = new Size(60, 24)
         };
         btnRthTLine.Click += async (s, e) =>
@@ -292,13 +298,21 @@ public class MultiChartForm : Form
             var on = await rthPanel.ToggleTLineModeAsync();
             btnRthTLine.BackColor = on ? Color.Orange : SystemColors.Control;
         };
+        btnRthHLine.Click += async (s, e) =>
+        {
+            if (rthPanel == null) return;
+            var on = await rthPanel.ToggleHLineModeAsync();
+            btnRthHLine.BackColor = on ? Color.LightSalmon : SystemColors.Control;
+        };
         btnRthClear.Click += async (s, e) =>
         {
             if (rthPanel == null) return;
             await rthPanel.ClearDrawingsAsync();
             btnRthTLine.BackColor = SystemColors.Control;
+            btnRthHLine.BackColor = SystemColors.Control;
         };
         rthToolsHost.Controls.Add(btnRthTLine);
+        rthToolsHost.Controls.Add(btnRthHLine);
         rthToolsHost.Controls.Add(btnRthClear);
         toolbar.Controls.Add(rthToolsHost, 1, 0);
 
