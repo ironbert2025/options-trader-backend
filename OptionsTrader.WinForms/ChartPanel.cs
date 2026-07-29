@@ -445,7 +445,21 @@ public class ChartPanel : Panel
 
             // Bollinger Bands (20, 2 std devs) — only on the 15m RTH panel for now.
             if (_mode == ChartPanelMode.Fifteen_RTH)
+            {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarBollinger(20, 2);");
+
+                // Pre-market blue line: only if the chart is opened before 9:30 AM ET that day —
+                // starts at the moment of opening and tracks live price until the market opens,
+                // then freezes (see Streamer_OnNewCandle). Not persisted; a later re-open restarts
+                // the whole thing from scratch.
+                var nowUtc = DateTime.UtcNow;
+                var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, EasternZone);
+                if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0))
+                {
+                    var startTime = FakeUtcEpochSeconds(nowUtc);
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"iniciarPreMarketLine({startTime});");
+                }
+            }
 
             // Gray shading for overnight/weekend gaps — only on the 15m RTH+Overnight panel.
             if (_mode == ChartPanelMode.Fifteen_Full)
@@ -574,7 +588,23 @@ public class ChartPanel : Panel
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
+        {
+            // Pre-market tick on the 15m RTH panel — doesn't form a candle, but feeds the blue
+            // pre-market line (if iniciarPreMarketLine was called when this panel opened). Once
+            // 9:30 AM ET hits this branch stops firing for that reason, which is what freezes the
+            // line in place with no extra "freeze" logic needed.
+            if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
+            {
+                var price = candle.Close;
+                BeginInvoke(async () =>
+                {
+                    if (_webView.CoreWebView2 == null) return;
+                    await _webView.CoreWebView2.ExecuteScriptAsync(
+                        $"actualizarPreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)});");
+                });
+            }
             return; // outside this panel's session — ignore the tick entirely
+        }
 
         if (_liveBucket == null)
         {
@@ -639,11 +669,9 @@ public class ChartPanel : Panel
     {
         static object Map(CandleData c)
         {
-            var easternWallClock = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(c.Time, DateTimeKind.Utc), EasternZone);
-            var fakeUtcForDisplay = DateTime.SpecifyKind(easternWallClock, DateTimeKind.Utc);
             return new
             {
-                time  = new DateTimeOffset(fakeUtcForDisplay).ToUnixTimeSeconds(),
+                time  = FakeUtcEpochSeconds(c.Time),
                 open  = c.Open,
                 high  = c.High,
                 low   = c.Low,
@@ -657,5 +685,14 @@ public class ChartPanel : Panel
             List<CandleData> many => JsonSerializer.Serialize(many.Select(Map)),
             _ => "null"
         };
+    }
+
+    // Same "ET wall-clock digits disguised as UTC" conversion ToChartJson uses for candles, split
+    // out so the pre-market line's start time (not a candle) can use it too.
+    private static long FakeUtcEpochSeconds(DateTime utcTime)
+    {
+        var easternWallClock = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc), EasternZone);
+        var fakeUtcForDisplay = DateTime.SpecifyKind(easternWallClock, DateTimeKind.Utc);
+        return new DateTimeOffset(fakeUtcForDisplay).ToUnixTimeSeconds();
     }
 }
