@@ -61,15 +61,9 @@ public sealed class CandleHubServer : IDisposable
 
     public void Broadcast(string symbol, CandleData candle)
     {
-        List<TcpClient> snapshot;
-        lock (_lock)
-        {
-            if (_clients.Count == 0) return;
-            snapshot = _clients.ToList();
-        }
-
         var json = JsonSerializer.Serialize(new
         {
+            type  = "candle",
             symbol,
             time  = new DateTimeOffset(DateTime.SpecifyKind(candle.Time, DateTimeKind.Utc)).ToUnixTimeMilliseconds(),
             open  = candle.Open,
@@ -77,6 +71,32 @@ public sealed class CandleHubServer : IDisposable
             low   = candle.Low,
             close = candle.Close
         });
+        BroadcastLine(json);
+    }
+
+    // Relays a LEVEL_ONE_EQUITIES last-price tick to every connected client — same wire, tagged
+    // with "type":"l1" so CandleHubClient can tell it apart from a candle update.
+    public void BroadcastLevelOne(string symbol, decimal price, DateTime utcTime)
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            type = "l1",
+            symbol,
+            time = new DateTimeOffset(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc)).ToUnixTimeMilliseconds(),
+            price
+        });
+        BroadcastLine(json);
+    }
+
+    private void BroadcastLine(string json)
+    {
+        List<TcpClient> snapshot;
+        lock (_lock)
+        {
+            if (_clients.Count == 0) return;
+            snapshot = _clients.ToList();
+        }
+
         var bytes = Encoding.UTF8.GetBytes(json + "\n");
 
         foreach (var client in snapshot)
@@ -121,6 +141,7 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
     private string _host = "127.0.0.1";
 
     public event Action<string, CandleData>? OnNewCandle;
+    public event Action<string, decimal, DateTime>? OnLevelOneTick;
     public event Action<string>? OnDisconnected;
 
     // host: "127.0.0.1" (default) for a hub on this same machine, or the hub machine's LAN IP
@@ -199,9 +220,20 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
             var symbol = root.GetProperty("symbol").GetString();
             if (string.IsNullOrEmpty(symbol)) return;
 
+            // "type" is absent on messages from hub instances built before this field existed —
+            // treat that as "candle" too, so an old hub / new client pairing still works.
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : "candle";
+            var time = DateTimeOffset.FromUnixTimeMilliseconds(root.GetProperty("time").GetInt64()).UtcDateTime;
+
+            if (type == "l1")
+            {
+                OnLevelOneTick?.Invoke(symbol, root.GetProperty("price").GetDecimal(), time);
+                return;
+            }
+
             var candle = new CandleData
             {
-                Time  = DateTimeOffset.FromUnixTimeMilliseconds(root.GetProperty("time").GetInt64()).UtcDateTime,
+                Time  = time,
                 Open  = root.GetProperty("open").GetDecimal(),
                 High  = root.GetProperty("high").GetDecimal(),
                 Low   = root.GetProperty("low").GetDecimal(),

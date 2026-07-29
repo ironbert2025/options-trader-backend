@@ -85,14 +85,16 @@ public class ChartPanel : Panel
         Controls.Add(_webView);
         Controls.Add(_header);
 
-        _liveFeed.OnNewCandle    += Streamer_OnNewCandle;
-        _liveFeed.OnDisconnected += Streamer_OnDisconnected;
+        _liveFeed.OnNewCandle     += Streamer_OnNewCandle;
+        _liveFeed.OnLevelOneTick  += Streamer_OnLevelOneTick;
+        _liveFeed.OnDisconnected  += Streamer_OnDisconnected;
 
         HandleCreated += async (s, e) => await LoadHistoryAsync();
         Disposed += (s, e) =>
         {
             _closing = true;
             _liveFeed.OnNewCandle    -= Streamer_OnNewCandle;
+            _liveFeed.OnLevelOneTick -= Streamer_OnLevelOneTick;
             _liveFeed.OnDisconnected -= Streamer_OnDisconnected;
             if (_webView.CoreWebView2 != null)
                 _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
@@ -652,6 +654,29 @@ public class ChartPanel : Panel
                 _liveBucket.Close = candle.Close;
             }
         }
+
+        var toSend = _liveBucket;
+        BeginInvoke(async () => await RunScriptAsync("actualizarUltimaVela", toSend));
+    }
+
+    // Real-time last-price update (LEVEL_ONE_EQUITIES, much higher frequency than CHART_EQUITY's
+    // 1-minute bars). Only ever adjusts the CURRENTLY-forming bucket's Close (and extends
+    // High/Low if the tick exceeds them) — CHART_EQUITY still owns bucket boundaries and Open, so
+    // this can't desync the two feeds, it just makes the live price shown track the true last
+    // trade instead of waiting for the next full-minute bar.
+    private void Streamer_OnLevelOneTick(string symbol, decimal price, DateTime utcTime)
+    {
+        if (symbol != _symbol) return;
+        if (_closing || !IsHandleCreated) return;
+        if (_liveBucket == null) return; // no bucket open yet — CHART_EQUITY seeds the first one
+
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
+            return; // outside this panel's session — ignore the tick entirely
+
+        _liveBucket.High  = Math.Max(_liveBucket.High, price);
+        _liveBucket.Low   = Math.Min(_liveBucket.Low, price);
+        _liveBucket.Close = price;
 
         var toSend = _liveBucket;
         BeginInvoke(async () => await RunScriptAsync("actualizarUltimaVela", toSend));

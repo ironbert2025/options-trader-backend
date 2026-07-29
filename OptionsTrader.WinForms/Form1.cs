@@ -1485,7 +1485,9 @@ public partial class Form1 : Form
             var streamer = CreateSchwabStreamerClient();
             await streamer.ConnectAsync();
             await streamer.SubscribeChartEquity(symbols);
+            await streamer.SubscribeLevelOneEquity(symbols);
             streamer.OnNewCandle += (symbol, candle) => hubServer.Broadcast(symbol, candle);
+            streamer.OnLevelOneTick += (symbol, price, time) => hubServer.BroadcastLevelOne(symbol, price, time);
 
             _historyClient = streamer;
             _liveFeed      = streamer; // this instance's own connection IS the live feed

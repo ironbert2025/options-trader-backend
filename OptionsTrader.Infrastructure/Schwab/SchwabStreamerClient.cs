@@ -49,10 +49,20 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     // re-ADD all of them on the new socket — Schwab drops all subscriptions on disconnect.
     private readonly HashSet<string> _subscribedSymbols = new();
 
+    // Same idea for SubscribeLevelOneEquity — tracked separately since a caller could subscribe
+    // to one service without the other.
+    private readonly HashSet<string> _levelOneSymbols = new();
+
     // Fires once per candle update the streamer sends (Schwab's CHART_EQUITY service pushes a
     // new/updated 1-minute candle per subscribed symbol — one connection can carry several
     // symbols at once, so the symbol is included for the caller to route on).
     public event Action<string, CandleData>? OnNewCandle;
+
+    // Fires on every LEVEL_ONE_EQUITIES last-price update — much higher frequency than
+    // CHART_EQUITY (which only pushes once per 1-minute bar). Field numbers (3 = Last Price,
+    // 35 = Trade Time) are Schwab's documented Level One Equity indices — same as CHART_EQUITY's
+    // mapping, verify against ws_raw.log if this doesn't line up with real prices once connected.
+    public event Action<string, decimal, DateTime>? OnLevelOneTick;
 
     // Fires when the socket disconnects unexpectedly (not via StopAsync), before a reconnect
     // attempt — useful for surfacing a status message in the UI.
@@ -273,6 +283,40 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     public Task SubscribeChartEquity(string symbol, CancellationToken ct = default) =>
         SubscribeChartEquity(new[] { symbol }, ct);
 
+    // Subscribes to real-time last-price quotes (LEVEL_ONE_EQUITIES) for one or more underlyings
+    // — much higher update frequency than CHART_EQUITY's 1-minute bars, used to keep the
+    // currently-forming candle's Close tracking the true last trade instead of waiting for the
+    // next bar close. Same shared-connection "keys" pattern as SubscribeChartEquity.
+    public Task SubscribeLevelOneEquity(IEnumerable<string> symbols, CancellationToken ct = default)
+    {
+        var symbolList = symbols.ToList();
+        foreach (var s in symbolList) _levelOneSymbols.Add(s);
+
+        var payload = new
+        {
+            requests = new[]
+            {
+                new
+                {
+                    service   = "LEVEL_ONE_EQUITIES",
+                    command   = "ADD",
+                    requestid = NextRequestId(),
+                    SchwabClientCustomerId = _schwabClientCustomerId,
+                    SchwabClientCorrelId   = _schwabClientCorrelId,
+                    parameters = new
+                    {
+                        keys   = string.Join(",", symbolList),
+                        fields = "0,1,2,3,35"
+                    }
+                }
+            }
+        };
+        return SendAsync(payload, ct);
+    }
+
+    public Task SubscribeLevelOneEquity(string symbol, CancellationToken ct = default) =>
+        SubscribeLevelOneEquity(new[] { symbol }, ct);
+
     private int NextRequestId() => Interlocked.Increment(ref _requestId);
 
     private async Task SendAsync(object payload, CancellationToken ct)
@@ -375,31 +419,55 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
 
             foreach (var entry in dataArray.EnumerateArray())
             {
-                if (!entry.TryGetProperty("service", out var svc) || svc.GetString() != "CHART_EQUITY")
-                    continue;
+                if (!entry.TryGetProperty("service", out var svc)) continue;
+                var serviceName = svc.GetString();
                 if (!entry.TryGetProperty("content", out var content)) continue;
 
-                foreach (var item in content.EnumerateArray())
+                if (serviceName == "CHART_EQUITY")
                 {
-                    var symbol = item.TryGetProperty("key", out var keyEl) ? keyEl.GetString() : null;
-                    if (string.IsNullOrEmpty(symbol)) continue;
-
-                    var candle = new CandleData
+                    foreach (var item in content.EnumerateArray())
                     {
-                        Open  = GetDecimal(item, "2"),
-                        High  = GetDecimal(item, "3"),
-                        Low   = GetDecimal(item, "4"),
-                        Close = GetDecimal(item, "5"),
-                        Time  = item.TryGetProperty("7", out var t) && t.TryGetInt64(out var epochMs)
-                            ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime
-                            : DateTime.UtcNow
-                    };
-                    // Phase 1 of the future offline simulator: capture every live price update
-                    // (time + price) per symbol/day now, so there's historical tick data to
-                    // replay once that's built (phase 2, later).
-                    TickPriceStore.Append(symbol, candle.Time, candle.Close);
+                        var symbol = item.TryGetProperty("key", out var keyEl) ? keyEl.GetString() : null;
+                        if (string.IsNullOrEmpty(symbol)) continue;
 
-                    OnNewCandle?.Invoke(symbol, candle);
+                        var candle = new CandleData
+                        {
+                            Open  = GetDecimal(item, "2"),
+                            High  = GetDecimal(item, "3"),
+                            Low   = GetDecimal(item, "4"),
+                            Close = GetDecimal(item, "5"),
+                            Time  = item.TryGetProperty("7", out var t) && t.TryGetInt64(out var epochMs)
+                                ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime
+                                : DateTime.UtcNow
+                        };
+                        // Phase 1 of the future offline simulator: capture every live price update
+                        // (time + price) per symbol/day now, so there's historical tick data to
+                        // replay once that's built (phase 2, later).
+                        TickPriceStore.Append(symbol, candle.Time, candle.Close);
+
+                        OnNewCandle?.Invoke(symbol, candle);
+                    }
+                }
+                else if (serviceName == "LEVEL_ONE_EQUITIES")
+                {
+                    foreach (var item in content.EnumerateArray())
+                    {
+                        var symbol = item.TryGetProperty("key", out var keyEl) ? keyEl.GetString() : null;
+                        if (string.IsNullOrEmpty(symbol)) continue;
+
+                        var lastPrice = GetDecimal(item, "3");
+                        var tradeTime = item.TryGetProperty("35", out var tt) && tt.TryGetInt64(out var epochMs)
+                            ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime
+                            : DateTime.UtcNow;
+
+                        // Save the raw tick regardless (for tomorrow's comparison against real
+                        // prices), but only drive the live chart off it when it looks like a real
+                        // trade price — a missing/mis-mapped field would otherwise show as a
+                        // price of 0 on the chart.
+                        LevelOneTickStore.Append(symbol, tradeTime, lastPrice);
+                        if (lastPrice > 0)
+                            OnLevelOneTick?.Invoke(symbol, lastPrice, tradeTime);
+                    }
                 }
             }
         }
@@ -436,6 +504,8 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                 await ConnectAsync();
                 if (_subscribedSymbols.Count > 0)
                     await SubscribeChartEquity(_subscribedSymbols.ToList());
+                if (_levelOneSymbols.Count > 0)
+                    await SubscribeLevelOneEquity(_levelOneSymbols.ToList());
                 _reconnectAttempt = 0;
                 return;
             }
