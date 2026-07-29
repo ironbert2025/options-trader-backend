@@ -1901,15 +1901,24 @@ public partial class Form1 : Form
         var fileName  = $"{symbol}_{optionType}_{timestamp}_TradeLog.png";
         var filePath  = Path.Combine(folder, fileName);
 
-        // Build bounding rect that covers grpTrades + grpLogger on screen
-        var topLeft     = grpTrades.PointToScreen(Point.Empty);
-        var bottomRight = grpLogger.PointToScreen(new Point(grpLogger.Width, grpLogger.Height));
-        var rect        = Rectangle.FromLTRB(topLeft.X, topLeft.Y, bottomRight.X, bottomRight.Y);
+        // Renders grpTrades + grpLogger directly via the form's own drawing (Control.DrawToBitmap)
+        // instead of CopyFromScreen — works even if the window is minimized, occluded, or off-screen.
+        using var tradesBmp = new Bitmap(grpTrades.Width, grpTrades.Height);
+        grpTrades.DrawToBitmap(tradesBmp, new Rectangle(Point.Empty, grpTrades.Size));
 
-        using var bmp = new Bitmap(rect.Width, rect.Height);
-        using var g   = Graphics.FromImage(bmp);
-        g.CopyFromScreen(rect.Location, Point.Empty, rect.Size);
-        bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+        using var loggerBmp = new Bitmap(grpLogger.Width, grpLogger.Height);
+        grpLogger.DrawToBitmap(loggerBmp, new Rectangle(Point.Empty, grpLogger.Size));
+
+        var width  = Math.Max(tradesBmp.Width, loggerBmp.Width);
+        var height = tradesBmp.Height + loggerBmp.Height;
+        using var combined = new Bitmap(width, height);
+        using (var g = Graphics.FromImage(combined))
+        {
+            g.Clear(Color.White);
+            g.DrawImage(tradesBmp, 0, 0);
+            g.DrawImage(loggerBmp, 0, tradesBmp.Height);
+        }
+        combined.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
 
         return filePath;
     }
