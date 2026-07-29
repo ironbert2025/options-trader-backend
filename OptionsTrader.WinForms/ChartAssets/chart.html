@@ -393,8 +393,12 @@
 
     const arrowIdx = verticalArrowPrimitive._arrows.findIndex(a => a.selected);
     if (arrowIdx !== -1) {
+      const removed = verticalArrowPrimitive._arrows[arrowIdx];
       verticalArrowPrimitive._arrows.splice(arrowIdx, 1);
       forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'arrow_delete', time: removed.time, price: removed.price, up: removed.up });
+      }
     }
   });
 
@@ -592,12 +596,21 @@
     }
 
     if (greenArrowArmed) {
-      verticalArrowPrimitive._arrows.push({ time: param.time, price, up: true, selected: false });
+      const arrow = { time: param.time, price, up: true, selected: false };
+      verticalArrowPrimitive._arrows.push(arrow);
       forceRepaint();
+      // Persisted per-symbol by C# (VerticalArrowStore) — see ChartPanel.CoreWebView2_WebMessageReceived.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'arrow_add', time: arrow.time, price: arrow.price, up: arrow.up });
+      }
     }
     if (redArrowArmed) {
-      verticalArrowPrimitive._arrows.push({ time: param.time, price, up: false, selected: false });
+      const arrow = { time: param.time, price, up: false, selected: false };
+      verticalArrowPrimitive._arrows.push(arrow);
       forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'arrow_add', time: arrow.time, price: arrow.price, up: arrow.up });
+      }
     }
   });
 
@@ -932,6 +945,7 @@
   // mousemove while dragging updates the arrow's tip (time/price) to follow the cursor;
   // mouseup ends it and restores normal chart pan/zoom.
   let draggingArrowIdx = -1;
+  let draggingArrowOriginal = null; // { time, price, up } captured at mousedown, to report the move
 
   container.addEventListener('mousedown', ev => {
     const idx = verticalArrowPrimitive._arrows.findIndex(a => a.selected);
@@ -942,6 +956,8 @@
     if (!pts || distToSegment(px, py, pts.x, pts.yTip, pts.x, pts.yTail) > 6) return;
 
     draggingArrowIdx = idx;
+    const a = verticalArrowPrimitive._arrows[idx];
+    draggingArrowOriginal = { time: a.time, price: a.price, up: a.up };
     chart.applyOptions({ handleScroll: false, handleScale: false }); // don't pan/zoom the chart while dragging
     ev.preventDefault();
     ev.stopPropagation();
@@ -961,7 +977,17 @@
 
   window.addEventListener('mouseup', () => {
     if (draggingArrowIdx === -1) return;
+    const a = verticalArrowPrimitive._arrows[draggingArrowIdx];
+    const moved = draggingArrowOriginal && (a.time !== draggingArrowOriginal.time || a.price !== draggingArrowOriginal.price);
+    if (moved && window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage({
+        type: 'arrow_move',
+        oldTime: draggingArrowOriginal.time, oldPrice: draggingArrowOriginal.price, up: draggingArrowOriginal.up,
+        newTime: a.time, newPrice: a.price,
+      });
+    }
     draggingArrowIdx = -1;
+    draggingArrowOriginal = null;
     chart.applyOptions({ handleScroll: true, handleScale: true });
   });
 
@@ -1242,6 +1268,13 @@
   function cargarTLines(lines) {
     if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }
     tLinePrimitive._lines = (lines || []).map(l => ({ t1: l.t1, p1: l.p1, t2: l.t2, p2: l.p2 }));
+    forceRepaint();
+  }
+
+  // Seeds vertical arrows persisted from a previous session (1h panel only — see VerticalArrowStore.cs).
+  function cargarFlechas(arrows) {
+    if (!verticalArrowAttached) { candleSeries.attachPrimitive(verticalArrowPrimitive); verticalArrowAttached = true; }
+    verticalArrowPrimitive._arrows = (arrows || []).map(a => ({ time: a.time, price: a.price, up: a.up, selected: false }));
     forceRepaint();
   }
 

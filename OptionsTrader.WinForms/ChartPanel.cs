@@ -204,20 +204,23 @@ public class ChartPanel : Panel
     }
 
     // Clears every DZ/SZ pair, rectangle, T-Line, H-Line, Arrow and Piso/Techo label drawn on
-    // this panel, and turns all drawing modes off. Also wipes the persisted T-Line file for this
-    // symbol (1h panel only) — a real "clear" should clear what's saved too.
+    // this panel, and turns all drawing modes off. Also wipes the persisted T-Line/vertical-arrow
+    // files for this symbol (1h panel only) — a real "clear" should clear what's saved too.
     public async Task ClearDrawingsAsync()
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync("limpiarDibujos();");
         if (_mode == ChartPanelMode.Hourly15)
+        {
             TLineStore.Clear(_symbol);
+            VerticalArrowStore.Clear(_symbol);
+        }
     }
 
-    // Receives T-Line events from the 1h panel (window.chrome.webview.postMessage from
-    // chart.html) — a new line just drawn ("tline") gets appended to the store, and one deleted
-    // via the Delete key ("tline_delete") gets removed from it, so persistence (TLineStore)
-    // always matches what's actually on screen.
+    // Receives T-Line and vertical-arrow events from the 1h panel (window.chrome.webview.
+    // postMessage from chart.html) and keeps TLineStore/VerticalArrowStore in sync with whatever
+    // is actually on screen: a new one drawn gets appended, one deleted via the Delete key gets
+    // removed, and a dragged arrow gets its stored position updated.
     private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
@@ -225,15 +228,41 @@ public class ChartPanel : Panel
             using var doc = JsonDocument.Parse(e.WebMessageAsJson);
             var root = doc.RootElement;
             var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
-            if (type != "tline" && type != "tline_delete") return;
 
-            var t1 = root.GetProperty("t1").GetInt64();
-            var p1 = root.GetProperty("p1").GetDecimal();
-            var t2 = root.GetProperty("t2").GetInt64();
-            var p2 = root.GetProperty("p2").GetDecimal();
-
-            if (type == "tline") TLineStore.Append(_symbol, t1, p1, t2, p2);
-            else TLineStore.Remove(_symbol, t1, p1, t2, p2);
+            switch (type)
+            {
+                case "tline":
+                case "tline_delete":
+                {
+                    var t1 = root.GetProperty("t1").GetInt64();
+                    var p1 = root.GetProperty("p1").GetDecimal();
+                    var t2 = root.GetProperty("t2").GetInt64();
+                    var p2 = root.GetProperty("p2").GetDecimal();
+                    if (type == "tline") TLineStore.Append(_symbol, t1, p1, t2, p2);
+                    else TLineStore.Remove(_symbol, t1, p1, t2, p2);
+                    break;
+                }
+                case "arrow_add":
+                case "arrow_delete":
+                {
+                    var time = root.GetProperty("time").GetInt64();
+                    var price = root.GetProperty("price").GetDecimal();
+                    var up = root.GetProperty("up").GetBoolean();
+                    if (type == "arrow_add") VerticalArrowStore.Append(_symbol, time, price, up);
+                    else VerticalArrowStore.Remove(_symbol, time, price, up);
+                    break;
+                }
+                case "arrow_move":
+                {
+                    var oldTime = root.GetProperty("oldTime").GetInt64();
+                    var oldPrice = root.GetProperty("oldPrice").GetDecimal();
+                    var up = root.GetProperty("up").GetBoolean();
+                    var newTime = root.GetProperty("newTime").GetInt64();
+                    var newPrice = root.GetProperty("newPrice").GetDecimal();
+                    VerticalArrowStore.Move(_symbol, oldTime, oldPrice, up, newTime, newPrice);
+                    break;
+                }
+            }
         }
         catch
         {
@@ -381,15 +410,23 @@ public class ChartPanel : Panel
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarSMAs([20,40,100,200]);");
 
-                // T-Line persistence (per symbol) — reload whatever was drawn in a previous
-                // session so it reappears at the same point, and listen for new ones the user
-                // draws now so they get saved too.
+                // T-Line + vertical-arrow persistence (per symbol) — reload whatever was drawn in
+                // a previous session so it reappears at the same point, and listen for new/
+                // deleted/moved ones from now on so they get saved too.
                 _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+
                 var savedLines = TLineStore.Load(_symbol);
                 if (savedLines.Count > 0)
                 {
                     var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
                     await _webView.CoreWebView2.ExecuteScriptAsync($"cargarTLines({linesJson});");
+                }
+
+                var savedArrows = VerticalArrowStore.Load(_symbol);
+                if (savedArrows.Count > 0)
+                {
+                    var arrowsJson = JsonSerializer.Serialize(savedArrows.Select(a => new { time = a.Time, price = a.Price, up = a.Up }));
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"cargarFlechas({arrowsJson});");
                 }
             }
 
