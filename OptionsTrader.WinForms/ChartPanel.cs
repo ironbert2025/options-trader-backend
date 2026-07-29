@@ -294,13 +294,13 @@ public class ChartPanel : Panel
 
         if (_webView.CoreWebView2 != null && _rawHistory.Count > 0)
         {
-            var aggregated = AggregateToInterval(_rawHistory, _intervalMinutes, _rthOnly);
+            var aggregated = CandleAggregation.AggregateToInterval(_rawHistory, _intervalMinutes, _rthOnly);
             if (aggregated.Count > 0)
             {
                 await RunScriptAsync("cargarHistorial", aggregated);
                 var last = aggregated[^1];
-                _liveAnchor      = BucketAnchor(new[] { last }, _rthOnly);
-                _liveBucketIndex = BucketIndex(last.Time, _liveAnchor, _intervalMinutes);
+                _liveAnchor      = CandleAggregation.BucketAnchor(new[] { last }, _rthOnly);
+                _liveBucketIndex = CandleAggregation.BucketIndex(last.Time, _liveAnchor, _intervalMinutes);
                 _liveBucket      = last;
             }
         }
@@ -490,9 +490,9 @@ public class ChartPanel : Panel
             var history = await _historyClient.GetHistoricalCandlesAsync(_symbol, requestDays);
             if (history.Count > 0)
             {
-                var filtered = FilterSession(history, _rthOnly);
+                var filtered = CandleAggregation.FilterSession(history, _rthOnly);
                 _rawHistory = filtered; // cached so ToggleIntervalAsync can re-aggregate without re-fetching
-                var aggregated = AggregateToInterval(filtered, _intervalMinutes, _rthOnly);
+                var aggregated = CandleAggregation.AggregateToInterval(filtered, _intervalMinutes, _rthOnly);
 
                 // 1h panel: persist today's fetch to disk and merge with everything saved from
                 // previous sessions, so SMA 100/200 can accumulate beyond Schwab's 10-day limit.
@@ -508,8 +508,8 @@ public class ChartPanel : Panel
                     // Seed the live aggregator with the last historical bucket so the first live
                     // tick extends it correctly instead of starting a spurious new one.
                     var last = aggregated[^1];
-                    _liveAnchor      = BucketAnchor(new[] { last }, _rthOnly);
-                    _liveBucketIndex = BucketIndex(last.Time, _liveAnchor, _intervalMinutes);
+                    _liveAnchor      = CandleAggregation.BucketAnchor(new[] { last }, _rthOnly);
+                    _liveBucketIndex = CandleAggregation.BucketIndex(last.Time, _liveAnchor, _intervalMinutes);
                     _liveBucket      = last;
 
                     // Seed Cross-SMA monitoring's closed-candle history — everything fetched here
@@ -529,66 +529,6 @@ public class ChartPanel : Panel
             MessageBox.Show($"Could not load the live chart for {_symbol} ({ModeLabel(_mode)}):\n\n{ex.Message}",
                 "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-    }
-
-    // rthOnly keeps only 9:30 AM - 4:00 PM ET on each day present in the data (regular session);
-    // otherwise keeps everything Schwab returned (regular + pre/after-hours). No longer
-    // restricted to a single day — covers however many days were requested.
-    private static List<CandleData> FilterSession(List<CandleData> candles, bool rthOnly)
-    {
-        if (!rthOnly) return candles;
-
-        var rthStart = new TimeSpan(9, 30, 0);
-        var rthEnd   = new TimeSpan(16, 0, 0);
-
-        return candles
-            .Where(c =>
-            {
-                var eastern = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
-                return eastern.TimeOfDay >= rthStart && eastern.TimeOfDay <= rthEnd;
-            })
-            .ToList();
-    }
-
-    // RTH buckets anchor at 9:30 AM ET (matching the regular session open); full-day buckets
-    // anchor at midnight ET. Same anchor logic used for both historical batch aggregation and
-    // live incremental aggregation, so bucket boundaries always agree.
-    private static DateTime BucketAnchor(IEnumerable<CandleData> candles, bool rthOnly) =>
-        candles
-            .Select(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))
-            .Min(t => rthOnly ? t.Date.AddHours(9).AddMinutes(30) : t.Date);
-
-    private static int BucketIndex(DateTime utcTime, DateTime anchorEastern, int intervalMinutes)
-    {
-        var eastern   = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
-        var minutesIn = (eastern - anchorEastern).TotalMinutes;
-        return (int)Math.Floor(minutesIn / intervalMinutes);
-    }
-
-    // Groups 1-minute candles into fixed-size buckets for the historical seed. Open = first
-    // minute's open, Close = last minute's close, High/Low = extremes across the bucket.
-    private static List<CandleData> AggregateToInterval(List<CandleData> minuteCandles, int intervalMinutes, bool rthOnly)
-    {
-        if (minuteCandles.Count == 0) return minuteCandles;
-
-        var anchor = BucketAnchor(minuteCandles, rthOnly);
-
-        return minuteCandles
-            .GroupBy(c => BucketIndex(c.Time, anchor, intervalMinutes))
-            .OrderBy(g => g.Key)
-            .Select(g =>
-            {
-                var ordered = g.OrderBy(c => c.Time).ToList();
-                return new CandleData
-                {
-                    Time  = ordered[0].Time,
-                    Open  = ordered[0].Open,
-                    Close = ordered[^1].Close,
-                    High  = ordered.Max(c => c.High),
-                    Low   = ordered.Min(c => c.Low)
-                };
-            })
-            .ToList();
     }
 
     // Every 1-minute tick from the shared streamer lands here for all 3 panels. Each panel
@@ -628,12 +568,12 @@ public class ChartPanel : Panel
         if (_liveBucket == null)
         {
             _liveAnchor      = eastern.Date.AddHours(_rthOnly ? 9 : 0).AddMinutes(_rthOnly ? 30 : 0);
-            _liveBucketIndex = BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
+            _liveBucketIndex = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
             _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
         }
         else
         {
-            var index = BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
+            var index = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
             if (index != _liveBucketIndex)
             {
                 // New bucket started — the previous one is now definitively closed (its last
