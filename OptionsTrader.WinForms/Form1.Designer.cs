@@ -756,7 +756,7 @@ partial class Form1
         btnFourEtfCharts.Name = "btnFourEtfCharts";
         btnFourEtfCharts.Size = new Size(120, 25);
         btnFourEtfCharts.TabIndex = 3;
-        btnFourEtfCharts.Text = "SPY/QQQ/DIA/IWM";
+        btnFourEtfCharts.Text = "Block Mov";
         btnFourEtfCharts.Click += BtnFourEtfCharts_Click;
         //
         // btnStartPolling
