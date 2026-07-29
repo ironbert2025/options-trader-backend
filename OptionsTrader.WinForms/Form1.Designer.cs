@@ -836,7 +836,7 @@ partial class Form1
         flpTickers.Location = new Point(3, 19);
         flpTickers.Name = "flpTickers";
         flpTickers.Padding = new Padding(4);
-        flpTickers.Size = new Size(279, 46);
+        flpTickers.Size = new Size(279, 73);
         flpTickers.TabIndex = 0;
         // 
         // grpTrade
