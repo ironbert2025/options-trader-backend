@@ -1388,6 +1388,49 @@ public partial class Form1 : Form
         form.Show();
     }
 
+    // Lets the user configure a REMOTE hub IP (another computer on the LAN running this same app
+    // as the hub) so THIS instance connects to it instead of deciding locally. Only takes effect
+    // on the next connect (EnsureLiveFeedReadyAsync hasn't run yet, or the app is restarted) —
+    // if streaming already started this session under the old setting, it keeps running as-is.
+    private void BtnHubHost_Click(object? sender, EventArgs e)
+    {
+        var current = HubHostSettingsStore.Load();
+
+        using var dialog = new Form
+        {
+            Text = "Remote Hub Host",
+            Width = 380,
+            Height = 160,
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+        };
+        var lbl = new Label
+        {
+            Text = "IP de la PC que hace de hub (vacío = esta PC decide sola):",
+            Location = new Point(10, 12),
+            Size = new Size(350, 32)
+        };
+        var txt = new TextBox { Text = current, Location = new Point(10, 48), Size = new Size(345, 24) };
+        var btnOk = new Button { Text = "Guardar", Location = new Point(190, 82), Size = new Size(80, 28), DialogResult = DialogResult.OK };
+        var btnCancel = new Button { Text = "Cancelar", Location = new Point(275, 82), Size = new Size(80, 28), DialogResult = DialogResult.Cancel };
+        dialog.Controls.Add(lbl);
+        dialog.Controls.Add(txt);
+        dialog.Controls.Add(btnOk);
+        dialog.Controls.Add(btnCancel);
+        dialog.AcceptButton = btnOk;
+        dialog.CancelButton = btnCancel;
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            HubHostSettingsStore.Save(txt.Text.Trim());
+            MessageBox.Show(
+                "Guardado. Se va a usar la próxima vez que esta instancia se conecte al streaming (cerrá y volvé a abrir la app si ya estaba conectada).",
+                "Hub Host", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+
     // Lazily decides whether this instance is the hub or a client, then sets up _historyClient +
     // _liveFeed accordingly — cheap to call repeatedly, does nothing once already set up.
     //
@@ -1414,8 +1457,25 @@ public partial class Form1 : Form
         symbols.AddRange(FourEtfChartsForm.Symbols);
         symbols = symbols.Distinct().ToList();
 
-        // Try to become the hub first — whichever app instance/process gets there first binds
-        // the local port and owns the real Schwab connection for as long as it stays open.
+        // If a REMOTE hub IP is configured (HubHostSettingsStore — set via "Hub Host" button,
+        // meant for an instance running on a DIFFERENT computer that wants to read another
+        // machine's hub instead of deciding locally), always connect there as a client. This
+        // instance never tries to bind the port itself/become a hub in that case.
+        var remoteHost = HubHostSettingsStore.Load();
+        if (!string.IsNullOrWhiteSpace(remoteHost))
+        {
+            var remoteHubClient = new CandleHubClient();
+            await remoteHubClient.ConnectAsync(LiveHubPort, remoteHost);
+
+            _candleHubClient = remoteHubClient;
+            _historyClient   = CreateSchwabStreamerClient();
+            _liveFeed        = remoteHubClient;
+            return;
+        }
+
+        // No remote hub configured — try to become the hub first — whichever app instance/
+        // process ON THIS MACHINE gets there first binds the port and owns the real Schwab
+        // connection for as long as it stays open.
         var hubServer = new CandleHubServer();
         if (hubServer.TryStart(LiveHubPort))
         {
@@ -1431,9 +1491,9 @@ public partial class Form1 : Form
             return;
         }
 
-        // Another instance already owns the port — connect to it as a client instead. Still
-        // need our OWN SchwabStreamerClient for REST history fetches (no per-account limit on
-        // that, unlike the streaming socket) — it's never connected/subscribed.
+        // Another instance on this machine already owns the port — connect to it as a client
+        // instead. Still need our OWN SchwabStreamerClient for REST history fetches (no
+        // per-account limit on that, unlike the streaming socket) — it's never connected/subscribed.
         var hubClient = new CandleHubClient();
         await hubClient.ConnectAsync(LiveHubPort);
 

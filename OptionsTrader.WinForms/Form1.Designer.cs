@@ -80,6 +80,7 @@ partial class Form1
         btnFetchQuotes = new Button();
         btnLiveChart = new Button();
         btnFourEtfCharts = new Button();
+        btnHubHost = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
@@ -214,6 +215,7 @@ partial class Form1
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnLiveChart);
         tabQuotes.Controls.Add(btnFourEtfCharts);
+        tabQuotes.Controls.Add(btnHubHost);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -758,6 +760,15 @@ partial class Form1
         btnFourEtfCharts.TabIndex = 3;
         btnFourEtfCharts.Text = "Block Mov";
         btnFourEtfCharts.Click += BtnFourEtfCharts_Click;
+        //
+        // btnHubHost
+        //
+        btnHubHost.Location = new Point(647, 87);
+        btnHubHost.Name = "btnHubHost";
+        btnHubHost.Size = new Size(90, 25);
+        btnHubHost.TabIndex = 4;
+        btnHubHost.Text = "Hub Host";
+        btnHubHost.Click += BtnHubHost_Click;
         //
         // btnStartPolling
         // 
@@ -1729,6 +1740,7 @@ partial class Form1
     private Button btnFetchQuotes;
     private Button btnLiveChart;
     private Button btnFourEtfCharts;
+    private Button btnHubHost;
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;

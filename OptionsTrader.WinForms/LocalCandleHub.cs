@@ -8,10 +8,13 @@ using OptionsTrader.Application.Interfaces;
 namespace OptionsTrader.WinForms;
 
 // Schwab allows only ONE streaming connection per account, but the user wants one app instance
-// per ticker (each showing that ticker's own options chain + chart). So only ONE instance ("the
-// hub") actually opens the Schwab WebSocket; it rebroadcasts every candle over a local
-// loopback-only TCP socket, and the other instances ("clients") read from that instead of Schwab
-// directly. No cross-instance auth/handshake needed — it's newline-delimited JSON on localhost.
+// per ticker (each showing that ticker's own options chain + chart) — including instances on
+// OTHER computers on the same LAN. So only ONE instance ("the hub") actually opens the Schwab
+// WebSocket; it rebroadcasts every candle over a TCP socket, and the other instances ("clients")
+// read from that instead of Schwab directly. No auth/handshake needed — it's newline-delimited
+// JSON. Binds to IPAddress.Any (all network interfaces), not just loopback, so both same-machine
+// clients (via 127.0.0.1) and clients on other LAN machines (via this machine's real IP) can
+// connect to the same hub at once.
 public sealed class CandleHubServer : IDisposable
 {
     private TcpListener? _listener;
@@ -19,14 +22,14 @@ public sealed class CandleHubServer : IDisposable
     private readonly object _lock = new();
     private CancellationTokenSource? _cts;
 
-    // Tries to become the hub by binding the fixed local port. Returns false if another instance
-    // already owns it (that instance is already the hub) — the caller should fall back to
-    // CandleHubClient in that case, not treat this as an error.
+    // Tries to become the hub by binding the fixed port on all network interfaces. Returns false
+    // if another instance ON THIS MACHINE already owns it (that instance is already the hub) —
+    // the caller should fall back to CandleHubClient in that case, not treat this as an error.
     public bool TryStart(int port)
     {
         try
         {
-            _listener = new TcpListener(IPAddress.Loopback, port);
+            _listener = new TcpListener(IPAddress.Any, port);
             _listener.Start();
         }
         catch (SocketException)
@@ -104,9 +107,10 @@ public sealed class CandleHubServer : IDisposable
     }
 }
 
-// Connects to another instance's CandleHubServer on localhost and re-raises each relayed candle
-// as OnNewCandle — same event shape as SchwabStreamerClient, so ChartPanel/MultiChartForm don't
-// need to know whether they're fed by the real Schwab socket or a local relay.
+// Connects to another instance's CandleHubServer — on this same machine (localhost) by default,
+// or on another computer on the LAN (given its IP) — and re-raises each relayed candle as
+// OnNewCandle. Same event shape as SchwabStreamerClient, so ChartPanel/MultiChartForm don't need
+// to know whether they're fed by the real Schwab socket or a relay, local or remote.
 public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
 {
     private TcpClient? _client;
@@ -114,15 +118,19 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
     private Task? _receiveTask;
     private volatile bool _stopRequested;
     private int _port;
+    private string _host = "127.0.0.1";
 
     public event Action<string, CandleData>? OnNewCandle;
     public event Action<string>? OnDisconnected;
 
-    public async Task ConnectAsync(int port, CancellationToken ct = default)
+    // host: "127.0.0.1" (default) for a hub on this same machine, or the hub machine's LAN IP
+    // (e.g. "192.168.1.50") to read a hub running on another computer on the network.
+    public async Task ConnectAsync(int port, string host = "127.0.0.1", CancellationToken ct = default)
     {
         _port = port;
+        _host = host;
         _client = new TcpClient();
-        await _client.ConnectAsync(IPAddress.Loopback, port, ct);
+        await _client.ConnectAsync(_host, port, ct);
 
         _cts = new CancellationTokenSource();
         _receiveTask = Task.Run(() => ReceiveLoopAsync(_cts.Token));
@@ -170,7 +178,7 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
             {
                 _client?.Dispose();
                 _client = new TcpClient();
-                await _client.ConnectAsync(IPAddress.Loopback, _port);
+                await _client.ConnectAsync(_host, _port);
                 _cts = new CancellationTokenSource();
                 _receiveTask = Task.Run(() => ReceiveLoopAsync(_cts.Token));
                 return;
