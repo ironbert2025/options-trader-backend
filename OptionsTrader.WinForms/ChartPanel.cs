@@ -592,12 +592,18 @@ public class ChartPanel : Panel
     // Every 1-minute tick from the shared streamer lands here for all 3 panels. Each panel
     // decides independently whether the tick belongs to its current bucket (extend it) or starts
     // a new one (append) — this is what lets one WebSocket connection feed 3 different intervals.
+    // Fires for every raw 1-minute tick this panel receives, regardless of session filtering —
+    // used by MultiChartForm to show a live "time — price" readout above the 15m RTH+Overnight
+    // panel. Eastern wall-clock time, same conversion used everywhere else in this class.
+    public event Action<DateTime, decimal>? OnLiveTick;
+
     private void Streamer_OnNewCandle(string symbol, CandleData candle)
     {
         if (symbol != _symbol) return; // one shared connection carries all 4 tickers — ignore ticks for the others
         if (_closing || !IsHandleCreated) return;
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
+        OnLiveTick?.Invoke(eastern, candle.Close);
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
         {
             // Pre-market tick on the 15m RTH panel — doesn't form a candle, but feeds the blue

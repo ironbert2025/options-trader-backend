@@ -360,6 +360,25 @@ public class MultiChartForm : Form
             Size     = new Size(70, 24)
         };
 
+        // Live "time — price" readout, updated on every raw tick this panel receives via the
+        // WebSocket — not tied to candle formation, so it updates even mid-bucket.
+        var lblLiveTick = new Label
+        {
+            Text      = string.Empty,
+            Location  = new Point(0, 58),
+            Size      = new Size(146, 20),
+            Font      = new Font("Consolas", 9F),
+            ForeColor = Color.White
+        };
+        if (overnightPanel != null)
+        {
+            overnightPanel.OnLiveTick += (eastern, price) =>
+            {
+                if (lblLiveTick.IsDisposed || !lblLiveTick.IsHandleCreated) return;
+                lblLiveTick.BeginInvoke(() => lblLiveTick.Text = $"{eastern:HH:mm:ss}  {price:F2}");
+            };
+        }
+
         btnDzSz.Click += async (s, e) =>
         {
             if (overnightPanel == null) return;
@@ -398,6 +417,7 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(btnClear);
         toolsHost.Controls.Add(btn5Min);
         toolsHost.Controls.Add(btnArrow);
+        toolsHost.Controls.Add(lblLiveTick);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
         Controls.Add(layout);
