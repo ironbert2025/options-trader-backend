@@ -10,7 +10,7 @@ namespace OptionsTrader.WinForms;
 /// </summary>
 public sealed class CsvLogger : IDisposable
 {
-    private const string OutputFolder = @"C:\OptionsData";
+    private const string OutputFolder = @"C:\OptionsData\Trades\Iv";
     private const string Header = "Time,SpotPrice,StrikePrice,Bid,Ask,IntValue,ExtValue,Delta,Gamma,Theta,Vega,IV";
 
     private StreamWriter? _callWriter;

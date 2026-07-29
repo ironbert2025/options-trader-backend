@@ -8,10 +8,10 @@ namespace OptionsTrader.WinForms;
 // round-tripped as opaque longs here, never interpreted as a real UTC instant on the C# side.
 internal static class VerticalArrowStore
 {
-    private const string OutputFolder = @"C:\OptionsData";
+    private const string OutputFolder = @"C:\OptionsData\ChartDrawings";
     private const string Header = "Time,Price,Up";
 
-    private static string PathFor(string symbol) => Path.Combine(OutputFolder, $"{symbol}_Arrows.csv");
+    private static string PathFor(string symbol) => Path.Combine(OutputFolder, symbol, $"{symbol}_Arrows.csv");
 
     public static List<(long Time, decimal Price, bool Up)> Load(string symbol)
     {
@@ -41,8 +41,8 @@ internal static class VerticalArrowStore
 
     public static void Append(string symbol, long time, decimal price, bool up)
     {
-        Directory.CreateDirectory(OutputFolder);
         var path = PathFor(symbol);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var isNew = !File.Exists(path);
         using var writer = new StreamWriter(path, append: true);
         if (isNew) writer.WriteLine(Header);
@@ -79,8 +79,9 @@ internal static class VerticalArrowStore
 
     private static void Rewrite(string symbol, List<(long Time, decimal Price, bool Up)> rows)
     {
-        Directory.CreateDirectory(OutputFolder);
-        using var writer = new StreamWriter(PathFor(symbol), append: false);
+        var path = PathFor(symbol);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var writer = new StreamWriter(path, append: false);
         writer.WriteLine(Header);
         foreach (var r in rows)
             writer.WriteLine($"{r.Time},{r.Price.ToString(CultureInfo.InvariantCulture)},{r.Up}");

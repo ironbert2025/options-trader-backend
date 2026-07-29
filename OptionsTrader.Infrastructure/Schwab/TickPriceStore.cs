@@ -12,7 +12,7 @@ namespace OptionsTrader.Infrastructure.Schwab;
 // there's no risk of multiple processes writing duplicate rows for the same symbol/tick.
 internal static class TickPriceStore
 {
-    private const string OutputFolder = @"C:\OptionsData";
+    private const string OutputFolder = @"C:\OptionsData\MarketData\Ticks";
     private const string Header = "Time,Price";
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
     private static readonly object WriteLock = new();
@@ -22,11 +22,12 @@ internal static class TickPriceStore
         try
         {
             var eastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc), EasternZone);
-            var path = Path.Combine(OutputFolder, $"{symbol}_Ticks_{eastern:yyyyMMdd}.csv");
+            var symbolFolder = Path.Combine(OutputFolder, symbol);
+            var path = Path.Combine(symbolFolder, $"{symbol}_Ticks_{eastern:yyyyMMdd}.csv");
 
             lock (WriteLock)
             {
-                Directory.CreateDirectory(OutputFolder);
+                Directory.CreateDirectory(symbolFolder);
                 var isNew = !File.Exists(path);
                 using var writer = new StreamWriter(path, append: true);
                 if (isNew) writer.WriteLine(Header);

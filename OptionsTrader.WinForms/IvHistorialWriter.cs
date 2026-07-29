@@ -8,7 +8,8 @@ namespace OptionsTrader.WinForms;
 // it never touches another symbol's CSV files. Safe to call repeatedly; idempotent per day+symbol.
 internal static class IvHistorialWriter
 {
-    private const string OutputFolder   = @"C:\OptionsData";
+    private const string OutputFolder   = @"C:\OptionsData\Trades\Iv";
+    private const string LogFolder      = @"C:\OptionsData\Logs";
     private const string MasterFileName = "IV_Historial_Apertura.csv";
     private const string Header = "Fecha,Simbolo,HoraSnapshot,SpotPrice,StrikeATM_Call,IV_Call_ATM,StrikeATM_Put,IV_Put_ATM,IV_ATM_Promedio";
 
@@ -46,9 +47,9 @@ internal static class IvHistorialWriter
     {
         try
         {
-            Directory.CreateDirectory(OutputFolder);
+            Directory.CreateDirectory(LogFolder);
             var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{symbol}] {ex.GetType().Name}: {ex.Message}{Environment.NewLine}";
-            File.AppendAllText(Path.Combine(OutputFolder, "iv_historial_errors.log"), line);
+            File.AppendAllText(Path.Combine(LogFolder, "iv_historial_errors.log"), line);
         }
         catch
         {

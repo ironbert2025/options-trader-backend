@@ -13,7 +13,7 @@ namespace OptionsTrader.WinForms;
 // candles) to have 200 daily bars available, i.e. up to ~200*7 = 1400 hourly candles.
 internal static class HourlyCandleStore
 {
-    private const string OutputFolder = @"C:\OptionsData";
+    private const string OutputFolder = @"C:\OptionsData\MarketData\Candles";
     private const string Header = "Time,Open,High,Low,Close";
     private const int MaxCandles = 1500; // ~200 trading days * 7 candles/day, plus headroom
 

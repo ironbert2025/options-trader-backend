@@ -8,10 +8,10 @@ namespace OptionsTrader.WinForms;
 // as opaque longs here, never interpreted as a real UTC instant on the C# side.
 internal static class TLineStore
 {
-    private const string OutputFolder = @"C:\OptionsData";
+    private const string OutputFolder = @"C:\OptionsData\ChartDrawings";
     private const string Header = "Time1,Price1,Time2,Price2";
 
-    private static string PathFor(string symbol) => Path.Combine(OutputFolder, $"{symbol}_TLines.csv");
+    private static string PathFor(string symbol) => Path.Combine(OutputFolder, symbol, $"{symbol}_TLines.csv");
 
     public static List<(long T1, decimal P1, long T2, decimal P2)> Load(string symbol)
     {
@@ -42,8 +42,8 @@ internal static class TLineStore
 
     public static void Append(string symbol, long t1, decimal p1, long t2, decimal p2)
     {
-        Directory.CreateDirectory(OutputFolder);
         var path = PathFor(symbol);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var isNew = !File.Exists(path);
         using var writer = new StreamWriter(path, append: true);
         if (isNew) writer.WriteLine(Header);
