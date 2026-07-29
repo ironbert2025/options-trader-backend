@@ -825,7 +825,7 @@ partial class Form1
         grpTickerButtons.Controls.Add(flpTickers);
         grpTickerButtons.Location = new Point(128, 4);
         grpTickerButtons.Name = "grpTickerButtons";
-        grpTickerButtons.Size = new Size(285, 68);
+        grpTickerButtons.Size = new Size(285, 96);
         grpTickerButtons.TabIndex = 6;
         grpTickerButtons.TabStop = false;
         grpTickerButtons.Text = "Tickers";
@@ -1134,7 +1134,7 @@ partial class Form1
         grpTickers.Controls.Add(btnSaveTickers);
         grpTickers.Location = new Point(175, 8);
         grpTickers.Name = "grpTickers";
-        grpTickers.Size = new Size(340, 168);
+        grpTickers.Size = new Size(340, 210);
         grpTickers.TabIndex = 1;
         grpTickers.TabStop = false;
         grpTickers.Text = "Tickers";
@@ -1184,7 +1184,7 @@ partial class Form1
         dgvTickers.RowHeadersVisible = false;
         dgvTickers.RowTemplate.Height = 22;
         dgvTickers.ScrollBars = ScrollBars.None;
-        dgvTickers.Size = new Size(318, 112);
+        dgvTickers.Size = new Size(318, 154);
         dgvTickers.TabIndex = 0;
         // 
         // colSymbol
@@ -1213,7 +1213,7 @@ partial class Form1
         // 
         // btnSaveTickers
         // 
-        btnSaveTickers.Location = new Point(250, 138);
+        btnSaveTickers.Location = new Point(250, 180);
         btnSaveTickers.Name = "btnSaveTickers";
         btnSaveTickers.Size = new Size(80, 23);
         btnSaveTickers.TabIndex = 1;

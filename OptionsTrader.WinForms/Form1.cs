@@ -296,7 +296,7 @@ public partial class Form1 : Form
         var tickers = TickerSettingsStore.Load();
 
         dgvTickers.Rows.Clear();
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 6; i++)
         {
             if (i < tickers.Count)
                 dgvTickers.Rows.Add(tickers[i].Symbol, tickers[i].Low, tickers[i].High, tickers[i].ExpDate);
