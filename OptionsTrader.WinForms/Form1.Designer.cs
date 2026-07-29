@@ -745,7 +745,7 @@ partial class Form1
         //
         // btnLiveChart
         //
-        btnLiveChart.Location = new Point(420, 87);
+        btnLiveChart.Location = new Point(990, 4);
         btnLiveChart.Name = "btnLiveChart";
         btnLiveChart.Size = new Size(95, 25);
         btnLiveChart.TabIndex = 2;
@@ -754,7 +754,7 @@ partial class Form1
         //
         // btnFourEtfCharts
         //
-        btnFourEtfCharts.Location = new Point(521, 87);
+        btnFourEtfCharts.Location = new Point(990, 34);
         btnFourEtfCharts.Name = "btnFourEtfCharts";
         btnFourEtfCharts.Size = new Size(120, 25);
         btnFourEtfCharts.TabIndex = 3;
@@ -763,7 +763,7 @@ partial class Form1
         //
         // btnHubHost
         //
-        btnHubHost.Location = new Point(647, 87);
+        btnHubHost.Location = new Point(990, 64);
         btnHubHost.Name = "btnHubHost";
         btnHubHost.Size = new Size(90, 25);
         btnHubHost.TabIndex = 4;
