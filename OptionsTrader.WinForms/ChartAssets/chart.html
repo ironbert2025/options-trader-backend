@@ -927,6 +927,44 @@
     return -1;
   }
 
+  // ---- Dragging a selected vertical arrow ----
+  // mousedown on an already-selected arrow's shaft starts a drag instead of letting the chart pan;
+  // mousemove while dragging updates the arrow's tip (time/price) to follow the cursor;
+  // mouseup ends it and restores normal chart pan/zoom.
+  let draggingArrowIdx = -1;
+
+  container.addEventListener('mousedown', ev => {
+    const idx = verticalArrowPrimitive._arrows.findIndex(a => a.selected);
+    if (idx === -1) return;
+    const rect = container.getBoundingClientRect();
+    const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+    const pts = verticalArrowEndpoints(verticalArrowPrimitive._arrows[idx]);
+    if (!pts || distToSegment(px, py, pts.x, pts.yTip, pts.x, pts.yTail) > 6) return;
+
+    draggingArrowIdx = idx;
+    chart.applyOptions({ handleScroll: false, handleScale: false }); // don't pan/zoom the chart while dragging
+    ev.preventDefault();
+    ev.stopPropagation();
+  });
+
+  container.addEventListener('mousemove', ev => {
+    if (draggingArrowIdx === -1) return;
+    const rect = container.getBoundingClientRect();
+    const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+    const time = chart.timeScale().coordinateToTime(px);
+    const price = candleSeries.coordinateToPrice(py);
+    if (time == null || price == null) return;
+    verticalArrowPrimitive._arrows[draggingArrowIdx].time = time;
+    verticalArrowPrimitive._arrows[draggingArrowIdx].price = price;
+    forceRepaint();
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (draggingArrowIdx === -1) return;
+    draggingArrowIdx = -1;
+    chart.applyOptions({ handleScroll: true, handleScale: true });
+  });
+
   // ---- Piso/Techo tool: writes orange text at the clicked point (1h panel) — single click per
   // label, no pairing (unlike the 2-click tools above) ----
 
