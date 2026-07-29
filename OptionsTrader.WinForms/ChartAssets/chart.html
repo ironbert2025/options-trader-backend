@@ -995,6 +995,7 @@
           lineWidth: smaWidths[p] || 1,
           priceLineVisible: false,
           lastValueVisible: false,
+          crosshairMarkerVisible: false, // no dot on the SMA line when hovering
         });
       }
     });
@@ -1030,7 +1031,7 @@
   function configurarBollinger(periodo, desviaciones) {
     bollingerConfig = { period: periodo, mult: desviaciones };
     if (!bollingerSeries) {
-      const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false };
+      const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
       bollingerSeries = {
         upper:  chart.addLineSeries({ ...opts, color: '#787b86' }),
         middle: chart.addLineSeries({ ...opts, color: '#787b86', lineStyle: LightweightCharts.LineStyle.Dashed }),
