@@ -7,11 +7,15 @@ namespace OptionsTrader.WinForms;
 // panel can eventually accumulate enough history — Schwab's pricehistory endpoint only returns
 // 10 days per fetch, nowhere near the 200 candles SMA 200 needs. Each session's fetch gets merged
 // into whatever was already saved, so the file grows by roughly one trading day per session.
+//
+// Also backs the 1h panel's Daily view (activarDaily in chart.html), which aggregates this same
+// hourly history into one bar per day — needs up to ~200 TRADING days of hourly candles (not 200
+// candles) to have 200 daily bars available, i.e. up to ~200*7 = 1400 hourly candles.
 internal static class HourlyCandleStore
 {
     private const string OutputFolder = @"C:\OptionsData";
     private const string Header = "Time,Open,High,Low,Close";
-    private const int MaxCandles = 300; // headroom above 200 without growing forever
+    private const int MaxCandles = 1500; // ~200 trading days * 7 candles/day, plus headroom
 
     private static string PathFor(string symbol) => Path.Combine(OutputFolder, $"{symbol}_Hourly1h.csv");
 

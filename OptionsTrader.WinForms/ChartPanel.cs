@@ -295,6 +295,19 @@ public class ChartPanel : Panel
         return _intervalMinutes == 5;
     }
 
+    // Toggles the 1h panel between Daily and Hourly candles. All the aggregation (grouping the
+    // already-loaded hourly history into one bar per day) and SMA recomputation happens entirely
+    // in JS (chart.html's activarDaily) off the same data already on the chart — no new fetch or
+    // re-seed needed here, unlike ToggleIntervalAsync above. Drawings (T-Line, arrows, etc.) are
+    // untouched since they're anchored to real timestamps valid in either view. Returns true if
+    // now showing Daily candles.
+    public async Task<bool> ToggleDailyModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarDaily();");
+        return result == "true";
+    }
+
     // Toggles a "Cross UP/DOWN SMA(period)" monitor on/off. While armed, every 1h candle that
     // closes and forms a genuine crossover of that SMA triggers a chart capture + Telegram push.
     // Returns the new on/off state.

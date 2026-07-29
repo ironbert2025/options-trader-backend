@@ -234,6 +234,22 @@ public class MultiChartForm : Form
             btnFlechaRoja.BackColor = SystemColors.Control;
         };
 
+        // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
+        // days of persisted hourly history) and plain Hourly candles. Sits in the space below the
+        // Cross-SMA grid (which only uses the first 2 rows in this column).
+        var btnDaily = new Button
+        {
+            Text     = "Daily",
+            Location = new Point(0, 56),
+            Size     = new Size(70, 24)
+        };
+        btnDaily.Click += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            var on = await hourlyPanel.ToggleDailyModeAsync();
+            btnDaily.BackColor = on ? Color.LightBlue : SystemColors.Control;
+        };
+
         crossHost.Controls.Add(btnTLine);
         crossHost.Controls.Add(btnHLine);
         crossHost.Controls.Add(btnHourlyClear);
@@ -242,6 +258,7 @@ public class MultiChartForm : Form
         crossHost.Controls.Add(btnFlechaRoja);
         crossHost.Controls.Add(btnPiso);
         crossHost.Controls.Add(btnTecho);
+        crossHost.Controls.Add(btnDaily);
         toolbar.Controls.Add(crossHost, 0, 0);
 
         // T-Line drawing tool for the 15m RTH panel (column 1) — no persistence like the 1h

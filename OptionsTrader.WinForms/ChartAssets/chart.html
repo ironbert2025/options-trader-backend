@@ -84,24 +84,22 @@
   });
 
   function aplicarRangoVisible() {
-    if (!diasVisibles || allCandles.length === 0) return;
-    const dayStart = t => {
-      const d = new Date(t * 1000);
-      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
-    };
-    const days = [...new Set(allCandles.map(c => dayStart(c.time)))].sort((a, b) => a - b);
+    const series = displaySeries();
+    if (!diasVisibles || series.length === 0) return;
+    const days = [...new Set(series.map(c => dayStartOf(c.time)))].sort((a, b) => a - b);
     if (days.length === 0) return;
     const cutoffIdx = Math.max(0, days.length - diasVisibles);
 
     // setVisibleRange is an EXACT range — it overrides timeScale.rightOffset's usual empty-space
     // margin, so the last candle would sit flush against the edge. Pad "to" by ~3 bars' worth of
-    // time ourselves (bar spacing taken from the last two candles) to leave that same margin.
-    const barDuration = allCandles.length > 1
-      ? allCandles[allCandles.length - 1].time - allCandles[allCandles.length - 2].time
+    // time ourselves (bar spacing taken from the last two candles of whichever series is
+    // currently displayed — hourly or daily) to leave that same margin.
+    const barDuration = series.length > 1
+      ? series[series.length - 1].time - series[series.length - 2].time
       : 900;
     const range = {
       from: days[cutoffIdx],
-      to: allCandles[allCandles.length - 1].time + barDuration * 3,
+      to: series[series.length - 1].time + barDuration * 3,
     };
     lastAppliedRange = range;
     chart.timeScale().setVisibleRange(range);
@@ -1068,14 +1066,15 @@
   }
 
   function recalcularSMAs() {
+    const source = displaySeries();
     smaPeriods.forEach(p => {
-      if (allCandles.length < p) { smaSeries[p].setData([]); return; }
+      if (source.length < p) { smaSeries[p].setData([]); return; }
       const data = [];
       let sum = 0;
-      for (let i = 0; i < allCandles.length; i++) {
-        sum += allCandles[i].close;
-        if (i >= p) sum -= allCandles[i - p].close;
-        if (i >= p - 1) data.push({ time: allCandles[i].time, value: sum / p });
+      for (let i = 0; i < source.length; i++) {
+        sum += source[i].close;
+        if (i >= p) sum -= source[i - p].close;
+        if (i >= p - 1) data.push({ time: source[i].time, value: sum / p });
       }
       smaSeries[p].setData(data);
     });
@@ -1085,6 +1084,51 @@
     const idx = allCandles.findIndex(c => c.time === vela.time);
     if (idx >= 0) allCandles[idx] = vela;
     else allCandles.push(vela);
+  }
+
+  // ---- Daily view toggle (1h panel only, via activarDaily) — aggregates the full hourly
+  // history (allCandles, always kept as the true source) into one bar per ET calendar day.
+  // recalcularSMAs/aplicarRangoVisible/candle rendering all read through displaySeries() so
+  // switching modes doesn't need its own separate code path for each. ----
+  let dailyMode = false;
+
+  function aggregateToDaily(candles) {
+    if (candles.length === 0) return [];
+    const byDay = new Map(); // dayStart -> aggregated bar
+    for (const c of candles) {
+      const day = dayStartOf(c.time);
+      const bucket = byDay.get(day);
+      if (!bucket) {
+        byDay.set(day, { time: day, open: c.open, high: c.high, low: c.low, close: c.close });
+      } else {
+        bucket.high = Math.max(bucket.high, c.high);
+        bucket.low = Math.min(bucket.low, c.low);
+        bucket.close = c.close;
+      }
+    }
+    return Array.from(byDay.values()).sort((a, b) => a.time - b.time);
+  }
+
+  function displaySeries() {
+    return dailyMode ? aggregateToDaily(allCandles) : allCandles;
+  }
+
+  function renderCandles() {
+    candleSeries.setData(displaySeries());
+  }
+
+  // Toggle: Daily shows one bar per day (last 20 by default) built from up to ~200 trading days
+  // of persisted hourly history; H1 goes back to plain hourly bars (last 7 days by default).
+  // Drawings (T-Line, arrows, etc.) aren't touched — they're anchored to real timestamps, which
+  // stay valid regardless of which series is currently rendered.
+  function activarDaily() {
+    dailyMode = !dailyMode;
+    diasVisibles = dailyMode ? 20 : 7;
+    userHasInteracted = false; // each mode gets its own fresh default view, not the other's manual pan/zoom
+    renderCandles();
+    aplicarRangoVisible();
+    recalcularSMAs();
+    return dailyMode;
   }
 
   // ---- Bollinger Bands overlay (optional — only enabled on panels that call configurarBollinger) ----
@@ -1281,7 +1325,7 @@
   // Replaces the whole dataset (used once at startup to seed historical candles).
   function cargarHistorial(velas) {
     allCandles = velas.slice().sort((a, b) => a.time - b.time);
-    candleSeries.setData(allCandles);
+    renderCandles();
     if (diasVisibles) aplicarRangoVisible(); else chart.timeScale().fitContent();
     recalcularSMAs();
     recalcularBollinger();
@@ -1289,15 +1333,18 @@
   }
 
   // Updates the still-forming candle (same Time as the last one) without redrawing everything.
+  // In Daily mode there's no single "last bar" to hand to candleSeries.update() — the live
+  // hourly tick just extends whichever day it falls in, so re-render the whole (cheap, ~200-bar)
+  // daily series instead.
   function actualizarUltimaVela(vela) {
     upsertCandle(vela);
-    candleSeries.update(vela);
+    if (dailyMode) renderCandles(); else candleSeries.update(vela);
     recalcularSMAs();
     recalcularBollinger();
     recalcularOvernightBands();
-    // series.update() auto-scrolls the time scale to keep following the latest bar, which eats
-    // into the right-edge margin set at load time — reapply it on every live tick so it sticks,
-    // but only while the user is actually following the live edge (see
+    // series.update()/setData() can auto-scroll the time scale to keep following the latest bar,
+    // which eats into the right-edge margin set at load time — reapply it on every live tick so
+    // it sticks, but only while the user is actually following the live edge (see
     // reaplicarRangoVisibleSiEnVivo): otherwise a manual pan to the left would get overridden by
     // the very next tick.
     reaplicarRangoVisibleSiEnVivo();
@@ -1307,7 +1354,7 @@
   // when the Time is newer than the last point.
   function agregarVelaCompleta(vela) {
     upsertCandle(vela);
-    candleSeries.update(vela);
+    if (dailyMode) renderCandles(); else candleSeries.update(vela);
     recalcularSMAs();
     recalcularBollinger();
     recalcularOvernightBands();
