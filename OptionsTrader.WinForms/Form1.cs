@@ -56,6 +56,7 @@ public partial class Form1 : Form
     private SchwabStreamerClient? _historyClient;
     private ICandleFeed? _liveFeed;
     private readonly Dictionary<string, MultiChartForm> _liveChartForms = new();
+    private FourEtfChartsForm? _fourEtfChartsForm;
 
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
@@ -1352,6 +1353,41 @@ public partial class Form1 : Form
         multiChartForm.Show();
     }
 
+    // Opens the single "1h Charts — SPY/QQQ/DIA/IWM" window (no per-ticker selection needed —
+    // always the same 4 symbols). Same shared-streamer setup as BtnLiveChart_Click.
+    private async void BtnFourEtfCharts_Click(object? sender, EventArgs e)
+    {
+        if (_fourEtfChartsForm is { IsDisposed: false })
+        {
+            _fourEtfChartsForm.Activate();
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var form = new FourEtfChartsForm(_historyClient!, _liveFeed!);
+        form.FormClosed += (s, e2) => _fourEtfChartsForm = null;
+        _fourEtfChartsForm = form;
+        form.Show();
+    }
+
     // Lazily decides whether this instance is the hub or a client, then sets up _historyClient +
     // _liveFeed accordingly — cheap to call repeatedly, does nothing once already set up.
     //
@@ -1370,8 +1406,13 @@ public partial class Form1 : Form
 
     private async Task SetUpLiveFeedAsync()
     {
-        var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).Distinct().ToList();
-        if (symbols.Count == 0) symbols = new List<string> { _selectedTicker!.Symbol };
+        var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).ToList();
+        if (symbols.Count == 0 && _selectedTicker != null) symbols.Add(_selectedTicker.Symbol);
+
+        // DIA/IWM aren't in TickerSettingsStore yet — added by hand for the SPY/QQQ/DIA/IWM live
+        // chart window (FourEtfChartsForm) until that comes from the tickers table instead.
+        symbols.AddRange(FourEtfChartsForm.Symbols);
+        symbols = symbols.Distinct().ToList();
 
         // Try to become the hub first — whichever app instance/process gets there first binds
         // the local port and owns the real Schwab connection for as long as it stays open.

@@ -79,6 +79,7 @@ partial class Form1
         chkHideNextExpDate = new CheckBox();
         btnFetchQuotes = new Button();
         btnLiveChart = new Button();
+        btnFourEtfCharts = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
@@ -212,6 +213,7 @@ partial class Form1
         tabQuotes.Controls.Add(grpOptionsChainNext);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnLiveChart);
+        tabQuotes.Controls.Add(btnFourEtfCharts);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -747,6 +749,15 @@ partial class Form1
         btnLiveChart.TabIndex = 2;
         btnLiveChart.Text = "Live Chart";
         btnLiveChart.Click += BtnLiveChart_Click;
+        //
+        // btnFourEtfCharts
+        //
+        btnFourEtfCharts.Location = new Point(521, 87);
+        btnFourEtfCharts.Name = "btnFourEtfCharts";
+        btnFourEtfCharts.Size = new Size(120, 25);
+        btnFourEtfCharts.TabIndex = 3;
+        btnFourEtfCharts.Text = "SPY/QQQ/DIA/IWM";
+        btnFourEtfCharts.Click += BtnFourEtfCharts_Click;
         //
         // btnStartPolling
         // 
@@ -1717,6 +1728,7 @@ partial class Form1
     private DataGridViewTextBoxColumn colTradePnLMax;
     private Button btnFetchQuotes;
     private Button btnLiveChart;
+    private Button btnFourEtfCharts;
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;
