@@ -81,6 +81,7 @@ partial class Form1
         btnLiveChart = new Button();
         btnFourEtfCharts = new Button();
         btnHubHost = new Button();
+        btnSimulator = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
@@ -216,6 +217,7 @@ partial class Form1
         tabQuotes.Controls.Add(btnLiveChart);
         tabQuotes.Controls.Add(btnFourEtfCharts);
         tabQuotes.Controls.Add(btnHubHost);
+        tabQuotes.Controls.Add(btnSimulator);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -770,8 +772,17 @@ partial class Form1
         btnHubHost.Text = "Hub Host";
         btnHubHost.Click += BtnHubHost_Click;
         //
+        // btnSimulator
+        //
+        btnSimulator.Location = new Point(990, 94);
+        btnSimulator.Name = "btnSimulator";
+        btnSimulator.Size = new Size(90, 25);
+        btnSimulator.TabIndex = 5;
+        btnSimulator.Text = "Simulador";
+        btnSimulator.Click += BtnSimulator_Click;
+        //
         // btnStartPolling
-        // 
+        //
         btnStartPolling.BackColor = Color.DarkGreen;
         btnStartPolling.FlatStyle = FlatStyle.Flat;
         btnStartPolling.ForeColor = Color.White;
@@ -1741,6 +1752,7 @@ partial class Form1
     private Button btnLiveChart;
     private Button btnFourEtfCharts;
     private Button btnHubHost;
+    private Button btnSimulator;
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;

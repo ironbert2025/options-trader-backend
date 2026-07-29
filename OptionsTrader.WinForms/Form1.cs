@@ -1436,6 +1436,15 @@ public partial class Form1 : Form
         }
     }
 
+    // Opens the price/options replay simulator — reads previously-recorded data from disk only,
+    // no live streaming/polling connection involved, so it can be open at the same time as
+    // everything else in this form without any interaction between them.
+    private void BtnSimulator_Click(object? sender, EventArgs e)
+    {
+        var simulatorForm = new SimulatorForm();
+        simulatorForm.Show();
+    }
+
     // Lazily decides whether this instance is the hub or a client, then sets up _historyClient +
     // _liveFeed accordingly — cheap to call repeatedly, does nothing once already set up.
     //
