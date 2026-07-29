@@ -19,6 +19,7 @@
 11. [Persistencia y almacenamiento](#11-persistencia-y-almacenamiento)
 12. [Reglas de negocio](#12-reglas-de-negocio)
 13. [Stack tecnológico](#13-stack-tecnológico)
+14. [Gráfico de velas en vivo](#14-gráfico-de-velas-en-vivo)
 
 ---
 
@@ -180,11 +181,13 @@ A partir del radio **Trade** / **Trade-Target**, el click en un Strike envía un
 
 ## 7. Capturas de pantalla (screenshots)
 
-- En la **apertura** y el **cierre** de cada operación, el programa **captura automáticamente** una región de la pantalla (definida por las Screen Coordinates del símbolo) y, al cerrar, también una captura del panel Trades + Logger.
+- En la **apertura** y el **cierre** de cada operación, el programa **captura automáticamente** una región de la pantalla (definida por las Screen Coordinates del símbolo, `CaptureScreenshot`) — esta sigue siendo una captura real de pantalla (`CopyFromScreen`), ya que apunta a la ventana del broker, no a un control propio de la app.
+- Al **cerrar** el trade, también se captura el panel Trades + Logger (`CaptureTradeLogScreenshot`) — pero esta **ya no es una captura de pantalla**: se renderiza directamente el control (`GroupBox.DrawToBitmap`), así que funciona igual aunque la ventana esté minimizada, tapada por otra, o fuera de la pantalla visible.
 - Las imágenes se guardan localmente y se **suben a AWS S3**, organizadas por carpeta de fecha.
 - La URL de S3 se asocia al trade vía la API (`POST /screenshots`).
 - **Máximo 3 screenshots por trade** (regla validada en `ScreenshotService`).
 - Recuperación por trade: `GET /screenshots/trade/{tradeId}`.
+- **Snapshot local de los 3 charts en vivo**: al registrar un trade (demo o real), si hay una ventana **Live Chart** abierta para ese símbolo, se capturan los 3 paneles (1h / 15m RTH / 15m RTH+Overnight) vía el motor del propio WebView2 (`CoreWebView2.CapturePreviewAsync` — tampoco es una captura de pantalla), se combinan en una sola imagen y se guardan **solo localmente** (no sube a S3, no toca la base de datos) en `C:\OptionsData\ChartSnapshots\{Symbol}\{Symbol}_{timestamp}_trade{tradeId}.png`. Best-effort: si falla o no hay chart abierto, no interrumpe el flujo del trade. Ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md).
 
 > Existe además un proyecto auxiliar **ScreenClipper** (repo aparte) para capturar manualmente zonas de demanda/oferta (SZ/DZ) de cada símbolo.
 
@@ -194,19 +197,28 @@ A partir del radio **Trade** / **Trade-Target**, el click en un Strike envía un
 
 ## 8. Registro de datos para backtesting
 
-- **CSV de cotizaciones** (`CsvLogger`): cuando *Quotes to CSV* está activo, cada ciclo agrega filas a `C:\OptionsData`, **un archivo para Calls y otro para Puts**, por símbolo y expiración.
+> **`C:\OptionsData` fue reorganizado en subcarpetas por tipo de dato** (`MarketData`, `Trades`, `ChartDrawings`, `Logs`, `Backups`) — ver [`docs/OPTIONSDATA_STRUCTURE.md`](OPTIONSDATA_STRUCTURE.md) para el detalle completo de qué vive dónde.
+
+- **CSV de cotizaciones** (`CsvLogger`): cuando *Quotes to CSV* está activo, cada ciclo agrega filas a `C:\OptionsData\Trades\Iv\`, **un archivo para Calls y otro para Puts**, por símbolo y expiración.
 - Se generan **CSV de ambas expiraciones** (actual y próxima) simultáneamente — **salvo** que *Hide Next ExpDate* esté marcado (default), en cuyo caso solo se escribe el CSV de la expiración actual (ver §2 y §4).
 - Columnas: `Time, SpotPrice, StrikePrice, Bid, Ask, IntValue, ExtValue, Delta, Gamma, Theta, Vega, IV` — incluye **griegos y volatilidad implícita**.
 - Filas con `Bid = 0` se omiten.
 - **Dumps JSON** opcionales (`C:\Dumps`) con la respuesta cruda de Schwab.
 
 ### Historial de IV de apertura (`IvHistorialWriter`)
-- **Se intenta en cada ciclo de polling** (no solo cada 5 minutos): apenas `FetchAndUpdateQuotesAsync` guarda una fila al CSV (con *Quotes to CSV* activo), se llama a `TryAppendIvHistorialSnapshot()` de inmediato — así el snapshot de apertura se captura tan pronto la ventana 9:30-9:35 tiene datos, sin esperar al final del día. El temporizador de 5 minutos (y una corrida al abrir el programa) sigue como respaldo. **Cada instancia** intenta agregar la fila de **su propio ticker seleccionado** a `C:\OptionsData\IV_Historial_Apertura.csv` — la instancia de SPY solo escribe la fila de SPY, la de QQQ solo la suya, sin tocar los CSV de otros símbolos.
+- **Se intenta en cada ciclo de polling** (no solo cada 5 minutos): apenas `FetchAndUpdateQuotesAsync` guarda una fila al CSV (con *Quotes to CSV* activo), se llama a `TryAppendIvHistorialSnapshot()` de inmediato — así el snapshot de apertura se captura tan pronto la ventana 9:30-9:35 tiene datos, sin esperar al final del día. El temporizador de 5 minutos (y una corrida al abrir el programa) sigue como respaldo. **Cada instancia** intenta agregar la fila de **su propio ticker seleccionado** a `C:\OptionsData\Trades\Iv\IV_Historial_Apertura.csv` — la instancia de SPY solo escribe la fila de SPY, la de QQQ solo la suya, sin tocar los CSV de otros símbolos. Errores se registran en `C:\OptionsData\Logs\iv_historial_errors.log`.
 - Para cada símbolo, toma el **primer snapshot** (ciclo de polling) dentro de la ventana **09:30:00–09:35:00 EST** de los CSV Call/Put del día, identifica el **strike ATM** (el más cercano al Spot) por separado en Call y Put, y calcula `IV_ATM_Promedio` = promedio de ambos IV.
 - Columnas del archivo maestro: `Fecha, Simbolo, HoraSnapshot, SpotPrice, StrikeATM_Call, IV_Call_ATM, StrikeATM_Put, IV_Put_ATM, IV_ATM_Promedio`.
 - **Idempotente**: si ya existe una fila para esa Fecha+Símbolo no la duplica. Si no hay datos en la ventana (feriado o ticker no pollingueado aún ese día), no escribe nada para ese símbolo y **reintenta en el siguiente ciclo**.
 - Usa **bloqueo exclusivo de archivo** en el check+escritura para que varias instancias abiertas a la vez no corrompan el archivo maestro compartido.
 - Objetivo: acumular un historial propio (recomendado 60–90 días) para calcular **IV Rank / IV Percentile** sin depender de fuentes externas (ej. Barchart).
+
+### Captura de precio en vivo por WebSocket (`TickPriceStore` + `LevelOneTickStore`)
+- Fase 1 de un futuro simulador offline: **cada tick que llega por streaming se guarda tal cual**, para poder reproducir el movimiento de precio más adelante (fase 2, no construida todavía).
+- **Dos fuentes en paralelo**, guardadas por separado para poder comparar cuál sigue mejor al precio real (ej. ThinkorSwim):
+  - `TickPriceStore` — una fila por minuto, derivada del cierre de cada barra de `CHART_EQUITY`. `C:\OptionsData\MarketData\Ticks\{Symbol}\{Symbol}_Ticks_{yyyyMMdd}.csv` (segundos).
+  - `LevelOneTickStore` — el último precio real (`LEVEL_ONE_EQUITIES`), varias veces por segundo. `C:\OptionsData\MarketData\TicksLevelOne\{Symbol}\{Symbol}_L1Ticks_{yyyyMMdd}.csv` (milisegundos).
+- Solo la instancia "hub" (la que tiene la conexión real a Schwab) escribe — sin riesgo de filas duplicadas entre instancias. Ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md#fuentes-de-precio-chart_equity-vs-level_one_equities).
 
 ---
 
@@ -255,8 +267,13 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 | Token Schwab compartido | Local (disco) | `SchwabTokenStore` |
 | Cuenta de broker seleccionada + cache de cuentas | Local | `SelectedAccountStore`, `AccountsCacheStore` |
 | Trades abiertos (recuperación) | Local | `open_trades.json` |
-| Datos para backtesting | Local | CSV en `C:\OptionsData`, dumps en `C:\Dumps` |
-| Historial de IV de apertura | Local | `C:\OptionsData\IV_Historial_Apertura.csv` |
+| Datos para backtesting | Local | CSV en `C:\OptionsData\Trades\Iv\`, dumps en `C:\Dumps` |
+| Historial de IV de apertura | Local | `C:\OptionsData\Trades\Iv\IV_Historial_Apertura.csv` |
+| Velas 1h persistidas (SMA 100/200, vista Daily) | Local | `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv` |
+| Ticks en vivo (2 fuentes, para comparar) | Local | `C:\OptionsData\MarketData\Ticks\` y `\TicksLevelOne\` |
+| Dibujos del chart (T-Line, flechas verticales) | Local | `C:\OptionsData\ChartDrawings\{Symbol}\` |
+| Snapshot local de los 3 charts por trade | Local | `C:\OptionsData\ChartSnapshots\{Symbol}\` |
+| IP de un hub remoto en la LAN (opcional) | Local | `HubHostSettingsStore` → `hubhost.json` |
 | Último username usado (no password) | Local | `LoginUsernameStore` → `last_login_username.txt` |
 
 ---
@@ -286,11 +303,20 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 
 ---
 
-## 14. Gráfico de velas en vivo (en desarrollo)
+## 14. Gráfico de velas en vivo
 
-Botón **"Live Chart"** en Quotes abre una ventana con **3 gráficos de velas lado a lado** (1h / 15m RTH / 15m RTH+Overnight) del subyacente, alimentados por streaming WebSocket directo a Schwab (`SchwabStreamerClient`) + WebView2 con Lightweight Charts (local, sin CDN). Completamente aislado del resto de la app — no toca el polling ni el trading existentes.
+Botón **"Live Chart"** en Quotes abre una ventana (`MultiChartForm`) con **3 gráficos de velas lado a lado** (1h / 15m RTH / 15m RTH+Overnight) del subyacente, alimentados por streaming WebSocket directo a Schwab + WebView2 con Lightweight Charts (local, sin CDN). Completamente aislado del resto de la app — no toca el polling ni el trading existentes.
 
-**⚠️ Streaming en vivo todavía no validado contra tráfico real** — ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md) para el contexto completo, decisiones de diseño, y lo que falta.
+Puntos clave (detalle completo en [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md)):
+
+- **Una sola conexión de streaming** compartida entre los 3 paneles, y entre múltiples instancias del programa corriendo a la vez (una por ticker) vía un **hub local** (`CandleHubServer`/`CandleHubClient`) — incluso puede leerse desde **otra PC en la misma red** (botón "Hub Host").
+- **Dos fuentes de precio en paralelo**: `CHART_EQUITY` (barras de 1 minuto, gobierna Open/High/Low y los límites de cada vela) y `LEVEL_ONE_EQUITIES` (último precio real, varias veces por segundo, actualiza el `Close` de la vela en formación en tiempo real).
+- **Indicadores**: SMA 20/40/100/200 (panel 1h), Bollinger Bands 20/2 (panel 15m RTH), monitores de cruce de SMA con push a Telegram.
+- **Vista Daily** en el panel 1h: agrega hasta 200 días de historial horario en velas diarias.
+- **Herramientas de dibujo** (T-Line, H-Line, rectángulos, zonas DZ/SZ, flechas, texto Piso/Techo) — seleccionables y borrables con la tecla Delete; T-Line y flechas verticales del panel 1h se **persisten por símbolo** entre sesiones.
+- **Línea azul de pre-market** (panel 15m RTH): si se abre el chart antes de las 9:30 AM ET, sigue el precio en vivo hasta la apertura y ahí se congela — no se persiste, cada apertura reinicia el proceso.
+- **Snapshot local de los 3 charts** al registrar un trade (ver §7).
+- Ventana **"Block Mov"**: 4 charts de 1h (SPY/QQQ/DIA/IWM) lado a lado, para ver el movimiento del mercado en conjunto.
 
 ---
 
