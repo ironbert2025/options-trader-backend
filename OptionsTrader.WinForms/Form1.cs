@@ -279,7 +279,8 @@ public partial class Form1 : Form
     private void CallPutFilter_CheckedChanged(object? sender, EventArgs e)
     {
         if (_selectedTicker == null || _lastAllQuotes.Count == 0) return;
-        PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true);
+        PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
+            selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked);
     }
 
     private static void ApplyRadioStyle(GroupBox group)
@@ -804,7 +805,8 @@ public partial class Form1 : Form
                 TryAppendIvHistorialSnapshot();
             }
 
-            PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true);
+            PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true,
+                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked);
 
             // Update PnL for open trades against the FULL chain (not the range-filtered grid),
             // so a trade's current bid keeps updating even after its strike leaves the display range.
@@ -891,8 +893,12 @@ public partial class Form1 : Form
 
     // Filters the chain to OTM strikes within the ticker's Ask range and (re)builds the given grid.
     // Returns the in-range OTM call/put lists so the caller can build trade-PnL maps if needed.
-    private (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
-        DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false)
+    // Static (no Form1 instance state) so it's reusable from SimulatorForm's own grid too —
+    // selectedCounts/callOnly/putOnly used to live on Form1's fields/checkboxes, now explicit
+    // parameters instead (same values, callers just pass them through).
+    internal static (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
+        DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false,
+        string? selectedCounts = null, bool callOnly = false, bool putOnly = false)
     {
         decimal.TryParse(ticker.Low,  out var rangeLow);
         decimal.TryParse(ticker.High, out var rangeHigh);
@@ -914,7 +920,7 @@ public partial class Form1 : Form
         List<OptionQuoteDto> otmCalls;
         List<OptionQuoteDto> otmPuts;
 
-        if (applyCountsFilter && int.TryParse(_selectedCounts, out var count))
+        if (applyCountsFilter && int.TryParse(selectedCounts, out var count))
         {
             // Show the N closest OTM strikes regardless of the Ask price range.
             var callStrikeSet = allOtmCallStrikes.Take(count).ToHashSet();
@@ -952,8 +958,6 @@ public partial class Form1 : Form
         // both checked or both unchecked shows both.
         if (applyCountsFilter)
         {
-            var callOnly = chkCallFilter.Checked && !chkPutFilter.Checked;
-            var putOnly  = chkPutFilter.Checked && !chkCallFilter.Checked;
             if (callOnly) otmPuts  = new List<OptionQuoteDto>();
             if (putOnly)  otmCalls = new List<OptionQuoteDto>();
         }
@@ -2310,7 +2314,7 @@ public partial class Form1 : Form
         }
     }
 
-    private decimal GetPositionSize()
+    private static decimal GetPositionSize()
     {
         var balance = BalanceStore.Load();
         if (!decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct)) return 0;
@@ -2340,7 +2344,7 @@ public partial class Form1 : Form
         return contracts > 0 ? contracts.ToString("F0") : string.Empty;
     }
 
-    private string GetContractsValue(decimal ask)
+    private static string GetContractsValue(decimal ask)
     {
         var selected = ContractsSettingsStore.Load();
         if (selected != "PositionSize" && int.TryParse(selected, out var fixedCount))
