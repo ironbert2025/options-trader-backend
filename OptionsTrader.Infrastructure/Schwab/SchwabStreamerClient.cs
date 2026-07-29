@@ -394,6 +394,11 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                             ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime
                             : DateTime.UtcNow
                     };
+                    // Phase 1 of the future offline simulator: capture every live price update
+                    // (time + price) per symbol/day now, so there's historical tick data to
+                    // replay once that's built (phase 2, later).
+                    TickPriceStore.Append(symbol, candle.Time, candle.Close);
+
                     OnNewCandle?.Invoke(symbol, candle);
                 }
             }
