@@ -54,9 +54,11 @@ public class SimulatorForm : Form
         BuildChainColumns();
         BuildTradesColumns();
 
-        _chartsHost.Controls.Add(_fullChart);
-        _chartsHost.Controls.Add(_rthChart);
+        // Dock=Left children are laid out in the order added (first added ends up leftmost), so
+        // this order gives left-to-right: 1h, 15m RTH, 15m RTH+Overnight (Fill takes whatever's left).
         _chartsHost.Controls.Add(_hourlyChart);
+        _chartsHost.Controls.Add(_rthChart);
+        _chartsHost.Controls.Add(_fullChart);
 
         Controls.Add(_cmbSymbol);
         Controls.Add(_cmbDate);
