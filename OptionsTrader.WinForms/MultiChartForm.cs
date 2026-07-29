@@ -1,5 +1,6 @@
 using OptionsTrader.Application.Interfaces;
 using OptionsTrader.Infrastructure.Schwab;
+using System.Linq;
 
 namespace OptionsTrader.WinForms;
 
@@ -17,6 +18,12 @@ public class MultiChartForm : Form
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
     private readonly string _symbol;
+
+    // Kept for CaptureCombinedChartImageAsync (trade snapshot) — same 3 instances the
+    // constructor's local variables of the same names point to, just also reachable afterward.
+    private ChartPanel? _hourlyPanel;
+    private ChartPanel? _rthPanel;
+    private ChartPanel? _overnightPanel;
 
     public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed)
     {
@@ -75,6 +82,9 @@ public class MultiChartForm : Form
             if (modes[i] == ChartPanelMode.Hourly15) hourlyPanel = panel;
             if (modes[i] == ChartPanelMode.Fifteen_RTH) rthPanel = panel;
         }
+        _hourlyPanel    = hourlyPanel;
+        _rthPanel       = rthPanel;
+        _overnightPanel = overnightPanel;
 
         // Cross-SMA monitors: 8 small toggles (UP/DOWN x 20/40/100/200), 2 rows x 4 columns, in
         // the toolbar column above the 1h panel (column 0). While armed, each one pushes the 1h
@@ -381,5 +391,40 @@ public class MultiChartForm : Form
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
         // subscribing, and disposing them) — not this window.
+    }
+
+    // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
+    // the same left-to-right order they're shown on screen (1h, 15m RTH, 15m RTH+Overnight), for
+    // Form1 to save as a single trade snapshot. Returns null if any panel isn't ready.
+    public async Task<Bitmap?> CaptureCombinedChartImageAsync()
+    {
+        if (_hourlyPanel == null || _rthPanel == null || _overnightPanel == null) return null;
+
+        var panels = new[] { _hourlyPanel, _rthPanel, _overnightPanel };
+        var images = new Bitmap[panels.Length];
+        try
+        {
+            for (int i = 0; i < panels.Length; i++)
+                images[i] = await panels[i].CaptureImageAsync();
+
+            var width  = images.Sum(img => img.Width);
+            var height = images.Max(img => img.Height);
+            var combined = new Bitmap(width, height);
+            using (var g = Graphics.FromImage(combined))
+            {
+                g.Clear(Color.Black);
+                var x = 0;
+                foreach (var img in images)
+                {
+                    g.DrawImage(img, x, 0);
+                    x += img.Width;
+                }
+            }
+            return combined;
+        }
+        finally
+        {
+            foreach (var img in images) img?.Dispose();
+        }
     }
 }

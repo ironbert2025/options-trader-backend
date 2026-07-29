@@ -1223,6 +1223,7 @@ public partial class Form1 : Form
         var entryPath = CaptureScreenshot(symbol, rowType, "entry");
         // LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
         _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
+        _ = SaveTradeChartSnapshotAsync(symbol, tradeId);
 
         return (tradeId, newRow);
     }
@@ -1847,6 +1848,30 @@ public partial class Form1 : Form
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
         _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr);
+    }
+
+    // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
+    // WebView2 form itself — not a screen capture — saved locally next to the tradeId, only if a
+    // MultiChartForm for this symbol happens to be open. Best-effort: never blocks the trade flow.
+    private async Task SaveTradeChartSnapshotAsync(string symbol, int tradeId)
+    {
+        try
+        {
+            if (!_liveChartForms.TryGetValue(symbol, out var chartForm) || chartForm.IsDisposed) return;
+
+            using var combined = await chartForm.CaptureCombinedChartImageAsync();
+            if (combined == null) return;
+
+            var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
+            Directory.CreateDirectory(folder);
+            var fileName = $"{symbol}_{DateTime.Now:yyyyMMdd_HHmmss}_trade{tradeId}.png";
+            combined.Save(Path.Combine(folder, fileName), System.Drawing.Imaging.ImageFormat.Png);
+        }
+        catch
+        {
+            // Best-effort — a chart-snapshot failure (WebView2 not ready, form closing, etc.)
+            // must never block or fail the trade flow.
+        }
     }
 
     private static string CaptureScreenshot(string symbol, string optionType, string tag)

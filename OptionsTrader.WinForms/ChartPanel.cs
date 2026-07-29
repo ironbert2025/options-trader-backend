@@ -107,6 +107,17 @@ public class ChartPanel : Panel
         _ => mode.ToString()
     };
 
+    // Renders this panel's actual chart content via the WebView2 engine itself — NOT a screen
+    // capture — so it works even if the window is minimized, occluded, or off-screen. Used to
+    // build the combined 3-chart trade snapshot in MultiChartForm.
+    public async Task<Bitmap> CaptureImageAsync()
+    {
+        using var stream = new MemoryStream();
+        await _webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
+        stream.Position = 0;
+        return new Bitmap(stream);
+    }
+
     private void InitializeWebView()
     {
         _webView = new WebView2 { Dock = DockStyle.Fill };
