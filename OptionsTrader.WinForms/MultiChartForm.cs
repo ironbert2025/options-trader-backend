@@ -385,10 +385,12 @@ public class MultiChartForm : Form
         var lblLiveTick = new Label
         {
             Text      = string.Empty,
-            Location  = new Point(0, 58),
-            Size      = new Size(146, 20),
+            Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            Location  = new Point(0, 86),
+            Size      = new Size(toolsHost.Width, 20),
+            TextAlign = ContentAlignment.MiddleCenter,
             Font      = new Font("Consolas", 9F),
-            ForeColor = Color.Yellow
+            ForeColor = Color.DeepSkyBlue
         };
         if (overnightPanel != null)
         {
