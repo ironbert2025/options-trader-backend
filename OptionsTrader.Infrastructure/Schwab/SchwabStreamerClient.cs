@@ -61,7 +61,11 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     // Fires on every LEVEL_ONE_EQUITIES last-price update — much higher frequency than
     // CHART_EQUITY (which only pushes once per 1-minute bar). Field numbers (3 = Last Price,
     // 35 = Trade Time) are Schwab's documented Level One Equity indices — same as CHART_EQUITY's
-    // mapping, verify against ws_raw.log if this doesn't line up with real prices once connected.
+    // mapping.
+    // ⚠️ 2026-07-30: SubscribeLevelOneEquity's ADD is currently NOT called anywhere (see the
+    // comment at its one call site in Form1.SetUpLiveFeedAsync) — confirmed via ws_raw.log that
+    // Schwab rejects it with code 21 "Bad command formatting" AND kills the whole socket over it,
+    // triggering a reconnect storm (~every 2.7s). So this event never actually fires right now.
     public event Action<string, decimal, DateTime>? OnLevelOneTick;
 
     // Fires when the socket disconnects unexpectedly (not via StopAsync), before a reconnect
