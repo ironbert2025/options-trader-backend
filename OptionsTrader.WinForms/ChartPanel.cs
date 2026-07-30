@@ -45,10 +45,11 @@ public class ChartPanel : Panel
     private DateTime _liveAnchor;
 
     // Cross-SMA monitoring (Hourly15 panel only) — closed 1h candles kept for computing SMA
-    // ourselves in C# (same simple-average formula as the JS overlay), and which (period, up)
-    // combinations are currently armed to push to Telegram on a genuine crossover.
+    // ourselves in C# (same simple-average formula as the JS overlay). One monitor per period at
+    // most (period -> Up direction) — the direction is decided automatically when the button is
+    // armed (see ToggleCrossMonitor), not chosen separately by the caller anymore.
     private readonly List<CandleData> _closedCandles = new();
-    private readonly HashSet<(int Period, bool Up)> _armedCrossMonitors = new();
+    private readonly Dictionary<int, bool> _armedCrossMonitors = new();
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -321,18 +322,24 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Toggles a "Cross UP/DOWN SMA(period)" monitor on/off. While armed, every 1h candle that
-    // closes and forms a genuine crossover of that SMA triggers a chart capture + Telegram push.
-    // Returns the new on/off state.
-    public bool ToggleCrossMonitor(int period, bool up)
+    // Toggles the single Cross-SMA(period) monitor on/off — one button per period now instead of
+    // separate UP/DOWN ones. Arming it decides the direction automatically from where price
+    // currently sits relative to that SMA: below it → watch for a cross UP; above it → watch for
+    // a cross DOWN. That direction is fixed for as long as this arming stays on (re-arming later
+    // re-evaluates it fresh, in case price is on the other side of the SMA by then).
+    // Returns (Armed, Up) — Up only meaningful when Armed is true, used by the caller to update
+    // the button's label/color to reflect which direction got armed.
+    public (bool Armed, bool Up) ToggleCrossMonitor(int period)
     {
-        var key = (period, up);
-        if (!_armedCrossMonitors.Remove(key))
-        {
-            _armedCrossMonitors.Add(key);
-            return true;
-        }
-        return false;
+        if (_armedCrossMonitors.Remove(period)) return (false, false);
+
+        var currentPrice = _liveBucket?.Close ?? _closedCandles.LastOrDefault()?.Close;
+        var currentSma   = _closedCandles.Count > 0 ? Sma(period, _closedCandles.Count - 1) : null;
+        if (currentPrice == null || currentSma == null) return (false, false); // not enough data yet to pick a direction
+
+        var up = currentPrice < currentSma;
+        _armedCrossMonitors[period] = up;
+        return (true, up);
     }
 
     // Captures this panel's chart as a PNG (via WebView2's native preview capture — pixel-exact,

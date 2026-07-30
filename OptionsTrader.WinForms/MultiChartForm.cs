@@ -86,43 +86,40 @@ public class MultiChartForm : Form
         _rthPanel       = rthPanel;
         _overnightPanel = overnightPanel;
 
-        // Cross-SMA monitors: 8 small toggles (UP/DOWN x 20/40/100/200), 2 rows x 4 columns, in
-        // the toolbar column above the 1h panel (column 0). While armed, each one pushes the 1h
-        // chart to Telegram the moment a candle closes with a genuine crossover of that SMA.
+        // Cross-SMA monitors: one toggle per period (20/40/100/200) in the toolbar column above
+        // the 1h panel (column 0) — the direction (UP or DOWN) is picked automatically from where
+        // price currently sits relative to that SMA when the button is armed, instead of having
+        // separate UP/DOWN buttons. While armed, it pushes the 1h chart to Telegram the moment a
+        // candle closes with a genuine crossover in that direction.
         var crossHost = new Panel { Dock = DockStyle.Fill };
         var periods = new[] { 20, 40, 100, 200 };
         for (int col = 0; col < periods.Length; col++)
         {
             var period = periods[col];
 
-            var btnUp = new Button
+            var btnSma = new Button
             {
-                Text     = $"↑{period}",
+                Text     = $"{period}",
                 Location = new Point(col * 42, 2),
                 Size     = new Size(40, 24)
             };
-            btnUp.Click += (s, e) =>
+            btnSma.Click += (s, e) =>
             {
                 if (hourlyPanel == null) return;
-                var on = hourlyPanel.ToggleCrossMonitor(period, up: true);
-                btnUp.BackColor = on ? Color.LightGreen : SystemColors.Control;
+                var (armed, up) = hourlyPanel.ToggleCrossMonitor(period);
+                if (armed)
+                {
+                    btnSma.Text = up ? $"↑{period}" : $"↓{period}";
+                    btnSma.BackColor = up ? Color.LightGreen : Color.LightSalmon;
+                }
+                else
+                {
+                    btnSma.Text = $"{period}";
+                    btnSma.BackColor = SystemColors.Control;
+                }
             };
 
-            var btnDown = new Button
-            {
-                Text     = $"↓{period}",
-                Location = new Point(col * 42, 30),
-                Size     = new Size(40, 24)
-            };
-            btnDown.Click += (s, e) =>
-            {
-                if (hourlyPanel == null) return;
-                var on = hourlyPanel.ToggleCrossMonitor(period, up: false);
-                btnDown.BackColor = on ? Color.LightSalmon : SystemColors.Control;
-            };
-
-            crossHost.Controls.Add(btnUp);
-            crossHost.Controls.Add(btnDown);
+            crossHost.Controls.Add(btnSma);
         }
 
         // T-Line / H-Line drawing tools, also on the 1h panel — placed to the right of the 8
