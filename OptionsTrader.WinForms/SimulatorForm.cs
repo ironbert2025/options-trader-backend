@@ -196,6 +196,8 @@ public class SimulatorForm : Form
         _dgvChain.Columns.Add("colPutSprd", "Sprd");
         _dgvChain.Columns.Add("colContracts", "Conts");
         _dgvChain.Columns.Add("colLevel", "Level");
+
+        foreach (DataGridViewColumn col in _dgvChain.Columns) col.Width = 50; // half the default (100)
     }
 
     private void BuildTradesColumns()
