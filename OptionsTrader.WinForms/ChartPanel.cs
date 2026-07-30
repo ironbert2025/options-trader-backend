@@ -722,13 +722,26 @@ public class ChartPanel : Panel
     }
 
     // Real-time last-price update (LEVEL_ONE_EQUITIES, much higher frequency than CHART_EQUITY's
-    // 1-minute bars). Only ever adjusts the CURRENTLY-forming bucket's Close (and extends
-    // High/Low if the tick exceeds them) — CHART_EQUITY still owns bucket boundaries and Open, so
-    // this can't desync the two feeds, it just makes the live price shown track the true last
-    // trade instead of waiting for the next full-minute bar.
+    // 1-minute bars) — currently never fires, see SubscribeLevelOneEquity's disabled call site.
     private void Streamer_OnLevelOneTick(string symbol, decimal price, DateTime utcTime)
     {
         if (symbol != _symbol) return;
+        UpdateLivePriceFromExternalSource(price, utcTime);
+    }
+
+    // Every ~6s options-chain poll cycle also carries a fresh SpotPrice (Form1's own REST polling,
+    // completely separate from the streaming feed) — while LEVEL_ONE_EQUITIES is disabled, Form1
+    // feeds that spot price here instead so the currently-forming candle still tracks something
+    // closer to real-time than waiting a full minute for the next CHART_EQUITY bar.
+    public void FeedPollingPrice(decimal price, DateTime utcTime) => UpdateLivePriceFromExternalSource(price, utcTime);
+
+    // Only ever adjusts the CURRENTLY-forming bucket's Close (and extends High/Low if the tick
+    // exceeds them) — CHART_EQUITY still owns bucket boundaries and Open, so this can't desync
+    // from it, it just makes the live price shown track more recent data than waiting for the
+    // next full CHART_EQUITY bar. Shared by both possible sources (LEVEL_ONE_EQUITIES ticks and
+    // Form1's options-chain polling) so there's exactly one place this logic lives.
+    private void UpdateLivePriceFromExternalSource(decimal price, DateTime utcTime)
+    {
         if (_closing || !IsHandleCreated) return;
         RestoreHeaderIfWasDisconnected();
 

@@ -850,6 +850,13 @@ public partial class Form1 : Form
             _lastAllQuotes = allQuotes;
             _lastSpotPrice = fullChain.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 
+            // While LEVEL_ONE_EQUITIES stays disabled (see SchwabStreamerClient), feed this
+            // polling cycle's spot price into the live chart's forming candle instead, if one
+            // happens to be open for this symbol — every ~6s instead of waiting a full minute for
+            // the next CHART_EQUITY bar.
+            if (_lastSpotPrice > 0 && _liveChartForms.TryGetValue(_selectedTicker.Symbol, out var chartForOwnTicker) && !chartForOwnTicker.IsDisposed)
+                chartForOwnTicker.FeedPollingPrice(_lastSpotPrice, DateTime.UtcNow);
+
             // Primary chain (current ExpDate)
             if (chkSaveToCsv.Checked)
             {

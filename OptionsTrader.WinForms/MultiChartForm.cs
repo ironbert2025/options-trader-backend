@@ -474,6 +474,17 @@ public class MultiChartForm : Form
         // subscribing, and disposing them) — not this window.
     }
 
+    // Feeds a fresh spot price (from Form1's ~6s options-chain polling, not the streaming feed)
+    // into all 3 panels' currently-forming candle — used while LEVEL_ONE_EQUITIES is disabled, so
+    // the live chart still tracks something closer to real-time than waiting a full minute for
+    // the next CHART_EQUITY bar.
+    public void FeedPollingPrice(decimal price, DateTime utcTime)
+    {
+        _hourlyPanel?.FeedPollingPrice(price, utcTime);
+        _rthPanel?.FeedPollingPrice(price, utcTime);
+        _overnightPanel?.FeedPollingPrice(price, utcTime);
+    }
+
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
     // the same left-to-right order they're shown on screen (1h, 15m RTH, 15m RTH+Overnight), for
     // Form1 to save as a single trade snapshot. Returns null if any panel isn't ready.
