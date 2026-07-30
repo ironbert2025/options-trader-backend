@@ -33,7 +33,7 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 900;
-        Height        = 440;
+        Height        = 530;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -440,8 +440,33 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(lblLiveTick);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
+        // Small event log below the charts — only logs Cross-SMA cruce/rebote detections (with
+        // the time they were detected), so the Telegram-push feature can be sanity-checked
+        // against what's actually firing without digging through Telegram itself. Temporary/
+        // diagnostic for now.
+        var crossLog = new TextBox
+        {
+            Dock       = DockStyle.Bottom,
+            Height     = 90,
+            Multiline  = true,
+            ReadOnly   = true,
+            ScrollBars = ScrollBars.Vertical,
+            Font       = new Font("Consolas", 8.5F),
+            BackColor  = Color.Black,
+            ForeColor  = Color.LightGreen
+        };
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnCrossSequenceEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
+        Controls.Add(crossLog);
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
         // subscribing, and disposing them) — not this window.

@@ -66,6 +66,11 @@ public class ChartPanel : Panel
     // to anything else for the rest of the session.
     public event Action? OnCrossSequenceFinished;
 
+    // Fires with a human-readable message every time a cross or bounce event is detected —
+    // regardless of whether the Telegram push actually succeeds — so the caller can log it
+    // locally (e.g. to verify the detection logic is firing as expected).
+    public event Action<string>? OnCrossSequenceEvent;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -478,6 +483,7 @@ public class ChartPanel : Panel
         var direction = _crossUp ? "UP" : "DOWN";
         var colorName = SmaColorNames.TryGetValue(period, out var c) ? c : string.Empty;
         var caption = $"{eventLabel} {direction} SMA {period}({colorName})";
+        OnCrossSequenceEvent?.Invoke(caption);
         _ = SendChartToTelegramAsync(caption);
     }
 
@@ -644,6 +650,7 @@ public class ChartPanel : Panel
     {
         if (symbol != _symbol) return; // one shared connection carries all 4 tickers — ignore ticks for the others
         if (_closing || !IsHandleCreated) return;
+        RestoreHeaderIfWasDisconnected();
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
         OnLiveTick?.Invoke(eastern, candle.Close);
@@ -723,6 +730,7 @@ public class ChartPanel : Panel
     {
         if (symbol != _symbol) return;
         if (_closing || !IsHandleCreated) return;
+        RestoreHeaderIfWasDisconnected();
         if (_liveBucket == null) return; // no bucket open yet — CHART_EQUITY seeds the first one
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
@@ -737,9 +745,26 @@ public class ChartPanel : Panel
         BeginInvoke(async () => await RunScriptAsync("actualizarUltimaVela", toSend));
     }
 
+    // Whether the header currently shows the "disconnected" message — cleared the moment real
+    // data starts flowing again, so the header doesn't stay stuck on it forever after a silent
+    // auto-reconnect (previously nothing ever reverted it).
+    private bool _headerShowsDisconnected;
+
+    private string NormalHeaderText() => _mode == ChartPanelMode.Fifteen_Full
+        ? $"{_symbol} — {_intervalMinutes}m RTH+Overnight"
+        : $"{_symbol} — {ModeLabel(_mode)}";
+
+    private void RestoreHeaderIfWasDisconnected()
+    {
+        if (!_headerShowsDisconnected) return;
+        _headerShowsDisconnected = false;
+        BeginInvoke(() => _header.Text = NormalHeaderText());
+    }
+
     private void Streamer_OnDisconnected(string message)
     {
         if (_closing || !IsHandleCreated) return;
+        _headerShowsDisconnected = true;
         BeginInvoke(() => _header.Text = $"{_symbol} — {ModeLabel(_mode)} — {message}");
     }
 
