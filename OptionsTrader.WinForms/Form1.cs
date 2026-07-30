@@ -1559,13 +1559,11 @@ public partial class Form1 : Form
             var streamer = CreateSchwabStreamerClient();
             await streamer.ConnectAsync();
             await streamer.SubscribeChartEquity(symbols);
-            // TEMPORARILY DISABLED (2026-07-30): confirmed via ws_raw.log that Schwab rejects this
-            // ADD with code 21 "Bad command formatting" (tried both "0,1,2,3,35" and "0,1,2,3" for
-            // `fields` — same rejection either time, so it's not just the field list), and — worse
-            // — the rejection kills the ENTIRE socket, not just this subscription, causing a full
-            // reconnect every ~2.7s. Root cause not yet found (possibly the service name itself).
-            // Re-enable only after confirming a working request shape against real traffic.
-            // await streamer.SubscribeLevelOneEquity(symbols);
+            // Re-enabled 2026-07-30 — root cause of the earlier "Bad command formatting"
+            // rejection was the service name itself ("LEVEL_ONE_EQUITIES" instead of the correct
+            // "LEVELONE_EQUITIES", confirmed against a working third-party SDK). Watch ws_raw.log
+            // on first use after this change to confirm the ADD actually succeeds this time.
+            await streamer.SubscribeLevelOneEquity(symbols);
             streamer.OnNewCandle += (symbol, candle) => hubServer.Broadcast(symbol, candle);
             streamer.OnLevelOneTick += (symbol, price, time) => hubServer.BroadcastLevelOne(symbol, price, time);
 
