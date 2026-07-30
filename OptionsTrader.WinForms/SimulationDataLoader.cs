@@ -60,15 +60,20 @@ internal static class SimulationDataLoader
 
         var prices = LoadUnderlyingTicks(symbol, date);
 
+        var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
         var steps = new List<SimulationStep>();
         foreach (var (time, quotes) in byTime)
         {
-            var stepTime = date.ToDateTime(time);
+            // Step.Time is stored as real UTC (same convention as CandleData.Time) so it can be
+            // compared directly against _underlyingCandles in SimulatorForm — the CSV's own Time
+            // column is Eastern wall-clock, converted here just like TickPriceStore's rows are.
+            var stepTimeEastern = date.ToDateTime(time);
+            var stepTimeUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(stepTimeEastern, DateTimeKind.Unspecified), eastern);
             steps.Add(new SimulationStep
             {
-                Time            = stepTime,
+                Time            = stepTimeUtc,
                 Quotes          = quotes,
-                UnderlyingPrice = NearestPriceAt(prices, stepTime) ?? quotes.FirstOrDefault()?.SpotPrice ?? 0m
+                UnderlyingPrice = NearestPriceAt(prices, stepTimeEastern) ?? quotes.FirstOrDefault()?.SpotPrice ?? 0m
             });
         }
         return steps;

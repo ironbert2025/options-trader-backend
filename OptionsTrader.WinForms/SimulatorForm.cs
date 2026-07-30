@@ -24,9 +24,15 @@ public class SimulatorForm : Form
         RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.CellSelect
     };
 
-    private readonly Panel _chartsHost = new() { Location = new Point(8, 302), Size = new Size(900, 260) };
-    private readonly SimulatedChartPanel _hourlyChart = new("1h") { Dock = DockStyle.Left, Width = 296 };
-    private readonly SimulatedChartPanel _rthChart    = new("15m RTH") { Dock = DockStyle.Left, Width = 296 };
+    // 3-column TableLayoutPanel (same pattern as MultiChartForm's own chart row) — deterministic
+    // left-to-right order, unlike stacking multiple Dock=Left panels.
+    private readonly TableLayoutPanel _chartsHost = new()
+    {
+        Location = new Point(8, 302), Size = new Size(900, 260),
+        ColumnCount = 3, RowCount = 1
+    };
+    private readonly SimulatedChartPanel _hourlyChart = new("1h") { Dock = DockStyle.Fill };
+    private readonly SimulatedChartPanel _rthChart    = new("15m RTH") { Dock = DockStyle.Fill };
     private readonly SimulatedChartPanel _fullChart   = new("15m RTH+Overnight") { Dock = DockStyle.Fill };
 
     private readonly DataGridView _dgvTrades = new()
@@ -54,11 +60,13 @@ public class SimulatorForm : Form
         BuildChainColumns();
         BuildTradesColumns();
 
-        // Dock=Left children are laid out in the order added (first added ends up leftmost), so
-        // this order gives left-to-right: 1h, 15m RTH, 15m RTH+Overnight (Fill takes whatever's left).
-        _chartsHost.Controls.Add(_hourlyChart);
-        _chartsHost.Controls.Add(_rthChart);
-        _chartsHost.Controls.Add(_fullChart);
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        _chartsHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        _chartsHost.Controls.Add(_hourlyChart, 0, 0);
+        _chartsHost.Controls.Add(_rthChart, 1, 0);
+        _chartsHost.Controls.Add(_fullChart, 2, 0);
 
         Controls.Add(_cmbSymbol);
         Controls.Add(_cmbDate);
@@ -149,7 +157,7 @@ public class SimulatorForm : Form
         }
 
         var step = _steps[_currentIndex];
-        _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {step.Time:HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
+        _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
         Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: false);
 
@@ -167,6 +175,12 @@ public class SimulatorForm : Form
 
     private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice);
     private readonly List<OpenSimTrade> _openSimTrades = new();
+
+    // step.Time / trade.EntryTime are real UTC (same convention as CandleData.Time, needed so the
+    // chart's candlesUpToNow filter compares apples to apples) — converted to Eastern only at the
+    // point of display/logging, same "disguise" pattern used elsewhere in this codebase.
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+    private static DateTime EasternTime(DateTime utc) => TimeZoneInfo.ConvertTimeFromUtc(utc, EasternZone);
 
     private void BuildChainColumns()
     {
@@ -222,7 +236,7 @@ public class SimulatorForm : Form
 
         var step = _steps[_currentIndex];
         var gridRow = _dgvTrades.Rows[_dgvTrades.Rows.Add(
-            step.Time.ToString("HH:mm:ss"), rowType, strike.ToString("F2"), contracts,
+            EasternTime(step.Time).ToString("HH:mm:ss"), rowType, strike.ToString("F2"), contracts,
             ask.ToString("F2"), ask.ToString("F2"), "0.00", "0.0")];
 
         _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask));
@@ -268,9 +282,12 @@ public class SimulatorForm : Form
         var pnlPct = trade.EntryPrice > 0 ? Math.Round((exitPrice - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
 
         SimTradesStore.Append(_symbol, _simDate, trade.OptionType, trade.StrikePrice, trade.Contracts,
-            trade.EntryTime, trade.EntryPrice, step.Time, exitPrice, pnl, pnlPct);
+            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct);
 
-        row.Cells["colSimClose"].Value = "Closed";
+        // DataGridViewButtonColumn with UseColumnTextForButtonValue=true always shows the
+        // column's own Text ("Close") regardless of the cell's Value, so gray out the row instead
+        // to signal visually that it's closed (row.ReadOnly already blocks re-clicking it).
+        foreach (DataGridViewCell cell in row.Cells) cell.Style.BackColor = Color.Gainsboro;
         row.ReadOnly = true;
         _openSimTrades.Remove(trade);
     }
