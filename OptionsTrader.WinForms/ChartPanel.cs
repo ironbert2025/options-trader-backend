@@ -44,12 +44,28 @@ public class ChartPanel : Panel
     private long? _liveBucketIndex;
     private DateTime _liveAnchor;
 
-    // Cross-SMA monitoring (Hourly15 panel only) — closed 1h candles kept for computing SMA
-    // ourselves in C# (same simple-average formula as the JS overlay). One monitor per period at
-    // most (period -> Up direction) — the direction is decided automatically when the button is
-    // armed (see ToggleCrossMonitor), not chosen separately by the caller anymore.
+    // Cross-SMA sequence monitoring (Hourly15 panel only) — closed 1h candles kept for computing
+    // SMA ourselves in C# (same simple-average formula as the JS overlay).
+    //
+    // The user picks which periods participate by arming their buttons (e.g. 20 and 40) — at any
+    // given moment only ONE of them is "active" (the nearest one price hasn't gotten past yet).
+    // Each closed candle is checked against the active period for exactly one of two outcomes:
+    //   - Bounce (rejected before/at getting through) → reported, stays on the SAME active period.
+    //   - Genuine cross (gets cleanly through) → reported, ADVANCES to the next armed period.
+    // Once the last armed period resolves (either way), the whole sequence stops firing for the
+    // rest of the session — each app instance only runs one RTH session anyway, so there's no
+    // "reset" to wire up.
     private readonly List<CandleData> _closedCandles = new();
-    private readonly Dictionary<int, bool> _armedCrossMonitors = new();
+    private readonly SortedSet<int> _crossArmedPeriods = new();
+    private int? _crossActivePeriod;
+    private bool _crossUp;      // fixed for the whole sequence once the first period is armed
+    private bool _crossFinished;
+
+    // Fires once the last armed period's event has been reported — MultiChartForm uses this to
+    // reset all 4 buttons back to their neutral/off appearance, since the sequence won't respond
+    // to anything else for the rest of the session.
+    public event Action? OnCrossSequenceFinished;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -322,24 +338,54 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Toggles the single Cross-SMA(period) monitor on/off — one button per period now instead of
-    // separate UP/DOWN ones. Arming it decides the direction automatically from where price
-    // currently sits relative to that SMA: below it → watch for a cross UP; above it → watch for
-    // a cross DOWN. That direction is fixed for as long as this arming stays on (re-arming later
-    // re-evaluates it fresh, in case price is on the other side of the SMA by then).
-    // Returns (Armed, Up) — Up only meaningful when Armed is true, used by the caller to update
-    // the button's label/color to reflect which direction got armed.
+    // Toggles whether `period` participates in the cross/bounce sequence. Arming the FIRST period
+    // of a fresh sequence decides the direction for the whole sequence from where price currently
+    // sits relative to that period's SMA: below it → watch for cross UP / bounce DOWN; above it →
+    // the mirror (cross DOWN / bounce UP). Later periods armed while a sequence is already running
+    // just join the pool of periods it can advance through — they don't re-decide direction.
+    // Returns (Armed, Up) so the caller can show which direction the sequence is using.
     public (bool Armed, bool Up) ToggleCrossMonitor(int period)
     {
-        if (_armedCrossMonitors.Remove(period)) return (false, false);
+        if (_crossArmedPeriods.Remove(period))
+        {
+            if (_crossActivePeriod == period)
+                AdvanceCrossSequence(period); // was watching this one — move on (or finish)
+            return (false, false);
+        }
 
-        var currentPrice = _liveBucket?.Close ?? _closedCandles.LastOrDefault()?.Close;
-        var currentSma   = _closedCandles.Count > 0 ? Sma(period, _closedCandles.Count - 1) : null;
-        if (currentPrice == null || currentSma == null) return (false, false); // not enough data yet to pick a direction
+        if (_crossFinished) return (false, false); // sequence already ran its course this session
 
-        var up = currentPrice < currentSma;
-        _armedCrossMonitors[period] = up;
-        return (true, up);
+        if (_crossActivePeriod == null)
+        {
+            // Starting a brand new sequence — decide direction from price vs. this (first) period.
+            var currentPrice = _liveBucket?.Close ?? _closedCandles.LastOrDefault()?.Close;
+            var currentSma   = _closedCandles.Count > 0 ? Sma(period, _closedCandles.Count - 1) : null;
+            if (currentPrice == null || currentSma == null) return (false, false); // not enough data yet
+
+            _crossUp = currentPrice < currentSma;
+            _crossActivePeriod = period;
+        }
+
+        _crossArmedPeriods.Add(period);
+        return (true, _crossUp);
+    }
+
+    // Moves the active period forward to the next still-armed period greater than `resolved`, or
+    // ends the sequence for the rest of the session if there isn't one.
+    private void AdvanceCrossSequence(int resolved)
+    {
+        _crossArmedPeriods.Remove(resolved);
+        var next = _crossArmedPeriods.Where(p => p > resolved).OrderBy(p => p).Cast<int?>().FirstOrDefault();
+        if (next == null)
+        {
+            _crossActivePeriod = null;
+            _crossFinished = true;
+            OnCrossSequenceFinished?.Invoke();
+        }
+        else
+        {
+            _crossActivePeriod = next;
+        }
     }
 
     // Captures this panel's chart as a PNG (via WebView2's native preview capture — pixel-exact,
@@ -370,38 +416,69 @@ public class ChartPanel : Panel
         }
     }
 
-    // Evaluates every armed Cross monitor against the candle that just closed. "Genuine crossover"
-    // means: candle color matches the direction (green for UP, red for DOWN), its close ends up on
-    // the crossed side of the SMA(period) computed as of this candle, AND the previous candle was
-    // still on the other side (or exactly on the line) — so it only fires once per actual cross,
-    // not on every candle that happens to stay above/below the SMA.
+    // How much closer than the bounce-back move price has to get to the SMA to still count as a
+    // "no-touch" bounce (case 2 below) — 30%: distance-to-SMA must be under 30% of the rejection
+    // move for it to count as "went looking for the SMA and got rejected near it".
+    private const decimal BounceProximityRatio = 0.30m;
+
+    // Evaluates the candle that just closed against whichever period is currently active in the
+    // cross/bounce sequence (see the fields above) — only ONE period is ever checked per candle.
+    //
+    // Genuine cross (advances the sequence to the next armed period): candle color matches the
+    // sequence's direction (green for UP, red for DOWN), its close ends up on the crossed side of
+    // the SMA(period), AND the previous candle was still on the other side (or on the line).
+    //
+    // Bounce (reported, but stays on the SAME period — case 1 or case 2, mirrored for the DOWN
+    // direction): price went looking for the SMA from its side and got rejected back the way it
+    // came, closing red (UP direction) or green (DOWN direction) instead of getting through.
+    //   Case 1 — touched/crossed intra-candle but rejected: the wick reached past the SMA, but
+    //            price closed back on the original side by the close.
+    //   Case 2 — didn't quite reach it: the wick fell short of the SMA, but came within
+    //            BounceProximityRatio of the rejection move's size (i.e. "closely missed it").
     private void EvaluateCrossings(CandleData justClosed)
     {
-        if (_armedCrossMonitors.Count == 0) return;
+        if (_crossFinished || _crossActivePeriod == null) return;
 
-        foreach (var (period, up) in _armedCrossMonitors.ToList())
+        var period = _crossActivePeriod.Value;
+        if (_closedCandles.Count < period + 1) return; // not enough history for this + the prior SMA
+
+        var currentSma  = Sma(period, _closedCandles.Count - 1);
+        var previousSma = Sma(period, _closedCandles.Count - 2);
+        if (currentSma == null) return;
+
+        var isGreen = justClosed.Close > justClosed.Open;
+        var isRed   = justClosed.Close < justClosed.Open;
+
+        var crossed = previousSma != null && _crossUp
+            ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
+            : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
+
+        if (crossed)
         {
-            if (_closedCandles.Count < period + 1) continue; // not enough history for this + the prior SMA
-
-            var currentSma  = Sma(period, _closedCandles.Count - 1);
-            var previousSma = Sma(period, _closedCandles.Count - 2);
-            if (currentSma == null || previousSma == null) continue;
-
-            var previousClose = _closedCandles[^2].Close;
-            var isGreen = justClosed.Close > justClosed.Open;
-            var isRed   = justClosed.Close < justClosed.Open;
-
-            var crossed = up
-                ? isGreen && justClosed.Close > currentSma && previousClose <= previousSma
-                : isRed   && justClosed.Close < currentSma && previousClose >= previousSma;
-
-            if (!crossed) continue;
-
-            var direction = up ? "UP" : "DOWN";
-            var colorName = SmaColorNames.TryGetValue(period, out var c) ? c : string.Empty;
-            var caption = $"Crossing {direction} SMA {period}({colorName})";
-            _ = SendChartToTelegramAsync(caption);
+            FireCrossSequenceEvent(period, "Cruce");
+            AdvanceCrossSequence(period);
+            return;
         }
+
+        var bounced = _crossUp
+            ? justClosed.Open < currentSma && isRed &&
+                (justClosed.High > currentSma
+                    ? justClosed.Close < currentSma                                            // case 1: crossed, rejected back down
+                    : (currentSma - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close)) // case 2: fell short, closely
+            : justClosed.Open > currentSma && isGreen &&
+                (justClosed.Low < currentSma
+                    ? justClosed.Close > currentSma                                             // case 1 mirrored: crossed, rejected back up
+                    : (justClosed.Low - currentSma) < BounceProximityRatio * (justClosed.Close - justClosed.Low)); // case 2 mirrored
+
+        if (bounced) FireCrossSequenceEvent(period, "Rebote"); // stays on the same active period
+    }
+
+    private void FireCrossSequenceEvent(int period, string eventLabel)
+    {
+        var direction = _crossUp ? "UP" : "DOWN";
+        var colorName = SmaColorNames.TryGetValue(period, out var c) ? c : string.Empty;
+        var caption = $"{eventLabel} {direction} SMA {period}({colorName})";
+        _ = SendChartToTelegramAsync(caption);
     }
 
     // Simple moving average of Close over the `period` candles ending at _closedCandles[endIndex].

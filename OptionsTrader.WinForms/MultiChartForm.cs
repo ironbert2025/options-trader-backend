@@ -93,6 +93,7 @@ public class MultiChartForm : Form
         // candle closes with a genuine crossover in that direction.
         var crossHost = new Panel { Dock = DockStyle.Fill };
         var periods = new[] { 20, 40, 100, 200 };
+        var smaButtons = new List<Button>();
         for (int col = 0; col < periods.Length; col++)
         {
             var period = periods[col];
@@ -119,7 +120,29 @@ public class MultiChartForm : Form
                 }
             };
 
+            smaButtons.Add(btnSma);
             crossHost.Controls.Add(btnSma);
+        }
+
+        // Once the cross/bounce sequence resolves its last armed period, it stops responding for
+        // the rest of the session — reset all 4 buttons back to neutral so the UI doesn't keep
+        // showing them as armed when they no longer do anything.
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnCrossSequenceFinished += () =>
+            {
+                // Streamer_OnNewCandle (where this fires from) runs on whatever thread the live
+                // feed raises its event on, not necessarily the UI thread.
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    foreach (var (btn, period) in smaButtons.Zip(periods))
+                    {
+                        btn.Text = $"{period}";
+                        btn.BackColor = SystemColors.Control;
+                    }
+                });
+            };
         }
 
         // T-Line / H-Line drawing tools, also on the 1h panel — placed to the right of the 8
