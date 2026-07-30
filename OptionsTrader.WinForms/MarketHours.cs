@@ -42,6 +42,26 @@ public static class MarketHours
         }
     }
 
+    // Short (1 min) windows around the exact open/close moment, used to trigger the
+    // once-per-day market-open/close chart snapshot without needing a sub-second timer.
+    public static bool IsInMarketOpenSnapshotWindow
+    {
+        get
+        {
+            var time = TimeOnly.FromDateTime(NowEst);
+            return IsWeekday && time >= MarketOpen && time < MarketOpen.AddMinutes(1);
+        }
+    }
+
+    public static bool IsInMarketCloseSnapshotWindow
+    {
+        get
+        {
+            var time = TimeOnly.FromDateTime(NowEst);
+            return IsWeekday && time >= MarketClose && time < MarketClose.AddMinutes(1);
+        }
+    }
+
     public static bool IsOpen
     {
         get

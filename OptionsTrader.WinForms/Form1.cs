@@ -25,6 +25,9 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _pollingTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
     private System.Windows.Forms.Timer? _autoCaptureTimer;
+    private System.Windows.Forms.Timer? _marketSnapshotTimer;
+    private DateOnly? _openSnapshotDoneFor;
+    private DateOnly? _closeSnapshotDoneFor;
     private System.Windows.Forms.Timer? _ivHistorialTimer;
     private bool _isPolling;
     private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
@@ -100,6 +103,7 @@ public partial class Form1 : Form
         Load += Form1_Load;
         StartAutoCaptureScheduler();
         StartIvHistorialScheduler();
+        StartMarketOpenCloseSnapshotScheduler();
     }
 
     // Anchored user — logs straight in against the API on startup, no LoginForm prompt.
@@ -174,6 +178,56 @@ public partial class Form1 : Form
             BeginPolling(showWarnings: false, isAutoCapture: true);
         };
         _autoCaptureTimer.Start();
+    }
+
+    // Saves a combined 3-chart snapshot for every symbol that currently has a Live Chart window
+    // open (_liveChartForms), at market open (9:30 AM ET) and close (4:00 PM ET) — skips silently
+    // for any symbol that isn't open, never opens one just to capture it. Runs independently in
+    // every app instance (each only knows about its OWN _liveChartForms, unlike the shared hub).
+    private void StartMarketOpenCloseSnapshotScheduler()
+    {
+        _marketSnapshotTimer = new System.Windows.Forms.Timer { Interval = 20000 }; // check every 20s
+        _marketSnapshotTimer.Tick += (s, e) =>
+        {
+            var today = DateOnly.FromDateTime(MarketHours.NowEst);
+
+            if (MarketHours.IsInMarketOpenSnapshotWindow && _openSnapshotDoneFor != today)
+            {
+                _openSnapshotDoneFor = today;
+                _ = CaptureOpenCloseSnapshotsAsync("Open");
+            }
+
+            if (MarketHours.IsInMarketCloseSnapshotWindow && _closeSnapshotDoneFor != today)
+            {
+                _closeSnapshotDoneFor = today;
+                _ = CaptureOpenCloseSnapshotsAsync("Close");
+            }
+        };
+        _marketSnapshotTimer.Start();
+    }
+
+    private async Task CaptureOpenCloseSnapshotsAsync(string tag)
+    {
+        foreach (var (symbol, chartForm) in _liveChartForms.ToList())
+        {
+            if (chartForm.IsDisposed) continue;
+
+            try
+            {
+                using var combined = await chartForm.CaptureCombinedChartImageAsync();
+                if (combined == null) continue;
+
+                var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
+                Directory.CreateDirectory(folder);
+                var fileName = $"{symbol}_{MarketHours.NowEst:yyyyMMdd}_{tag}.png";
+                combined.Save(Path.Combine(folder, fileName), System.Drawing.Imaging.ImageFormat.Png);
+            }
+            catch
+            {
+                // Best-effort — a snapshot failure for one symbol must never affect trading or
+                // the other symbols' snapshots.
+            }
+        }
     }
 
     // Maps each broker radio button to its BrokerName via its control Name (rbSchwab → Schwab,
