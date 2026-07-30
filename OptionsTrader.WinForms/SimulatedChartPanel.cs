@@ -64,14 +64,25 @@ public class SimulatedChartPanel : Panel
         }
     }
 
+    private bool _visibleDaysSet;
+
     // Replaces the whole visible candle series with the given list — used instead of the live
     // ChartPanel's incremental "extend current bucket" logic, since a step-through simulator can
     // simply recompute "everything up to the current step" on every ◀/▶ click; no need to
     // replicate ChartPanel's live-bucket state machine here.
-    public async Task CargarHastaPasoAsync(List<CandleData> candles)
+    //
+    // visibleDays matches the live chart's own default zoom (7 for the 1h panel, 3 for the 15m
+    // ones — see ChartPanel.LoadHistoryAsync) so the simulator reads the same as a real chart.
+    public async Task CargarHastaPasoAsync(List<CandleData> candles, int visibleDays)
     {
         if (_readyTcs != null) await _readyTcs.Task;
         if (_webView.CoreWebView2 == null || candles.Count == 0) return;
+
+        if (!_visibleDaysSet)
+        {
+            await _webView.CoreWebView2.ExecuteScriptAsync($"configurarDiasVisibles({visibleDays});");
+            _visibleDaysSet = true;
+        }
         await RunScriptAsync("cargarHistorial", candles);
     }
 

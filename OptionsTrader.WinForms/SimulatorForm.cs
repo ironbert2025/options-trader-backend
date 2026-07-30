@@ -44,7 +44,8 @@ public class SimulatorForm : Form
 
     private List<DateOnly> _availableDates = new();
     private List<SimulationStep> _steps = new();
-    private List<CandleData> _underlyingCandles = new();
+    private List<CandleData> _hourlyCandles = new();
+    private List<CandleData> _intradayCandles = new(); // shared by the 15m RTH and RTH+Overnight panels
     private int _currentIndex = -1;
     private string _symbol = string.Empty;
     private DateOnly _simDate;
@@ -122,7 +123,10 @@ public class SimulatorForm : Form
         _symbol  = symbol;
         _simDate = date;
         _steps   = SimulationDataLoader.LoadDay(symbol, date);
-        _underlyingCandles = SimulationDataLoader.LoadUnderlyingCandles(symbol, date);
+        // Same amount of surrounding context the live charts default to (7 days for 1h, 3 for the
+        // two 15m panels) — see ChartPanel.LoadHistoryAsync's visibleDays.
+        _hourlyCandles   = SimulationDataLoader.LoadHourlyCandlesWithContext(symbol, date);
+        _intradayCandles = SimulationDataLoader.LoadUnderlyingCandlesWithContext(symbol, date, contextDays: 3);
         _currentIndex = _steps.Count > 0 ? 0 : -1;
 
         _dgvTrades.Rows.Clear();
@@ -161,12 +165,15 @@ public class SimulatorForm : Form
 
         Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: false);
 
-        var candlesUpToNow = _underlyingCandles.Where(c => c.Time <= step.Time).ToList();
+        var hourlyUpToNow   = _hourlyCandles.Where(c => c.Time <= step.Time).ToList();
+        var intradayUpToNow = _intradayCandles.Where(c => c.Time <= step.Time).ToList();
+
         _ = _hourlyChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
-            CandleAggregation.FilterSession(candlesUpToNow, rthOnly: true), 60, rthOnly: true));
+            CandleAggregation.FilterSession(hourlyUpToNow, rthOnly: true), 60, rthOnly: true), visibleDays: 7);
         _ = _rthChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
-            CandleAggregation.FilterSession(candlesUpToNow, rthOnly: true), 15, rthOnly: true));
-        _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(candlesUpToNow, 15, rthOnly: false));
+            CandleAggregation.FilterSession(intradayUpToNow, rthOnly: true), 15, rthOnly: true), visibleDays: 3);
+        _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
+            intradayUpToNow, 15, rthOnly: false), visibleDays: 3);
 
         RefreshOpenSimTradesPnL(step);
     }

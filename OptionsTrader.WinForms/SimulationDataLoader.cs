@@ -83,11 +83,65 @@ internal static class SimulationDataLoader
     // they can be fed straight into CandleAggregation.AggregateToInterval — the same aggregation
     // the live chart uses, just replaying pre-recorded prices instead of live ones. Prefers
     // LevelOneTickStore (finer resolution) when present for that day, falls back to TickPriceStore.
-    public static List<CandleData> LoadUnderlyingCandles(string symbol, DateOnly date)
-    {
-        return LoadUnderlyingTicks(symbol, date)
+    private static List<CandleData> LoadUnderlyingCandlesForDay(string symbol, DateOnly date) =>
+        LoadUnderlyingTicks(symbol, date)
             .Select(t => new CandleData { Time = t.Time, Open = t.Price, High = t.Price, Low = t.Price, Close = t.Price })
             .ToList();
+
+    // Same idea as the live chart's "days visible" default zoom (7 days for the 1h panel, 3 for
+    // the 15m panels) — the simulator should show that same amount of surrounding context, not
+    // just the single replayed day, so it reads the same as a real live chart. Prior days come
+    // from whichever tick files happen to exist for this symbol; if capture only started
+    // recently there may be fewer than requested, which is a genuine data limit, not a bug.
+    public static List<CandleData> LoadUnderlyingCandlesWithContext(string symbol, DateOnly date, int contextDays)
+    {
+        var priorDates = GetAvailableTickDates(symbol)
+            .Where(d => d < date)
+            .OrderByDescending(d => d)
+            .Take(contextDays);
+
+        var candles = new List<CandleData>();
+        foreach (var d in priorDates) candles.AddRange(LoadUnderlyingCandlesForDay(symbol, d));
+        candles.AddRange(LoadUnderlyingCandlesForDay(symbol, date));
+        return candles.OrderBy(c => c.Time).ToList();
+    }
+
+    // Same as above but for the 1h panel specifically: HourlyCandleStore already has ~200 days of
+    // real OHLC persisted (far better than our flat per-tick candles), so use that for every day
+    // BEFORE the replayed one, and only fall back to flat tick-built candles for the target date
+    // itself (which still needs to build up step by step as the simulator advances).
+    public static List<CandleData> LoadHourlyCandlesWithContext(string symbol, DateOnly date)
+    {
+        var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        var priorFromStore = HourlyCandleStore.Load(symbol)
+            .Where(c => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, eastern)) < date);
+
+        return priorFromStore
+            .Concat(LoadUnderlyingCandlesForDay(symbol, date))
+            .OrderBy(c => c.Time)
+            .ToList();
+    }
+
+    private static List<DateOnly> GetAvailableTickDates(string symbol)
+    {
+        var dates = new HashSet<DateOnly>();
+
+        void Scan(string folder, string pattern)
+        {
+            var dir = Path.Combine(folder, symbol);
+            if (!Directory.Exists(dir)) return;
+            foreach (var file in Directory.EnumerateFiles(dir, pattern))
+            {
+                var parts = Path.GetFileNameWithoutExtension(file).Split('_');
+                var last  = parts[^1]; // {Symbol}_Ticks_{yyyyMMdd} / {Symbol}_L1Ticks_{yyyyMMdd}
+                if (DateTime.TryParseExact(last, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+                    dates.Add(DateOnly.FromDateTime(d));
+            }
+        }
+
+        Scan(TicksLevelOneFolder, $"{symbol}_L1Ticks_*.csv");
+        Scan(TicksFolder, $"{symbol}_Ticks_*.csv");
+        return dates.ToList();
     }
 
     private static List<(DateTime Time, decimal Price)> LoadUnderlyingTicks(string symbol, DateOnly date)
