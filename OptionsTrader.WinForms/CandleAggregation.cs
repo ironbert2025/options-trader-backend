@@ -54,18 +54,62 @@ internal static class CandleAggregation
         return minuteCandles
             .GroupBy(c => BucketIndex(c.Time, anchor, intervalMinutes))
             .OrderBy(g => g.Key)
-            .Select(g =>
-            {
-                var ordered = g.OrderBy(c => c.Time).ToList();
-                return new CandleData
-                {
-                    Time  = ordered[0].Time,
-                    Open  = ordered[0].Open,
-                    Close = ordered[^1].Close,
-                    High  = ordered.Max(c => c.High),
-                    Low   = ordered.Min(c => c.Low)
-                };
-            })
+            .Select(g => BuildCandle(g))
             .ToList();
+    }
+
+    // Special-cased 1h bucketing for the Hourly15 panel: the FIRST bucket of the RTH session is
+    // only 30 minutes (9:30-10:00, matching the market open), and every bucket after that is
+    // aligned to the clock hour (10-11, 11-12, ..., 15-16) instead of floating 60-minute offsets
+    // from 9:30 — e.g. a 12:15 tick belongs to the 12:00-13:00 bucket, not an 11:30-12:30 one.
+    public static List<CandleData> AggregateToHourlyRthBuckets(List<CandleData> minuteCandles)
+    {
+        var filtered = FilterSession(minuteCandles, rthOnly: true);
+        if (filtered.Count == 0) return filtered;
+
+        return filtered
+            .GroupBy(c => HourlyRthBucketKey(c.Time))
+            .OrderBy(g => g.Key)
+            .Select(g => BuildCandle(g))
+            .ToList();
+    }
+
+    private static CandleData BuildCandle(IEnumerable<CandleData> bucket)
+    {
+        var ordered = bucket.OrderBy(c => c.Time).ToList();
+        return new CandleData
+        {
+            Time  = ordered[0].Time,
+            Open  = ordered[0].Open,
+            Close = ordered[^1].Close,
+            High  = ordered.Max(c => c.High),
+            Low   = ordered.Min(c => c.Low)
+        };
+    }
+
+    // slot 0 = the 9:30-10:00 bucket, slot N (10-15) = the N:00-(N+1):00 bucket.
+    private static (DateOnly Date, int Slot) HourlyRthBucketOf(DateTime utcTime)
+    {
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        var slot = eastern.TimeOfDay < new TimeSpan(10, 0, 0) ? 0 : eastern.Hour;
+        return (DateOnly.FromDateTime(eastern), slot);
+    }
+
+    // Unique across arbitrarily many days (DayNumber is a running count since year 1), so grouping
+    // by this key never merges the same clock hour across two different days.
+    public static long HourlyRthBucketKey(DateTime utcTime)
+    {
+        var (date, slot) = HourlyRthBucketOf(utcTime);
+        return date.DayNumber * 100L + slot;
+    }
+
+    // The UTC instant marking the start of the bucket utcTime falls into — used to tag a
+    // newly-started live bucket's own Time (9:30 for the first bucket, otherwise slot:00).
+    public static DateTime HourlyRthBucketStartUtc(DateTime utcTime)
+    {
+        var (date, slot) = HourlyRthBucketOf(utcTime);
+        var (hour, minute) = slot == 0 ? (9, 30) : (slot, 0);
+        var startEastern = date.ToDateTime(new TimeOnly(hour, minute));
+        return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(startEastern, DateTimeKind.Unspecified), EasternZone);
     }
 }

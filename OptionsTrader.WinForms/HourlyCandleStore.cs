@@ -79,4 +79,35 @@ internal static class HourlyCandleStore
         foreach (var c in merged)
             writer.WriteLine($"{c.Time:O},{c.Open},{c.High},{c.Low},{c.Close}");
     }
+
+    // Like AppendIfMissing, but for any Eastern calendar date present in freshCandles, the
+    // EXISTING stored candles for that same date are dropped first instead of merged by exact
+    // Time match. Needed when freshCandles was bucketed with different boundaries than whatever
+    // is already on disk for that date (e.g. switching the 1h panel's bucketing scheme) — merging
+    // by Time alone would just add a second, conflicting set of bars for the same hours.
+    public static void ReplaceDates(string symbol, List<CandleData> freshCandles)
+    {
+        if (freshCandles.Count == 0) return;
+
+        Directory.CreateDirectory(OutputFolder);
+
+        var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        DateOnly EasternDate(DateTime utc) => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(utc, eastern));
+
+        var freshDates = freshCandles.Select(c => EasternDate(c.Time)).ToHashSet();
+        var existing   = Load(symbol).Where(c => !freshDates.Contains(EasternDate(c.Time)));
+
+        var merged = existing
+            .Concat(freshCandles)
+            .OrderBy(c => c.Time)
+            .ToList();
+
+        if (merged.Count > MaxCandles)
+            merged = merged.Skip(merged.Count - MaxCandles).ToList();
+
+        using var writer = new StreamWriter(PathFor(symbol), append: false);
+        writer.WriteLine(Header);
+        foreach (var c in merged)
+            writer.WriteLine($"{c.Time:O},{c.Open},{c.High},{c.Low},{c.Close}");
+    }
 }

@@ -168,8 +168,8 @@ public class SimulatorForm : Form
         var hourlyUpToNow   = _hourlyCandles.Where(c => c.Time <= step.Time).ToList();
         var intradayUpToNow = _intradayCandles.Where(c => c.Time <= step.Time).ToList();
 
-        _ = _hourlyChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
-            CandleAggregation.FilterSession(hourlyUpToNow, rthOnly: true), 60, rthOnly: true), visibleDays: 7);
+        _ = _hourlyChart.CargarHastaPasoAsync(
+            CandleAggregation.AggregateToHourlyRthBuckets(hourlyUpToNow), visibleDays: 7);
         _ = _rthChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
             CandleAggregation.FilterSession(intradayUpToNow, rthOnly: true), 15, rthOnly: true), visibleDays: 3);
         _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
