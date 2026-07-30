@@ -731,9 +731,11 @@ public class ChartPanel : Panel
         if (symbol != _symbol) return;
         if (_closing || !IsHandleCreated) return;
         RestoreHeaderIfWasDisconnected();
-        if (_liveBucket == null) return; // no bucket open yet — CHART_EQUITY seeds the first one
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        OnLiveTick?.Invoke(eastern, price); // fires regardless of session/bucket state, same as Streamer_OnNewCandle
+
+        if (_liveBucket == null) return; // no bucket open yet — CHART_EQUITY seeds the first one
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
             return; // outside this panel's session — ignore the tick entirely
 
