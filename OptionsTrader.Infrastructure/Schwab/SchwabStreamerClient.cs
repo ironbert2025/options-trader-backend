@@ -58,14 +58,15 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     // symbols at once, so the symbol is included for the caller to route on).
     public event Action<string, CandleData>? OnNewCandle;
 
-    // Fires on every LEVEL_ONE_EQUITIES last-price update — much higher frequency than
+    // Fires on every LEVELONE_EQUITIES last-price update — much higher frequency than
     // CHART_EQUITY (which only pushes once per 1-minute bar). Field numbers (3 = Last Price,
     // 35 = Trade Time) are Schwab's documented Level One Equity indices — same as CHART_EQUITY's
     // mapping.
-    // ⚠️ 2026-07-30: SubscribeLevelOneEquity's ADD is currently NOT called anywhere (see the
-    // comment at its one call site in Form1.SetUpLiveFeedAsync) — confirmed via ws_raw.log that
-    // Schwab rejects it with code 21 "Bad command formatting" AND kills the whole socket over it,
-    // triggering a reconnect storm (~every 2.7s). So this event never actually fires right now.
+    // 2026-07-30: the call site in Form1.SetUpLiveFeedAsync is still commented out — the service
+    // name used to be wrong ("LEVEL_ONE_EQUITIES", confirmed rejected with code 21 "Bad command
+    // formatting" and killed the whole socket over it) and has just been fixed to "LEVELONE_EQUITIES"
+    // (confirmed against a working third-party SDK), but re-enabling the call site still needs a
+    // live re-test before trusting it in normal use.
     public event Action<string, decimal, DateTime>? OnLevelOneTick;
 
     // Fires when the socket disconnects unexpectedly (not via StopAsync), before a reconnect
@@ -302,7 +303,7 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
             {
                 new
                 {
-                    service   = "LEVEL_ONE_EQUITIES",
+                    service   = "LEVELONE_EQUITIES",
                     command   = "ADD",
                     requestid = NextRequestId(),
                     SchwabClientCustomerId = _schwabClientCustomerId,
@@ -452,7 +453,7 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                         OnNewCandle?.Invoke(symbol, candle);
                     }
                 }
-                else if (serviceName == "LEVEL_ONE_EQUITIES")
+                else if (serviceName == "LEVELONE_EQUITIES")
                 {
                     foreach (var item in content.EnumerateArray())
                     {
