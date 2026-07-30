@@ -388,7 +388,7 @@ public class MultiChartForm : Form
             Location  = new Point(0, 58),
             Size      = new Size(146, 20),
             Font      = new Font("Consolas", 9F),
-            ForeColor = Color.White
+            ForeColor = Color.Yellow
         };
         if (overnightPanel != null)
         {
