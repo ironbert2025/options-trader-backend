@@ -477,6 +477,14 @@ public class MultiChartForm : Form
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
                 _ = SendTLineSignalTelegramPushAsync(message);
             };
+
+            // Daily-candle bounce off SMA20 — purely informational, log only (no Telegram, no
+            // automatic action; the user checks this window in the morning and acts manually).
+            hourlyPanel.OnDailyBounceEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
         }
 
         Controls.Add(layout);

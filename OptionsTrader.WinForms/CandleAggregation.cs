@@ -112,4 +112,17 @@ internal static class CandleAggregation
         var startEastern = date.ToDateTime(new TimeOnly(hour, minute));
         return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(startEastern, DateTimeKind.Unspecified), EasternZone);
     }
+
+    // Groups hourly (or any intraday) candles into one bar per ET calendar day — same rule as
+    // chart.html's aggregateToDaily (Open = first bar's open, Close = last bar's close, High/Low
+    // = extremes across the day). Used by the daily-bounce-off-SMA20 analysis (ChartPanel), which
+    // needs daily bars purely in memory, without touching the WebView/JS side at all.
+    public static List<(DateOnly Date, CandleData Candle)> AggregateToDaily(List<CandleData> candles)
+    {
+        return candles
+            .GroupBy(c => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone)))
+            .OrderBy(g => g.Key)
+            .Select(g => (g.Key, BuildCandle(g)))
+            .ToList();
+    }
 }

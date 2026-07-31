@@ -32,6 +32,7 @@ public class ChartPanel : Panel
     private readonly bool _rthOnly;
     private readonly Label _header;
     private readonly Label? _tLineHintLabel; // "Potencial CT al Alza/Baja" — Hourly15 only
+    private readonly Label? _dailyBounceHintLabel; // "Análisis Diario: Rebote ..." — Hourly15 only
     private WebView2 _webView = null!;
     private bool _closing;
 
@@ -83,6 +84,11 @@ public class ChartPanel : Panel
     // caller (MultiChartForm) both logs it and pushes the combined 3-chart Telegram snapshot.
     public event Action<string>? OnTLineSignalEvent;
 
+    // Fires once, right after history loads (Hourly15 only — see EvaluateDailyBounce), if
+    // yesterday's already-closed daily candle bounced off the daily SMA20. Purely informational —
+    // the caller just logs it and shows a hint on the chart; no Telegram push, no automatic action.
+    public event Action<string>? OnDailyBounceEvent;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -133,6 +139,19 @@ public class ChartPanel : Panel
                 Text      = string.Empty
             };
             Controls.Add(_tLineHintLabel);
+
+            // Daily-candle bounce-off-SMA20 hint — set once per app run, right after history
+            // loads (EvaluateDailyBounce), if yesterday's daily candle bounced.
+            _dailyBounceHintLabel = new Label
+            {
+                Dock      = DockStyle.Bottom,
+                Height    = 18,
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.LimeGreen,
+                BackColor = Color.FromArgb(19, 23, 34),
+                Text      = string.Empty
+            };
+            Controls.Add(_dailyBounceHintLabel);
         }
 
         _liveFeed.OnNewCandle     += Streamer_OnNewCandle;
@@ -558,6 +577,53 @@ public class ChartPanel : Panel
         _ = SendChartToTelegramAsync(caption);
     }
 
+    // Daily-candle bounce off the daily SMA20 — evaluated once per app run, right after the 1h
+    // panel's history loads (only if this window is open at all; if it's closed, this never
+    // runs). Checks the last already-CLOSED daily bar (yesterday — today's bar, if present in
+    // `hourly`, is still forming and is excluded) against the daily SMA20, using the exact same
+    // case-1/case-2 bounce formula as EvaluateCrossings (BounceProximityRatio), just on daily bars
+    // instead of 1h ones, and with no Cruce detection at all — only Rebote.
+    private void EvaluateDailyBounce(List<CandleData> hourly)
+    {
+        var daily = CandleAggregation.AggregateToDaily(hourly);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        daily = daily.Where(d => d.Date < today).ToList(); // drop today's still-forming bar, if any
+
+        const int period = TLineSmaPeriod; // 20 — reused, same "SMA20" concept as T-Line signal
+        if (daily.Count < period + 1) return; // need the bounce day itself + period prior closes
+
+        var bars = daily.Select(d => d.Candle).ToList();
+        var idx = bars.Count - 1; // yesterday — the last closed daily bar
+        var justClosed = bars[idx];
+
+        decimal sum = 0;
+        for (int i = idx - period + 1; i <= idx; i++) sum += bars[i].Close;
+        var sma20 = sum / period;
+
+        var isGreen = justClosed.Close > justClosed.Open;
+        var isRed   = justClosed.Close < justClosed.Open;
+
+        // Approaching from below (Open < SMA20), rejected back down — case 1 (wick crossed but
+        // close rejected) or case 2 (wick fell short, but came within 30% of the rejection move).
+        var bouncedDown = justClosed.Open < sma20 && isRed &&
+            (justClosed.High > sma20
+                ? justClosed.Close < sma20
+                : (sma20 - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close));
+
+        // Mirrored: approaching from above (Open > SMA20), rejected back up.
+        var bouncedUp = justClosed.Open > sma20 && isGreen &&
+            (justClosed.Low < sma20
+                ? justClosed.Close > sma20
+                : (justClosed.Low - sma20) < BounceProximityRatio * (justClosed.Close - justClosed.Low));
+
+        if (!bouncedDown && !bouncedUp) return;
+
+        var direction = bouncedUp ? "al alza" : "a la baja";
+        OnDailyBounceEvent?.Invoke($"Rebote {direction} en Diario");
+        if (_dailyBounceHintLabel != null)
+            _dailyBounceHintLabel.Text = $"Análisis Diario: Rebote {direction} en Diario";
+    }
+
     private const int TLineSmaPeriod = 20;
 
     // T-Line + SMA20 breakout: fires once (per T-Line — see _tLineSignalFired) when a just-closed
@@ -723,6 +789,7 @@ public class ChartPanel : Panel
                 {
                     HourlyCandleStore.ReplaceDates(_symbol, aggregated);
                     aggregated = HourlyCandleStore.Load(_symbol);
+                    EvaluateDailyBounce(aggregated);
                 }
 
                 if (aggregated.Count > 0)
