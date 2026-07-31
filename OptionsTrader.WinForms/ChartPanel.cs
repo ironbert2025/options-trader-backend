@@ -724,6 +724,7 @@ public class ChartPanel : Panel
             if (_mode == ChartPanelMode.Hourly15)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarSMAs([20,40,100,200]);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configurarBollinger(20, 2);");
 
                 // T-Line + vertical-arrow persistence (per symbol) — reload whatever was drawn in
                 // a previous session so it reappears at the same point, and listen for new/
@@ -746,7 +747,8 @@ public class ChartPanel : Panel
                 }
             }
 
-            // Bollinger Bands (20, 2 std devs) — only on the 15m RTH panel for now.
+            // Bollinger Bands (20, 2 std devs) — also on the 1h panel (see above); this block is
+            // just the 15m RTH panel's other extras (pre-market line).
             if (_mode == ChartPanelMode.Fifteen_RTH)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configurarBollinger(20, 2);");
