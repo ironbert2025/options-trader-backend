@@ -529,10 +529,13 @@ public class ChartPanel : Panel
     private const int TLineSmaPeriod = 20;
 
     // T-Line + SMA20 breakout: fires once (per T-Line — see _tLineSignalFired) when a just-closed
-    // 1h candle opened BELOW the T-Line, crossed above BOTH the T-Line and SMA20 at some point
-    // during the candle (approximated with High, since only OHLC is available for a closed bar),
-    // and closed above both. Automatic — runs for as long as exactly one T-Line is drawn, no
-    // arm/disarm toggle (unlike Cross-SMA).
+    // 1h candle crosses BOTH the T-Line and SMA20 in the same direction and closes past both —
+    // either direction counts, mirrored:
+    //   Al alza:  opened BELOW the T-Line, High got above BOTH T-Line and SMA20 during the
+    //             candle (approximated with High since only OHLC is available), closed above both.
+    //   A la baja: opened ABOVE the T-Line, Low got below BOTH during the candle, closed below both.
+    // Automatic — runs for as long as exactly one T-Line is drawn, no arm/disarm toggle (unlike
+    // Cross-SMA).
     private void EvaluateTLineSignal(CandleData justClosed)
     {
         if (_tLineSignalFired) return;
@@ -548,14 +551,19 @@ public class ChartPanel : Panel
         var sma20 = Sma(TLineSmaPeriod, _closedCandles.Count - 1);
         if (sma20 == null) return;
 
-        var openedBelow  = justClosed.Open < tLineValue;
-        var crossedDuring = justClosed.High > tLineValue && justClosed.High > sma20.Value;
-        var closedAbove  = justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
+        var upBreakout = justClosed.Open < tLineValue
+            && justClosed.High > tLineValue && justClosed.High > sma20.Value
+            && justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
 
-        if (!(openedBelow && crossedDuring && closedAbove)) return;
+        var downBreakout = justClosed.Open > tLineValue
+            && justClosed.Low < tLineValue && justClosed.Low < sma20.Value
+            && justClosed.Close < tLineValue && justClosed.Close < sma20.Value;
+
+        if (!upBreakout && !downBreakout) return;
 
         _tLineSignalFired = true;
-        var caption = $"T-Line + SMA{TLineSmaPeriod} breakout — cerró {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})";
+        var direction = upBreakout ? "al alza" : "a la baja";
+        var caption = $"CT {direction} en Hora — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})";
         OnTLineSignalEvent?.Invoke(caption);
     }
 
