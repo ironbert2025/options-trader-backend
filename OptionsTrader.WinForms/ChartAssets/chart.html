@@ -789,9 +789,15 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
-                const x = ts.timeToCoordinate(self._startTime);
                 const y = candleSeries.priceToCoordinate(self._price);
-                if (x == null || y == null) return;
+                if (y == null) return;
+                // timeToCoordinate returns null when startTime (today, pre-market) falls outside
+                // the chart's known time range — which is exactly the common case here: the RTH
+                // panel has no candle for today yet since the market hasn't opened, so its last
+                // real data point is a prior day. Fall back to the left edge instead of skipping
+                // the draw entirely — still a correct horizontal reference line either way.
+                const xRaw = ts.timeToCoordinate(self._startTime);
+                const x = xRaw == null ? 0 : xRaw;
                 ctx.strokeStyle = '#2196f3'; // blue
                 ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                 ctx.beginPath();
