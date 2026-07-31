@@ -1288,7 +1288,7 @@ public partial class Form1 : Form
         var entryPath = CaptureScreenshot(symbol, rowType, "entry");
         // LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
         _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
-        _ = SaveTradeChartSnapshotAsync(symbol, tradeId);
+        _ = SaveTradeChartSnapshotAsync(symbol, tradeId, "open");
 
         return (tradeId, newRow);
     }
@@ -1923,6 +1923,10 @@ public partial class Form1 : Form
         // LogLine($"{nowStr} Screenshot: {exitPath}", Color.DimGray);
         _ = UploadScreenshotAsync(exitPath, symbol, type, tradeId, nowStr);
 
+        // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
+        if (tradeId > 0)
+            _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration);
+
         // Screenshot TradeLog (Trades + Logger section of the form)
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
@@ -1933,24 +1937,60 @@ public partial class Form1 : Form
     // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
     // WebView2 form itself — not a screen capture — saved locally next to the tradeId, only if a
     // MultiChartForm for this symbol happens to be open. Best-effort: never blocks the trade flow.
-    private async Task SaveTradeChartSnapshotAsync(string symbol, int tradeId)
+    // Returns the saved file path (or null if nothing was captured) so callers — the Telegram
+    // close-push, for one — can reuse the same file instead of capturing twice.
+    private async Task<string?> SaveTradeChartSnapshotAsync(string symbol, int tradeId, string tag)
     {
         try
         {
-            if (!_liveChartForms.TryGetValue(symbol, out var chartForm) || chartForm.IsDisposed) return;
+            if (!_liveChartForms.TryGetValue(symbol, out var chartForm) || chartForm.IsDisposed) return null;
 
             using var combined = await chartForm.CaptureCombinedChartImageAsync();
-            if (combined == null) return;
+            if (combined == null) return null;
 
             var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
             Directory.CreateDirectory(folder);
-            var fileName = $"{symbol}_{DateTime.Now:yyyyMMdd_HHmmss}_trade{tradeId}.png";
-            combined.Save(Path.Combine(folder, fileName), System.Drawing.Imaging.ImageFormat.Png);
+            var fileName = $"{symbol}_{DateTime.Now:yyyyMMdd_HHmmss}_trade{tradeId}_{tag}.png";
+            var filePath = Path.Combine(folder, fileName);
+            combined.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+            return filePath;
         }
         catch
         {
             // Best-effort — a chart-snapshot failure (WebView2 not ready, form closing, etc.)
             // must never block or fail the trade flow.
+            return null;
+        }
+    }
+
+    // Pushes a Telegram photo (the same combined 3-chart snapshot saved locally) with a caption
+    // describing the closed trade — symbol, side, strike, entry/exit, PnL$ and PnL%, duration.
+    // Best-effort, fire-and-forget from the caller: a failed/misconfigured push must never affect
+    // the trade-close flow itself (which has already committed by the time this runs).
+    private async Task SendTradeCloseTelegramPushAsync(
+        string symbol, int tradeId, string optionType, string strike, string closeType,
+        decimal entryPrice, decimal exitPrice, decimal pnl, decimal pnlPercent, TimeSpan duration)
+    {
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+
+            var imagePath = await SaveTradeChartSnapshotAsync(symbol, tradeId, "close");
+            if (imagePath == null) return; // no Live Chart open for this symbol — nothing to attach
+
+            var pnlSign = pnl >= 0 ? "+" : string.Empty;
+            var caption =
+                $"{symbol} {optionType} {strike} — Closed ({closeType})\n" +
+                $"Entry: {entryPrice:F2}  Exit: {exitPrice:F2}\n" +
+                $"PnL: {pnlSign}{pnl:F2} ({pnlSign}{pnlPercent:F1}%)\n" +
+                $"Duration: {duration:hh\\:mm\\:ss}";
+
+            await TelegramNotifier.SendPhotoAsync(botToken, chatId, imagePath, caption);
+        }
+        catch
+        {
+            // Best-effort — never let a Telegram/network failure affect the already-closed trade.
         }
     }
 
