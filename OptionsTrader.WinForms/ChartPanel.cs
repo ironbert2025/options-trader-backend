@@ -829,6 +829,21 @@ public class ChartPanel : Panel
                     {
                         _closedCandles.Clear();
                         _closedCandles.AddRange(aggregated);
+
+                        // Yesterday's LAST hourly candle (15:00-16:00) never gets a same-day
+                        // follow-up tick to close it live (see Streamer_OnNewCandle's sameDay
+                        // check) — evaluate it once here instead, on open, same idea as
+                        // EvaluateDailyBounce. Only for a PRIOR day's bar — if this instance is
+                        // reopened mid-session, the last bar is today's and already got evaluated
+                        // live when it originally closed, so re-checking it here would just be a
+                        // duplicate (and, for the T-Line signal, a duplicate Telegram push).
+                        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+                        var lastBarDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(last.Time, EasternZone));
+                        if (lastBarDate < today)
+                        {
+                            EvaluateCrossings(last);
+                            EvaluateTLineSignal(last);
+                        }
                     }
                 }
             }
@@ -900,13 +915,25 @@ public class ChartPanel : Panel
                 : CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
             if (index != _liveBucketIndex)
             {
-                // New bucket started — the previous one is now definitively closed (its last
-                // update already reflects its final close). Feed Cross-SMA monitoring with it.
                 if (_mode == ChartPanelMode.Hourly15)
                 {
                     _closedCandles.Add(_liveBucket);
-                    EvaluateCrossings(_liveBucket);
-                    EvaluateTLineSignal(_liveBucket);
+
+                    // At market open, the first live tick of the day always looks like "a new
+                    // bucket" compared to whatever _liveBucket was seeded with from history
+                    // (LoadHistoryAsync seeds it with YESTERDAY's last hourly bar, e.g. 15:00-16:00,
+                    // so live ticks extend it correctly instead of starting a spurious bucket).
+                    // That seeded bucket already closed yesterday — it must NOT be evaluated again
+                    // here just because today's session started; doing so previously fired
+                    // Cross-SMA/T-Line events at ~9:31 AM using yesterday's stale close. Only
+                    // evaluate when the outgoing bucket is from the SAME trading day as this tick
+                    // (HourlyRthBucketKey = dayNumber*100+slot, so dividing by 100 isolates the day).
+                    var sameDay = _liveBucketIndex is { } prevIndex && prevIndex / 100 == index / 100;
+                    if (sameDay)
+                    {
+                        EvaluateCrossings(_liveBucket);
+                        EvaluateTLineSignal(_liveBucket);
+                    }
                 }
 
                 _liveBucketIndex = index;
