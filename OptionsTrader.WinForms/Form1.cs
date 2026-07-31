@@ -1417,10 +1417,7 @@ public partial class Form1 : Form
             Level:          level,
             PnlTarget:      targetPct.ToString("F0")));
 
-        var entryPath = CaptureScreenshot(symbol, rowType, "entry");
-        // LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
-        _ = SaveTradeChartSnapshotAsync(symbol, tradeId, "open");
+        _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
 
         return (tradeId, newRow);
     }
@@ -2061,14 +2058,15 @@ public partial class Form1 : Form
             await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
         }
 
-        // Screenshot exit
-        var exitPath = CaptureScreenshot(symbol, type, "exit");
-        // LogLine($"{nowStr} Screenshot: {exitPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(exitPath, symbol, type, tradeId, nowStr);
+        // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
+        // and the Telegram push below, instead of each capturing its own copy.
+        var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
+        if (closeChartPath != null)
+            _ = UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr);
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
         if (tradeId > 0)
-            _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration);
+            _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
         // Red "Expired!!!" marker on the 1h chart — only for the 4pm expiration auto-close.
         if (closeType == "EXPIRED" && _liveChartForms.TryGetValue(symbol, out var chartFormExpired) && !chartFormExpired.IsDisposed)
@@ -2082,11 +2080,12 @@ public partial class Form1 : Form
     }
 
     // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
-    // WebView2 form itself — not a screen capture — saved locally next to the tradeId, only if a
-    // MultiChartForm for this symbol happens to be open. Best-effort: never blocks the trade flow.
-    // Returns the saved file path (or null if nothing was captured) so callers — the Telegram
-    // close-push, for one — can reuse the same file instead of capturing twice.
-    private async Task<string?> SaveTradeChartSnapshotAsync(string symbol, int tradeId, string tag)
+    // WebView2 form itself — not a screen capture — only if a MultiChartForm for this symbol
+    // happens to be open. Best-effort: never blocks the trade flow. Filename matches
+    // CaptureTradeLogScreenshot's format ({Symbol}_{OptionType}_{timestamp}_{Tag}.png) so all 3
+    // screenshots a trade ever gets (Entry, Close, TradeLog) look consistent. Returns the saved
+    // file path (or null if nothing was captured) so callers can upload/reuse it.
+    private async Task<string?> SaveTradeChartSnapshotAsync(string symbol, string optionType, string tag)
     {
         try
         {
@@ -2097,7 +2096,7 @@ public partial class Form1 : Form
 
             var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
             Directory.CreateDirectory(folder);
-            var fileName = $"{symbol}_{DateTime.Now:yyyyMMdd_HHmmss}_trade{tradeId}_{tag}.png";
+            var fileName = $"{symbol}_{optionType}_{DateTime.Now:yyyyMMdd_HHmmss}_{tag}.png";
             var filePath = Path.Combine(folder, fileName);
             combined.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
             return filePath;
@@ -2110,21 +2109,31 @@ public partial class Form1 : Form
         }
     }
 
-    // Pushes a Telegram photo (the same combined 3-chart snapshot saved locally) with a caption
-    // describing the closed trade — symbol, side, strike, entry/exit, PnL$ and PnL%, duration.
-    // Best-effort, fire-and-forget from the caller: a failed/misconfigured push must never affect
-    // the trade-close flow itself (which has already committed by the time this runs).
+    // Captures the "_Entry" 3-chart snapshot and uploads it to S3 — mirrors the "_Close" path in
+    // CloseTradeRowAsync. Fire-and-forget from RecordEntryAsync, same as every other upload here.
+    private async Task UploadEntryChartSnapshotAsync(string symbol, string optionType, int tradeId, string timeStr)
+    {
+        var path = await SaveTradeChartSnapshotAsync(symbol, optionType, "Entry");
+        if (path != null)
+            await UploadScreenshotAsync(path, symbol, optionType, tradeId, timeStr);
+    }
+
+    // Pushes a Telegram photo (the "_Close" 3-chart snapshot CloseTradeRowAsync already captured
+    // and uploaded — imagePath is null if no Live Chart was open, in which case there's nothing
+    // to attach) with a caption describing the closed trade — symbol, side, strike, entry/exit,
+    // PnL$ and PnL%, duration. Best-effort, fire-and-forget from the caller: a failed/misconfigured
+    // push must never affect the trade-close flow itself (which has already committed by now).
     private async Task SendTradeCloseTelegramPushAsync(
         string symbol, int tradeId, string optionType, string strike, string closeType,
-        decimal entryPrice, decimal exitPrice, decimal pnl, decimal pnlPercent, TimeSpan duration)
+        decimal entryPrice, decimal exitPrice, decimal pnl, decimal pnlPercent, TimeSpan duration,
+        string? imagePath)
     {
         try
         {
+            if (imagePath == null) return; // no Live Chart open for this symbol — nothing to attach
+
             var (botToken, chatId) = TelegramSettingsStore.Load();
             if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
-
-            var imagePath = await SaveTradeChartSnapshotAsync(symbol, tradeId, "close");
-            if (imagePath == null) return; // no Live Chart open for this symbol — nothing to attach
 
             var pnlSign = pnl >= 0 ? "+" : string.Empty;
             var caption =
@@ -2141,24 +2150,6 @@ public partial class Form1 : Form
         {
             // Best-effort — never let a Telegram/network failure affect the already-closed trade.
         }
-    }
-
-    private static string CaptureScreenshot(string symbol, string optionType, string tag)
-    {
-        var folder = Path.Combine(@"C:\Screenshots", DateTime.Now.ToString("yyyyMMdd"));
-        Directory.CreateDirectory(folder);
-
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        var fileName  = $"{symbol}_{optionType}_{timestamp}_{tag}.png";
-        var filePath  = Path.Combine(folder, fileName);
-
-        var captureRect = GetCaptureRect(symbol);
-        using var bmp = new Bitmap(captureRect.Width, captureRect.Height);
-        using var g   = Graphics.FromImage(bmp);
-        g.CopyFromScreen(new Point(captureRect.X, captureRect.Y), Point.Empty, captureRect.Size);
-        bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
-
-        return filePath;
     }
 
     private string CaptureTradeLogScreenshot(string symbol, string optionType)
@@ -2190,34 +2181,6 @@ public partial class Form1 : Form
         combined.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
 
         return filePath;
-    }
-
-    private static Rectangle GetCaptureRect(string symbol)
-    {
-        var coords = ScreenCoordsStore.Load();
-        coords.TryGetValue(symbol.ToUpperInvariant(), out var tc);
-
-        if (tc is not null &&
-            !string.IsNullOrWhiteSpace(tc.Coords1) &&
-            !string.IsNullOrWhiteSpace(tc.Coords2))
-        {
-            var parts1 = tc.Coords1.Split(',');
-            var parts2 = tc.Coords2.Split(',');
-            if (parts1.Length == 2 && parts2.Length == 2 &&
-                int.TryParse(parts1[0].Trim(), out int x1) &&
-                int.TryParse(parts1[1].Trim(), out int y1) &&
-                int.TryParse(parts2[0].Trim(), out int x2) &&
-                int.TryParse(parts2[1].Trim(), out int y2))
-            {
-                int width  = Math.Abs(x2 - x1);
-                int height = Math.Abs(y2 - y1);
-                if (width > 0 && height > 0)
-                    return new Rectangle(Math.Min(x1, x2), Math.Min(y1, y2), width, height);
-            }
-        }
-
-        // Fallback: full primary screen
-        return Screen.PrimaryScreen!.Bounds;
     }
 
     // (Re)builds one row (button + 2 coord textboxes) per symbol currently in the Tickers table,
