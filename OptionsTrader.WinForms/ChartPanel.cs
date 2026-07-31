@@ -31,6 +31,7 @@ public class ChartPanel : Panel
     private int _intervalMinutes; // mutable only for Fifteen_Full, via ToggleIntervalAsync (5m <-> 15m)
     private readonly bool _rthOnly;
     private readonly Label _header;
+    private readonly Label? _tLineHintLabel; // "Potencial CT al Alza/Baja" — Hourly15 only
     private WebView2 _webView = null!;
     private bool _closing;
 
@@ -117,6 +118,22 @@ public class ChartPanel : Panel
 
         Controls.Add(_webView);
         Controls.Add(_header);
+
+        // "Potencial CT al Alza/Baja" hint — 1h panel only, shown as soon as the T-Line finishes
+        // drawing (see CoreWebView2_WebMessageReceived) and cleared when it's deleted.
+        if (mode == ChartPanelMode.Hourly15)
+        {
+            _tLineHintLabel = new Label
+            {
+                Dock      = DockStyle.Bottom,
+                Height    = 18,
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.LimeGreen,
+                BackColor = Color.FromArgb(19, 23, 34),
+                Text      = string.Empty
+            };
+            Controls.Add(_tLineHintLabel);
+        }
 
         _liveFeed.OnNewCandle     += Streamer_OnNewCandle;
         _liveFeed.OnLevelOneTick  += Streamer_OnLevelOneTick;
@@ -269,7 +286,20 @@ public class ChartPanel : Panel
             TLineStore.Clear(_symbol);
             VerticalArrowStore.Clear(_symbol);
             _tLineSignalFired = false;
+            if (_tLineHintLabel != null) _tLineHintLabel.Text = string.Empty;
         }
+    }
+
+    // Sets the "Potencial CT al Alza/Baja" hint right after a T-Line finishes drawing — direction
+    // comes from how the line itself was drawn (technical-analysis convention: a descending line
+    // acts as resistance, so breaking it is a bullish signal; an ascending line acts as support,
+    // so breaking it is bearish):
+    //   drawn top-to-bottom (1st click's price ABOVE the 2nd's) → descending → "al Alza"
+    //   drawn bottom-to-top (1st click's price BELOW the 2nd's) → ascending  → "a la Baja"
+    private void UpdateTLineHint(decimal p1, decimal p2)
+    {
+        if (_tLineHintLabel == null) return;
+        _tLineHintLabel.Text = p1 > p2 ? "Potencial CT al Alza" : "Potencial CT a la Baja";
     }
 
     // Receives T-Line and vertical-arrow events from the 1h panel (window.chrome.webview.
@@ -308,11 +338,13 @@ public class ChartPanel : Panel
                         }
                         TLineStore.Append(_symbol, t1, p1, t2, p2);
                         _tLineSignalFired = false;
+                        UpdateTLineHint(p1, p2);
                     }
                     else
                     {
                         TLineStore.Remove(_symbol, t1, p1, t2, p2);
                         _tLineSignalFired = false;
+                        if (_tLineHintLabel != null) _tLineHintLabel.Text = string.Empty;
                     }
                     break;
                 }
@@ -626,6 +658,7 @@ public class ChartPanel : Panel
                 {
                     var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
                     await _webView.CoreWebView2.ExecuteScriptAsync($"cargarTLines({linesJson});");
+                    UpdateTLineHint(savedLines[0].P1, savedLines[0].P2);
                 }
 
                 var savedArrows = VerticalArrowStore.Load(_symbol);
