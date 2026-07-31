@@ -88,6 +88,15 @@ public sealed class CandleHubServer : IDisposable
         BroadcastLine(json);
     }
 
+    // Relays a WS connect/disconnect/reconnect line (from the hub's own real Schwab connection)
+    // to every connected client, so their Live Charts windows show the same connection history
+    // as the hub's — tagged "type":"wsevent".
+    public void BroadcastWsEvent(string text)
+    {
+        var json = JsonSerializer.Serialize(new { type = "wsevent", text });
+        BroadcastLine(json);
+    }
+
     private void BroadcastLine(string json)
     {
         List<TcpClient> snapshot;
@@ -143,6 +152,7 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
     public event Action<string, CandleData>? OnNewCandle;
     public event Action<string, decimal, DateTime>? OnLevelOneTick;
     public event Action<string>? OnDisconnected;
+    public event Action<string>? OnWsStatusEvent;
 
     // host: "127.0.0.1" (default) for a hub on this same machine, or the hub machine's LAN IP
     // (e.g. "192.168.1.50") to read a hub running on another computer on the network.
@@ -217,12 +227,21 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
-            var symbol = root.GetProperty("symbol").GetString();
-            if (string.IsNullOrEmpty(symbol)) return;
 
             // "type" is absent on messages from hub instances built before this field existed —
             // treat that as "candle" too, so an old hub / new client pairing still works.
             var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : "candle";
+
+            // wsevent carries no symbol/time — a connection status line, not a price update.
+            if (type == "wsevent")
+            {
+                OnWsStatusEvent?.Invoke(root.GetProperty("text").GetString() ?? string.Empty);
+                return;
+            }
+
+            var symbol = root.GetProperty("symbol").GetString();
+            if (string.IsNullOrEmpty(symbol)) return;
+
             var time = DateTimeOffset.FromUnixTimeMilliseconds(root.GetProperty("time").GetInt64()).UtcDateTime;
 
             if (type == "l1")

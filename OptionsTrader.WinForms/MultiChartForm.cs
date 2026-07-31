@@ -25,6 +25,10 @@ public class MultiChartForm : Form
     private ChartPanel? _rthPanel;
     private ChartPanel? _overnightPanel;
 
+    // Kept for LogWebSocketEvent (Form1 forwards WS connect/disconnect/reconnect events here,
+    // since the hub's Schwab connection isn't owned by this window).
+    private TextBox? _crossLog;
+
     public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed)
     {
         _symbol        = symbol;
@@ -442,10 +446,10 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(lblLiveTick);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
-        // Small event log below the charts — only logs Cross-SMA cruce/rebote detections (with
-        // the time they were detected), so the Telegram-push feature can be sanity-checked
-        // against what's actually firing without digging through Telegram itself. Temporary/
-        // diagnostic for now.
+        // Small event log below the charts — logs Cross-SMA cruce/rebote detections (so the
+        // Telegram-push feature can be sanity-checked without digging through Telegram itself)
+        // and, via LogWebSocketEvent, WS connect/disconnect/reconnect events forwarded from
+        // Form1's hub connection. Temporary/diagnostic for now.
         var crossLog = new TextBox
         {
             Dock       = DockStyle.Bottom,
@@ -469,6 +473,7 @@ public class MultiChartForm : Form
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);
+        _crossLog = crossLog;
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
         // subscribing, and disposing them) — not this window.
@@ -488,6 +493,28 @@ public class MultiChartForm : Form
     // Red "Expired!!!" marker on the 1h panel only — fired when a trade auto-closes at 4pm ET
     // because it expires today.
     public Task MarkExpiredOnHourlyChartAsync() => _hourlyPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
+
+    // Forwards an already-timestamped WS connect/disconnect/reconnect line from Form1 (which owns
+    // the actual Schwab streamer connection) into this window's small event log — safe to call
+    // from any thread, since streamer reconnects fire from its own background receive-loop thread.
+    public void LogWebSocketEvent(string line)
+    {
+        if (_crossLog == null || IsDisposed) return;
+        // ReplayWebSocketEvents is called right after construction, before Show() — the window
+        // has no handle yet at that point, so IsHandleCreated must NOT gate this (it used to,
+        // which silently dropped every replayed line). InvokeRequired safely returns false when
+        // there's no handle yet, so this still routes through BeginInvoke once one exists.
+        if (IsHandleCreated && InvokeRequired) { BeginInvoke(() => LogWebSocketEvent(line)); return; }
+        _crossLog.AppendText(line + Environment.NewLine);
+    }
+
+    // Replays every WS event Form1 has buffered so far — the streamer connects once when the
+    // FIRST Live Charts window of the session is opened (before this window even exists), so
+    // without this the "Connected" line would otherwise be lost for every window but that first.
+    public void ReplayWebSocketEvents(IEnumerable<string> lines)
+    {
+        foreach (var line in lines) LogWebSocketEvent(line);
+    }
 
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
     // the same left-to-right order they're shown on screen (1h, 15m RTH, 15m RTH+Overnight), for

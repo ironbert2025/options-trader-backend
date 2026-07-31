@@ -73,6 +73,13 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     // attempt — useful for surfacing a status message in the UI.
     public event Action<string>? OnDisconnected;
 
+    // Fires once the server's LOGIN response confirms the connection is live — both on the very
+    // first ConnectAsync and on every successful reconnect (ReconnectWithBackoffAsync calls
+    // ConnectAsync again, which raises this the same way).
+    public event Action? OnConnected;
+
+    public event Action<string>? OnWsStatusEvent;
+
     public SchwabStreamerClient(
         HttpClient httpClient,
         SchwabAuthService authService,
@@ -140,6 +147,9 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
         {
             await _loginTcs.Task;
         }
+
+        OnConnected?.Invoke();
+        OnWsStatusEvent?.Invoke("Connected to Schwab streamer");
     }
 
     // Seeds the chart with the last `days` TRADING days of 1-minute candles so it isn't empty
@@ -497,6 +507,7 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     private async Task ReconnectWithBackoffAsync()
     {
         OnDisconnected?.Invoke("Streamer disconnected — reconnecting...");
+        OnWsStatusEvent?.Invoke("Streamer disconnected — reconnecting...");
         while (!_stopRequested)
         {
             var delay = ReconnectDelaysMs[Math.Min(_reconnectAttempt, ReconnectDelaysMs.Length - 1)];

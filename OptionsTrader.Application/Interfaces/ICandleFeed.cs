@@ -18,4 +18,10 @@ public interface ICandleFeed
     event Action<string, decimal, DateTime>? OnLevelOneTick;
 
     event Action<string>? OnDisconnected;
+
+    // Fires with a human-readable line for every Schwab WS connect/disconnect/reconnect event,
+    // regardless of whether this feed IS the real Schwab connection (SchwabStreamerClient, the
+    // hub instance) or a relay of it (CandleHubClient, every other instance) — so any instance's
+    // Live Charts windows can show the same connection history, not just the hub's own.
+    event Action<string>? OnWsStatusEvent;
 }
