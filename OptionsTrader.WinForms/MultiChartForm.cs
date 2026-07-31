@@ -335,9 +335,24 @@ public class MultiChartForm : Form
             btnRthTLine.BackColor = SystemColors.Control;
             btnRthHLine.BackColor = SystemColors.Control;
         };
+
+        // Brings every "Live Charts — <Symbol>" window to the front, across ALL running ticker
+        // instances (each is a separate OS process) — not just this one's own windows. Uses raw
+        // Win32 window enumeration (CrossProcessWindowHelper) since a normal BringToFront() can't
+        // reach windows owned by another process.
+        var btnBringAllForward = new Button
+        {
+            Text     = "Traer todas",
+            Location = new Point(0, 30),
+            Size     = new Size(126, 24)
+        };
+        btnBringAllForward.Click += (s, e) =>
+            CrossProcessWindowHelper.BringAllToFront("Live Charts — ");
+
         rthToolsHost.Controls.Add(btnRthTLine);
         rthToolsHost.Controls.Add(btnRthHLine);
         rthToolsHost.Controls.Add(btnRthClear);
+        rthToolsHost.Controls.Add(btnBringAllForward);
         toolbar.Controls.Add(rthToolsHost, 1, 0);
 
         // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the
