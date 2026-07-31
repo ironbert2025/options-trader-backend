@@ -550,7 +550,7 @@ public class ChartPanel : Panel
 
         if (crossed)
         {
-            FireCrossSequenceEvent(period, "Cruce");
+            FireCrossSequenceEvent(period, "Cruce", justClosed.Close, currentSma!.Value);
             AdvanceCrossSequence(period);
             return;
         }
@@ -565,16 +565,19 @@ public class ChartPanel : Panel
                     ? justClosed.Close > currentSma                                             // case 1 mirrored: crossed, rejected back up
                     : (justClosed.Low - currentSma) < BounceProximityRatio * (justClosed.Close - justClosed.Low)); // case 2 mirrored
 
-        if (bounced) FireCrossSequenceEvent(period, "Rebote"); // stays on the same active period
+        if (bounced) FireCrossSequenceEvent(period, "Rebote", justClosed.Close, currentSma!.Value); // stays on the same active period
     }
 
-    private void FireCrossSequenceEvent(int period, string eventLabel)
+    private void FireCrossSequenceEvent(int period, string eventLabel, decimal price, decimal smaValue)
     {
         var direction = _crossUp ? "UP" : "DOWN";
         var colorName = SmaColorNames.TryGetValue(period, out var c) ? c : string.Empty;
         var caption = $"{eventLabel} {direction} SMA {period}({colorName})";
         OnCrossSequenceEvent?.Invoke(caption);
         _ = SendChartToTelegramAsync(caption);
+
+        var direccion = direction == "UP" ? "Alza" : "Baja";
+        EventLogStore.Append(_symbol, "Hora", "CrossSMA", direccion, caption, price, $"SMA{period}={smaValue:F2}");
     }
 
     // Daily-candle bounce off the daily SMA20 — evaluated once per app run, right after the 1h
@@ -619,9 +622,13 @@ public class ChartPanel : Panel
         if (!bouncedDown && !bouncedUp) return;
 
         var direction = bouncedUp ? "al alza" : "a la baja";
-        OnDailyBounceEvent?.Invoke($"Rebote {direction} en Diario");
+        var descripcion = $"Rebote {direction} en Diario";
+        OnDailyBounceEvent?.Invoke(descripcion);
         if (_dailyBounceHintLabel != null)
-            _dailyBounceHintLabel.Text = $"Análisis Diario: Rebote {direction} en Diario";
+            _dailyBounceHintLabel.Text = $"Análisis Diario: {descripcion}";
+
+        var direccion = bouncedUp ? "Alza" : "Baja";
+        EventLogStore.Append(_symbol, "Diario", "DailyBounce", direccion, descripcion, justClosed.Close, $"SMA20={sma20:F2}");
     }
 
     private const int TLineSmaPeriod = 20;
@@ -663,6 +670,10 @@ public class ChartPanel : Panel
         var direction = upBreakout ? "al alza" : "a la baja";
         var caption = $"CT {direction} en Hora — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})";
         OnTLineSignalEvent?.Invoke(caption);
+
+        var direccion = upBreakout ? "Alza" : "Baja";
+        EventLogStore.Append(_symbol, "Hora", "TLineBreakout", direccion, caption, justClosed.Close,
+            $"TLine={tLineValue:F2};SMA{TLineSmaPeriod}={sma20.Value:F2}");
     }
 
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
