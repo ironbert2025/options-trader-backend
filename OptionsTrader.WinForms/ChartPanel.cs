@@ -71,6 +71,17 @@ public class ChartPanel : Panel
     // locally (e.g. to verify the detection logic is firing as expected).
     public event Action<string>? OnCrossSequenceEvent;
 
+    // T-Line + SMA20 breakout signal (Hourly15 panel only, see EvaluateTLineSignal): only one
+    // T-Line is ever allowed to exist for a symbol at a time — enforced in
+    // CoreWebView2_WebMessageReceived — so there's no ambiguity about which line to evaluate
+    // against. Fires once per T-Line, then stays silent until that line is deleted and a new one
+    // drawn (_tLineSignalFired resets in both those cases).
+    private bool _tLineSignalFired;
+
+    // Fires with a human-readable caption when the T-Line+SMA20 breakout signal triggers — the
+    // caller (MultiChartForm) both logs it and pushes the combined 3-chart Telegram snapshot.
+    public event Action<string>? OnTLineSignalEvent;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -257,6 +268,7 @@ public class ChartPanel : Panel
         {
             TLineStore.Clear(_symbol);
             VerticalArrowStore.Clear(_symbol);
+            _tLineSignalFired = false;
         }
     }
 
@@ -281,8 +293,27 @@ public class ChartPanel : Panel
                     var p1 = root.GetProperty("p1").GetDecimal();
                     var t2 = root.GetProperty("t2").GetInt64();
                     var p2 = root.GetProperty("p2").GetDecimal();
-                    if (type == "tline") TLineStore.Append(_symbol, t1, p1, t2, p2);
-                    else TLineStore.Remove(_symbol, t1, p1, t2, p2);
+                    if (type == "tline")
+                    {
+                        // Only 1 T-Line allowed at a time (the breakout signal below needs an
+                        // unambiguous line to evaluate against) — reject a 2nd one, undo it on
+                        // the chart, and tell the user why.
+                        if (TLineStore.Load(_symbol).Count > 0)
+                        {
+                            _ = _webView.CoreWebView2.ExecuteScriptAsync("eliminarUltimaTLine();");
+                            MessageBox.Show(
+                                "Ya existe una T-Line dibujada para este símbolo. Borra la actual (selecciónala y presiona Delete) antes de dibujar una nueva.",
+                                "T-Line ya existe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            break;
+                        }
+                        TLineStore.Append(_symbol, t1, p1, t2, p2);
+                        _tLineSignalFired = false;
+                    }
+                    else
+                    {
+                        TLineStore.Remove(_symbol, t1, p1, t2, p2);
+                        _tLineSignalFired = false;
+                    }
                     break;
                 }
                 case "arrow_add":
@@ -493,6 +524,49 @@ public class ChartPanel : Panel
         var caption = $"{eventLabel} {direction} SMA {period}({colorName})";
         OnCrossSequenceEvent?.Invoke(caption);
         _ = SendChartToTelegramAsync(caption);
+    }
+
+    private const int TLineSmaPeriod = 20;
+
+    // T-Line + SMA20 breakout: fires once (per T-Line — see _tLineSignalFired) when a just-closed
+    // 1h candle opened BELOW the T-Line, crossed above BOTH the T-Line and SMA20 at some point
+    // during the candle (approximated with High, since only OHLC is available for a closed bar),
+    // and closed above both. Automatic — runs for as long as exactly one T-Line is drawn, no
+    // arm/disarm toggle (unlike Cross-SMA).
+    private void EvaluateTLineSignal(CandleData justClosed)
+    {
+        if (_tLineSignalFired) return;
+
+        var lines = TLineStore.Load(_symbol);
+        if (lines.Count == 0) return; // enforced to be 0 or 1, never more
+
+        var (t1, p1, t2, p2) = lines[0];
+        var candleTimeSec = new DateTimeOffset(DateTime.SpecifyKind(justClosed.Time, DateTimeKind.Utc)).ToUnixTimeSeconds();
+        var tLineValue = TLineValueAt(t1, p1, t2, p2, candleTimeSec);
+
+        if (_closedCandles.Count < TLineSmaPeriod) return; // not enough history for SMA20 yet
+        var sma20 = Sma(TLineSmaPeriod, _closedCandles.Count - 1);
+        if (sma20 == null) return;
+
+        var openedBelow  = justClosed.Open < tLineValue;
+        var crossedDuring = justClosed.High > tLineValue && justClosed.High > sma20.Value;
+        var closedAbove  = justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
+
+        if (!(openedBelow && crossedDuring && closedAbove)) return;
+
+        _tLineSignalFired = true;
+        var caption = $"T-Line + SMA{TLineSmaPeriod} breakout — cerró {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})";
+        OnTLineSignalEvent?.Invoke(caption);
+    }
+
+    // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
+    // a trend line is meant to keep projecting forward. Falls back to p1 if the 2 points share
+    // the same time (shouldn't happen — chart.html requires 2 distinct clicks).
+    private static decimal TLineValueAt(long t1, decimal p1, long t2, decimal p2, long atTime)
+    {
+        if (t2 == t1) return p1;
+        var slope = (p2 - p1) / (t2 - t1);
+        return p1 + slope * (atTime - t1);
     }
 
     // Simple moving average of Close over the `period` candles ending at _closedCandles[endIndex].
@@ -711,6 +785,7 @@ public class ChartPanel : Panel
                 {
                     _closedCandles.Add(_liveBucket);
                     EvaluateCrossings(_liveBucket);
+                    EvaluateTLineSignal(_liveBucket);
                 }
 
                 _liveBucketIndex = index;

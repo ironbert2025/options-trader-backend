@@ -468,6 +468,15 @@ public class MultiChartForm : Form
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
+
+            // T-Line + SMA20 breakout — unlike Cross-SMA (which only pushes this panel's own
+            // screenshot), the user wants the combined 3-chart image, same as a trade close.
+            hourlyPanel.OnTLineSignalEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                _ = SendTLineSignalTelegramPushAsync(message);
+            };
         }
 
         Controls.Add(layout);
@@ -514,6 +523,32 @@ public class MultiChartForm : Form
     public void ReplayWebSocketEvents(IEnumerable<string> lines)
     {
         foreach (var line in lines) LogWebSocketEvent(line);
+    }
+
+    // Pushes the combined 3-chart snapshot to Telegram for the T-Line+SMA20 breakout signal —
+    // best-effort, same as every other Telegram push in this app: a failure here must never
+    // affect the chart/detection logic itself.
+    private async Task SendTLineSignalTelegramPushAsync(string caption)
+    {
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null) return;
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_TLineSignal_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+        }
+        catch
+        {
+            // Best-effort — never let a Telegram failure affect the chart/detection logic.
+        }
     }
 
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in

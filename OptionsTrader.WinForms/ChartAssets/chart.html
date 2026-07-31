@@ -718,6 +718,13 @@
     return tLineArmed;
   }
 
+  // Only 1 T-Line is allowed at a time (ChartPanel.cs enforces this and calls this to undo a
+  // 2nd one just drawn, after warning the user with a MessageBox).
+  function eliminarUltimaTLine() {
+    tLinePrimitive._lines.pop();
+    forceRepaint();
+  }
+
   // ---- H-Line tool: red line from the click point to the right edge of the chart ----
 
   class HLinePrimitive {
