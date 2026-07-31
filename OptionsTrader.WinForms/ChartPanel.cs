@@ -200,7 +200,7 @@ public class ChartPanel : Panel
     public async Task<bool> ToggleDzSzModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarDZSZ();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
         return result == "true";
     }
 
@@ -209,7 +209,7 @@ public class ChartPanel : Panel
     public async Task<bool> ToggleRectModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarRect();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
         return result == "true";
     }
 
@@ -219,7 +219,7 @@ public class ChartPanel : Panel
     public async Task<bool> ToggleRectGrisModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarRectGris();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleGrayRect();");
         return result == "true";
     }
 
@@ -228,7 +228,7 @@ public class ChartPanel : Panel
     public async Task<bool> ToggleTLineModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarTLine();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleTLine();");
         return result == "true";
     }
 
@@ -237,7 +237,7 @@ public class ChartPanel : Panel
     public async Task<bool> ToggleHLineModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarHLine();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleHLine();");
         return result == "true";
     }
 
@@ -247,7 +247,7 @@ public class ChartPanel : Panel
     public async Task<bool> ToggleArrowModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarArrow();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleArrow();");
         return result == "true";
     }
 
@@ -256,14 +256,14 @@ public class ChartPanel : Panel
     public async Task<bool> TogglePisoModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarPiso();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleFloorLabel();");
         return result == "true";
     }
 
     public async Task<bool> ToggleTechoModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarTecho();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleCeilingLabel();");
         return result == "true";
     }
 
@@ -272,7 +272,7 @@ public class ChartPanel : Panel
     public async Task MarkExpiredAsync()
     {
         if (_webView.CoreWebView2 == null) return;
-        await _webView.CoreWebView2.ExecuteScriptAsync("marcarExpirado();");
+        await _webView.CoreWebView2.ExecuteScriptAsync("markExpired();");
     }
 
     // Toggles the 1h panel's vertical arrow tools on/off. While on, every click places a
@@ -282,14 +282,14 @@ public class ChartPanel : Panel
     public async Task<bool> ToggleFlechaVerdeModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarFlechaVerde();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleGreenArrow();");
         return result == "true";
     }
 
     public async Task<bool> ToggleFlechaRojaModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarFlechaRoja();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleRedArrow();");
         return result == "true";
     }
 
@@ -299,7 +299,7 @@ public class ChartPanel : Panel
     public async Task ClearDrawingsAsync()
     {
         if (_webView.CoreWebView2 == null) return;
-        await _webView.CoreWebView2.ExecuteScriptAsync("limpiarDibujos();");
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
         if (_mode == ChartPanelMode.Hourly15)
         {
             TLineStore.Clear(_symbol);
@@ -349,7 +349,7 @@ public class ChartPanel : Panel
                         // the chart, and tell the user why.
                         if (TLineStore.Load(_symbol).Count > 0)
                         {
-                            _ = _webView.CoreWebView2.ExecuteScriptAsync("eliminarUltimaTLine();");
+                            _ = _webView.CoreWebView2.ExecuteScriptAsync("removeLastTLine();");
                             MessageBox.Show(
                                 "Ya existe una T-Line dibujada para este símbolo. Borra la actual (selecciónala y presiona Delete) antes de dibujar una nueva.",
                                 "T-Line ya existe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -409,7 +409,7 @@ public class ChartPanel : Panel
             var aggregated = CandleAggregation.AggregateToInterval(_rawHistory, _intervalMinutes, _rthOnly);
             if (aggregated.Count > 0)
             {
-                await RunScriptAsync("cargarHistorial", aggregated);
+                await RunScriptAsync("loadHistory", aggregated);
                 var last = aggregated[^1];
                 _liveAnchor      = CandleAggregation.BucketAnchor(new[] { last }, _rthOnly);
                 _liveBucketIndex = CandleAggregation.BucketIndex(last.Time, _liveAnchor, _intervalMinutes);
@@ -422,14 +422,14 @@ public class ChartPanel : Panel
 
     // Toggles the 1h panel between Daily and Hourly candles. All the aggregation (grouping the
     // already-loaded hourly history into one bar per day) and SMA recomputation happens entirely
-    // in JS (chart.html's activarDaily) off the same data already on the chart — no new fetch or
+    // in JS (chart.html's toggleDaily) off the same data already on the chart — no new fetch or
     // re-seed needed here, unlike ToggleIntervalAsync above. Drawings (T-Line, arrows, etc.) are
     // untouched since they're anchored to real timestamps valid in either view. Returns true if
     // now showing Daily candles.
     public async Task<bool> ToggleDailyModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("activarDaily();");
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleDaily();");
         return result == "true";
     }
 
@@ -576,8 +576,8 @@ public class ChartPanel : Panel
         OnCrossSequenceEvent?.Invoke(caption);
         _ = SendChartToTelegramAsync(caption);
 
-        var direccion = direction == "UP" ? "Alza" : "Baja";
-        EventLogStore.Append(_symbol, "Hora", "CrossSMA", direccion, caption, price, $"SMA{period}={smaValue:F2}");
+        var eventDirection = direction == "UP" ? "Alza" : "Baja";
+        EventLogStore.Append(_symbol, "Hora", "CrossSMA", eventDirection, caption, price, $"SMA{period}={smaValue:F2}");
     }
 
     // Daily-candle bounce off the daily SMA20 — evaluated once per app run, right after the 1h
@@ -622,13 +622,13 @@ public class ChartPanel : Panel
         if (!bouncedDown && !bouncedUp) return;
 
         var direction = bouncedUp ? "al alza" : "a la baja";
-        var descripcion = $"Rebote {direction} en Diario";
-        OnDailyBounceEvent?.Invoke(descripcion);
+        var description = $"Rebote {direction} en Diario";
+        OnDailyBounceEvent?.Invoke(description);
         if (_dailyBounceHintLabel != null)
-            _dailyBounceHintLabel.Text = $"Análisis Diario: {descripcion}";
+            _dailyBounceHintLabel.Text = $"Análisis Diario: {description}";
 
-        var direccion = bouncedUp ? "Alza" : "Baja";
-        EventLogStore.Append(_symbol, "Diario", "DailyBounce", direccion, descripcion, justClosed.Close, $"SMA20={sma20:F2}");
+        var eventDirection = bouncedUp ? "Alza" : "Baja";
+        EventLogStore.Append(_symbol, "Diario", "DailyBounce", eventDirection, description, justClosed.Close, $"SMA20={sma20:F2}");
     }
 
     private const int TLineSmaPeriod = 20;
@@ -671,8 +671,8 @@ public class ChartPanel : Panel
         var caption = $"CT {direction} en Hora — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})";
         OnTLineSignalEvent?.Invoke(caption);
 
-        var direccion = upBreakout ? "Alza" : "Baja";
-        EventLogStore.Append(_symbol, "Hora", "TLineBreakout", direccion, caption, justClosed.Close,
+        var eventDirection = upBreakout ? "Alza" : "Baja";
+        EventLogStore.Append(_symbol, "Hora", "TLineBreakout", eventDirection, caption, justClosed.Close,
             $"TLine={tLineValue:F2};SMA{TLineSmaPeriod}={sma20.Value:F2}");
     }
 
@@ -723,8 +723,8 @@ public class ChartPanel : Panel
             // SMA 20/40/100/200 overlay — only on the 1h panel for now.
             if (_mode == ChartPanelMode.Hourly15)
             {
-                await _webView.CoreWebView2.ExecuteScriptAsync("configurarSMAs([20,40,100,200]);");
-                await _webView.CoreWebView2.ExecuteScriptAsync("configurarBollinger(20, 2);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
                 // T-Line + vertical-arrow persistence (per symbol) — reload whatever was drawn in
                 // a previous session so it reappears at the same point, and listen for new/
@@ -735,7 +735,7 @@ public class ChartPanel : Panel
                 if (savedLines.Count > 0)
                 {
                     var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
-                    await _webView.CoreWebView2.ExecuteScriptAsync($"cargarTLines({linesJson});");
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"loadTLines({linesJson});");
                     UpdateTLineHint(savedLines[0].P1, savedLines[0].P2);
                 }
 
@@ -743,7 +743,7 @@ public class ChartPanel : Panel
                 if (savedArrows.Count > 0)
                 {
                     var arrowsJson = JsonSerializer.Serialize(savedArrows.Select(a => new { time = a.Time, price = a.Price, up = a.Up }));
-                    await _webView.CoreWebView2.ExecuteScriptAsync($"cargarFlechas({arrowsJson});");
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"loadArrows({arrowsJson});");
                 }
             }
 
@@ -751,7 +751,7 @@ public class ChartPanel : Panel
             // just the 15m RTH panel's other extras (pre-market line).
             if (_mode == ChartPanelMode.Fifteen_RTH)
             {
-                await _webView.CoreWebView2.ExecuteScriptAsync("configurarBollinger(20, 2);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
                 // Pre-market blue line: only if the chart is opened before 9:30 AM ET that day —
                 // starts at the moment of opening and tracks live price until the market opens,
@@ -762,19 +762,19 @@ public class ChartPanel : Panel
                 if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0))
                 {
                     var startTime = FakeUtcEpochSeconds(nowUtc);
-                    await _webView.CoreWebView2.ExecuteScriptAsync($"iniciarPreMarketLine({startTime});");
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({startTime});");
                 }
             }
 
             // Gray shading for overnight/weekend gaps — only on the 15m RTH+Overnight panel.
             if (_mode == ChartPanelMode.Fifteen_Full)
-                await _webView.CoreWebView2.ExecuteScriptAsync("configurarOvernightBands();");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureOvernightBands();");
 
             // Default zoom on open: 1h panel shows the last 7 days, the two 15m panels show the
             // last 3 — full history is still loaded underneath for SMA/Bollinger, this only
             // limits the initial visible window (user can still scroll/zoom out manually).
             var visibleDays = _mode == ChartPanelMode.Hourly15 ? 7 : 3;
-            await _webView.CoreWebView2.ExecuteScriptAsync($"configurarDiasVisibles({visibleDays});");
+            await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
 
             // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
             // 1h panel shows the full 10 days; the two 15m panels show the last 3 days.
@@ -807,7 +807,7 @@ public class ChartPanel : Panel
 
                 if (aggregated.Count > 0)
                 {
-                    await RunScriptAsync("cargarHistorial", aggregated);
+                    await RunScriptAsync("loadHistory", aggregated);
                     // Seed the live aggregator with the last historical bucket so the first live
                     // tick extends it correctly instead of starting a spurious new one.
                     var last = aggregated[^1];
@@ -860,7 +860,7 @@ public class ChartPanel : Panel
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
         {
             // Pre-market tick on the 15m RTH panel — doesn't form a candle, but feeds the blue
-            // pre-market line (if iniciarPreMarketLine was called when this panel opened). Once
+            // pre-market line (if startPreMarketLine was called when this panel opened). Once
             // 9:30 AM ET hits this branch stops firing for that reason, which is what freezes the
             // line in place with no extra "freeze" logic needed.
             if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
@@ -870,7 +870,7 @@ public class ChartPanel : Panel
                 {
                     if (_webView.CoreWebView2 == null) return;
                     await _webView.CoreWebView2.ExecuteScriptAsync(
-                        $"actualizarPreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)});");
+                        $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)});");
                 });
             }
             return; // outside this panel's session — ignore the tick entirely
@@ -922,7 +922,7 @@ public class ChartPanel : Panel
         }
 
         var toSend = _liveBucket;
-        BeginInvoke(async () => await RunScriptAsync("actualizarUltimaVela", toSend));
+        BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
     }
 
     // Real-time last-price update (LEVEL_ONE_EQUITIES, much higher frequency than CHART_EQUITY's
@@ -961,7 +961,7 @@ public class ChartPanel : Panel
         _liveBucket.Close = price;
 
         var toSend = _liveBucket;
-        BeginInvoke(async () => await RunScriptAsync("actualizarUltimaVela", toSend));
+        BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
     }
 
     // Whether the header currently shows the "disconnected" message — cleared the moment real
@@ -988,7 +988,7 @@ public class ChartPanel : Panel
     }
 
     // Serializes the payload as JSON and calls the given JS function with it — used for both
-    // cargarHistorial(velas[]) and actualizarUltimaVela(vela).
+    // loadHistory(velas[]) and updateLastCandle(vela).
     private async Task RunScriptAsync(string jsFunction, object payload)
     {
         // With the shared streamer, ticks for this panel's symbol can start arriving before this

@@ -62,8 +62,8 @@ Schwab's `pricehistory` (REST, historial) solo devuelve velas de 1 minuto — `C
 
 ## 6. Indicadores
 
-- **SMA 20/40/100/200** — panel 1h, calculadas en JS (`configurarSMAs`). Sin marcadores de hover (`crosshairMarkerVisible: false`).
-- **Bollinger Bands (20, 2 std devs)** — panel 15m RTH (`configurarBollinger`).
+- **SMA 20/40/100/200** — panel 1h, calculadas en JS (`configureSmas`). Sin marcadores de hover (`crosshairMarkerVisible: false`).
+- **Bollinger Bands (20, 2 std devs)** — panel 1h y 15m RTH (`configureBollinger`).
 - **Monitores Cross-SMA** — panel 1h, 8 toggles (↑/↓ × 20/40/100/200). Al armarse, cada cruce genuino de una vela cerrada dispara un push a Telegram con el chart (`SendChartToTelegramAsync`).
 
 ## 7. Herramientas de dibujo
@@ -87,7 +87,7 @@ Todas implementadas como *Series Primitives* de Lightweight Charts v4 en `chart.
 
 ## 8. Línea azul de pre-market (panel 15m RTH)
 
-Al abrir "Live Chart" **antes de las 9:30 AM ET**, arranca una línea azul en el momento del click, siguiendo el precio en vivo (`iniciarPreMarketLine` / `actualizarPreMarketLine` en `chart.html`) hasta que el mercado abre — ahí C# simplemente deja de mandar actualizaciones, así que se congela sola, sin lógica extra de "freeze". **No se persiste a disco** — cerrar y reabrir el chart (ese día o al siguiente) reinicia todo el proceso desde cero. Si se abre después de las 9:30, no aparece nada.
+Al abrir "Live Chart" **antes de las 9:30 AM ET**, arranca una línea azul en el momento del click, siguiendo el precio en vivo (`startPreMarketLine` / `updatePreMarketLine` en `chart.html`) hasta que el mercado abre — ahí C# simplemente deja de mandar actualizaciones, así que se congela sola, sin lógica extra de "freeze". **No se persiste a disco** — cerrar y reabrir el chart (ese día o al siguiente) reinicia todo el proceso desde cero. Si se abre después de las 9:30, no aparece nada.
 
 ## 9. Snapshot local de los 3 charts por trade
 

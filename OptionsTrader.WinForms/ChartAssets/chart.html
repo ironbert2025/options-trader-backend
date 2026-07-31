@@ -63,12 +63,12 @@
     chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
   });
 
-  // ---- Default visible time window (optional — set via configurarDiasVisibles) ----
+  // ---- Default visible time window (optional — set via configureVisibleDays) ----
   // Historical data is always loaded in full (SMA/Bollinger need the full lookback), but the
   // chart's initial zoom only shows the most recent N calendar days by default — the user can
   // still scroll/zoom out manually to see more.
-  let diasVisibles = null;
-  function configurarDiasVisibles(dias) { diasVisibles = dias; }
+  let visibleDays = null;
+  function configureVisibleDays(days) { visibleDays = days; }
 
   // Tracks whether the user has manually changed the visible range (pan OR zoom) since we last
   // set it ourselves — once true, we stop touching their view entirely, forever (for this chart
@@ -83,12 +83,12 @@
     if (!matches) userHasInteracted = true;
   });
 
-  function aplicarRangoVisible() {
+  function applyVisibleRange() {
     const series = displaySeries();
-    if (!diasVisibles || series.length === 0) return;
+    if (!visibleDays || series.length === 0) return;
     const days = [...new Set(series.map(c => dayStartOf(c.time)))].sort((a, b) => a - b);
     if (days.length === 0) return;
-    const cutoffIdx = Math.max(0, days.length - diasVisibles);
+    const cutoffIdx = Math.max(0, days.length - visibleDays);
 
     // setVisibleRange is an EXACT range — it overrides timeScale.rightOffset's usual empty-space
     // margin, so the last candle would sit flush against the edge. Pad "to" by ~3 bars' worth of
@@ -107,13 +107,13 @@
 
   // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
   // the user hasn't manually panned/zoomed since the last time we set it — see userHasInteracted.
-  function reaplicarRangoVisibleSiEnVivo() {
-    if (!diasVisibles || userHasInteracted) return;
-    aplicarRangoVisible();
+  function reapplyVisibleRangeIfLive() {
+    if (!visibleDays || userHasInteracted) return;
+    applyVisibleRange();
   }
 
   // ---- DZ/SZ (Demand Zone / Supply Zone) partial lines ----
-  // activarDZSZ() arms the next 2 clicks: first click -> green line (Demand Zone) from the click
+  // toggleDzSz() arms the next 2 clicks: first click -> green line (Demand Zone) from the click
   // point to the right edge, second click -> red line (Supply Zone), same. The price value shows
   // on the right axis (no text label). createPriceLine always spans the FULL width, so it's only
   // used here for the axis label (lineVisible:false); the visible line segment itself is drawn by
@@ -182,7 +182,7 @@
 
   // Toggle: one click on the button turns drawing mode ON — every 2 clicks on the chart from then
   // on draws a new demand+supply pair, forever, until the button is pressed again to turn it OFF.
-  function activarDZSZ() {
+  function toggleDzSz() {
     if (!dzSzAttached) { candleSeries.attachPrimitive(zoneLinesPrimitive); dzSzAttached = true; }
     dzSzArmed = !dzSzArmed;
     dzSzNextIsSupply = false;
@@ -240,7 +240,7 @@
 
   // Same toggle pattern as DZ/SZ: one click arms it, every 2 chart clicks draws a new rectangle,
   // forever, until pressed again to disarm.
-  function activarRect() {
+  function toggleRect() {
     if (!rectAttached) { candleSeries.attachPrimitive(rectanglesPrimitive); rectAttached = true; }
     rectArmed = !rectArmed;
     rectPending = null;
@@ -299,7 +299,7 @@
   let grayRectArmed = false;
   let grayRectPending = null; // { time, price } of the first click of the current rectangle
 
-  function activarRectGris() {
+  function toggleGrayRect() {
     if (!grayRectAttached) { candleSeries.attachPrimitive(grayRectPrimitive); grayRectAttached = true; }
     grayRectArmed = !grayRectArmed;
     grayRectPending = null;
@@ -400,7 +400,7 @@
     }
   });
 
-  function limpiarDibujos() {
+  function clearDrawings() {
     zoneLinesPrimitive._segments = [];
     dzSzAxisLabels.forEach(l => candleSeries.removePriceLine(l));
     dzSzAxisLabels.length = 0;
@@ -711,7 +711,7 @@
   let tLineArmed = false;
   let tLinePending = null; // { time, price } of the first click of the current segment
 
-  function activarTLine() {
+  function toggleTLine() {
     if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }
     tLineArmed = !tLineArmed;
     tLinePending = null;
@@ -720,7 +720,7 @@
 
   // Only 1 T-Line is allowed at a time (ChartPanel.cs enforces this and calls this to undo a
   // 2nd one just drawn, after warning the user with a MessageBox).
-  function eliminarUltimaTLine() {
+  function removeLastTLine() {
     tLinePrimitive._lines.pop();
     forceRepaint();
   }
@@ -764,7 +764,7 @@
   let hLineAttached = false;
   let hLineArmed = false;
 
-  function activarHLine() {
+  function toggleHLine() {
     if (!hLineAttached) { candleSeries.attachPrimitive(hLinePrimitive); hLineAttached = true; }
     hLineArmed = !hLineArmed;
     return hLineArmed;
@@ -773,7 +773,7 @@
   // ---- Pre-market line (15m RTH panel only): blue line from the moment the chart was opened
   // (only if before 9:30 AM ET) to the right edge, following the live price tick by tick until
   // the market opens at 9:30 — after that C# simply stops sending updates, so it freezes in place
-  // on its own. Not persisted anywhere; a fresh iniciarPreMarketLine() call replaces it entirely. ----
+  // on its own. Not persisted anywhere; a fresh startPreMarketLine() call replaces it entirely. ----
 
   class PreMarketLinePrimitive {
     constructor() { this._startTime = null; this._price = null; this._chart = null; }
@@ -816,7 +816,7 @@
   let preMarketLineAttached = false;
 
   // Called once, right when the chart opens, only if it's before 9:30 AM ET that day.
-  function iniciarPreMarketLine(startTime) {
+  function startPreMarketLine(startTime) {
     if (!preMarketLineAttached) { candleSeries.attachPrimitive(preMarketLinePrimitive); preMarketLineAttached = true; }
     preMarketLinePrimitive._startTime = startTime;
     preMarketLinePrimitive._price = null;
@@ -825,8 +825,8 @@
 
   // Called on every pre-market tick until 9:30 AM ET; C# stops calling this once the market
   // opens, which is what makes the line freeze in place with no extra logic needed here.
-  function actualizarPreMarketLine(price) {
-    if (preMarketLinePrimitive._startTime == null) return; // iniciarPreMarketLine wasn't called this session
+  function updatePreMarketLine(price) {
+    if (preMarketLinePrimitive._startTime == null) return; // startPreMarketLine wasn't called this session
     preMarketLinePrimitive._price = price;
     forceRepaint();
   }
@@ -893,7 +893,7 @@
   let arrowArmed = false;
   let arrowPending = null; // { time, price } of the first click of the current arrow
 
-  function activarArrow() {
+  function toggleArrow() {
     if (!arrowAttached) { candleSeries.attachPrimitive(arrowPrimitive); arrowAttached = true; }
     arrowArmed = !arrowArmed;
     arrowPending = null;
@@ -973,13 +973,13 @@
   let greenArrowArmed = false;
   let redArrowArmed = false;
 
-  function activarFlechaVerde() {
+  function toggleGreenArrow() {
     if (!verticalArrowAttached) { candleSeries.attachPrimitive(verticalArrowPrimitive); verticalArrowAttached = true; }
     greenArrowArmed = !greenArrowArmed;
     return greenArrowArmed;
   }
 
-  function activarFlechaRoja() {
+  function toggleRedArrow() {
     if (!verticalArrowAttached) { candleSeries.attachPrimitive(verticalArrowPrimitive); verticalArrowAttached = true; }
     redArrowArmed = !redArrowArmed;
     return redArrowArmed;
@@ -1097,13 +1097,13 @@
   let pisoArmed = false;
   let techoArmed = false;
 
-  function activarPiso() {
+  function toggleFloorLabel() {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     pisoArmed = !pisoArmed;
     return pisoArmed;
   }
 
-  function activarTecho() {
+  function toggleCeilingLabel() {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     techoArmed = !techoArmed;
     return techoArmed;
@@ -1111,7 +1111,7 @@
 
   // Programmatic (not click-driven) red "Expired!!!" marker — placed at the most recent candle's
   // time/price, triggered from C# when a trade auto-closes at 4pm ET because it expired today.
-  function marcarExpirado() {
+  function markExpired() {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     if (allCandles.length === 0) return false;
     const last = allCandles[allCandles.length - 1];
@@ -1120,7 +1120,7 @@
     return true;
   }
 
-  // ---- SMA overlay (optional — only enabled on panels that call configurarSMAs) ----
+  // ---- SMA overlay (optional — only enabled on panels that call configureSmas) ----
 
   let allCandles = [];           // mirrors what's on the candle series, kept sorted by time
   let smaSeries = {};            // period -> LineSeries
@@ -1129,8 +1129,8 @@
   const smaColors = { 20: '#f5a623', 40: '#ef5350', 100: '#26a69a', 200: '#a259ff' };
   const smaWidths = { 20: 1, 40: 1, 100: 2, 200: 2 };
 
-  function configurarSMAs(periodos) {
-    periodos.forEach(p => {
+  function configureSmas(periods) {
+    periods.forEach(p => {
       if (!smaSeries[p]) {
         smaSeries[p] = chart.addLineSeries({
           color: smaColors[p] || '#888888',
@@ -1141,11 +1141,11 @@
         });
       }
     });
-    smaPeriods = periodos;
-    recalcularSMAs();
+    smaPeriods = periods;
+    recalculateSmas();
   }
 
-  function recalcularSMAs() {
+  function recalculateSmas() {
     const source = displaySeries();
     smaPeriods.forEach(p => {
       if (source.length < p) { smaSeries[p].setData([]); return; }
@@ -1160,15 +1160,15 @@
     });
   }
 
-  function upsertCandle(vela) {
-    const idx = allCandles.findIndex(c => c.time === vela.time);
-    if (idx >= 0) allCandles[idx] = vela;
-    else allCandles.push(vela);
+  function upsertCandle(candle) {
+    const idx = allCandles.findIndex(c => c.time === candle.time);
+    if (idx >= 0) allCandles[idx] = candle;
+    else allCandles.push(candle);
   }
 
-  // ---- Daily view toggle (1h panel only, via activarDaily) — aggregates the full hourly
+  // ---- Daily view toggle (1h panel only, via toggleDaily) — aggregates the full hourly
   // history (allCandles, always kept as the true source) into one bar per ET calendar day.
-  // recalcularSMAs/aplicarRangoVisible/candle rendering all read through displaySeries() so
+  // recalculateSmas/applyVisibleRange/candle rendering all read through displaySeries() so
   // switching modes doesn't need its own separate code path for each. ----
   let dailyMode = false;
 
@@ -1201,23 +1201,23 @@
   // of persisted hourly history; H1 goes back to plain hourly bars (last 7 days by default).
   // Drawings (T-Line, arrows, etc.) aren't touched — they're anchored to real timestamps, which
   // stay valid regardless of which series is currently rendered.
-  function activarDaily() {
+  function toggleDaily() {
     dailyMode = !dailyMode;
-    diasVisibles = dailyMode ? 20 : 7;
+    visibleDays = dailyMode ? 20 : 7;
     userHasInteracted = false; // each mode gets its own fresh default view, not the other's manual pan/zoom
     renderCandles();
-    aplicarRangoVisible();
-    recalcularSMAs();
+    applyVisibleRange();
+    recalculateSmas();
     return dailyMode;
   }
 
-  // ---- Bollinger Bands overlay (optional — only enabled on panels that call configurarBollinger) ----
+  // ---- Bollinger Bands overlay (optional — only enabled on panels that call configureBollinger) ----
 
   let bollingerConfig = null; // { period, mult }
   let bollingerSeries = null; // { upper, middle, lower }
 
-  function configurarBollinger(periodo, desviaciones) {
-    bollingerConfig = { period: periodo, mult: desviaciones };
+  function configureBollinger(period, deviations) {
+    bollingerConfig = { period: period, mult: deviations };
     if (!bollingerSeries) {
       const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
       bollingerSeries = {
@@ -1226,10 +1226,10 @@
         lower:  chart.addLineSeries({ ...opts, color: '#787b86' }),
       };
     }
-    recalcularBollinger();
+    recalculateBollinger();
   }
 
-  function recalcularBollinger() {
+  function recalculateBollinger() {
     if (!bollingerConfig || !bollingerSeries) return;
     const { period: p, mult } = bollingerConfig;
     if (allCandles.length < p) {
@@ -1256,7 +1256,7 @@
     bollingerSeries.lower.setData(lowerData);
   }
 
-  // ---- Overnight shading (optional — only enabled on panels that call configurarOvernightBands) ----
+  // ---- Overnight shading (optional — only enabled on panels that call configureOvernightBands) ----
   // Draws a gray rectangle behind the candles for each gap between one day's RTH close (4:00 PM
   // ET) and the next available day's RTH open (9:30 AM ET) — highlights overnight/weekend gaps,
   // like the reference screenshot. Uses the Series Primitives API (custom canvas overlay), since
@@ -1302,10 +1302,10 @@
 
   const overnightPrimitive = new OvernightBandsPrimitive();
 
-  function configurarOvernightBands() {
+  function configureOvernightBands() {
     overnightBandsEnabled = true;
     candleSeries.attachPrimitive(overnightPrimitive);
-    recalcularOvernightBands();
+    recalculateOvernightBands();
   }
 
   // Real current time, converted to the same "ET digits disguised as UTC" seconds scheme the
@@ -1353,7 +1353,7 @@
   // Shades every stretch where the ACTUAL candles fall outside RTH hours (9:30 AM-4:00 PM ET) —
   // driven directly by real candle timestamps rather than inferred from a "days present" list,
   // so it can't accidentally shade a day that's entirely within RTH due to a day-boundary mixup.
-  function recalcularOvernightBands() {
+  function recalculateOvernightBands() {
     if (!overnightBandsEnabled || allCandles.length === 0) return;
 
     const bands = [];
@@ -1389,56 +1389,56 @@
   // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
 
   // Seeds T-Line drawings persisted from a previous session (1h panel only — see TLineStore.cs).
-  function cargarTLines(lines) {
+  function loadTLines(lines) {
     if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }
     tLinePrimitive._lines = (lines || []).map(l => ({ t1: l.t1, p1: l.p1, t2: l.t2, p2: l.p2 }));
     forceRepaint();
   }
 
   // Seeds vertical arrows persisted from a previous session (1h panel only — see VerticalArrowStore.cs).
-  function cargarFlechas(arrows) {
+  function loadArrows(arrows) {
     if (!verticalArrowAttached) { candleSeries.attachPrimitive(verticalArrowPrimitive); verticalArrowAttached = true; }
     verticalArrowPrimitive._arrows = (arrows || []).map(a => ({ time: a.time, price: a.price, up: a.up, selected: false }));
     forceRepaint();
   }
 
   // Replaces the whole dataset (used once at startup to seed historical candles).
-  function cargarHistorial(velas) {
-    allCandles = velas.slice().sort((a, b) => a.time - b.time);
+  function loadHistory(candles) {
+    allCandles = candles.slice().sort((a, b) => a.time - b.time);
     renderCandles();
-    if (diasVisibles) aplicarRangoVisible(); else chart.timeScale().fitContent();
-    recalcularSMAs();
-    recalcularBollinger();
-    recalcularOvernightBands();
+    if (visibleDays) applyVisibleRange(); else chart.timeScale().fitContent();
+    recalculateSmas();
+    recalculateBollinger();
+    recalculateOvernightBands();
   }
 
   // Updates the still-forming candle (same Time as the last one) without redrawing everything.
   // In Daily mode there's no single "last bar" to hand to candleSeries.update() — the live
   // hourly tick just extends whichever day it falls in, so re-render the whole (cheap, ~200-bar)
   // daily series instead.
-  function actualizarUltimaVela(vela) {
-    upsertCandle(vela);
-    if (dailyMode) renderCandles(); else candleSeries.update(vela);
-    recalcularSMAs();
-    recalcularBollinger();
-    recalcularOvernightBands();
+  function updateLastCandle(candle) {
+    upsertCandle(candle);
+    if (dailyMode) renderCandles(); else candleSeries.update(candle);
+    recalculateSmas();
+    recalculateBollinger();
+    recalculateOvernightBands();
     // series.update()/setData() can auto-scroll the time scale to keep following the latest bar,
     // which eats into the right-edge margin set at load time — reapply it on every live tick so
     // it sticks, but only while the user is actually following the live edge (see
-    // reaplicarRangoVisibleSiEnVivo): otherwise a manual pan to the left would get overridden by
+    // reapplyVisibleRangeIfLive): otherwise a manual pan to the left would get overridden by
     // the very next tick.
-    reaplicarRangoVisibleSiEnVivo();
+    reapplyVisibleRangeIfLive();
   }
 
   // A new candle period started — same call as update; Lightweight Charts appends automatically
   // when the Time is newer than the last point.
-  function agregarVelaCompleta(vela) {
-    upsertCandle(vela);
-    if (dailyMode) renderCandles(); else candleSeries.update(vela);
-    recalcularSMAs();
-    recalcularBollinger();
-    recalcularOvernightBands();
-    reaplicarRangoVisibleSiEnVivo();
+  function addFullCandle(candle) {
+    upsertCandle(candle);
+    if (dailyMode) renderCandles(); else candleSeries.update(candle);
+    recalculateSmas();
+    recalculateBollinger();
+    recalculateOvernightBands();
+    reapplyVisibleRangeIfLive();
   }
 </script>
 </body>

@@ -9,10 +9,10 @@ internal static class EventLogStore
 {
     private const string OutputFolder = @"C:\OptionsData\EventLog";
     private static readonly string FilePath = Path.Combine(OutputFolder, "events_log.csv");
-    private const string Header = "Fecha,Hora,Symbolo,Timeframe,EventType,Direccion,Descripcion,Precio,Referencia";
+    private const string Header = "Date,Time,Symbol,Timeframe,EventType,Direction,Description,Price,Reference";
 
-    public static void Append(string symbol, string timeframe, string eventType, string direccion,
-        string descripcion, decimal precio, string referencia = "")
+    public static void Append(string symbol, string timeframe, string eventType, string direction,
+        string description, decimal price, string reference = "")
     {
         Directory.CreateDirectory(OutputFolder);
         var now = DateTime.Now;
@@ -22,10 +22,10 @@ internal static class EventLogStore
             Csv(symbol),
             Csv(timeframe),
             Csv(eventType),
-            Csv(direccion),
-            Csv(descripcion),
-            precio.ToString("F2"),
-            Csv(referencia));
+            Csv(direction),
+            Csv(description),
+            price.ToString("F2"),
+            Csv(reference));
 
         WithRetry(() =>
         {
@@ -37,7 +37,7 @@ internal static class EventLogStore
         });
     }
 
-    // Wraps a field in quotes only if it needs it — Descripcion/Referencia are built from fixed
+    // Wraps a field in quotes only if it needs it — Description/Reference are built from fixed
     // templates that never contain a raw comma today, but this stays safe if that changes.
     private static string Csv(string value) =>
         value.Contains(',') || value.Contains('"')

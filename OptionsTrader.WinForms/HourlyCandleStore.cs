@@ -8,7 +8,7 @@ namespace OptionsTrader.WinForms;
 // 10 days per fetch, nowhere near the 200 candles SMA 200 needs. Each session's fetch gets merged
 // into whatever was already saved, so the file grows by roughly one trading day per session.
 //
-// Also backs the 1h panel's Daily view (activarDaily in chart.html), which aggregates this same
+// Also backs the 1h panel's Daily view (toggleDaily in chart.html), which aggregates this same
 // hourly history into one bar per day — needs up to ~200 TRADING days of hourly candles (not 200
 // candles) to have 200 daily bars available, i.e. up to ~200*7 = 1400 hourly candles.
 internal static class HourlyCandleStore

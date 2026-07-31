@@ -80,10 +80,10 @@ public class SimulatedChartPanel : Panel
 
         if (!_visibleDaysSet)
         {
-            await _webView.CoreWebView2.ExecuteScriptAsync($"configurarDiasVisibles({visibleDays});");
+            await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
             _visibleDaysSet = true;
         }
-        await RunScriptAsync("cargarHistorial", candles);
+        await RunScriptAsync("loadHistory", candles);
     }
 
     private async Task RunScriptAsync(string jsFunction, List<CandleData> candles)
