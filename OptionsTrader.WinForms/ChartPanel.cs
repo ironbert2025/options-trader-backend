@@ -220,6 +220,14 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Programmatic (not click-driven) red "Expired!!!" marker at the most recent candle — used
+    // by the 4pm ET expiration auto-close, not exposed via any UI toggle.
+    public async Task MarkExpiredAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("marcarExpirado();");
+    }
+
     // Toggles the 1h panel's vertical arrow tools on/off. While on, every click places a
     // fixed-length vertical arrow with its tip at the clicked point — green points up, red points
     // down. Selectable by clicking the shaft and removable with Delete, same as the gray Rect

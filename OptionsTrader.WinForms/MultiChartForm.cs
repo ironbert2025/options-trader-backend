@@ -485,6 +485,10 @@ public class MultiChartForm : Form
         _overnightPanel?.FeedPollingPrice(price, utcTime);
     }
 
+    // Red "Expired!!!" marker on the 1h panel only — fired when a trade auto-closes at 4pm ET
+    // because it expires today.
+    public Task MarkExpiredOnHourlyChartAsync() => _hourlyPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
+
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
     // the same left-to-right order they're shown on screen (1h, 15m RTH, 15m RTH+Overnight), for
     // Form1 to save as a single trade snapshot. Returns null if any panel isn't ready.

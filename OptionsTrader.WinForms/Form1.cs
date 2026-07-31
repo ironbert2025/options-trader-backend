@@ -14,7 +14,8 @@ namespace OptionsTrader.WinForms;
 // CloseTradeRowAsync it needs to actually send a SELL_TO_CLOSE order, not just update the log.
 // ExitOrderId is the pending Trade-Target LIMIT exit (if any), cancelled before a manual close.
 file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false,
-    string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null);
+    string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
+    DateOnly ExpirationDate = default);
 
 public partial class Form1 : Form
 {
@@ -28,6 +29,7 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _marketSnapshotTimer;
     private DateOnly? _openSnapshotDoneFor;
     private DateOnly? _closeSnapshotDoneFor;
+    private DateOnly? _expiredTradesClosedFor;
     private System.Windows.Forms.Timer? _ivHistorialTimer;
     private bool _isPolling;
     private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
@@ -202,8 +204,31 @@ public partial class Form1 : Form
                 _closeSnapshotDoneFor = today;
                 _ = CaptureOpenCloseSnapshotsAsync("Close");
             }
+
+            if (MarketHours.IsInMarketCloseSnapshotWindow && _expiredTradesClosedFor != today)
+            {
+                _expiredTradesClosedFor = today;
+                _ = CloseExpiredTradesAsync();
+            }
         };
         _marketSnapshotTimer.Start();
+    }
+
+    // At 4pm ET, any still-open trade whose own expiration date is today is worthless — close it
+    // (PnL/Telegram push flow exactly like any other close) and mark the 1h chart with a red
+    // "Expired!!!" label. Trades expiring on a later date are left untouched; RestoreOpenTrades
+    // already reopens/keeps showing them on the next app start if still valid.
+    private async Task CloseExpiredTradesAsync()
+    {
+        var today = DateOnly.FromDateTime(MarketHours.NowEst);
+
+        var expiredRows = dgvTrades.Rows.Cast<DataGridViewRow>()
+            .Where(r => r.Tag is TradeRowTag { ExpirationDate: var exp } && exp == today)
+            .Where(r => string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
+            .ToList();
+
+        foreach (var row in expiredRows)
+            await CloseTradeRowAsync(row, "EXPIRED");
     }
 
     private async Task CaptureOpenCloseSnapshotsAsync(string tag)
@@ -462,7 +487,7 @@ public partial class Form1 : Form
                     string.Empty, "Close");
 
                 var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime);
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
                 restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
@@ -1269,10 +1294,10 @@ public partial class Form1 : Form
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
-        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity);
+        var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
+        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity, ExpirationDate: expDate);
         PadWithBlankRows(dgvTrades, 4);
 
-        var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         OpenTradesStore.Add(new PersistedTrade(
             TradeId:        tradeId,
             Symbol:         symbol,
@@ -1926,6 +1951,10 @@ public partial class Form1 : Form
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
         if (tradeId > 0)
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration);
+
+        // Red "Expired!!!" marker on the 1h chart — only for the 4pm expiration auto-close.
+        if (closeType == "EXPIRED" && _liveChartForms.TryGetValue(symbol, out var chartFormExpired) && !chartFormExpired.IsDisposed)
+            _ = chartFormExpired.MarkExpiredOnHourlyChartAsync();
 
         // Screenshot TradeLog (Trades + Logger section of the form)
         await Task.Delay(100); // let UI settle
