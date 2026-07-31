@@ -910,6 +910,29 @@ public class ChartPanel : Panel
         }
         else
         {
+            // 15m RTH panel only: _liveAnchor is only ever set once — either at market open
+            // (_liveBucket == null branch, above) or when LoadHistoryAsync seeds _liveBucket from
+            // history — and never refreshed after that. BucketIndex's day-boundary separation
+            // (24h = an exact multiple of any interval that divides it) should still work off a
+            // stale anchor in theory, but in practice this was observed merging yesterday's last
+            // seeded bucket straight into today's first live tick (a single candle spanning both
+            // days' prices). Rather than trust that index math, explicitly reset for a new
+            // calendar day here — unambiguous, and guarantees today's RTH candles are built
+            // purely from today's live ticks, never carrying over any part of a prior day's bar.
+            if (_mode == ChartPanelMode.Fifteen_RTH && _liveBucket != null)
+            {
+                var liveBucketDate = TimeZoneInfo.ConvertTimeFromUtc(_liveBucket.Time, EasternZone).Date;
+                if (eastern.Date != liveBucketDate)
+                {
+                    _liveAnchor      = eastern.Date.AddHours(9).AddMinutes(30);
+                    _liveBucketIndex = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
+                    _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
+                    var freshBucket = _liveBucket;
+                    BeginInvoke(async () => await RunScriptAsync("updateLastCandle", freshBucket));
+                    return;
+                }
+            }
+
             var index = isHourly
                 ? CandleAggregation.HourlyRthBucketKey(candle.Time)
                 : CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
