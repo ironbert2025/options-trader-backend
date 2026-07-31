@@ -42,7 +42,7 @@ public class MultiChartForm : Form
         var toolbar = new TableLayoutPanel
         {
             Dock        = DockStyle.Top,
-            Height      = 110,
+            Height      = 88,
             ColumnCount = 3,
             RowCount    = 1,
             Padding     = new Padding(6, 4, 6, 0)
@@ -178,7 +178,7 @@ public class MultiChartForm : Form
         var btnHourlyClear = new Button
         {
             Text     = "Clear",
-            Location = new Point(toolsStartX, 30),
+            Location = new Point(0, 30),
             Size     = new Size(60, 24)
         };
 
@@ -187,7 +187,7 @@ public class MultiChartForm : Form
         var btnRectGris = new Button
         {
             Text     = "Rect",
-            Location = new Point(toolsStartX + 66, 30),
+            Location = new Point(66, 30),
             Size     = new Size(60, 24)
         };
         btnRectGris.Click += async (s, e) =>
@@ -202,13 +202,13 @@ public class MultiChartForm : Form
         var btnPiso = new Button
         {
             Text     = "Piso",
-            Location = new Point(toolsStartX, 56),
+            Location = new Point(toolsStartX, 30),
             Size     = new Size(60, 24)
         };
         var btnTecho = new Button
         {
             Text     = "Techo",
-            Location = new Point(toolsStartX + 66, 56),
+            Location = new Point(toolsStartX + 66, 30),
             Size     = new Size(60, 24)
         };
         btnPiso.Click += async (s, e) =>
@@ -229,13 +229,13 @@ public class MultiChartForm : Form
         var btnFlechaVerde = new Button
         {
             Text     = "↑ Verde",
-            Location = new Point(toolsStartX, 82),
+            Location = new Point(toolsStartX, 56),
             Size     = new Size(60, 24)
         };
         var btnFlechaRoja = new Button
         {
             Text     = "↓ Roja",
-            Location = new Point(toolsStartX + 66, 82),
+            Location = new Point(toolsStartX + 66, 56),
             Size     = new Size(60, 24)
         };
         btnFlechaVerde.Click += async (s, e) =>
@@ -386,7 +386,7 @@ public class MultiChartForm : Form
         {
             Text      = string.Empty,
             Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-            Location  = new Point(0, 86),
+            Location  = new Point(0, 64),
             Size      = new Size(toolsHost.Width, 20),
             TextAlign = ContentAlignment.MiddleCenter,
             Font      = new Font("Consolas", 9F),
