@@ -502,7 +502,9 @@ public class ChartPanel : Panel
             }
 
             var (botToken, chatId) = TelegramSettingsStore.Load();
-            var (ok, detail, _) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, caption);
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, caption);
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "CrossSMA", DateTime.Now));
             return (ok, detail);
         }
         catch (Exception ex)

@@ -112,6 +112,58 @@ public partial class Form1 : Form
         StartAutoCaptureScheduler();
         StartIvHistorialScheduler();
         StartMarketOpenCloseSnapshotScheduler();
+
+        // Deletes every Telegram push this app has sent — across ALL ticker instances, since
+        // they all share the same telegram_pushes.json file and the same channel. Added via code
+        // (not the designer) so it doesn't require touching Form1.Designer.cs's layout.
+        var btnDeleteTelegramPushes = new Button
+        {
+            Location = new Point(990, 94),
+            Size     = new Size(90, 25),
+            Text     = "Del. Telegram"
+        };
+        btnDeleteTelegramPushes.Click += BtnDeleteTelegramPushes_Click;
+        tabQuotes.Controls.Add(btnDeleteTelegramPushes);
+    }
+
+    private async void BtnDeleteTelegramPushes_Click(object? sender, EventArgs e)
+    {
+        var pushes = TelegramPushStore.Load();
+        if (pushes.Count == 0)
+        {
+            MessageBox.Show("No hay pushes de Telegram guardados para borrar.", "Eliminar pushes de Telegram",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"Se van a borrar {pushes.Count} mensajes enviados a Telegram (de todas las instancias). Esta acción no se puede deshacer.\n\n¿Continuar?",
+            "Eliminar pushes de Telegram", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+
+        var (botToken, chatId) = TelegramSettingsStore.Load();
+        if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+        {
+            MessageBox.Show("Telegram no está configurado (falta Bot Token o Chat ID).", "Eliminar pushes de Telegram",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        int ok = 0, failed = 0;
+        foreach (var push in pushes)
+        {
+            var (deleted, detail) = await TelegramNotifier.DeleteMessageAsync(botToken, push.ChatId, push.MessageId);
+            if (deleted) ok++;
+            else { failed++; LogLine($"{DateTime.Now:HH:mm:ss} [Telegram] No se pudo borrar mensaje {push.MessageId} ({push.Symbol}/{push.Kind}): {detail}", Color.Orange); }
+        }
+
+        // Best-effort sweep — clear regardless of individual failures (a message Telegram
+        // rejected, e.g. older than ~48h, will never succeed on a later retry either).
+        TelegramPushStore.Clear();
+
+        LogLine($"{DateTime.Now:HH:mm:ss} [Telegram] Borrados {ok}/{pushes.Count} pushes ({failed} fallaron).", Color.Cyan);
+        MessageBox.Show($"Borrados {ok} de {pushes.Count} mensajes.{(failed > 0 ? $"\n{failed} fallaron (ver log)." : string.Empty)}",
+            "Eliminar pushes de Telegram", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // Anchored user — logs straight in against the API on startup, no LoginForm prompt.
@@ -2081,7 +2133,9 @@ public partial class Form1 : Form
                 $"PnL: {pnlSign}{pnl:F2} ({pnlSign}{pnlPercent:F1}%)\n" +
                 $"Duration: {duration:hh\\:mm\\:ss}";
 
-            await TelegramNotifier.SendPhotoAsync(botToken, chatId, imagePath, caption);
+            var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, imagePath, caption);
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "TradeClose", DateTime.Now));
         }
         catch
         {
