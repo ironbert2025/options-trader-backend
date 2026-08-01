@@ -17,9 +17,10 @@ public class SimulatorForm : Form
     private readonly Button _btnAdelante = new() { Text = "Adelante ▶", Location = new Point(102, 40), Size = new Size(90, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
 
+    // Width matches Form1's real dgvQuotes (566) — see BuildChainColumns' per-column widths.
     private readonly DataGridView _dgvChain = new()
     {
-        Location = new Point(8, 74), Size = new Size(900, 220),
+        Location = new Point(8, 74), Size = new Size(566, 220),
         AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true,
         RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.CellSelect
     };
@@ -54,7 +55,7 @@ public class SimulatorForm : Form
     public SimulatorForm()
     {
         Text          = "Simulador";
-        Width         = 940;
+        Width         = 1020;
         Height        = 740;
         StartPosition = FormStartPosition.CenterScreen;
 
@@ -204,7 +205,10 @@ public class SimulatorForm : Form
         _dgvChain.Columns.Add("colContracts", "Conts");
         _dgvChain.Columns.Add("colLevel", "Level");
 
-        foreach (DataGridViewColumn col in _dgvChain.Columns) col.Width = 50; // half the default (100)
+        // Same per-column widths as Form1's real dgvQuotes (same column order too), instead of a
+        // uniform halved width — so the chain grid reads exactly like the live one.
+        int[] widths = { 80, 62, 33, 33, 33, 50, 60, 33, 33, 33, 48, 45 };
+        for (int i = 0; i < _dgvChain.Columns.Count; i++) _dgvChain.Columns[i].Width = widths[i];
     }
 
     // Same column set (names/order) as Form1's real dgvTrades, so the simulator's practice trades
