@@ -577,7 +577,7 @@ public partial class Form1 : Form
                 var pnlPct    = t.EntryPrice > 0 ? Math.Round(pnl / (t.EntryPrice * decimal.Parse(t.Contracts) * 100) * 100, 1) : 0m;
 
                 OpenTradesStore.Remove(t.TradeId);
-                if (t.TradeId > 0)
+                if (t.TradeId != 0) // 0 == entry never even got a local id (SaveTradeToApiAsync failed outright) — nothing to close
                     _ = CloseTradeInApiAsync(t.TradeId, 0m, pnl, pnlPct, duration);
             }
             else
@@ -2048,11 +2048,12 @@ public partial class Form1 : Form
         System.Windows.Forms.Application.DoEvents();
 
         // Remove from local persistence
-        if (tradeId > 0)
+        if (tradeId != 0)
             OpenTradesStore.Remove(tradeId);
 
-        // Close trade in API
-        if (tradeId > 0)
+        // Close trade (API PATCH if tradeId is a real API id, always updates TradeHistoryStore
+        // locally regardless — see CloseTradeInApiAsync)
+        if (tradeId != 0)
         {
             var exitPrice = exitBid;
             await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
@@ -2075,7 +2076,7 @@ public partial class Form1 : Form
             _ = UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr);
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
-        if (tradeId > 0)
+        if (tradeId != 0)
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
         // Screenshot TradeLog (Trades + Logger section of the form)
@@ -2315,13 +2316,20 @@ public partial class Form1 : Form
         }
     }
 
+    // Dual-writes every trade to TradeHistoryStore alongside the API call — first step toward
+    // being able to run without the EC2 backend. The API stays the source of truth for the id
+    // whenever it's reachable; if it isn't (apiTradeId stays 0), TradeHistoryStore.Add assigns a
+    // local negative id instead of losing the trade, and THAT becomes the id used everywhere else
+    // (OpenTradesStore, screenshots, close) for the rest of this trade's life.
     private async Task<int> SaveTradeToApiAsync(string symbol, string rowType, string strike, decimal ask,
         int contracts, int level, decimal targetPct, DateTime entryTime, bool isDemo = false)
     {
+        var ticker = _selectedTicker!;
+        var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
+        var apiTradeId = 0;
+
         try
         {
-            var ticker = _selectedTicker!;
-            var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
             var optionType = rowType == "CALL"
                 ? OptionsTrader.Domain.Enums.OptionType.Call
                 : OptionsTrader.Domain.Enums.OptionType.Put;
@@ -2346,35 +2354,47 @@ public partial class Form1 : Form
             var json = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
-            {
                 this.Invoke(() => LogLine($"API Error {(int)response.StatusCode}: {json}", Color.Red));
-                return 0;
+            else
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                apiTradeId = doc.RootElement.GetProperty("id").GetInt32();
             }
-
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            return doc.RootElement.GetProperty("id").GetInt32();
         }
         catch (Exception ex)
         {
             this.Invoke(() => LogLine($"API Exception: {ex.Message}", Color.Red));
-            return 0;
         }
+
+        return TradeHistoryStore.Add(new TradeRecord(
+            Id: apiTradeId, Symbol: symbol, OptionType: rowType, StrikePrice: decimal.Parse(strike),
+            SpotPrice: _lastSpotPrice, ExpirationDate: expDate, EntryPrice: ask, ExitPrice: null,
+            EntryTime: entryTime, Contracts: contracts, Level: level, TargetPercent: targetPct,
+            Duration: null, Pnl: null, PnlPercent: null, IsDemo: isDemo, Broker: "Schwab"));
     }
 
     private async Task CloseTradeInApiAsync(int tradeId, decimal exitPrice, decimal pnl, decimal pnlPercent, TimeSpan duration)
     {
-        try
+        // tradeId can be a local-only negative id (see SaveTradeToApiAsync) if the API was
+        // unreachable at open time — nothing to PATCH on the API for those, but still record the
+        // close locally so the trade's full lifecycle isn't lost.
+        if (tradeId > 0)
         {
-            var payload = new
+            try
             {
-                ExitPrice  = exitPrice,
-                PnL        = pnl,
-                PnLPercent = pnlPercent,
-                Duration   = TimeSpan.FromSeconds(Math.Floor(duration.TotalSeconds))
-            };
-            await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
+                var payload = new
+                {
+                    ExitPrice  = exitPrice,
+                    PnL        = pnl,
+                    PnLPercent = pnlPercent,
+                    Duration   = TimeSpan.FromSeconds(Math.Floor(duration.TotalSeconds))
+                };
+                await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
+            }
+            catch { }
         }
-        catch { }
+
+        TradeHistoryStore.Close(tradeId, exitPrice, pnl, pnlPercent, duration);
     }
 
     private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr)
