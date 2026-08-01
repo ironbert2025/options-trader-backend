@@ -1082,7 +1082,17 @@
                   if (x == null || y == null) return;
                   ctx.fillStyle = l.color || '#ff9800'; // orange default (Piso/Techo)
                   ctx.font = l.bold ? `bold ${14 * scope.verticalPixelRatio}px sans-serif` : `${12 * scope.verticalPixelRatio}px sans-serif`;
-                  ctx.fillText(l.text, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio);
+                  if (l.above) {
+                    // Anchored at/near the LAST candle (e.g. markExpired) sits right where
+                    // Lightweight Charts draws its own "last price" label box, on the same y —
+                    // the default right-of-point placement below gets hidden behind it. Draw
+                    // above and ending AT the point instead, clear of that label.
+                    ctx.textAlign = 'right';
+                    ctx.fillText(l.text, x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 14 * scope.verticalPixelRatio);
+                    ctx.textAlign = 'left';
+                  } else {
+                    ctx.fillText(l.text, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio);
+                  }
                 });
               });
             }
@@ -1115,7 +1125,7 @@
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     if (allCandles.length === 0) return false;
     const last = allCandles[allCandles.length - 1];
-    textLabelsPrimitive._labels.push({ time: last.time, price: last.close, text: 'Expired!!!', color: '#ff0000', bold: true });
+    textLabelsPrimitive._labels.push({ time: last.time, price: last.close, text: 'Expired!!!', color: '#ff0000', bold: true, above: true });
     forceRepaint();
     return true;
   }

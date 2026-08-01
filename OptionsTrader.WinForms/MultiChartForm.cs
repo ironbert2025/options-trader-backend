@@ -522,9 +522,9 @@ public class MultiChartForm : Form
         _overnightPanel?.FeedPollingPrice(price, utcTime);
     }
 
-    // Red "Expired!!!" marker on the 1h panel only — fired when a trade auto-closes at 4pm ET
-    // because it expires today.
-    public Task MarkExpiredOnHourlyChartAsync() => _hourlyPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
+    // Red "Expired!!!" marker on the 15m RTH panel (middle chart) only — fired when a trade
+    // auto-closes at 4pm ET because it expires today.
+    public Task MarkExpiredOnRthChartAsync() => _rthPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
 
     // Forwards an already-timestamped WS connect/disconnect/reconnect line from Form1 (which owns
     // the actual Schwab streamer connection) into this window's small event log — safe to call

@@ -2058,6 +2058,16 @@ public partial class Form1 : Form
             await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
         }
 
+        // Red "Expired!!!" marker on the 15m RTH (middle) chart — only for the 4pm expiration
+        // auto-close, and awaited BEFORE the snapshot below so it's actually drawn on the chart
+        // in time to be captured, instead of racing the capture (it used to be fire-and-forget
+        // AFTER the snapshot, so the marker never made it into the uploaded/pushed image).
+        if (closeType == "EXPIRED" && _liveChartForms.TryGetValue(symbol, out var chartFormExpired) && !chartFormExpired.IsDisposed)
+        {
+            await chartFormExpired.MarkExpiredOnRthChartAsync();
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
+
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
         // and the Telegram push below, instead of each capturing its own copy.
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
@@ -2067,10 +2077,6 @@ public partial class Form1 : Form
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
         if (tradeId > 0)
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
-
-        // Red "Expired!!!" marker on the 1h chart — only for the 4pm expiration auto-close.
-        if (closeType == "EXPIRED" && _liveChartForms.TryGetValue(symbol, out var chartFormExpired) && !chartFormExpired.IsDisposed)
-            _ = chartFormExpired.MarkExpiredOnHourlyChartAsync();
 
         // Screenshot TradeLog (Trades + Logger section of the form)
         await Task.Delay(100); // let UI settle
