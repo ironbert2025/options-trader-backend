@@ -36,11 +36,17 @@ public class SimulatorForm : Form
     private readonly SimulatedChartPanel _rthChart    = new("15m RTH") { Dock = DockStyle.Fill };
     private readonly SimulatedChartPanel _fullChart   = new("15m RTH+Overnight") { Dock = DockStyle.Fill };
 
+    // Same column-sizing behavior as Form1's real dgvTrades: AutoSizeColumnsMode.Fill stretches
+    // the 16 columns proportionally across whatever width the grid has, instead of a fixed pixel
+    // width per column (dgvTrades never sets one either).
     private readonly DataGridView _dgvTrades = new()
     {
-        Location = new Point(8, 570), Size = new Size(900, 130),
+        Location = new Point(8, 570), Size = new Size(1000, 130),
         AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true,
-        RowHeadersVisible = false
+        RowHeadersVisible = false,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+        RowTemplate = { Height = 22 }
     };
 
     private List<DateOnly> _availableDates = new();
@@ -55,7 +61,7 @@ public class SimulatorForm : Form
     public SimulatorForm()
     {
         Text          = "Simulador";
-        Width         = 1020;
+        Width         = 1040;
         Height        = 740;
         StartPosition = FormStartPosition.CenterScreen;
 
