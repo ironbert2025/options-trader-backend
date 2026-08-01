@@ -118,7 +118,7 @@ public partial class Form1 : Form
         // (not the designer) so it doesn't require touching Form1.Designer.cs's layout.
         var btnDeleteTelegramPushes = new Button
         {
-            Location = new Point(990, 94),
+            Location = new Point(1020, 124),
             Size     = new Size(90, 25),
             Text     = "Del. Telegram"
         };
@@ -637,6 +637,8 @@ public partial class Form1 : Form
         rbTrade.Font = new Font(rbTrade.Font, rbTrade.Checked ? FontStyle.Bold : FontStyle.Regular);
         rbTradeTarget.ForeColor = rbTradeTarget.Checked ? Color.Green : SystemColors.ControlText;
         rbTradeTarget.Font = new Font(rbTradeTarget.Font, rbTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
+        rbNoTradeTarget.ForeColor = rbNoTradeTarget.Checked ? Color.DarkOrange : SystemColors.ControlText;
+        rbNoTradeTarget.Font = new Font(rbNoTradeTarget.Font, rbNoTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
     }
 
     private void LoadBalance()
@@ -1340,6 +1342,8 @@ public partial class Form1 : Form
             _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false);
         else if (rbTradeTarget.Checked)
             _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true);
+        else if (rbNoTradeTarget.Checked)
+            OpenSimulatedTradeNoTarget(e.RowIndex);
     }
 
     private async void OpenSimulatedTrade(int rowIndex)
@@ -1355,6 +1359,23 @@ public partial class Form1 : Form
         if (ask <= 0) return;
 
         await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false);
+    }
+
+    // Same as OpenSimulatedTrade, but with suppressAutoClose: true — no target% auto-close, the
+    // demo trade just runs until closed manually or auto-closed at 4pm ET if it expires today.
+    private async void OpenSimulatedTradeNoTarget(int rowIndex)
+    {
+        var row       = dgvQuotes.Rows[rowIndex];
+        var rowType   = row.Tag?.ToString() ?? "CALL";
+        var strike    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
+        var contracts = row.Cells["colContracts"].Value?.ToString() ?? "0";
+        var level     = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
+        var symbol    = _selectedTicker?.Symbol ?? "UNK";
+
+        var (bid, ask) = ReadRowBidAsk(row, rowType);
+        if (ask <= 0) return;
+
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true);
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)

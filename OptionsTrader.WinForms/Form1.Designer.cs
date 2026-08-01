@@ -94,6 +94,7 @@ partial class Form1
         rbNoTrade = new RadioButton();
         rbTrade = new RadioButton();
         rbTradeTarget = new RadioButton();
+        rbNoTradeTarget = new RadioButton();
         grpContracts = new GroupBox();
         rbContracts1 = new RadioButton();
         rbContracts2 = new RadioButton();
@@ -747,7 +748,7 @@ partial class Form1
         //
         // btnLiveChart
         //
-        btnLiveChart.Location = new Point(990, 4);
+        btnLiveChart.Location = new Point(1020, 4);
         btnLiveChart.Name = "btnLiveChart";
         btnLiveChart.Size = new Size(95, 25);
         btnLiveChart.TabIndex = 2;
@@ -756,7 +757,7 @@ partial class Form1
         //
         // btnFourEtfCharts
         //
-        btnFourEtfCharts.Location = new Point(990, 34);
+        btnFourEtfCharts.Location = new Point(1020, 34);
         btnFourEtfCharts.Name = "btnFourEtfCharts";
         btnFourEtfCharts.Size = new Size(120, 25);
         btnFourEtfCharts.TabIndex = 3;
@@ -765,7 +766,7 @@ partial class Form1
         //
         // btnHubHost
         //
-        btnHubHost.Location = new Point(990, 64);
+        btnHubHost.Location = new Point(1020, 64);
         btnHubHost.Name = "btnHubHost";
         btnHubHost.Size = new Size(90, 25);
         btnHubHost.TabIndex = 4;
@@ -774,7 +775,7 @@ partial class Form1
         //
         // btnSimulator
         //
-        btnSimulator.Location = new Point(990, 94);
+        btnSimulator.Location = new Point(1020, 94);
         btnSimulator.Name = "btnSimulator";
         btnSimulator.Size = new Size(90, 25);
         btnSimulator.TabIndex = 5;
@@ -853,11 +854,12 @@ partial class Form1
         // grpTrade
         // 
         grpTrade.Controls.Add(rbNoTrade);
+        grpTrade.Controls.Add(rbNoTradeTarget);
         grpTrade.Controls.Add(rbTrade);
         grpTrade.Controls.Add(rbTradeTarget);
         grpTrade.Location = new Point(740, 4);
         grpTrade.Name = "grpTrade";
-        grpTrade.Size = new Size(125, 96);
+        grpTrade.Size = new Size(155, 116);
         grpTrade.TabIndex = 7;
         grpTrade.TabStop = false;
         grpTrade.Text = "Trade";
@@ -874,22 +876,32 @@ partial class Form1
         rbNoTrade.TabStop = true;
         rbNoTrade.Text = "No Trade";
         rbNoTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
-        // 
+        //
+        // rbNoTradeTarget
+        //
+        rbNoTradeTarget.AutoSize = false;
+        rbNoTradeTarget.Location = new Point(12, 44);
+        rbNoTradeTarget.Name = "rbNoTradeTarget";
+        rbNoTradeTarget.Size = new Size(130, 20);
+        rbNoTradeTarget.TabIndex = 1;
+        rbNoTradeTarget.Text = "No Trade-Target";
+        rbNoTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
+        //
         // rbTrade
-        // 
-        rbTrade.Location = new Point(12, 44);
+        //
+        rbTrade.Location = new Point(12, 66);
         rbTrade.Name = "rbTrade";
         rbTrade.Size = new Size(80, 20);
-        rbTrade.TabIndex = 1;
+        rbTrade.TabIndex = 2;
         rbTrade.Text = "Trade";
         rbTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
-        // 
+        //
         // rbTradeTarget
         //
         rbTradeTarget.AutoSize = true;
-        rbTradeTarget.Location = new Point(12, 62);
+        rbTradeTarget.Location = new Point(12, 88);
         rbTradeTarget.Name = "rbTradeTarget";
-        rbTradeTarget.TabIndex = 2;
+        rbTradeTarget.TabIndex = 3;
         rbTradeTarget.Text = "Trade-Target";
         rbTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
         //
@@ -902,7 +914,7 @@ partial class Form1
         grpContracts.Controls.Add(rbContracts5);
         grpContracts.Controls.Add(rbContracts6);
         grpContracts.Controls.Add(rbContractsPositionSize);
-        grpContracts.Location = new Point(875, 4);
+        grpContracts.Location = new Point(905, 4);
         grpContracts.Name = "grpContracts";
         grpContracts.Size = new Size(105, 96);
         grpContracts.TabIndex = 8;
@@ -1692,6 +1704,7 @@ partial class Form1
     private RadioButton rbNoTrade;
     private RadioButton rbTrade;
     private RadioButton rbTradeTarget;
+    private RadioButton rbNoTradeTarget;
     private GroupBox grpContracts;
     private RadioButton rbContracts1;
     private RadioButton rbContracts2;
