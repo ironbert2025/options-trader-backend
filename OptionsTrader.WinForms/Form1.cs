@@ -124,6 +124,13 @@ public partial class Form1 : Form
         };
         btnDeleteTelegramPushes.Click += BtnDeleteTelegramPushes_Click;
         tabQuotes.Controls.Add(btnDeleteTelegramPushes);
+
+        // "History" tab — Calendar (trading journal) + Trade Log views over TradeHistoryStore.
+        // Built entirely in HistoryTabPanel (no designer file), same convention as
+        // MultiChartForm/ChartPanel.
+        var tabHistory = new TabPage("History") { Padding = new Padding(8) };
+        tabHistory.Controls.Add(new HistoryTabPanel());
+        tabControl.TabPages.Add(tabHistory);
     }
 
     private async void BtnDeleteTelegramPushes_Click(object? sender, EventArgs e)
