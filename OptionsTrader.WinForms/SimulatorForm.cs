@@ -180,7 +180,7 @@ public class SimulatorForm : Form
 
     // ----- Demo trades (practice only — separate from real/demo trades in Form1) -----
 
-    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice);
+    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid);
     private readonly List<OpenSimTrade> _openSimTrades = new();
 
     // step.Time / trade.EntryTime are real UTC (same convention as CandleData.Time, needed so the
@@ -207,18 +207,29 @@ public class SimulatorForm : Form
         foreach (DataGridViewColumn col in _dgvChain.Columns) col.Width = 50; // half the default (100)
     }
 
+    // Same column set (names/order) as Form1's real dgvTrades, so the simulator's practice trades
+    // read exactly like the live grid. StrikePrice is a button column (not plain text) per request
+    // — purely visual here, nothing depends on clicking it (unlike dgvQuotes' strike buttons,
+    // which actually open a trade).
     private void BuildTradesColumns()
     {
         _dgvTrades.Columns.Add("colSimTime", "Time");
         _dgvTrades.Columns.Add("colSimType", "Type");
-        _dgvTrades.Columns.Add("colSimStrike", "Strike");
+        _dgvTrades.Columns.Add(new DataGridViewButtonColumn { Name = "colSimStrike", HeaderText = "StrikePrice" });
+        _dgvTrades.Columns.Add("colSimBid", "Bid");
+        _dgvTrades.Columns.Add("colSimAsk", "Ask");
         _dgvTrades.Columns.Add("colSimContracts", "Contracts");
-        _dgvTrades.Columns.Add("colSimEntry", "EntryPrice");
-        _dgvTrades.Columns.Add("colSimCurrent", "CurrentBid");
+        _dgvTrades.Columns.Add("colSimEntryPrice", "EntryPrice");
+        _dgvTrades.Columns.Add("colSimCBid", "C_Bid");
+        _dgvTrades.Columns.Add("colSimTBid", "T_Bid");
         _dgvTrades.Columns.Add("colSimPnl", "PnL");
-        _dgvTrades.Columns.Add("colSimPnlPct", "PnL%");
+        _dgvTrades.Columns.Add("colSimPnlPct", "PnL_Percent");
+        _dgvTrades.Columns.Add("colSimPnlTarget", "PnL_Target");
+        _dgvTrades.Columns.Add("colSimExitTime", "ExitTime");
         var closeCol = new DataGridViewButtonColumn { Name = "colSimClose", HeaderText = "", Text = "Close", UseColumnTextForButtonValue = true };
         _dgvTrades.Columns.Add(closeCol);
+        _dgvTrades.Columns.Add("colSimPnlMin", "Min PnL%");
+        _dgvTrades.Columns.Add("colSimPnlMax", "Max PnL%");
         _dgvTrades.CellContentClick += DgvTrades_CellContentClick;
     }
 
@@ -237,22 +248,31 @@ public class SimulatorForm : Form
 
         var bidCol = rowType == "CALL" ? "colCallBid" : "colPutBid";
         var askCol = rowType == "CALL" ? "colCallAsk" : "colPutAsk";
+        decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid);
         decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask);
         if (ask <= 0) return; // same guard as the real grid — never open on an illiquid quote
 
         int.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts);
         if (contracts <= 0) contracts = 1;
 
+        // Same target% source and formula Form1.RecordEntryAsync uses — informational only here
+        // (T_Bid/PnL_Target are shown for parity with the real grid; the simulator's trades still
+        // only close via the Close button, no auto-close-at-target).
+        decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
+        var tBid = Math.Round(ask * (1 + targetPct / 100m), 2);
+
         var step = _steps[_currentIndex];
         var gridRow = _dgvTrades.Rows[_dgvTrades.Rows.Add(
-            EasternTime(step.Time).ToString("HH:mm:ss"), rowType, strike.ToString("F2"), contracts,
-            ask.ToString("F2"), ask.ToString("F2"), "0.00", "0.0")];
+            EasternTime(step.Time).ToString("HH:mm:ss"), rowType, strike.ToString("F2"),
+            bid.ToString("F2"), ask.ToString("F2"), contracts, ask.ToString("F2"),
+            ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", targetPct.ToString("F0"))];
 
-        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask));
+        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid));
     }
 
     // Recomputes PnL for every open demo trade against the current step's chain — same formula
-    // Form1 uses for real/demo trades (currentBid - entryPrice) * contracts * 100.
+    // Form1 uses for real/demo trades (currentBid - entryPrice) * contracts * 100 — and the same
+    // Min/Max PnL% tracking (UpdatePnLMinMax below, copied from Form1's private static method).
     private void RefreshOpenSimTradesPnL(SimulationStep step)
     {
         foreach (var trade in _openSimTrades)
@@ -265,10 +285,32 @@ public class SimulatorForm : Form
             var pnl    = Math.Round((quote.Bid - trade.EntryPrice) * trade.Contracts * 100, 2);
             var pnlPct = trade.EntryPrice > 0 ? Math.Round((quote.Bid - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
 
-            trade.Row.Cells["colSimCurrent"].Value = quote.Bid.ToString("F2");
-            trade.Row.Cells["colSimPnl"].Value      = pnl.ToString("F2");
-            trade.Row.Cells["colSimPnlPct"].Value   = pnlPct.ToString("F1");
+            trade.Row.Cells["colSimCBid"].Value    = quote.Bid.ToString("F2");
+            trade.Row.Cells["colSimPnl"].Value     = pnl.ToString("F2");
+            trade.Row.Cells["colSimPnlPct"].Value  = pnlPct.ToString("F1");
             trade.Row.Cells["colSimPnl"].Style.ForeColor = pnl >= 0 ? Color.LimeGreen : Color.OrangeRed;
+            UpdatePnLMinMax(trade.Row, pnlPct);
+        }
+    }
+
+    // Same logic as Form1's private static UpdatePnLMinMax — kept as its own copy since that one
+    // isn't accessible from here (private to Form1) and this simulator is deliberately isolated
+    // from the live trade flow.
+    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
+    {
+        var minCell = row.Cells["colSimPnlMin"];
+        var maxCell = row.Cells["colSimPnlMax"];
+
+        if (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min)
+        {
+            minCell.Value           = pnlPct.ToString("F1");
+            minCell.Style.ForeColor = Color.Red;
+        }
+
+        if (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max)
+        {
+            maxCell.Value           = pnlPct.ToString("F1");
+            maxCell.Style.ForeColor = Color.Green;
         }
     }
 
@@ -285,13 +327,16 @@ public class SimulatorForm : Form
         var quote = step.Quotes.FirstOrDefault(q =>
             q.StrikePrice == trade.StrikePrice &&
             q.OptionType.ToString().ToUpperInvariant() == trade.OptionType);
-        var exitPrice = quote?.Bid ?? decimal.Parse(row.Cells["colSimCurrent"].Value?.ToString() ?? "0");
+        var exitPrice = quote?.Bid ?? decimal.Parse(row.Cells["colSimCBid"].Value?.ToString() ?? "0");
 
         var pnl    = Math.Round((exitPrice - trade.EntryPrice) * trade.Contracts * 100, 2);
         var pnlPct = trade.EntryPrice > 0 ? Math.Round((exitPrice - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
 
         SimTradesStore.Append(_symbol, _simDate, trade.OptionType, trade.StrikePrice, trade.Contracts,
             EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct);
+
+        row.Cells["colSimExitTime"].Value = EasternTime(step.Time).ToString("HH:mm:ss");
+        UpdatePnLMinMax(row, pnlPct);
 
         // DataGridViewButtonColumn with UseColumnTextForButtonValue=true always shows the
         // column's own Text ("Close") regardless of the cell's Value, so gray out the row instead

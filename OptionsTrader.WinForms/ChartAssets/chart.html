@@ -1412,11 +1412,21 @@
     forceRepaint();
   }
 
-  // Replaces the whole dataset (used once at startup to seed historical candles).
+  // Replaces the whole dataset — used once at startup to seed historical candles on the live
+  // chart, but called on EVERY step by the simulator (SimulatedChartPanel.CargarHastaPasoAsync
+  // recomputes and resends the full candle list each ◀/▶ click instead of incrementally updating
+  // like the live chart does). Only force the default view on the very first call; after that,
+  // behave like a live update (reapplyVisibleRangeIfLive) so a manual pan/zoom survives.
+  let historyLoadedOnce = false;
   function loadHistory(candles) {
     allCandles = candles.slice().sort((a, b) => a.time - b.time);
     renderCandles();
-    if (visibleDays) applyVisibleRange(); else chart.timeScale().fitContent();
+    if (!historyLoadedOnce) {
+      if (visibleDays) applyVisibleRange(); else chart.timeScale().fitContent();
+      historyLoadedOnce = true;
+    } else {
+      reapplyVisibleRangeIfLive();
+    }
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
