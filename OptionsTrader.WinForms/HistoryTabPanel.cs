@@ -20,12 +20,14 @@ public class HistoryTabPanel : Panel
     private readonly Label _lblMonthYear;
     private readonly DataGridView _dgvCalendar;
 
+    private readonly Label _lblLogMonth;
     private readonly Label _lblLogFilter;
     private readonly Button _btnClearFilter;
     private readonly DataGridView _dgvLog;
 
     private List<TradeRecord> _allTrades = new();
     private DateOnly _currentMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateOnly _logMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
     private DateOnly? _logFilterDate;
 
     private static readonly string[] DayHeaders = { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "WEEK" };
@@ -36,7 +38,7 @@ public class HistoryTabPanel : Panel
 
         // ---- View toggle ----
         var togglePanel = new Panel { Dock = DockStyle.Top, Height = 32 };
-        _rbCalendar = new RadioButton { Text = "Calendar", Checked = true, Location = new Point(0, 6), AutoSize = true };
+        _rbCalendar = new RadioButton { Text = "Calendar", Location = new Point(0, 6), AutoSize = true };
         _rbLog      = new RadioButton { Text = "Trade Log", Location = new Point(90, 6), AutoSize = true };
         var btnRefresh = new Button { Text = "Refresh", Location = new Point(190, 2), Size = new Size(70, 24) };
         _rbCalendar.CheckedChanged += (s, e) => { _calendarView.Visible = _rbCalendar.Checked; _logView.Visible = !_rbCalendar.Checked; };
@@ -48,7 +50,8 @@ public class HistoryTabPanel : Panel
         // ---- Calendar view ----
         _calendarView = new Panel { Dock = DockStyle.Fill };
 
-        var statsPanel = new TableLayoutPanel { Dock = DockStyle.Top, Height = 56, ColumnCount = 4, RowCount = 1 };
+        var statsPanel = new TableLayoutPanel { Dock = DockStyle.Top, Height = 72, ColumnCount = 4, RowCount = 1 };
+        statsPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         for (int i = 0; i < 4; i++) statsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25f));
         _lblMonthPnl    = MakeStatTile(statsPanel, 0, "Month PnL");
         _lblTradingDays = MakeStatTile(statsPanel, 1, "Trading days");
@@ -90,12 +93,20 @@ public class HistoryTabPanel : Panel
         // ---- Trade Log view ----
         _logView = new Panel { Dock = DockStyle.Fill, Visible = false };
 
-        var logFilterPanel = new Panel { Dock = DockStyle.Top, Height = 26 };
-        _lblLogFilter = new Label { AutoSize = true, Location = new Point(0, 5), ForeColor = Color.DimGray };
-        _btnClearFilter = new Button { Text = "Ver todos", Location = new Point(0, 0), Size = new Size(80, 24), Visible = false };
+        var logFilterPanel = new Panel { Dock = DockStyle.Top, Height = 30 };
+        var btnLogPrev = new Button { Text = "<", Location = new Point(0, 2), Size = new Size(28, 24) };
+        var btnLogNext = new Button { Text = ">", Location = new Point(32, 2), Size = new Size(28, 24) };
+        _lblLogMonth = new Label { Location = new Point(70, 6), AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
+        _btnClearFilter = new Button { Text = "Ver todos", Location = new Point(200, 2), Size = new Size(80, 24), Visible = false };
+        _lblLogFilter = new Label { AutoSize = true, Location = new Point(290, 6), ForeColor = Color.DimGray };
+        btnLogPrev.Click += (s, e) => { _logMonth = _logMonth.AddMonths(-1); _logFilterDate = null; RefreshLog(); };
+        btnLogNext.Click += (s, e) => { _logMonth = _logMonth.AddMonths(1); _logFilterDate = null; RefreshLog(); };
         _btnClearFilter.Click += (s, e) => { _logFilterDate = null; RefreshLog(); };
-        logFilterPanel.Controls.Add(_lblLogFilter);
+        logFilterPanel.Controls.Add(btnLogPrev);
+        logFilterPanel.Controls.Add(btnLogNext);
+        logFilterPanel.Controls.Add(_lblLogMonth);
         logFilterPanel.Controls.Add(_btnClearFilter);
+        logFilterPanel.Controls.Add(_lblLogFilter);
 
         _dgvLog = new DataGridView
         {
@@ -105,10 +116,11 @@ public class HistoryTabPanel : Panel
             AllowUserToDeleteRows       = false,
             RowHeadersVisible           = false,
             SelectionMode               = DataGridViewSelectionMode.FullRowSelect,
-            AutoSizeColumnsMode         = DataGridViewAutoSizeColumnsMode.Fill
+            AutoSizeColumnsMode         = DataGridViewAutoSizeColumnsMode.AllCells
         };
         _dgvLog.Columns.Add("colDate",     "Date");
         _dgvLog.Columns.Add("colTime",     "Time");
+        _dgvLog.Columns.Add("colWeek",     "Week");
         _dgvLog.Columns.Add("colSymbol",   "Symbol");
         _dgvLog.Columns.Add("colType",     "Type");
         _dgvLog.Columns.Add("colStrike",   "Strike");
@@ -119,6 +131,13 @@ public class HistoryTabPanel : Panel
         _dgvLog.Columns.Add("colPnlPct",   "PnL%");
         _dgvLog.Columns.Add("colDuration", "Duration");
         _dgvLog.Columns.Add("colDemo",     "Demo/Real");
+        // Hidden id column — clicking a row looks the trade up fresh by this instead of relying
+        // on row.Tag surviving whatever the grid does internally (header-click sorting on an
+        // unbound DataGridView can reorder rows in ways that don't reliably carry Tag along).
+        _dgvLog.Columns.Add(new DataGridViewTextBoxColumn { Name = "colId", Visible = false });
+        foreach (DataGridViewColumn col in _dgvLog.Columns)
+            col.SortMode = DataGridViewColumnSortMode.NotSortable;
+        _dgvLog.CellClick += DgvLog_CellClick;
 
         _logView.Controls.Add(_dgvLog);
         _logView.Controls.Add(logFilterPanel);
@@ -127,16 +146,39 @@ public class HistoryTabPanel : Panel
         Controls.Add(_logView);
         Controls.Add(togglePanel);
 
+        // Default view — set now that _calendarView/_logView both exist (setting this earlier,
+        // before they were constructed, meant the CheckedChanged handler above ran against null
+        // fields and silently never applied the visibility swap).
+        _rbLog.Checked = true;
+        _calendarView.Visible = false;
+        _logView.Visible = true;
+
         RefreshData();
     }
 
+    // Explicit Location/Size instead of nested Dock=Top/Fill labels — the docked version left the
+    // value label collapsed to zero height in practice. Both labels anchor to the tile's top-left
+    // corner, which is enough since the tile itself has a fixed height (statsPanel.Height).
     private static Label MakeStatTile(TableLayoutPanel host, int col, string title)
     {
         var panel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(2), BorderStyle = BorderStyle.FixedSingle };
-        var lblTitle = new Label { Text = title, Dock = DockStyle.Top, Height = 18, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(6, 0, 0, 0) };
-        var lblValue = new Label { Text = "-", Dock = DockStyle.Fill, Font = new Font(host.Font.FontFamily, 14, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(6, 0, 0, 0) };
-        panel.Controls.Add(lblValue);
+        var lblTitle = new Label
+        {
+            Text      = title,
+            Location  = new Point(8, 6),
+            AutoSize  = true,
+            ForeColor = Color.DimGray
+        };
+        var lblValue = new Label
+        {
+            Text      = "-",
+            Location  = new Point(8, 26),
+            AutoSize  = true,
+            Font      = new Font(host.Font.FontFamily, 15, FontStyle.Bold),
+            ForeColor = Color.Black
+        };
         panel.Controls.Add(lblTitle);
+        panel.Controls.Add(lblValue);
         host.Controls.Add(panel, col, 0);
         return lblValue;
     }
@@ -221,6 +263,10 @@ public class HistoryTabPanel : Panel
                         _ = dayPending; // included in the trade count only, no separate rendering for now
                     }
                 }
+                // Selection highlight would otherwise repaint the cell solid blue on click,
+                // hiding the Profit/Loss/Pending color — keep the same look whether selected or not.
+                cell.Style.SelectionBackColor = cell.Style.BackColor;
+                cell.Style.SelectionForeColor = cell.Style.ForeColor;
                 day = day.AddDays(1);
             }
 
@@ -237,6 +283,8 @@ public class HistoryTabPanel : Panel
                 weekCell.Style.ForeColor = Color.Black;
                 weekCell.Style.Font = new Font(_dgvCalendar.Font, FontStyle.Bold);
             }
+            weekCell.Style.SelectionBackColor = weekCell.Style.BackColor;
+            weekCell.Style.SelectionForeColor = weekCell.Style.ForeColor;
         }
     }
 
@@ -246,23 +294,38 @@ public class HistoryTabPanel : Panel
         if (_dgvCalendar.Rows[e.RowIndex].Cells[e.ColumnIndex].Tag is not DateOnly day) return;
 
         _logFilterDate = day;
+        _logMonth = _currentMonth; // keep the log's month nav in sync with the day being drilled into
         _rbLog.Checked = true; // triggers the panel-visibility swap
         RefreshLog();
     }
 
     // ---- Trade Log ----
 
+    private void DgvLog_CellClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        if (_dgvLog.Rows[e.RowIndex].Cells["colId"].Value is not int id) return;
+
+        var trade = _allTrades.FirstOrDefault(t => t.Id == id);
+        if (trade == null) return;
+
+        using var detail = new TradeDetailForm(trade);
+        detail.ShowDialog(FindForm());
+    }
+
     private void RefreshLog()
     {
+        _lblLogMonth.Text = _logMonth.ToString("MMMM yyyy");
         _btnClearFilter.Visible = _logFilterDate.HasValue;
+
+        var monthTrades = _allTrades.Where(t => t.EntryTime.Year == _logMonth.Year && t.EntryTime.Month == _logMonth.Month).ToList();
         _lblLogFilter.Text = _logFilterDate.HasValue
             ? $"Filtrado: {_logFilterDate.Value:yyyy-MM-dd}"
-            : $"Todos los trades ({_allTrades.Count})";
-        if (_logFilterDate.HasValue) _btnClearFilter.Location = new Point(_lblLogFilter.PreferredWidth + 12, 0);
+            : $"{monthTrades.Count} trades";
 
         var trades = _logFilterDate.HasValue
             ? _allTrades.Where(t => DateOnly.FromDateTime(t.EntryTime) == _logFilterDate.Value)
-            : _allTrades.AsEnumerable();
+            : monthTrades.AsEnumerable();
 
         _dgvLog.Rows.Clear();
         foreach (var t in trades.OrderByDescending(t => t.EntryTime))
@@ -270,6 +333,7 @@ public class HistoryTabPanel : Panel
             var idx = _dgvLog.Rows.Add(
                 t.EntryTime.ToString("yyyy-MM-dd"),
                 t.EntryTime.ToString("HH:mm:ss"),
+                $"Wk{WeekOfMonth(DateOnly.FromDateTime(t.EntryTime))}",
                 t.Symbol,
                 t.OptionType,
                 t.StrikePrice.ToString("F2"),
@@ -280,9 +344,33 @@ public class HistoryTabPanel : Panel
                 t.PnlPercent.HasValue ? $"{(t.PnlPercent.Value >= 0 ? "+" : "")}{t.PnlPercent.Value:F1}%" : "-",
                 t.Duration?.ToString(@"hh\:mm\:ss") ?? "-",
                 t.IsDemo ? "Demo" : "Real");
+            _dgvLog.Rows[idx].Cells["colId"].Value = t.Id;
 
-            if (t.Pnl.HasValue)
-                _dgvLog.Rows[idx].Cells["colPnl"].Style.ForeColor = t.Pnl.Value >= 0 ? Color.DarkGreen : Color.DarkRed;
+            var boldFont = new Font(_dgvLog.Font, FontStyle.Bold);
+            var row = _dgvLog.Rows[idx];
+
+            row.Cells["colSymbol"].Style.ForeColor = Color.DarkBlue;
+
+            row.Cells["colType"].Style.ForeColor = t.OptionType == "CALL" ? Color.DarkGreen : Color.DarkRed;
+            row.Cells["colType"].Style.Font = boldFont;
+
+            var pnlColor = t.Pnl.HasValue ? (t.Pnl.Value >= 0 ? Color.DarkGreen : Color.DarkRed) : Color.Black;
+            row.Cells["colPnl"].Style.ForeColor = pnlColor;
+            row.Cells["colPnl"].Style.Font = boldFont;
+            row.Cells["colPnlPct"].Style.ForeColor = pnlColor;
+            row.Cells["colPnlPct"].Style.Font = boldFont;
+
+            row.Cells["colDemo"].Style.ForeColor = t.IsDemo ? Color.DarkOrange : Color.DarkGreen;
+            row.Cells["colDemo"].Style.Font = boldFont;
         }
+    }
+
+    // Same Sunday-start week grouping the Calendar view uses (W1, W2, ...) so "Wk2" here lines
+    // up with the "W2" row on the Calendar tab for the same date.
+    private static int WeekOfMonth(DateOnly date)
+    {
+        var firstOfMonth = new DateOnly(date.Year, date.Month, 1);
+        var offset = (int)firstOfMonth.DayOfWeek;
+        return (date.Day + offset - 1) / 7 + 1;
     }
 }

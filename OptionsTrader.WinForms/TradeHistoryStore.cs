@@ -25,7 +25,14 @@ public record TradeRecord(
     decimal? Pnl,
     decimal? PnlPercent,
     bool IsDemo,
-    string Broker);
+    string Broker,
+    // S3 URLs — set by UploadScreenshotAsync as each screenshot actually gets uploaded, so the
+    // trade-detail view can show all 3 without depending on the API's /screenshots record.
+    string? EntryImageUrl = null,
+    string? CloseImageUrl = null,
+    string? TradeLogImageUrl = null);
+
+public enum TradeImageKind { Entry, Close, TradeLog }
 
 // One instance runs per ticker as a SEPARATE OS process, all appending/updating this SAME file —
 // same exclusive-lock-with-retry pattern as OpenTradesStore/TelegramPushStore.
@@ -82,6 +89,24 @@ internal static class TradeHistoryStore
             var idx = trades.FindIndex(t => t.Id == id);
             if (idx < 0) return;
             trades[idx] = trades[idx] with { ExitPrice = exitPrice, Pnl = pnl, PnlPercent = pnlPercent, Duration = duration };
+        });
+    }
+
+    // Records the S3 URL for one of the 3 screenshots a trade gets (Entry/Close/TradeLog). No-op
+    // if the id isn't found — best-effort, same as every other store here.
+    public static void SetImageUrl(int id, TradeImageKind kind, string url)
+    {
+        Mutate(trades =>
+        {
+            var idx = trades.FindIndex(t => t.Id == id);
+            if (idx < 0) return;
+            trades[idx] = kind switch
+            {
+                TradeImageKind.Entry    => trades[idx] with { EntryImageUrl = url },
+                TradeImageKind.Close    => trades[idx] with { CloseImageUrl = url },
+                TradeImageKind.TradeLog => trades[idx] with { TradeLogImageUrl = url },
+                _ => trades[idx]
+            };
         });
     }
 

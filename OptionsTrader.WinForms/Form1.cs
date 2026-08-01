@@ -2080,7 +2080,7 @@ public partial class Form1 : Form
         // and the Telegram push below, instead of each capturing its own copy.
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
         if (closeChartPath != null)
-            _ = UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr);
+            _ = UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
         if (tradeId != 0)
@@ -2090,7 +2090,7 @@ public partial class Form1 : Form
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr);
+        _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr, TradeImageKind.TradeLog);
     }
 
     // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
@@ -2129,7 +2129,7 @@ public partial class Form1 : Form
     {
         var path = await SaveTradeChartSnapshotAsync(symbol, optionType, "Entry");
         if (path != null)
-            await UploadScreenshotAsync(path, symbol, optionType, tradeId, timeStr);
+            await UploadScreenshotAsync(path, symbol, optionType, tradeId, timeStr, TradeImageKind.Entry);
     }
 
     // Pushes a Telegram photo (the "_Close" 3-chart snapshot CloseTradeRowAsync already captured
@@ -2404,7 +2404,10 @@ public partial class Form1 : Form
         TradeHistoryStore.Close(tradeId, exitPrice, pnl, pnlPercent, duration);
     }
 
-    private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr)
+    // kind, when given, also saves the resulting S3 URL onto the local TradeHistoryStore record
+    // (EntryImageUrl/CloseImageUrl/TradeLogImageUrl) — this is what lets the trade-detail view
+    // show all 3 images without needing the API, once a trade is uploaded through this path.
+    private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr, TradeImageKind? kind = null)
     {
         try
         {
@@ -2433,6 +2436,9 @@ public partial class Form1 : Form
             });
 
             var s3Url = $"https://{aws.BucketName}.s3.amazonaws.com/{s3Key}";
+
+            if (kind.HasValue && tradeId != 0)
+                TradeHistoryStore.SetImageUrl(tradeId, kind.Value, s3Url);
 
             if (tradeId > 0)
             {
