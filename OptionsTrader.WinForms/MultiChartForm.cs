@@ -526,6 +526,18 @@ public class MultiChartForm : Form
     // auto-closes at 4pm ET because it expires today.
     public Task MarkExpiredOnRthChartAsync() => _rthPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
 
+    // Green "Stk=xxx" line on all 3 panels — fired when a trade (demo or real) opens.
+    public async Task MarkStrikeOnAllChartsAsync(decimal strike)
+    {
+        var tasks = new[]
+        {
+            _hourlyPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask,
+            _rthPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask,
+            _overnightPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask
+        };
+        await Task.WhenAll(tasks);
+    }
+
     // Forwards an already-timestamped WS connect/disconnect/reconnect line from Form1 (which owns
     // the actual Schwab streamer connection) into this window's small event log — safe to call
     // from any thread, since streamer reconnects fire from its own background receive-loop thread.

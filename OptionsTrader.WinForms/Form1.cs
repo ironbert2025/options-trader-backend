@@ -118,12 +118,19 @@ public partial class Form1 : Form
         // (not the designer) so it doesn't require touching Form1.Designer.cs's layout.
         var btnDeleteTelegramPushes = new Button
         {
-            Location = new Point(990, 94),
+            Location = new Point(1020, 124),
             Size     = new Size(90, 25),
             Text     = "Del. Telegram"
         };
         btnDeleteTelegramPushes.Click += BtnDeleteTelegramPushes_Click;
         tabQuotes.Controls.Add(btnDeleteTelegramPushes);
+
+        // "History" tab — Calendar (trading journal) + Trade Log views over TradeHistoryStore.
+        // Built entirely in HistoryTabPanel (no designer file), same convention as
+        // MultiChartForm/ChartPanel.
+        var tabHistory = new TabPage("History") { Padding = new Padding(8) };
+        tabHistory.Controls.Add(new HistoryTabPanel());
+        tabControl.TabPages.Add(tabHistory);
     }
 
     private async void BtnDeleteTelegramPushes_Click(object? sender, EventArgs e)
@@ -577,7 +584,7 @@ public partial class Form1 : Form
                 var pnlPct    = t.EntryPrice > 0 ? Math.Round(pnl / (t.EntryPrice * decimal.Parse(t.Contracts) * 100) * 100, 1) : 0m;
 
                 OpenTradesStore.Remove(t.TradeId);
-                if (t.TradeId > 0)
+                if (t.TradeId != 0) // 0 == entry never even got a local id (SaveTradeToApiAsync failed outright) — nothing to close
                     _ = CloseTradeInApiAsync(t.TradeId, 0m, pnl, pnlPct, duration);
             }
             else
@@ -630,6 +637,8 @@ public partial class Form1 : Form
         rbTrade.Font = new Font(rbTrade.Font, rbTrade.Checked ? FontStyle.Bold : FontStyle.Regular);
         rbTradeTarget.ForeColor = rbTradeTarget.Checked ? Color.Green : SystemColors.ControlText;
         rbTradeTarget.Font = new Font(rbTradeTarget.Font, rbTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
+        rbNoTradeTarget.ForeColor = rbNoTradeTarget.Checked ? Color.DarkOrange : SystemColors.ControlText;
+        rbNoTradeTarget.Font = new Font(rbNoTradeTarget.Font, rbNoTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
     }
 
     private void LoadBalance()
@@ -1333,6 +1342,8 @@ public partial class Form1 : Form
             _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false);
         else if (rbTradeTarget.Checked)
             _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true);
+        else if (rbNoTradeTarget.Checked)
+            OpenSimulatedTradeNoTarget(e.RowIndex);
     }
 
     private async void OpenSimulatedTrade(int rowIndex)
@@ -1348,6 +1359,23 @@ public partial class Form1 : Form
         if (ask <= 0) return;
 
         await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false);
+    }
+
+    // Same as OpenSimulatedTrade, but with suppressAutoClose: true — no target% auto-close, the
+    // demo trade just runs until closed manually or auto-closed at 4pm ET if it expires today.
+    private async void OpenSimulatedTradeNoTarget(int rowIndex)
+    {
+        var row       = dgvQuotes.Rows[rowIndex];
+        var rowType   = row.Tag?.ToString() ?? "CALL";
+        var strike    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
+        var contracts = row.Cells["colContracts"].Value?.ToString() ?? "0";
+        var level     = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
+        var symbol    = _selectedTicker?.Symbol ?? "UNK";
+
+        var (bid, ask) = ReadRowBidAsk(row, rowType);
+        if (ask <= 0) return;
+
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true);
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
@@ -1392,6 +1420,8 @@ public partial class Form1 : Form
         newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
         newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
         SetTradeTypeColor(newRow, rowType);
+        if (decimal.TryParse(strike, out var strikeForMoneyness))
+            SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
 
         LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
@@ -1418,6 +1448,10 @@ public partial class Form1 : Form
             PnlTarget:      targetPct.ToString("F0")));
 
         _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
+
+        // Green "Stk=xxx" line on all 3 charts — demo and real trades both flow through here.
+        if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
+            _ = chartFormForStrike.MarkStrikeOnAllChartsAsync(strikeVal);
 
         return (tradeId, newRow);
     }
@@ -2048,11 +2082,12 @@ public partial class Form1 : Form
         System.Windows.Forms.Application.DoEvents();
 
         // Remove from local persistence
-        if (tradeId > 0)
+        if (tradeId != 0)
             OpenTradesStore.Remove(tradeId);
 
-        // Close trade in API
-        if (tradeId > 0)
+        // Close trade (API PATCH if tradeId is a real API id, always updates TradeHistoryStore
+        // locally regardless — see CloseTradeInApiAsync)
+        if (tradeId != 0)
         {
             var exitPrice = exitBid;
             await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
@@ -2072,17 +2107,17 @@ public partial class Form1 : Form
         // and the Telegram push below, instead of each capturing its own copy.
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
         if (closeChartPath != null)
-            _ = UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr);
+            _ = UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
-        if (tradeId > 0)
+        if (tradeId != 0)
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
         // Screenshot TradeLog (Trades + Logger section of the form)
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr);
+        _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr, TradeImageKind.TradeLog);
     }
 
     // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
@@ -2121,7 +2156,7 @@ public partial class Form1 : Form
     {
         var path = await SaveTradeChartSnapshotAsync(symbol, optionType, "Entry");
         if (path != null)
-            await UploadScreenshotAsync(path, symbol, optionType, tradeId, timeStr);
+            await UploadScreenshotAsync(path, symbol, optionType, tradeId, timeStr, TradeImageKind.Entry);
     }
 
     // Pushes a Telegram photo (the "_Close" 3-chart snapshot CloseTradeRowAsync already captured
@@ -2315,13 +2350,20 @@ public partial class Form1 : Form
         }
     }
 
+    // Dual-writes every trade to TradeHistoryStore alongside the API call — first step toward
+    // being able to run without the EC2 backend. The API stays the source of truth for the id
+    // whenever it's reachable; if it isn't (apiTradeId stays 0), TradeHistoryStore.Add assigns a
+    // local negative id instead of losing the trade, and THAT becomes the id used everywhere else
+    // (OpenTradesStore, screenshots, close) for the rest of this trade's life.
     private async Task<int> SaveTradeToApiAsync(string symbol, string rowType, string strike, decimal ask,
         int contracts, int level, decimal targetPct, DateTime entryTime, bool isDemo = false)
     {
+        var ticker = _selectedTicker!;
+        var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
+        var apiTradeId = 0;
+
         try
         {
-            var ticker = _selectedTicker!;
-            var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
             var optionType = rowType == "CALL"
                 ? OptionsTrader.Domain.Enums.OptionType.Call
                 : OptionsTrader.Domain.Enums.OptionType.Put;
@@ -2346,38 +2388,53 @@ public partial class Form1 : Form
             var json = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
-            {
                 this.Invoke(() => LogLine($"API Error {(int)response.StatusCode}: {json}", Color.Red));
-                return 0;
+            else
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                apiTradeId = doc.RootElement.GetProperty("id").GetInt32();
             }
-
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            return doc.RootElement.GetProperty("id").GetInt32();
         }
         catch (Exception ex)
         {
             this.Invoke(() => LogLine($"API Exception: {ex.Message}", Color.Red));
-            return 0;
         }
+
+        return TradeHistoryStore.Add(new TradeRecord(
+            Id: apiTradeId, Symbol: symbol, OptionType: rowType, StrikePrice: decimal.Parse(strike),
+            SpotPrice: _lastSpotPrice, ExpirationDate: expDate, EntryPrice: ask, ExitPrice: null,
+            EntryTime: entryTime, Contracts: contracts, Level: level, TargetPercent: targetPct,
+            Duration: null, Pnl: null, PnlPercent: null, IsDemo: isDemo, Broker: "Schwab"));
     }
 
     private async Task CloseTradeInApiAsync(int tradeId, decimal exitPrice, decimal pnl, decimal pnlPercent, TimeSpan duration)
     {
-        try
+        // tradeId can be a local-only negative id (see SaveTradeToApiAsync) if the API was
+        // unreachable at open time — nothing to PATCH on the API for those, but still record the
+        // close locally so the trade's full lifecycle isn't lost.
+        if (tradeId > 0)
         {
-            var payload = new
+            try
             {
-                ExitPrice  = exitPrice,
-                PnL        = pnl,
-                PnLPercent = pnlPercent,
-                Duration   = TimeSpan.FromSeconds(Math.Floor(duration.TotalSeconds))
-            };
-            await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
+                var payload = new
+                {
+                    ExitPrice  = exitPrice,
+                    PnL        = pnl,
+                    PnLPercent = pnlPercent,
+                    Duration   = TimeSpan.FromSeconds(Math.Floor(duration.TotalSeconds))
+                };
+                await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
+            }
+            catch { }
         }
-        catch { }
+
+        TradeHistoryStore.Close(tradeId, exitPrice, pnl, pnlPercent, duration);
     }
 
-    private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr)
+    // kind, when given, also saves the resulting S3 URL onto the local TradeHistoryStore record
+    // (EntryImageUrl/CloseImageUrl/TradeLogImageUrl) — this is what lets the trade-detail view
+    // show all 3 images without needing the API, once a trade is uploaded through this path.
+    private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr, TradeImageKind? kind = null)
     {
         try
         {
@@ -2407,6 +2464,9 @@ public partial class Form1 : Form
 
             var s3Url = $"https://{aws.BucketName}.s3.amazonaws.com/{s3Key}";
 
+            if (kind.HasValue && tradeId != 0)
+                TradeHistoryStore.SetImageUrl(tradeId, kind.Value, s3Url);
+
             if (tradeId > 0)
             {
                 var payload = new { TradeId = tradeId, Symbol = symbol, S3Url = s3Url };
@@ -2435,6 +2495,17 @@ public partial class Form1 : Form
         rtbLogger.ScrollToCaret();
     }
 
+
+    // CALL is ITM once spot crosses above the strike; PUT is ITM once spot crosses below it.
+    // Colored red (OTM) / green (ITM) — called both at entry (with that moment's spot) and on
+    // every poll tick while the trade is open.
+    private static void SetMoneyness(DataGridViewRow row, string rowType, decimal strike, decimal spot)
+    {
+        var cell = row.Cells["colTradeMoneyness"];
+        var isItm = rowType == "CALL" ? spot > strike : spot < strike;
+        cell.Value           = isItm ? "ITM" : "OTM";
+        cell.Style.ForeColor = isItm ? Color.Green : Color.Red;
+    }
 
     // Extends the row's Min/Max PnL% columns if the given value is a new low/high. Session-only —
     // not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
@@ -2493,6 +2564,7 @@ public partial class Form1 : Form
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
 
             UpdatePnLMinMax(row, pnlPct);
+            SetMoneyness(row, type, strike, _lastSpotPrice);
 
             // Auto-close when the current bid reaches the target price (T_Bid).
             // Plain real trades (no target order) are manual-close only; Trade-Target rows still

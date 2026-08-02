@@ -161,6 +161,12 @@ internal static class SimulationDataLoader
             if (parts.Length < 2) continue;
             if (!DateTime.TryParse(parts[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out var eastTime)) continue;
             if (!decimal.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var price)) continue;
+            // A missing/mis-mapped field on the wire shows up as a 0 price — LevelOneTickStore
+            // saves every tick regardless (by design, for later comparison), but the live chart
+            // never plots these (SchwabStreamerClient only raises OnLevelOneTick when
+            // lastPrice > 0). Skip them here too, or a single 0-to-real-price "candle" per
+            // contaminated bucket blows out the whole chart's Y-axis.
+            if (price <= 0) continue;
 
             // Stored as Eastern wall-clock (see TickPriceStore/LevelOneTickStore) — convert back
             // to real UTC so it lines up with CandleAggregation's own Eastern conversions.

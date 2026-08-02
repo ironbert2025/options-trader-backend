@@ -275,6 +275,15 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync("markExpired();");
     }
 
+    // Full-width green line + "Stk=xxx" label at the given price — fired when a trade (demo or
+    // real) opens, on all 3 panels. Accumulates across trades, never auto-removed.
+    public async Task MarkStrikeAsync(decimal strike)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = strike.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markStrike({priceStr});");
+    }
+
     // Toggles the 1h panel's vertical arrow tools on/off. While on, every click places a
     // fixed-length vertical arrow with its tip at the clicked point — green points up, red points
     // down. Selectable by clicking the shaft and removable with Delete, same as the gray Rect
