@@ -39,6 +39,7 @@ partial class Form1
         colTradeClose = new DataGridViewButtonColumn();
         colTradePnLMin = new DataGridViewTextBoxColumn();
         colTradePnLMax = new DataGridViewTextBoxColumn();
+        colTradeMoneyness = new DataGridViewTextBoxColumn();
         grpOptionsChain = new GroupBox();
         dgvQuotes = new DataGridView();
         colSymbolQ = new DataGridViewTextBoxColumn();
@@ -274,7 +275,7 @@ partial class Form1
         dgvTrades.AllowUserToDeleteRows = false;
         dgvTrades.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         dgvTrades.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        dgvTrades.Columns.AddRange(new DataGridViewColumn[] { colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk, colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid, colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose, colTradePnLMin, colTradePnLMax });
+        dgvTrades.Columns.AddRange(new DataGridViewColumn[] { colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk, colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid, colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose, colTradePnLMin, colTradePnLMax, colTradeMoneyness });
         dgvTrades.Dock = DockStyle.Fill;
         dgvTrades.Location = new Point(3, 19);
         dgvTrades.Name = "dgvTrades";
@@ -380,8 +381,14 @@ partial class Form1
         colTradePnLMax.Name = "colTradePnLMax";
         colTradePnLMax.ReadOnly = true;
         //
+        // colTradeMoneyness
+        //
+        colTradeMoneyness.HeaderText = "OTM/ITM";
+        colTradeMoneyness.Name = "colTradeMoneyness";
+        colTradeMoneyness.ReadOnly = true;
+        //
         // grpOptionsChain
-        // 
+        //
         grpOptionsChain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
         grpOptionsChain.Controls.Add(dgvQuotes);
         grpOptionsChain.Controls.Add(lblCallHeader);
@@ -1761,6 +1768,7 @@ partial class Form1
     private DataGridViewButtonColumn colTradeClose;
     private DataGridViewTextBoxColumn colTradePnLMin;
     private DataGridViewTextBoxColumn colTradePnLMax;
+    private DataGridViewTextBoxColumn colTradeMoneyness;
     private Button btnFetchQuotes;
     private Button btnLiveChart;
     private Button btnFourEtfCharts;

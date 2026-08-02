@@ -1420,6 +1420,8 @@ public partial class Form1 : Form
         newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
         newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
         SetTradeTypeColor(newRow, rowType);
+        if (decimal.TryParse(strike, out var strikeForMoneyness))
+            SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
 
         LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
@@ -2494,6 +2496,17 @@ public partial class Form1 : Form
     }
 
 
+    // CALL is ITM once spot crosses above the strike; PUT is ITM once spot crosses below it.
+    // Colored red (OTM) / green (ITM) — called both at entry (with that moment's spot) and on
+    // every poll tick while the trade is open.
+    private static void SetMoneyness(DataGridViewRow row, string rowType, decimal strike, decimal spot)
+    {
+        var cell = row.Cells["colTradeMoneyness"];
+        var isItm = rowType == "CALL" ? spot > strike : spot < strike;
+        cell.Value           = isItm ? "ITM" : "OTM";
+        cell.Style.ForeColor = isItm ? Color.Green : Color.Red;
+    }
+
     // Extends the row's Min/Max PnL% columns if the given value is a new low/high. Session-only —
     // not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
     private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
@@ -2551,6 +2564,7 @@ public partial class Form1 : Form
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
 
             UpdatePnLMinMax(row, pnlPct);
+            SetMoneyness(row, type, strike, _lastSpotPrice);
 
             // Auto-close when the current bid reaches the target price (T_Bid).
             // Plain real trades (no target order) are manual-close only; Trade-Target rows still

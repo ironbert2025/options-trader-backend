@@ -515,6 +515,7 @@ public class SimulatorForm : Form
         _dgvTrades.Columns.Add(closeCol);
         _dgvTrades.Columns.Add("colSimPnlMin", "Min PnL%");
         _dgvTrades.Columns.Add("colSimPnlMax", "Max PnL%");
+        _dgvTrades.Columns.Add("colSimMoneyness", "OTM/ITM");
         _dgvTrades.CellContentClick += DgvTrades_CellContentClick;
     }
 
@@ -590,6 +591,7 @@ public class SimulatorForm : Form
             ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", targetPct.ToString("F0"))];
 
         _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid));
+        SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
         // Green "Stk=xxx" line on all 3 simulated charts — same as the real app's demo/real trades.
         _ = _hourlyChart.MarkStrikeAsync(strike);
@@ -617,7 +619,17 @@ public class SimulatorForm : Form
             trade.Row.Cells["colSimPnlPct"].Value  = pnlPct.ToString("F1");
             trade.Row.Cells["colSimPnl"].Style.ForeColor = pnl >= 0 ? Color.LimeGreen : Color.OrangeRed;
             UpdatePnLMinMax(trade.Row, pnlPct);
+            SetSimMoneyness(trade.Row, trade.OptionType, trade.StrikePrice, step.UnderlyingPrice);
         }
+    }
+
+    // Same rule as Form1's SetMoneyness: CALL is ITM once spot > strike, PUT once spot < strike.
+    private static void SetSimMoneyness(DataGridViewRow row, string optionType, decimal strike, decimal spot)
+    {
+        var cell  = row.Cells["colSimMoneyness"];
+        var isItm = optionType == "CALL" ? spot > strike : spot < strike;
+        cell.Value           = isItm ? "ITM" : "OTM";
+        cell.Style.ForeColor = isItm ? Color.Green : Color.Red;
     }
 
     // Same logic as Form1's private static UpdatePnLMinMax — kept as its own copy since that one
