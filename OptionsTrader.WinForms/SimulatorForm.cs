@@ -32,9 +32,20 @@ public class SimulatorForm : Form
         Location = new Point(8, 302), Size = new Size(900, 260),
         ColumnCount = 3, RowCount = 1
     };
-    private readonly SimulatedChartPanel _hourlyChart = new("1h") { Dock = DockStyle.Fill };
-    private readonly SimulatedChartPanel _rthChart    = new("15m RTH") { Dock = DockStyle.Fill };
-    private readonly SimulatedChartPanel _fullChart   = new("15m RTH+Overnight") { Dock = DockStyle.Fill };
+    private readonly SimulatedChartPanel _hourlyChart = new("1h", ChartPanelMode.Hourly15) { Dock = DockStyle.Fill };
+    private readonly SimulatedChartPanel _rthChart    = new("15m RTH", ChartPanelMode.Fifteen_RTH) { Dock = DockStyle.Fill };
+    private readonly SimulatedChartPanel _fullChart   = new("15m RTH+Overnight", ChartPanelMode.Fifteen_Full) { Dock = DockStyle.Fill };
+
+    // Cross-SMA (20/40/100/200), T-Line toggle/Clear, and a log of everything they (and the
+    // once-per-day Rebote Diario check) detect — log-only, no Telegram, no persistence, per
+    // request ("es un simulador").
+    private readonly Panel _pnlSmaEvents = new() { Location = new Point(590, 168), Size = new Size(440, 30) };
+    private readonly TextBox _txtEventLog = new()
+    {
+        Location = new Point(590, 202), Size = new Size(440, 90),
+        Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+        Font = new Font("Consolas", 8.5F), BackColor = Color.Black, ForeColor = Color.LightGreen
+    };
 
     // Same column-sizing behavior as Form1's real dgvTrades: AutoSizeColumnsMode.Fill stretches
     // the 16 columns proportionally across whatever width the grid has, instead of a fixed pixel
@@ -48,6 +59,21 @@ public class SimulatorForm : Form
         ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
         RowTemplate = { Height = 22 }
     };
+
+    // Counts and Contracts, same options/behavior as Form1's grpCounts/grpContracts, but session-
+    // only local fields (never written to CountsSettingsStore-equivalent or
+    // ContractsSettingsStore) — this is a simulator, it must never touch the real app's settings.
+    private readonly GroupBox _grpCounts    = new() { Text = "Counts", Location = new Point(590, 4), Size = new Size(185, 64) };
+    private readonly GroupBox _grpContracts = new() { Text = "Contracts", Location = new Point(785, 4), Size = new Size(105, 96) };
+    private string _selectedCounts    = "6"; // same default as Form1's _selectedCounts
+    private string _selectedContracts = "1"; // same default as Form1's rbContracts1.Checked
+
+    // "Go to time" — two rows of plain buttons (no typing): pick an RTH hour, then which 15-min
+    // candle within it, and jump straight to the step nearest that time. Whichever is clicked
+    // second (hour or minute — either order works) triggers the jump once both are set.
+    private readonly Panel _pnlGoToTime = new() { Location = new Point(590, 104), Size = new Size(440, 60) };
+    private int? _goToHour;
+    private int? _goToMinute;
 
     private List<DateOnly> _availableDates = new();
     private List<SimulationStep> _steps = new();
@@ -67,6 +93,9 @@ public class SimulatorForm : Form
 
         BuildChainColumns();
         BuildTradesColumns();
+        BuildCountsAndContractsGroups();
+        BuildGoToTimeButtons();
+        BuildSmaEventControls();
 
         _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
@@ -83,6 +112,11 @@ public class SimulatorForm : Form
         Controls.Add(_btnAdelante);
         Controls.Add(_lblStep);
         Controls.Add(_dgvChain);
+        Controls.Add(_grpCounts);
+        Controls.Add(_grpContracts);
+        Controls.Add(_pnlGoToTime);
+        Controls.Add(_pnlSmaEvents);
+        Controls.Add(_txtEventLog);
         Controls.Add(_chartsHost);
         Controls.Add(_dgvTrades);
 
@@ -90,9 +124,201 @@ public class SimulatorForm : Form
         _btnCargar.Click    += (s, e) => LoadSelectedDay();
         _btnAtras.Click     += (s, e) => Step(-1);
         _btnAdelante.Click  += (s, e) => Step(1);
-        _dgvChain.CellClick += DgvChain_CellClick;
+        _dgvChain.CellClick    += DgvChain_CellClick;
+        _dgvChain.CellPainting += DgvChain_CellPainting;
 
         Load += (s, e) => LoadSymbols();
+    }
+
+    // Same options as Form1's grpCounts (3-10, In Range) and grpContracts (1-6, PositionSize),
+    // built programmatically instead of via the designer since this form has none. Selecting one
+    // just updates the local field and re-renders the current step — no settings file touched.
+    private void BuildCountsAndContractsGroups()
+    {
+        var counts = new[] { "3", "4", "5", "6", "In Range" };
+        for (int i = 0; i < counts.Length; i++)
+        {
+            var rb = new RadioButton
+            {
+                Text     = counts[i],
+                Checked  = counts[i] == _selectedCounts,
+                AutoSize = true,
+                Location = new Point(6 + (i % 3) * 58, 20 + (i / 3) * 20)
+            };
+            rb.CheckedChanged += (s, e) =>
+            {
+                if (rb.Checked) { _selectedCounts = rb.Text; ApplyRadioStyle(_grpCounts); RenderCurrentStep(); }
+            };
+            _grpCounts.Controls.Add(rb);
+        }
+        ApplyRadioStyle(_grpCounts);
+
+        var contracts = new[] { "1", "2", "3", "4", "5", "6", "PositionSize" };
+        for (int i = 0; i < contracts.Length; i++)
+        {
+            var rb = new RadioButton
+            {
+                Text     = contracts[i],
+                Checked  = contracts[i] == _selectedContracts,
+                Location = contracts[i] == "PositionSize" ? new Point(6, 64) : new Point(6 + (i % 3) * 32, 20 + (i / 3) * 20),
+                Size     = contracts[i] == "PositionSize" ? new Size(93, 18) : new Size(28, 18)
+            };
+            rb.CheckedChanged += (s, e) =>
+            {
+                if (rb.Checked) { _selectedContracts = rb.Text; ApplyRadioStyle(_grpContracts); RenderCurrentStep(); }
+            };
+            _grpContracts.Controls.Add(rb);
+        }
+        ApplyRadioStyle(_grpContracts);
+    }
+
+    private static void ApplyRadioStyle(GroupBox group)
+    {
+        foreach (var rb in group.Controls.OfType<RadioButton>())
+        {
+            rb.ForeColor = rb.Checked ? Color.Green : SystemColors.ControlText;
+            rb.Font = new Font(rb.Font, rb.Checked ? FontStyle.Bold : FontStyle.Regular);
+        }
+    }
+
+    // Same formula as Form1's private CalcContracts/GetPositionSize — position size % and
+    // account balance are read (not written) from the real stores, since those aren't part of
+    // what this feature asked to keep simulator-local; only Counts/Contracts stay local.
+    private static string CalcSimContracts(decimal positionSize, decimal ask)
+    {
+        if (ask <= 0 || positionSize <= 0) return string.Empty;
+        var contracts = Math.Floor(positionSize / (ask * 100));
+        return contracts > 0 ? contracts.ToString("F0") : string.Empty;
+    }
+
+    private string GetSimContractsValue(decimal ask)
+    {
+        if (_selectedContracts != "PositionSize" && int.TryParse(_selectedContracts, out var fixedCount))
+            return fixedCount.ToString();
+
+        var balance = BalanceStore.Load();
+        decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct);
+        return CalcSimContracts(balance * pct / 100m, ask);
+    }
+
+    // Cross-SMA (20/40/100/200) + T-Line/Clear on the 1h simulated chart — same toggle mechanics
+    // as MultiChartForm's buttons, wired to SimulatedChartPanel's ported copies of the live
+    // detection logic. Everything they detect (plus the once-per-load Rebote Diario check) goes
+    // to _txtEventLog only.
+    private void BuildSmaEventControls()
+    {
+        var periods = new[] { 20, 40, 100, 200 };
+        var smaButtons = new List<Button>();
+        for (int i = 0; i < periods.Length; i++)
+        {
+            var period = periods[i];
+            var btn = new Button { Text = period.ToString(), Location = new Point(i * 46, 0), Size = new Size(42, 24) };
+            btn.Click += (s, e) =>
+            {
+                var (armed, up) = _hourlyChart.ToggleCrossMonitor(period);
+                btn.Text = armed ? $"{(up ? "↑" : "↓")}{period}" : period.ToString();
+                btn.BackColor = armed ? (up ? Color.LightGreen : Color.LightSalmon) : SystemColors.Control;
+            };
+            smaButtons.Add(btn);
+            _pnlSmaEvents.Controls.Add(btn);
+        }
+
+        var btnTLine = new Button { Text = "T-Line", Location = new Point(190, 0), Size = new Size(60, 24) };
+        btnTLine.Click += async (s, e) =>
+        {
+            var on = await _hourlyChart.ToggleTLineModeAsync();
+            btnTLine.BackColor = on ? Color.Orange : SystemColors.Control;
+        };
+        var btnClear = new Button { Text = "Clear", Location = new Point(254, 0), Size = new Size(60, 24) };
+        btnClear.Click += async (s, e) =>
+        {
+            await _hourlyChart.ClearTLineAsync();
+            btnTLine.BackColor = SystemColors.Control;
+        };
+        _pnlSmaEvents.Controls.Add(btnTLine);
+        _pnlSmaEvents.Controls.Add(btnClear);
+
+        _hourlyChart.OnCrossSequenceEvent += msg => LogSimEvent(msg);
+        _hourlyChart.OnTLineSignalEvent   += msg => LogSimEvent(msg);
+        _hourlyChart.OnCrossSequenceFinished += () =>
+        {
+            if (IsDisposed) return;
+            BeginInvoke(() =>
+            {
+                foreach (var (btn, period) in smaButtons.Zip(periods))
+                {
+                    btn.Text = period.ToString();
+                    btn.BackColor = SystemColors.Control;
+                }
+            });
+        };
+    }
+
+    private void LogSimEvent(string message)
+    {
+        if (IsDisposed) return;
+        void Append() => _txtEventLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+        if (InvokeRequired) BeginInvoke(Append); else Append();
+    }
+
+    private void BuildGoToTimeButtons()
+    {
+        var hourButtons = new List<Button>();
+        var hours = new[] { 9, 10, 11, 12, 13, 14, 15 }; // RTH: 9:30-16:00 ET
+        for (int i = 0; i < hours.Length; i++)
+        {
+            var hour = hours[i];
+            var btn = new Button { Text = hour.ToString(), Location = new Point(i * 40, 0), Size = new Size(36, 24) };
+            btn.Click += (s, e) =>
+            {
+                _goToHour = hour;
+                foreach (var b in hourButtons) b.BackColor = SystemColors.Control;
+                btn.BackColor = Color.LightGreen;
+                TryJumpToSelectedTime();
+            };
+            hourButtons.Add(btn);
+            _pnlGoToTime.Controls.Add(btn);
+        }
+
+        var minuteButtons = new List<Button>();
+        var minutes = new[] { 0, 15, 30, 45 };
+        for (int i = 0; i < minutes.Length; i++)
+        {
+            var minute = minutes[i];
+            var btn = new Button { Text = minute.ToString("D2"), Location = new Point(i * 40, 30), Size = new Size(36, 24) };
+            btn.Click += (s, e) =>
+            {
+                _goToMinute = minute;
+                foreach (var b in minuteButtons) b.BackColor = SystemColors.Control;
+                btn.BackColor = Color.LightGreen;
+                TryJumpToSelectedTime();
+            };
+            minuteButtons.Add(btn);
+            _pnlGoToTime.Controls.Add(btn);
+        }
+    }
+
+    // Jumps to whichever loaded step is closest to hour:minute on the currently loaded
+    // _simDate — steps are ~6s poll snapshots, not exactly on the minute, so "closest" (not
+    // "exact match") is what actually lands on the requested 15-min candle.
+    private void TryJumpToSelectedTime()
+    {
+        if (_goToHour is not { } hour || _goToMinute is not { } minute) return;
+        if (_steps.Count == 0) return;
+
+        var targetEastern = _simDate.ToDateTime(new TimeOnly(hour, minute));
+        var targetUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(targetEastern, DateTimeKind.Unspecified), EasternZone);
+
+        var closestIndex = 0;
+        var closestDiff = TimeSpan.MaxValue;
+        for (int i = 0; i < _steps.Count; i++)
+        {
+            var diff = (_steps[i].Time - targetUtc).Duration();
+            if (diff < closestDiff) { closestDiff = diff; closestIndex = i; }
+        }
+
+        _currentIndex = closestIndex;
+        RenderCurrentStep();
     }
 
     private void LoadSymbols()
@@ -139,8 +365,47 @@ public class SimulatorForm : Form
         _dgvTrades.Rows.Clear();
         _openSimTrades.Clear();
 
+        _txtEventLog.Clear();
+        EvaluateDailyBounce();
+
         UpdateStepButtons();
         RenderCurrentStep();
+    }
+
+    // Ported from ChartPanel.EvaluateDailyBounce, once per load (not per step) — checks the last
+    // daily candle BEFORE _simDate (i.e. "yesterday" relative to the replayed day) against the
+    // daily SMA20, same case-1/case-2 bounce formula as Cross-SMA. Log-only, no Telegram.
+    private void EvaluateDailyBounce()
+    {
+        var daily = CandleAggregation.AggregateToDaily(_hourlyCandles).Where(d => d.Date < _simDate).ToList();
+        const int period = 20;
+        if (daily.Count < period + 1) return;
+
+        var bars = daily.Select(d => d.Candle).ToList();
+        var justClosed = bars[^1];
+
+        decimal sum = 0;
+        for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
+        var sma20 = sum / period;
+
+        var isGreen = justClosed.Close > justClosed.Open;
+        var isRed   = justClosed.Close < justClosed.Open;
+        const decimal proximityRatio = 0.30m;
+
+        var bouncedDown = justClosed.Open < sma20 && isRed &&
+            (justClosed.High > sma20
+                ? justClosed.Close < sma20
+                : (sma20 - justClosed.High) < proximityRatio * (justClosed.High - justClosed.Close));
+
+        var bouncedUp = justClosed.Open > sma20 && isGreen &&
+            (justClosed.Low < sma20
+                ? justClosed.Close > sma20
+                : (justClosed.Low - sma20) < proximityRatio * (justClosed.Close - justClosed.Low));
+
+        if (!bouncedDown && !bouncedUp) return;
+
+        var direction = bouncedUp ? "al alza" : "a la baja";
+        LogSimEvent($"Rebote {direction} en Diario");
     }
 
     private void Step(int direction)
@@ -170,7 +435,17 @@ public class SimulatorForm : Form
         var step = _steps[_currentIndex];
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
-        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: false);
+        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts);
+
+        // PopulateQuotesGrid computes its own Conts column from the REAL (persisted)
+        // ContractsSettingsStore — override it here with the simulator's own local Contracts
+        // selection instead, against the same Ask shown in this grid.
+        foreach (DataGridViewRow row in _dgvChain.Rows)
+        {
+            var askCol = row.Tag?.ToString() == "PUT" ? "colPutAsk" : "colCallAsk";
+            decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask);
+            row.Cells["colContracts"].Value = GetSimContractsValue(ask);
+        }
 
         var hourlyUpToNow   = _hourlyCandles.Where(c => c.Time <= step.Time).ToList();
         var intradayUpToNow = _intradayCandles.Where(c => c.Time <= step.Time).ToList();
@@ -243,6 +518,43 @@ public class SimulatorForm : Form
         _dgvTrades.CellContentClick += DgvTrades_CellContentClick;
     }
 
+    // Same rendering as Form1.DgvQuotes_CellPainting — a colored button (green CALL / red PUT /
+    // gray if illiquid) instead of plain text, since the Strike cell is clickable here too
+    // (DgvChain_CellClick below).
+    private void DgvChain_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        if (e.ColumnIndex != _dgvChain.Columns["colStrikePrice"].Index) return;
+
+        var val      = e.Value?.ToString();
+        var row      = _dgvChain.Rows[e.RowIndex];
+        var rowType  = row.Tag?.ToString();
+        var bidCol   = rowType == "PUT" ? "colPutBid" : "colCallBid";
+        var disabled = !decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid) || bid == 0m;
+
+        e.PaintBackground(e.ClipBounds, true);
+
+        if (!string.IsNullOrEmpty(val))
+        {
+            var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
+            var textColor = disabled ? Color.Gray : Color.White;
+            var btnRect   = Rectangle.Inflate(e.CellBounds, -3, -3);
+
+            using var fillBrush = new SolidBrush(btnColor);
+            using var borderPen = new Pen(ControlPaint.Dark(btnColor, 0.2f));
+            using var textFont  = new Font(_dgvChain.Font, FontStyle.Bold);
+
+            e.Graphics!.FillRectangle(fillBrush, btnRect);
+            e.Graphics.DrawRectangle(borderPen, btnRect);
+
+            TextRenderer.DrawText(
+                e.Graphics, val, textFont, btnRect, textColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+        }
+
+        e.Handled = true;
+    }
+
     // Clicking the Strike cell opens a demo trade at the current step's Bid/Ask for that row's
     // option type — same interaction the real grid uses (Form1.DgvQuotes_CellClick), just against
     // simulated data and writing to SimTradesStore instead of the real trade flow.
@@ -278,6 +590,11 @@ public class SimulatorForm : Form
             ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", targetPct.ToString("F0"))];
 
         _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid));
+
+        // Green "Stk=xxx" line on all 3 simulated charts — same as the real app's demo/real trades.
+        _ = _hourlyChart.MarkStrikeAsync(strike);
+        _ = _rthChart.MarkStrikeAsync(strike);
+        _ = _fullChart.MarkStrikeAsync(strike);
     }
 
     // Recomputes PnL for every open demo trade against the current step's chain — same formula

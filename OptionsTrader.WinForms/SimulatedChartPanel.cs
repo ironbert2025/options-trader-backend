@@ -1,23 +1,30 @@
+using System.Text.Json;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using OptionsTrader.Application.DTOs.Streaming;
 
 namespace OptionsTrader.WinForms;
 
 // Minimal, standalone chart panel for SimulatorForm — reuses the SAME chart.html/Lightweight
-// Charts asset as the live ChartPanel, but has NO streaming connection, NO REST history fetch,
-// and NO drawing tools. It only ever shows whatever candle list it's told to via
-// CargarHastaPasoAsync — SimulatorForm recomputes and pushes that list on every step.
+// Charts asset as the live ChartPanel, but has NO streaming connection and NO REST history fetch.
+// It only ever shows whatever candle list it's told to via CargarHastaPasoAsync — SimulatorForm
+// recomputes and pushes that list on every step.
 //
 // Deliberately NOT a subclass or variant of ChartPanel — completely separate so nothing here can
-// ever affect the live chart's behavior, even by accident.
+// ever affect the live chart's behavior, even by accident. Cross-SMA and T-Line+SMA20 signal
+// detection (Hourly15 only) are ported copies of ChartPanel's own logic, evaluated against
+// whichever hourly candle just became "closed" as the simulator steps forward — no Telegram, no
+// disk persistence (not even the T-Line itself), matching this being a practice-only sandbox.
 public class SimulatedChartPanel : Panel
 {
     private readonly Label _header;
+    private readonly ChartPanelMode _mode;
     private WebView2 _webView = null!;
     private TaskCompletionSource? _readyTcs;
 
-    public SimulatedChartPanel(string title)
+    public SimulatedChartPanel(string title, ChartPanelMode mode)
     {
+        _mode = mode;
         _header = new Label
         {
             Dock      = DockStyle.Top,
@@ -56,6 +63,20 @@ public class SimulatedChartPanel : Panel
             _webView.CoreWebView2.Navigate(chartUri);
             await navDone.Task;
 
+            // Same SMA/Bollinger overlays as the live ChartPanel.LoadHistoryAsync, per mode —
+            // 1h gets SMA 20/40/100/200 + Bollinger, 15m RTH gets Bollinger only, RTH+Overnight
+            // gets neither (matches the live chart exactly).
+            if (_mode == ChartPanelMode.Hourly15)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+            }
+            else if (_mode == ChartPanelMode.Fifteen_RTH)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+            }
+
             _readyTcs.TrySetResult();
         }
         catch (Exception ex)
@@ -84,6 +105,18 @@ public class SimulatedChartPanel : Panel
             _visibleDaysSet = true;
         }
         await RunScriptAsync("loadHistory", candles);
+
+        if (_mode == ChartPanelMode.Hourly15)
+            EvaluateNewlyClosedCandles(candles);
+    }
+
+    // Same green "Stk=xxx" line as the live ChartPanel.MarkStrikeAsync — fired when a demo trade
+    // opens in the Simulator. Accumulates, never auto-removed.
+    public async Task MarkStrikeAsync(decimal strike)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = strike.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markStrike({priceStr});");
     }
 
     private async Task RunScriptAsync(string jsFunction, List<CandleData> candles)
@@ -113,5 +146,249 @@ public class SimulatedChartPanel : Panel
         }
 
         return System.Text.Json.JsonSerializer.Serialize(candles.Select(Map));
+    }
+
+    // ==================================================================================
+    // Cross-SMA (Cruce/Rebote) — ported from ChartPanel, log-only (no Telegram, no persistence).
+    // ==================================================================================
+
+    private readonly List<CandleData> _closedCandles = new();
+    private readonly SortedSet<int> _crossArmedPeriods = new();
+    private int? _crossActivePeriod;
+    private bool _crossUp;
+    private bool _crossFinished;
+
+    private static readonly Dictionary<int, string> SmaColorNames = new()
+    {
+        [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
+    };
+
+    public event Action? OnCrossSequenceFinished;
+    public event Action<string>? OnCrossSequenceEvent;
+    public event Action<string>? OnTLineSignalEvent;
+
+    public (bool Armed, bool Up) ToggleCrossMonitor(int period)
+    {
+        if (_crossArmedPeriods.Remove(period))
+        {
+            if (_crossActivePeriod == period) AdvanceCrossSequence(period);
+            return (false, false);
+        }
+
+        if (_crossFinished) return (false, false);
+
+        if (_crossActivePeriod == null)
+        {
+            var currentPrice = _closedCandles.LastOrDefault()?.Close;
+            var currentSma   = _closedCandles.Count > 0 ? Sma(period, _closedCandles.Count - 1) : null;
+            if (currentPrice == null || currentSma == null) return (false, false);
+
+            _crossUp = currentPrice < currentSma;
+            _crossActivePeriod = period;
+        }
+
+        _crossArmedPeriods.Add(period);
+        return (true, _crossUp);
+    }
+
+    private void AdvanceCrossSequence(int resolved)
+    {
+        _crossArmedPeriods.Remove(resolved);
+        var next = _crossArmedPeriods.Where(p => p > resolved).OrderBy(p => p).Cast<int?>().FirstOrDefault();
+        if (next == null)
+        {
+            _crossActivePeriod = null;
+            _crossFinished = true;
+            OnCrossSequenceFinished?.Invoke();
+        }
+        else
+        {
+            _crossActivePeriod = next;
+        }
+    }
+
+    private const decimal BounceProximityRatio = 0.30m;
+
+    private void EvaluateCrossings(CandleData justClosed)
+    {
+        if (_crossFinished || _crossActivePeriod == null) return;
+
+        var period = _crossActivePeriod.Value;
+        if (_closedCandles.Count < period + 1) return;
+
+        var currentSma  = Sma(period, _closedCandles.Count - 1);
+        var previousSma = Sma(period, _closedCandles.Count - 2);
+        if (currentSma == null) return;
+
+        var isGreen = justClosed.Close > justClosed.Open;
+        var isRed   = justClosed.Close < justClosed.Open;
+
+        var crossed = previousSma != null && _crossUp
+            ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
+            : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
+
+        if (crossed)
+        {
+            FireCrossSequenceEvent(period, "Cruce");
+            AdvanceCrossSequence(period);
+            return;
+        }
+
+        var bounced = _crossUp
+            ? justClosed.Open < currentSma && isRed &&
+                (justClosed.High > currentSma
+                    ? justClosed.Close < currentSma
+                    : (currentSma - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close))
+            : justClosed.Open > currentSma && isGreen &&
+                (justClosed.Low < currentSma
+                    ? justClosed.Close > currentSma
+                    : (justClosed.Low - currentSma) < BounceProximityRatio * (justClosed.Close - justClosed.Low));
+
+        if (bounced) FireCrossSequenceEvent(period, "Rebote");
+    }
+
+    private void FireCrossSequenceEvent(int period, string eventLabel)
+    {
+        var direction = _crossUp ? "UP" : "DOWN";
+        var colorName = SmaColorNames.TryGetValue(period, out var c) ? c : string.Empty;
+        OnCrossSequenceEvent?.Invoke($"{eventLabel} {direction} SMA {period}({colorName})");
+    }
+
+    private decimal? Sma(int period, int endIndex)
+    {
+        if (endIndex < period - 1 || endIndex >= _closedCandles.Count) return null;
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++) sum += _closedCandles[i].Close;
+        return sum / period;
+    }
+
+    // ==================================================================================
+    // T-Line + SMA20 breakout — ported from ChartPanel. Only 1 T-Line, in memory only (no
+    // TLineStore — nothing about a practice T-Line should survive closing the simulator).
+    // ==================================================================================
+
+    private const int TLineSmaPeriod = 20;
+    private (long T1, decimal P1, long T2, decimal P2)? _tLine;
+    private bool _tLineSignalFired;
+    private bool _tLineArmed;
+
+    public async Task<bool> ToggleTLineModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleTLine();");
+        _tLineArmed = result == "true";
+        return _tLineArmed;
+    }
+
+    public async Task ClearTLineAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
+        _tLine = null;
+        _tLineSignalFired = false;
+    }
+
+    private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "tline" && type != "tline_delete") return;
+
+            var t1 = root.GetProperty("t1").GetInt64();
+            var p1 = root.GetProperty("p1").GetDecimal();
+            var t2 = root.GetProperty("t2").GetInt64();
+            var p2 = root.GetProperty("p2").GetDecimal();
+
+            if (type == "tline")
+            {
+                if (_tLine != null)
+                {
+                    _ = _webView.CoreWebView2?.ExecuteScriptAsync("removeLastTLine();");
+                    MessageBox.Show(
+                        "Ya existe una T-Line dibujada. Borrala (Clear) antes de dibujar una nueva.",
+                        "T-Line ya existe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                _tLine = (t1, p1, t2, p2);
+                _tLineSignalFired = false;
+            }
+            else
+            {
+                _tLine = null;
+                _tLineSignalFired = false;
+            }
+        }
+        catch
+        {
+            // Malformed/unexpected message — ignore, not fatal.
+        }
+    }
+
+    private void EvaluateTLineSignal(CandleData justClosed)
+    {
+        if (_tLineSignalFired || _tLine == null) return;
+
+        var (t1, p1, t2, p2) = _tLine.Value;
+        var candleTimeSec = new DateTimeOffset(DateTime.SpecifyKind(justClosed.Time, DateTimeKind.Utc)).ToUnixTimeSeconds();
+        var tLineValue = TLineValueAt(t1, p1, t2, p2, candleTimeSec);
+
+        if (_closedCandles.Count < TLineSmaPeriod) return;
+        var sma20 = Sma(TLineSmaPeriod, _closedCandles.Count - 1);
+        if (sma20 == null) return;
+
+        var upBreakout = justClosed.Open < tLineValue
+            && justClosed.High > tLineValue && justClosed.High > sma20.Value
+            && justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
+
+        var downBreakout = justClosed.Open > tLineValue
+            && justClosed.Low < tLineValue && justClosed.Low < sma20.Value
+            && justClosed.Close < tLineValue && justClosed.Close < sma20.Value;
+
+        if (!upBreakout && !downBreakout) return;
+
+        _tLineSignalFired = true;
+        var direction = upBreakout ? "al alza" : "a la baja";
+        OnTLineSignalEvent?.Invoke($"CT {direction} en Hora — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})");
+    }
+
+    private static decimal TLineValueAt(long t1, decimal p1, long t2, decimal p2, long atTime)
+    {
+        if (t2 == t1) return p1;
+        var slope = (p2 - p1) / (t2 - t1);
+        return p1 + slope * (atTime - t1);
+    }
+
+    // ==================================================================================
+    // Bridges the simulator's "resend the whole candle list every step" model into the live
+    // chart's "evaluate once when a candle closes" model — a candle is treated as closed once a
+    // NEWER one appears after it in the list (the last candle in the list is always assumed
+    // still-forming, same as the live chart's _liveBucket). Handles jumps of more than 1 candle
+    // (e.g. the "Ir a hora" buttons) by evaluating every newly-closed candle in order, not just
+    // the latest one, so the Cross-SMA sequence never skips a step.
+    // ==================================================================================
+    private void EvaluateNewlyClosedCandles(List<CandleData> candles)
+    {
+        var closedNow = candles.Count > 0 ? candles.Take(candles.Count - 1).ToList() : new List<CandleData>();
+
+        // A step going backwards (◀) or a jump to an earlier time must roll the sequence state
+        // back too, or re-evaluating from scratch would replay already-fired events.
+        if (closedNow.Count < _closedCandles.Count)
+        {
+            _closedCandles.Clear();
+            _crossArmedPeriods.Clear();
+            _crossActivePeriod = null;
+            _crossFinished = false;
+            _tLineSignalFired = false;
+        }
+
+        for (int i = _closedCandles.Count; i < closedNow.Count; i++)
+        {
+            _closedCandles.Add(closedNow[i]);
+            EvaluateCrossings(closedNow[i]);
+            EvaluateTLineSignal(closedNow[i]);
+        }
     }
 }

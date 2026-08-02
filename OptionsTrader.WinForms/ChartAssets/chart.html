@@ -1130,6 +1130,64 @@
     return true;
   }
 
+  // ---- Strike marker: full-width green line + "Stk=xxx" label, drawn programmatically when a
+  // trade (demo or real) opens — see markStrike below. Accumulates, one per trade, never removed
+  // automatically (stays as a historical reference even after the trade closes). ----
+
+  class StrikeLinesPrimitive {
+    constructor() { this._lines = []; this._chart = null; } // [{ time, price, label }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                self._lines.forEach(l => {
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  // xRaw is null once the entry candle scrolls out of the loaded range (e.g. a
+                  // multi-day context) — start from the left edge instead of skipping the line.
+                  const xRaw = ts.timeToCoordinate(l.time);
+                  const x = xRaw == null ? 0 : xRaw;
+                  if (y == null) return;
+                  ctx.strokeStyle = '#00c853'; // green
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+
+                  ctx.fillStyle = '#00c853';
+                  ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textBaseline = 'bottom';
+                  ctx.fillText(l.label, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio - 2);
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const strikeLinesPrimitive = new StrikeLinesPrimitive();
+  let strikeLinesAttached = false;
+
+  // Anchors at the LAST candle currently loaded (i.e. "now", the moment the trade opened) instead
+  // of the left edge — same "current candle to the right edge" convention as the H-Line tool.
+  function markStrike(price) {
+    if (!strikeLinesAttached) { candleSeries.attachPrimitive(strikeLinesPrimitive); strikeLinesAttached = true; }
+    if (allCandles.length === 0) return;
+    const anchorTime = allCandles[allCandles.length - 1].time;
+    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: `Stk=${price}` });
+    forceRepaint();
+  }
+
   // ---- SMA overlay (optional — only enabled on panels that call configureSmas) ----
 
   let allCandles = [];           // mirrors what's on the candle series, kept sorted by time
