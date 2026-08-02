@@ -26,10 +26,12 @@ public class SimulatorForm : Form
     };
 
     // 3-column TableLayoutPanel (same pattern as MultiChartForm's own chart row) — deterministic
-    // left-to-right order, unlike stacking multiple Dock=Left panels.
+    // left-to-right order, unlike stacking multiple Dock=Left panels. Height matches the candle
+    // panel area MultiChartForm actually renders at (Form Height 530, minus its 88px toolbar and
+    // title bar/padding) so the simulator's charts look the same size as the real form's.
     private readonly TableLayoutPanel _chartsHost = new()
     {
-        Location = new Point(8, 302), Size = new Size(900, 260),
+        Location = new Point(8, 302), Size = new Size(900, 400),
         ColumnCount = 3, RowCount = 1
     };
     private readonly SimulatedChartPanel _hourlyChart = new("1h", ChartPanelMode.Hourly15) { Dock = DockStyle.Fill };
@@ -38,11 +40,12 @@ public class SimulatorForm : Form
 
     // Cross-SMA (20/40/100/200), T-Line toggle/Clear, and a log of everything they (and the
     // once-per-day Rebote Diario check) detect — log-only, no Telegram, no persistence, per
-    // request ("es un simulador").
+    // request ("es un simulador"). The toggle buttons stay up top; the log itself lives below the
+    // trades grid at the bottom of the form.
     private readonly Panel _pnlSmaEvents = new() { Location = new Point(590, 168), Size = new Size(440, 30) };
     private readonly TextBox _txtEventLog = new()
     {
-        Location = new Point(590, 202), Size = new Size(440, 90),
+        Location = new Point(8, 848), Size = new Size(1000, 90),
         Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
         Font = new Font("Consolas", 8.5F), BackColor = Color.Black, ForeColor = Color.LightGreen
     };
@@ -52,7 +55,7 @@ public class SimulatorForm : Form
     // width per column (dgvTrades never sets one either).
     private readonly DataGridView _dgvTrades = new()
     {
-        Location = new Point(8, 570), Size = new Size(1000, 130),
+        Location = new Point(8, 710), Size = new Size(1000, 130),
         AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true,
         RowHeadersVisible = false,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
@@ -88,7 +91,7 @@ public class SimulatorForm : Form
     {
         Text          = "Simulador";
         Width         = 1040;
-        Height        = 740;
+        Height        = 1000;
         StartPosition = FormStartPosition.CenterScreen;
 
         BuildChainColumns();
@@ -124,8 +127,9 @@ public class SimulatorForm : Form
         _btnCargar.Click    += (s, e) => LoadSelectedDay();
         _btnAtras.Click     += (s, e) => Step(-1);
         _btnAdelante.Click  += (s, e) => Step(1);
-        _dgvChain.CellClick    += DgvChain_CellClick;
-        _dgvChain.CellPainting += DgvChain_CellPainting;
+        _dgvChain.CellClick     += DgvChain_CellClick;
+        _dgvChain.CellPainting  += DgvChain_CellPainting;
+        _dgvChain.CellFormatting += DgvChain_CellFormatting;
 
         Load += (s, e) => LoadSymbols();
     }
@@ -522,6 +526,46 @@ public class SimulatorForm : Form
     // Same rendering as Form1.DgvQuotes_CellPainting — a colored button (green CALL / red PUT /
     // gray if illiquid) instead of plain text, since the Strike cell is clickable here too
     // (DgvChain_CellClick below).
+    // Same rules as Form1.DgvQuotes_CellFormatting: Sprd bold red, Ask bold dark green, and Bid
+    // background light green when that side's Sprd <= 2 (FormatSprd strips the decimal point, so
+    // "2" == a real spread of $0.02 — this is the "bid/ask difference < 0.02" rule).
+    private void DgvChain_CellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        var row = _dgvChain.Rows[e.RowIndex];
+
+        var callSprdCol = _dgvChain.Columns["colCallSprd"].Index;
+        var putSprdCol  = _dgvChain.Columns["colPutSprd"].Index;
+        var callBidCol  = _dgvChain.Columns["colCallBid"].Index;
+        var putBidCol   = _dgvChain.Columns["colPutBid"].Index;
+        var callAskCol  = _dgvChain.Columns["colCallAsk"].Index;
+        var putAskCol   = _dgvChain.Columns["colPutAsk"].Index;
+
+        if (e.ColumnIndex == callSprdCol || e.ColumnIndex == putSprdCol)
+        {
+            e.CellStyle.ForeColor = Color.Red;
+            e.CellStyle.Font = new Font(_dgvChain.Font, FontStyle.Bold);
+        }
+
+        if (e.ColumnIndex == callAskCol || e.ColumnIndex == putAskCol)
+        {
+            e.CellStyle.ForeColor = Color.DarkGreen;
+            e.CellStyle.Font = new Font(_dgvChain.Font, FontStyle.Bold);
+        }
+
+        if (e.ColumnIndex == callBidCol)
+        {
+            e.CellStyle.BackColor = decimal.TryParse(row.Cells["colCallSprd"].Value?.ToString(), out var callSprd) && callSprd <= 2
+                ? Color.LightGreen : _dgvChain.DefaultCellStyle.BackColor;
+        }
+
+        if (e.ColumnIndex == putBidCol)
+        {
+            e.CellStyle.BackColor = decimal.TryParse(row.Cells["colPutSprd"].Value?.ToString(), out var putSprd) && putSprd <= 2
+                ? Color.LightGreen : _dgvChain.DefaultCellStyle.BackColor;
+        }
+    }
+
     private void DgvChain_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
     {
         if (e.RowIndex < 0) return;
