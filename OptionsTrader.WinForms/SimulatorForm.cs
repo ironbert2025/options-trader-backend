@@ -752,18 +752,21 @@ public class SimulatorForm : Form
     // Same logic as Form1's private static UpdatePnLMinMax — kept as its own copy since that one
     // isn't accessible from here (private to Form1) and this simulator is deliberately isolated
     // from the live trade flow.
+    // Min only ever tracks NEGATIVE values, Max only ever tracks POSITIVE ones — a trade that's
+    // never been profitable leaves Max blank instead of showing "the least negative point
+    // reached" (same idea mirrored for Min if it's never gone negative). See Form1's identical copy.
     private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
     {
         var minCell = row.Cells["colSimPnlMin"];
         var maxCell = row.Cells["colSimPnlMax"];
 
-        if (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min)
+        if (pnlPct < 0 && (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min))
         {
             minCell.Value           = pnlPct.ToString("F1");
             minCell.Style.ForeColor = Color.Red;
         }
 
-        if (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max)
+        if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value           = pnlPct.ToString("F1");
             maxCell.Style.ForeColor = Color.Green;

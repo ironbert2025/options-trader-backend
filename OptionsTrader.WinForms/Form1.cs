@@ -2604,20 +2604,23 @@ public partial class Form1 : Form
         cell.Style.ForeColor = isItm ? Color.Green : Color.Red;
     }
 
-    // Extends the row's Min/Max PnL% columns if the given value is a new low/high. Session-only —
-    // not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
+    // Extends the row's Min/Max PnL% columns if the given value is a new low/high — but Min only
+    // ever tracks NEGATIVE values and Max only ever tracks POSITIVE ones. A trade that's never
+    // been profitable leaves Max blank (no positive value to show) rather than showing "the least
+    // negative point reached"; same idea mirrored for Min if it's never gone negative.
+    // Session-only — not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
     private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
     {
         var minCell = row.Cells["colTradePnLMin"];
         var maxCell = row.Cells["colTradePnLMax"];
 
-        if (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min)
+        if (pnlPct < 0 && (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min))
         {
             minCell.Value             = pnlPct.ToString("F1");
             minCell.Style.ForeColor   = Color.Red;
         }
 
-        if (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max)
+        if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value             = pnlPct.ToString("F1");
             maxCell.Style.ForeColor   = Color.Green;
