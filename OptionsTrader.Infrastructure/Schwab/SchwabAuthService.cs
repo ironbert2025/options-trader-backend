@@ -26,16 +26,44 @@ public class SchwabAuthService : IBrokerAuthService
 
     // Called by WinForms: passes stored token info from disk; returns new access token if renewed.
     // onTokenRenewed is called when a new access token is obtained so WinForms can save it to disk.
+    //
+    // allowRefresh gates whether THIS instance is allowed to actually call Schwab to renew the
+    // token — only the designated hub instance should (see Form1's _isWebSocketHub). When false
+    // and the stored token is expired, this never calls Schwab itself: it waits and re-reads the
+    // token from disk (via reloadFromDisk) a few times, since the hub is expected to renew it
+    // there shortly (possibly over a shared network folder — see TokenShareSettingsStore). If the
+    // hub hasn't renewed it in time, this throws so the caller can log/surface the error and try
+    // again on its own next cycle — it never blocks forever.
     public async Task<string> GetAccessTokenAsync(
         string apiKey,
         string apiSecret,
         string storedAccessToken,
         DateTime storedExpiresAt,
         string refreshToken,
-        Func<string, DateTime, Task> onTokenRenewed)
+        Func<string, DateTime, Task> onTokenRenewed,
+        bool allowRefresh = true,
+        Func<(string AccessToken, DateTime ExpiresAt)>? reloadFromDisk = null)
     {
         if (!string.IsNullOrEmpty(storedAccessToken) && DateTime.UtcNow < storedExpiresAt)
             return storedAccessToken;
+
+        if (!allowRefresh)
+        {
+            const int maxAttempts = 5;
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                _logCallback?.Invoke($"{DateTime.Now:HH:mm:ss} [Token] Access token vencido — esta instancia no es el hub, esperando renovación ({attempt}/{maxAttempts})...");
+                await Task.Delay(2000);
+
+                if (reloadFromDisk == null) continue;
+                var (diskToken, diskExpiresAt) = reloadFromDisk();
+                if (!string.IsNullOrEmpty(diskToken) && DateTime.UtcNow < diskExpiresAt)
+                    return diskToken;
+            }
+
+            throw new InvalidOperationException(
+                "El hub no ha renovado el access token todavía. Revisá que la instancia primaria (hub) esté abierta y conectada.");
+        }
 
         if (string.IsNullOrEmpty(refreshToken))
             throw new InvalidOperationException("No refresh token available. Please log in via the Settings tab.");

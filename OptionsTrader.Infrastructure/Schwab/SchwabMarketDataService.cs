@@ -21,6 +21,8 @@ public class SchwabMarketDataService : IMarketDataService
     private readonly string _refreshToken;
     private readonly Func<string, DateTime, Task> _onTokenRenewed;
     private readonly bool _enableDumps;
+    private readonly bool _allowRefresh;
+    private readonly Func<(string AccessToken, DateTime ExpiresAt)>? _reloadFromDisk;
 
     // storedAccessToken and storedExpiresAt come from disk each polling cycle via WinForms
     private string _storedAccessToken;
@@ -35,7 +37,9 @@ public class SchwabMarketDataService : IMarketDataService
         string storedAccessToken,
         DateTime storedExpiresAt,
         Func<string, DateTime, Task> onTokenRenewed,
-        bool enableDumps = false)
+        bool enableDumps = false,
+        bool allowRefresh = true,
+        Func<(string AccessToken, DateTime ExpiresAt)>? reloadFromDisk = null)
     {
         _httpClient          = httpClient;
         _authService         = authService;
@@ -46,6 +50,8 @@ public class SchwabMarketDataService : IMarketDataService
         _storedExpiresAt     = storedExpiresAt;
         _onTokenRenewed      = onTokenRenewed;
         _enableDumps         = enableDumps;
+        _allowRefresh        = allowRefresh;
+        _reloadFromDisk      = reloadFromDisk;
     }
 
     // Caches a renewed token in-memory so multiple chain requests in the same polling cycle
@@ -65,7 +71,8 @@ public class SchwabMarketDataService : IMarketDataService
         var token = await _authService.GetAccessTokenAsync(
             _apiKey, _apiSecret,
             _storedAccessToken, _storedExpiresAt,
-            _refreshToken, OnTokenRenewedInternal);
+            _refreshToken, OnTokenRenewedInternal,
+            _allowRefresh, _reloadFromDisk);
         var fromStr = fromDate.ToString("yyyy-MM-dd");
         var toStr   = toDate.ToString("yyyy-MM-dd");
         var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={fromStr}&toDate={toStr}&strikeCount={StrikePriceCount}&_t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";

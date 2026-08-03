@@ -206,6 +206,19 @@ public partial class Form1 : Form
             MessageBox.Show($"Login failed: {ex.Message}", "Login Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Environment.Exit(0);
         }
+
+        // Decide hub-vs-client (and become the token hub if we win the race) as soon as the app
+        // opens, instead of waiting for the user to open a Live Chart window — token renewal
+        // depends on _isWebSocketHub being settled early, not just streaming.
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            LogLine($"{DateTime.Now:HH:mm:ss} [Hub] No se pudo inicializar streaming al arrancar: {ex.Message}", Color.OrangeRed);
+        }
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
@@ -1485,6 +1498,16 @@ public partial class Form1 : Form
         };
     }
 
+    // Only the hub instance (_isWebSocketHub — see SetUpLiveFeedAsync) is allowed to actually
+    // call Schwab to renew the access token; every other instance (other tickers on this same
+    // PC, or another PC pointed at the shared token folder via TokenShareSettingsStore) just
+    // re-reads whatever the hub last wrote to SchwabTokenStore.
+    private static (string AccessToken, DateTime ExpiresAt) ReloadTokenFromDisk()
+    {
+        var t = SchwabTokenStore.Load();
+        return (t?.AccessToken ?? string.Empty, t?.AccessTokenExpiresAt ?? DateTime.MinValue);
+    }
+
     private SchwabTradingService CreateSchwabTradingService()
     {
         var creds  = SchwabCredentialsStore.Load();
@@ -1495,7 +1518,8 @@ public partial class Form1 : Form
             tokens?.RefreshToken ?? string.Empty,
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
-            OnSchwabTokenRenewed);
+            OnSchwabTokenRenewed,
+            _isWebSocketHub, ReloadTokenFromDisk);
     }
 
     // Same broker-dispatch pattern as CreateTradingService, for the market-data (quotes) side.
@@ -1519,10 +1543,15 @@ public partial class Form1 : Form
             tokens?.RefreshToken ?? string.Empty,
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
-            OnSchwabTokenRenewed, enableDumps);
+            OnSchwabTokenRenewed, enableDumps,
+            _isWebSocketHub, ReloadTokenFromDisk);
     }
 
-    private SchwabStreamerClient CreateSchwabStreamerClient()
+    // allowRefresh should only be true for the instance that's actually becoming the WS hub (the
+    // one call site in SetUpLiveFeedAsync that wins the port race) — every other caller of this
+    // (client instances that just need a SchwabStreamerClient for REST history fetches) must
+    // stay false so they never race the hub to renew the access token themselves.
+    private SchwabStreamerClient CreateSchwabStreamerClient(bool allowRefresh = false)
     {
         var creds  = SchwabCredentialsStore.Load();
         var tokens = SchwabTokenStore.Load();
@@ -1532,7 +1561,8 @@ public partial class Form1 : Form
             tokens?.RefreshToken ?? string.Empty,
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
-            OnSchwabTokenRenewed);
+            OnSchwabTokenRenewed,
+            allowRefresh, ReloadTokenFromDisk);
     }
 
     // Opens a live-chart window (candles only, streamed via WebSocket) for the currently
@@ -1661,6 +1691,50 @@ public partial class Form1 : Form
         }
     }
 
+    // Lets the user configure a shared network folder for the Schwab access/refresh token file
+    // (schwab_tokens.json) so this PC and other PCs on the LAN all read the SAME token instead of
+    // each having their own local copy. Only the hub instance (_isWebSocketHub) ever writes there
+    // — everyone else, on any PC pointed at this same folder, only reads. Configure the SAME path
+    // on every PC involved. Empty = local %AppData% only (default, single-machine behavior).
+    private void BtnTokenShare_Click(object? sender, EventArgs e)
+    {
+        var current = TokenShareSettingsStore.Load();
+
+        using var dialog = new Form
+        {
+            Text = "Token Share Folder",
+            Width = 420,
+            Height = 160,
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+        };
+        var lbl = new Label
+        {
+            Text = "Carpeta de red compartida para schwab_tokens.json (vacío = solo esta PC):",
+            Location = new Point(10, 12),
+            Size = new Size(390, 32)
+        };
+        var txt = new TextBox { Text = current, Location = new Point(10, 48), Size = new Size(385, 24) };
+        var btnOk = new Button { Text = "Guardar", Location = new Point(230, 82), Size = new Size(80, 28), DialogResult = DialogResult.OK };
+        var btnCancel = new Button { Text = "Cancelar", Location = new Point(315, 82), Size = new Size(80, 28), DialogResult = DialogResult.Cancel };
+        dialog.Controls.Add(lbl);
+        dialog.Controls.Add(txt);
+        dialog.Controls.Add(btnOk);
+        dialog.Controls.Add(btnCancel);
+        dialog.AcceptButton = btnOk;
+        dialog.CancelButton = btnCancel;
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            TokenShareSettingsStore.Save(txt.Text.Trim());
+            MessageBox.Show(
+                "Guardado. Configurá la misma ruta en todas las PCs que deban compartir el token (cerrá y volvé a abrir la app para que tome efecto).",
+                "Token Share", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+
     // Opens the price/options replay simulator — reads previously-recorded data from disk only,
     // no live streaming/polling connection involved, so it can be open at the same time as
     // everything else in this form without any interaction between them.
@@ -1721,7 +1795,7 @@ public partial class Form1 : Form
         {
             _candleHubServer = hubServer;
 
-            var streamer = CreateSchwabStreamerClient();
+            var streamer = CreateSchwabStreamerClient(allowRefresh: true);
             _isWebSocketHub = true;
             // Shown only in each open Live Charts child window's own event log (crossLog), not
             // the main form's log — LogWebSocketEvent is itself safe to call from any thread,
