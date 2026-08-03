@@ -189,6 +189,25 @@
     return dzSzArmed;
   }
 
+  // Simulator only: SimulatorForm calls this on the 15m RTH chart whenever a DZ/SZ line is drawn
+  // on the RTH+Overnight chart, so the same zone shows on both. Never armed here (no click
+  // handling needed) — just pushes the line C# already decided the time/price for.
+  function addMirroredZoneLine(time, price, color) {
+    if (!dzSzAttached) { candleSeries.attachPrimitive(zoneLinesPrimitive); dzSzAttached = true; }
+    zoneLinesPrimitive._segments.push({ time, price, color });
+    dzSzAxisLabels.push(candleSeries.createPriceLine({
+      price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
+    }));
+    forceRepaint();
+  }
+
+  function clearMirroredZoneLines() {
+    zoneLinesPrimitive._segments = [];
+    dzSzAxisLabels.forEach(l => candleSeries.removePriceLine(l));
+    dzSzAxisLabels.length = 0;
+    forceRepaint();
+  }
+
   // ---- Rect tool: sky-blue rectangle between 2 clicks (opposite corners, no value labels) ----
 
   class RectanglesPrimitive {
@@ -564,6 +583,12 @@
       }));
 
       dzSzNextIsSupply = !dzSzNextIsSupply;
+
+      // Simulator only (SimulatorForm mirrors each line onto the 15m RTH chart at the same
+      // price) — harmless on the live chart, nothing listens for it there.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'dzsz', time: param.time, price, color });
+      }
     }
 
     if (rectArmed) {
@@ -1214,7 +1239,9 @@
                   ctx.fillStyle = '#00c853';
                   ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
                   ctx.textBaseline = 'bottom';
-                  ctx.fillText(l.label, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio - 2);
+                  ctx.textAlign = 'right';
+                  ctx.fillText(l.label, scope.bitmapSize.width - 4, y * scope.verticalPixelRatio - 2);
+                  ctx.textAlign = 'left'; // reset — other primitives assume the default
                 });
               });
             }

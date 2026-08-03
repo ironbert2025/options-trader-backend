@@ -143,21 +143,25 @@ public class SimulatedChartPanel : Panel
     // FakeUtcEpochSeconds) — Lightweight Charts renders the Unix timestamp as literal UTC digits.
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
+    // Public so SimulatorForm can compute the same fake-epoch value for a candle's real UTC time
+    // when it needs to compare against a DZ/SZ line's time (see AddMirroredZoneLineAsync callers).
+    public static long ToFakeUtcEpochSeconds(DateTime utcTime)
+    {
+        var easternWallClock = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc), EasternZone);
+        var fakeUtcForDisplay = DateTime.SpecifyKind(easternWallClock, DateTimeKind.Utc);
+        return new DateTimeOffset(fakeUtcForDisplay).ToUnixTimeSeconds();
+    }
+
     private static string ToChartJson(List<CandleData> candles)
     {
-        object Map(CandleData c)
+        object Map(CandleData c) => new
         {
-            var easternWallClock = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(c.Time, DateTimeKind.Utc), EasternZone);
-            var fakeUtcForDisplay = DateTime.SpecifyKind(easternWallClock, DateTimeKind.Utc);
-            return new
-            {
-                time  = new DateTimeOffset(fakeUtcForDisplay).ToUnixTimeSeconds(),
-                open  = c.Open,
-                high  = c.High,
-                low   = c.Low,
-                close = c.Close
-            };
-        }
+            time  = ToFakeUtcEpochSeconds(c.Time),
+            open  = c.Open,
+            high  = c.High,
+            low   = c.Low,
+            close = c.Close
+        };
 
         return System.Text.Json.JsonSerializer.Serialize(candles.Select(Map));
     }
@@ -302,6 +306,47 @@ public class SimulatedChartPanel : Panel
         _tLineSignalFired = false;
     }
 
+    // ==================================================================================
+    // DZ/SZ (Demand Zone / Supply Zone) — ported toggle from ChartPanel, plus a mirroring hook
+    // (SimulatorForm listens for OnDzSzLineDrawn on the RTH+Overnight chart and forwards each
+    // line to the 15m RTH chart's AddMirroredZoneLineAsync, at the same price).
+    // ==================================================================================
+
+    // Fires (fakeUtcTime, price, color) every time a DZ/SZ line is drawn on THIS chart.
+    public event Action<long, decimal, string>? OnDzSzLineDrawn;
+
+    public async Task<bool> ToggleDzSzModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
+        return result == "true";
+    }
+
+    // Clears everything drawn on THIS chart (same as ClearTLineAsync — chart.html's
+    // clearDrawings() is shared/global per WebView instance).
+    public async Task ClearDzSzAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
+    }
+
+    // Adds a DZ/SZ line to THIS chart without arming click mode — used to mirror a line drawn on
+    // another chart. fakeUtcTime is the same "ET wall-clock digits disguised as UTC" epoch value
+    // ToFakeUtcEpochSeconds/chart.html candles already use, so it can be forwarded verbatim from
+    // one chart's OnDzSzLineDrawn straight into another's AddMirroredZoneLineAsync.
+    public async Task AddMirroredZoneLineAsync(long fakeUtcTime, decimal price, string color)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredZoneLine({fakeUtcTime}, {priceStr}, '{color}');");
+    }
+
+    public async Task ClearMirroredZoneLinesAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearMirroredZoneLines();");
+    }
+
     private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
@@ -309,6 +354,16 @@ public class SimulatedChartPanel : Panel
             using var doc = JsonDocument.Parse(e.WebMessageAsJson);
             var root = doc.RootElement;
             var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+
+            if (type == "dzsz")
+            {
+                var dzTime  = root.GetProperty("time").GetInt64();
+                var dzPrice = root.GetProperty("price").GetDecimal();
+                var dzColor = root.GetProperty("color").GetString() ?? "#26a69a";
+                OnDzSzLineDrawn?.Invoke(dzTime, dzPrice, dzColor);
+                return;
+            }
+
             if (type != "tline" && type != "tline_delete") return;
 
             var t1 = root.GetProperty("t1").GetInt64();

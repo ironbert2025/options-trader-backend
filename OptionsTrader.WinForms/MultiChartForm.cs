@@ -36,7 +36,7 @@ public class MultiChartForm : Form
         _liveFeed      = liveFeed;
 
         Text          = $"Live Charts — {symbol}";
-        Width         = 900;
+        Width         = 1050; // +150 so the 1h/15m RTH columns keep their size while RTH+Overnight gets 50% wider
         Height        = 530;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
@@ -51,9 +51,11 @@ public class MultiChartForm : Form
             RowCount    = 1,
             Padding     = new Padding(6, 4, 6, 0)
         };
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        // 2:2:3 ratio (of 7 total) — 1h and 15m RTH stay equal, RTH+Overnight is 50% wider than
+        // them (3 vs 2), so the price action there reads more clearly.
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
         toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         var layout = new TableLayoutPanel
@@ -63,9 +65,10 @@ public class MultiChartForm : Form
             RowCount    = 1,
             Padding     = new Padding(6, 2, 6, 6)
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        // Same 2:2:3 ratio as the toolbar above, so each column still lines up with its buttons.
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         ChartPanel? overnightPanel = null;
