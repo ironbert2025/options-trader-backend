@@ -606,6 +606,13 @@ public class MultiChartForm : Form
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
     // the same left-to-right order they're shown on screen (1h, 15m RTH, 15m RTH+Overnight), for
     // Form1 to save as a single trade snapshot. Returns null if any panel isn't ready.
+    // Gray gap between panels (so each chart is visually distinct in the combined snapshot) and a
+    // yellow timeframe label centered at the top of each one — order matches the panels array.
+    private const int PanelGap = 6;
+    private static readonly Color PanelGapColor = Color.FromArgb(58, 58, 58);
+    private static readonly Color PanelLabelColor = Color.FromArgb(245, 216, 0);
+    private static readonly string[] PanelLabels = { "1 Hour", "15Min RTH", "15Min RTH+OVN" };
+
     public async Task<Bitmap?> CaptureCombinedChartImageAsync()
     {
         if (_hourlyPanel == null || _rthPanel == null || _overnightPanel == null) return null;
@@ -617,17 +624,25 @@ public class MultiChartForm : Form
             for (int i = 0; i < panels.Length; i++)
                 images[i] = await panels[i].CaptureImageAsync();
 
-            var width  = images.Sum(img => img.Width);
+            var width  = images.Sum(img => img.Width) + PanelGap * (images.Length - 1);
             var height = images.Max(img => img.Height);
             var combined = new Bitmap(width, height);
             using (var g = Graphics.FromImage(combined))
+            using (var labelFont = new Font("Segoe UI", 11f, FontStyle.Bold))
+            using (var labelBrush = new SolidBrush(PanelLabelColor))
             {
-                g.Clear(Color.Black);
+                g.Clear(PanelGapColor);
                 var x = 0;
-                foreach (var img in images)
+                for (int i = 0; i < images.Length; i++)
                 {
+                    var img = images[i];
                     g.DrawImage(img, x, 0);
-                    x += img.Width;
+
+                    var labelSize = g.MeasureString(PanelLabels[i], labelFont);
+                    var labelX = x + (img.Width - labelSize.Width) / 2f;
+                    g.DrawString(PanelLabels[i], labelFont, labelBrush, labelX, 8f);
+
+                    x += img.Width + PanelGap;
                 }
             }
             return combined;
