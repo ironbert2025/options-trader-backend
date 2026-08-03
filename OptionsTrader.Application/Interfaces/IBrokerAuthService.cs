@@ -7,11 +7,18 @@ public interface IBrokerAuthService
 {
     // Returns the stored access token if still valid, otherwise renews it via refreshToken
     // and calls onTokenRenewed so the caller can persist the new token.
+    //
+    // allowRefresh gates whether this call is allowed to actually renew the token itself
+    // (only the designated "hub" instance should); when false and the token is expired, the
+    // implementation should instead wait and re-check via reloadFromDisk rather than calling
+    // the broker.
     Task<string> GetAccessTokenAsync(
         string apiKey,
         string apiSecret,
         string storedAccessToken,
         DateTime storedExpiresAt,
         string refreshToken,
-        Func<string, DateTime, Task> onTokenRenewed);
+        Func<string, DateTime, Task> onTokenRenewed,
+        bool allowRefresh = true,
+        Func<(string AccessToken, DateTime ExpiresAt)>? reloadFromDisk = null);
 }

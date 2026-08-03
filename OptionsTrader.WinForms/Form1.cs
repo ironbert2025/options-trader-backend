@@ -206,6 +206,19 @@ public partial class Form1 : Form
             MessageBox.Show($"Login failed: {ex.Message}", "Login Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Environment.Exit(0);
         }
+
+        // Decide hub-vs-client (and become the token hub if we win the race) as soon as the app
+        // opens, instead of waiting for the user to open a Live Chart window — token renewal
+        // depends on _isWebSocketHub being settled early, not just streaming.
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            LogLine($"{DateTime.Now:HH:mm:ss} [Hub] No se pudo inicializar streaming al arrancar: {ex.Message}", Color.OrangeRed);
+        }
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
@@ -675,8 +688,12 @@ public partial class Form1 : Form
         var hasCreds = !string.IsNullOrEmpty(creds.ApiKey) && !string.IsNullOrEmpty(creds.ApiSecret);
         lblCredentialsSaved.Visible = hasCreds;
 
-        // Wire logger so token events appear in the log panel
-        // _schwabAuth.SetLogCallback(msg => Invoke(() => LogLine(msg, Color.Yellow)));
+        // Wire logger so token events (hub renewals, non-hub reads/waits) appear in the log
+        // panel — GetAccessTokenAsync can fire this from a background thread, hence the Invoke.
+        _schwabAuth.SetLogCallback(msg =>
+        {
+            if (IsHandleCreated) Invoke(() => LogLine(msg, Color.Yellow));
+        });
 
         var tokens = SchwabTokenStore.Load();
         if (tokens != null && !string.IsNullOrEmpty(tokens.AccessToken))
@@ -789,7 +806,6 @@ public partial class Form1 : Form
                 DateTime.UtcNow.AddSeconds(expiresIn - 30),
                 DateTime.UtcNow.AddDays(7));
             SchwabTokenStore.Save(tokens);
-            // LogLine($"{DateTime.Now:HH:mm:ss} [Token] Refresh token saved — valid until {DateTime.Now.AddDays(7):yyyy-MM-dd}", Color.Yellow);
 
             txtResponse.Text = string.Empty;
             lblTokenStatus.Text = "Token saved successfully";
@@ -1295,6 +1311,22 @@ public partial class Form1 : Form
         return !decimal.TryParse(bidStr, out var bid) || bid == 0m;
     }
 
+    // Guards the Strike button on the tradable (current-expiration) grid: blocks the trade if
+    // the option is illiquid (bid = 0), the spread is too wide (Sprd >= 5, same cents units
+    // shown in the Sprd column), or there's no room for even 1 contract at the current Position
+    // Size (Conts = 0) — any one of these makes clicking Strike a guaranteed-bad trade.
+    private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName)
+    {
+        if (IsRowBidZero(row, callBidColName, putBidColName)) return true;
+
+        var sprdColName = row.Tag?.ToString() == "PUT" ? "colPutSprd" : "colCallSprd";
+        if (decimal.TryParse(row.Cells[sprdColName].Value?.ToString(), out var sprd) && sprd >= 5) return true;
+
+        if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
+
+        return false;
+    }
+
     private void DgvQuotes_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
     {
         if (e.RowIndex < 0) return;
@@ -1303,7 +1335,7 @@ public partial class Form1 : Form
         var val     = e.Value?.ToString();
         var row     = dgvQuotes.Rows[e.RowIndex];
         var rowType = row.Tag?.ToString();
-        var disabled = IsRowBidZero(row, "colCallBid", "colPutBid");
+        var disabled = IsRowTradeBlocked(row, "colCallBid", "colPutBid");
 
         // Paint default background
         e.PaintBackground(e.ClipBounds, true);
@@ -1333,17 +1365,20 @@ public partial class Form1 : Form
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
 
-        // Block clicks on illiquid options (bid = 0) to avoid opening a guaranteed-loss order
-        if (IsRowBidZero(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
+        // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
+        if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
 
+        // rbNoTrade ("No Trade") runs free, no target auto-close; rbNoTradeTarget
+        // ("No Trade-Target") is the one that auto-closes at target — swapped 2026-08-03, the
+        // wiring had these backwards since rbNoTradeTarget was added.
         if (rbNoTrade.Checked)
-            OpenSimulatedTrade(e.RowIndex);
+            OpenSimulatedTradeNoTarget(e.RowIndex);
         else if (rbTrade.Checked)
             _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false);
         else if (rbTradeTarget.Checked)
             _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true);
         else if (rbNoTradeTarget.Checked)
-            OpenSimulatedTradeNoTarget(e.RowIndex);
+            OpenSimulatedTrade(e.RowIndex);
     }
 
     private async void OpenSimulatedTrade(int rowIndex)
@@ -1423,7 +1458,13 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeForMoneyness))
             SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
 
-        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
+        // Premium = riesgo máximo de la posición = precio de entrada * 100 (por contrato) *
+        // cantidad de contratos. "ask" ya es el valor usado como EntryPrice acá mismo (ver
+        // entryStr abajo) tanto para demo como para real — el real recibe su propio log aparte
+        // cuando se confirma el fill ("Real EntryPrice confirmed"), esto es solo el de apertura.
+        decimal.TryParse(contracts, out var contractsForPremium);
+        var premium = ask * 100 * contractsForPremium;
+        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}  Premium={premium:F2}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
         System.Windows.Forms.Application.DoEvents();
@@ -1485,6 +1526,29 @@ public partial class Form1 : Form
         };
     }
 
+    // Which instance on THIS machine is allowed to actually call Schwab to renew the access
+    // token — every other instance just re-reads whatever this one last wrote to
+    // SchwabTokenStore (local %AppData% file, never shared over the network — each PC keeps and
+    // renews its own copy of the same refresh token, which gets copied over manually about once
+    // a week). Two cases:
+    //   - This PC hosts the real streaming connection (_isWebSocketHub) — the hub instance is
+    //     also the token authority, same as before.
+    //   - This PC is a pure remote client of another PC's hub (Hub Host configured) — it never
+    //     contends for the streaming port, so _isWebSocketHub is always false here. Falls back to
+    //     IsPrimaryTickerInstance() (first ticker in this PC's own TickerSettingsStore) instead,
+    //     so exactly one instance on this PC is still designated.
+    // The Hub Host gate matters: without it, a PC that DOES host the hub could end up with two
+    // simultaneous authorities (the hub winner AND whichever instance happens to be "primary
+    // ticker") if they're different processes — racing each other to renew.
+    private bool IsTokenAuthority() =>
+        _isWebSocketHub || (!string.IsNullOrWhiteSpace(HubHostSettingsStore.Load()) && IsPrimaryTickerInstance());
+
+    private static (string AccessToken, DateTime ExpiresAt) ReloadTokenFromDisk()
+    {
+        var t = SchwabTokenStore.Load();
+        return (t?.AccessToken ?? string.Empty, t?.AccessTokenExpiresAt ?? DateTime.MinValue);
+    }
+
     private SchwabTradingService CreateSchwabTradingService()
     {
         var creds  = SchwabCredentialsStore.Load();
@@ -1495,7 +1559,8 @@ public partial class Form1 : Form
             tokens?.RefreshToken ?? string.Empty,
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
-            OnSchwabTokenRenewed);
+            OnSchwabTokenRenewed,
+            IsTokenAuthority(), ReloadTokenFromDisk);
     }
 
     // Same broker-dispatch pattern as CreateTradingService, for the market-data (quotes) side.
@@ -1519,20 +1584,28 @@ public partial class Form1 : Form
             tokens?.RefreshToken ?? string.Empty,
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
-            OnSchwabTokenRenewed, enableDumps);
+            OnSchwabTokenRenewed, enableDumps,
+            IsTokenAuthority(), ReloadTokenFromDisk);
     }
 
-    private SchwabStreamerClient CreateSchwabStreamerClient()
+    // allowRefresh defaults to this instance's own IsTokenAuthority() — the one call site in
+    // SetUpLiveFeedAsync that wins the streaming port race passes true explicitly (before
+    // _isWebSocketHub itself is set, so IsTokenAuthority() can't see it yet); every other caller
+    // (client instances that just need a SchwabStreamerClient for REST history fetches) leaves it
+    // at the default so they never race the authority to renew the access token themselves.
+    private SchwabStreamerClient CreateSchwabStreamerClient(bool? allowRefresh = null)
     {
         var creds  = SchwabCredentialsStore.Load();
         var tokens = SchwabTokenStore.Load();
+        var effectiveAllowRefresh = allowRefresh ?? IsTokenAuthority();
         return new SchwabStreamerClient(
             _marketHttpClient, _schwabAuth,
             creds.ApiKey, creds.ApiSecret,
             tokens?.RefreshToken ?? string.Empty,
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
-            OnSchwabTokenRenewed);
+            OnSchwabTokenRenewed,
+            effectiveAllowRefresh, ReloadTokenFromDisk);
     }
 
     // Opens a live-chart window (candles only, streamed via WebSocket) for the currently
@@ -1721,7 +1794,7 @@ public partial class Form1 : Form
         {
             _candleHubServer = hubServer;
 
-            var streamer = CreateSchwabStreamerClient();
+            var streamer = CreateSchwabStreamerClient(allowRefresh: true);
             _isWebSocketHub = true;
             // Shown only in each open Live Charts child window's own event log (crossLog), not
             // the main form's log — LogWebSocketEvent is itself safe to call from any thread,
@@ -2106,8 +2179,6 @@ public partial class Form1 : Form
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
         // and the Telegram push below, instead of each capturing its own copy.
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
-        if (closeChartPath != null)
-            _ = UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
         if (tradeId != 0)
@@ -2117,7 +2188,23 @@ public partial class Form1 : Form
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr, TradeImageKind.TradeLog);
+
+        // Uploads Close + TradeLog (fire-and-forget, doesn't block the row from showing "Closed"),
+        // then appends today's Obsidian daily-trade-log entry once both S3 URLs are actually known
+        // — EntryImageUrl is already set from when the trade opened.
+        _ = UploadCloseTradeLogAndAppendDailyAsync(closeChartPath, tradeLogPath, symbol, type, tradeId, nowStr);
+    }
+
+    private async Task UploadCloseTradeLogAndAppendDailyAsync(string? closeChartPath, string tradeLogPath,
+        string symbol, string type, int tradeId, string nowStr)
+    {
+        if (closeChartPath != null)
+            await UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
+        await UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr, TradeImageKind.TradeLog);
+
+        if (tradeId == 0) return;
+        var trade = TradeHistoryStore.Load().FirstOrDefault(t => t.Id == tradeId);
+        if (trade != null) DailyTradeLogWriter.AppendTrade(trade);
     }
 
     // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
@@ -2507,20 +2594,23 @@ public partial class Form1 : Form
         cell.Style.ForeColor = isItm ? Color.Green : Color.Red;
     }
 
-    // Extends the row's Min/Max PnL% columns if the given value is a new low/high. Session-only —
-    // not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
+    // Extends the row's Min/Max PnL% columns if the given value is a new low/high — but Min only
+    // ever tracks NEGATIVE values and Max only ever tracks POSITIVE ones. A trade that's never
+    // been profitable leaves Max blank (no positive value to show) rather than showing "the least
+    // negative point reached"; same idea mirrored for Min if it's never gone negative.
+    // Session-only — not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
     private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
     {
         var minCell = row.Cells["colTradePnLMin"];
         var maxCell = row.Cells["colTradePnLMax"];
 
-        if (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min)
+        if (pnlPct < 0 && (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min))
         {
             minCell.Value             = pnlPct.ToString("F1");
             minCell.Style.ForeColor   = Color.Red;
         }
 
-        if (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max)
+        if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value             = pnlPct.ToString("F1");
             maxCell.Style.ForeColor   = Color.Green;
@@ -2642,11 +2732,11 @@ public partial class Form1 : Form
 
     private static string CalcContracts(decimal positionSize, decimal ask)
     {
-        if (ask <= 0 || positionSize <= 0) return string.Empty;
+        if (ask <= 0 || positionSize <= 0) return "0";
         // Floor, not round — Position Size % is a risk cap, so rounding up could spend more
         // than the configured budget (e.g. $300 @ 1.18 = 2.54 contracts must stay at 2, not 3).
         var contracts = Math.Floor(positionSize / (ask * 100));
-        return contracts > 0 ? contracts.ToString("F0") : string.Empty;
+        return contracts.ToString("F0");
     }
 
     private static string GetContractsValue(decimal ask)

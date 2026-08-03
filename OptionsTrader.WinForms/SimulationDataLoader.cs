@@ -173,7 +173,38 @@ internal static class SimulationDataLoader
             var utcTime = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(eastTime, DateTimeKind.Unspecified), eastern);
             result.Add((utcTime, price));
         }
-        return result.OrderBy(t => t.Item1).ToList();
+        return RemoveOutlierTicks(result.OrderBy(t => t.Item1).ToList());
+    }
+
+    // Drops isolated bad prints — a single tick that jumps far from its neighbor and snaps right
+    // back on the very next tick (e.g. a stale/bad quote during thin pre-market liquidity), which
+    // otherwise shows up as a fake long wick in whichever bucket it lands in. Only fires when the
+    // NEXT tick reverts close to where the PREVIOUS one was — a real, sustained move (even a fast
+    // one) never gets touched, since the follow-up tick stays away from the pre-jump price too.
+    private static List<(DateTime Time, decimal Price)> RemoveOutlierTicks(List<(DateTime Time, decimal Price)> ticks)
+    {
+        if (ticks.Count < 3) return ticks;
+
+        const decimal outlierPct = 0.004m; // 0.4% — comfortably above normal tick-to-tick noise
+        var result = new List<(DateTime, decimal)> { ticks[0] };
+
+        for (int i = 1; i < ticks.Count - 1; i++)
+        {
+            var prev = ticks[i - 1].Price;
+            var cur  = ticks[i].Price;
+            var next = ticks[i + 1].Price;
+
+            var jump    = Math.Abs(cur - prev);
+            var reverts = Math.Abs(next - prev);
+
+            if (prev > 0 && jump / prev >= outlierPct && reverts / prev < outlierPct)
+                continue; // isolated spike that snaps back right after — drop it
+
+            result.Add(ticks[i]);
+        }
+
+        result.Add(ticks[^1]);
+        return result;
     }
 
     // Latest price at or before the given step time — a step's underlying price should reflect

@@ -189,6 +189,25 @@
     return dzSzArmed;
   }
 
+  // Simulator only: SimulatorForm calls this on the 15m RTH chart whenever a DZ/SZ line is drawn
+  // on the RTH+Overnight chart, so the same zone shows on both. Never armed here (no click
+  // handling needed) — just pushes the line C# already decided the time/price for.
+  function addMirroredZoneLine(time, price, color) {
+    if (!dzSzAttached) { candleSeries.attachPrimitive(zoneLinesPrimitive); dzSzAttached = true; }
+    zoneLinesPrimitive._segments.push({ time, price, color });
+    dzSzAxisLabels.push(candleSeries.createPriceLine({
+      price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
+    }));
+    forceRepaint();
+  }
+
+  function clearMirroredZoneLines() {
+    zoneLinesPrimitive._segments = [];
+    dzSzAxisLabels.forEach(l => candleSeries.removePriceLine(l));
+    dzSzAxisLabels.length = 0;
+    forceRepaint();
+  }
+
   // ---- Rect tool: sky-blue rectangle between 2 clicks (opposite corners, no value labels) ----
 
   class RectanglesPrimitive {
@@ -564,6 +583,12 @@
       }));
 
       dzSzNextIsSupply = !dzSzNextIsSupply;
+
+      // Simulator only (SimulatorForm mirrors each line onto the 15m RTH chart at the same
+      // price) — harmless on the live chart, nothing listens for it there.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'dzsz', time: param.time, price, color });
+      }
     }
 
     if (rectArmed) {
@@ -1126,11 +1151,22 @@
                 ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
                 ctx.textBaseline = 'middle';
                 self._labels.forEach(l => {
+                  ctx.fillStyle = l.color || '#ff9800'; // orange default (Piso/Techo)
+                  ctx.font = l.bold ? `bold ${14 * scope.verticalPixelRatio}px sans-serif` : `${12 * scope.verticalPixelRatio}px sans-serif`;
+
+                  // Fixed at the top-center of the chart pane, ignoring pan/zoom/price entirely —
+                  // used for markExpired, which needs to stay put and readable regardless of where
+                  // the last candle's price happens to be.
+                  if (l.fixedTop) {
+                    ctx.textAlign = 'center';
+                    ctx.fillText(l.text, scope.bitmapSize.width / 2, 18 * scope.verticalPixelRatio);
+                    ctx.textAlign = 'left';
+                    return;
+                  }
+
                   const x = ts.timeToCoordinate(l.time);
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (x == null || y == null) return;
-                  ctx.fillStyle = l.color || '#ff9800'; // orange default (Piso/Techo)
-                  ctx.font = l.bold ? `bold ${14 * scope.verticalPixelRatio}px sans-serif` : `${12 * scope.verticalPixelRatio}px sans-serif`;
                   if (l.above) {
                     // Anchored at/near the LAST candle (e.g. markExpired) sits right where
                     // Lightweight Charts draws its own "last price" label box, on the same y —
@@ -1168,13 +1204,14 @@
     return techoArmed;
   }
 
-  // Programmatic (not click-driven) red "Expired!!!" marker — placed at the most recent candle's
-  // time/price, triggered from C# when a trade auto-closes at 4pm ET because it expired today.
+  // Programmatic (not click-driven) red "Expired!!!" marker — fixed at the top-center of the
+  // chart pane (see TextLabelsPrimitive's fixedTop handling), triggered from C# when a trade
+  // auto-closes at 4pm ET because it expired today. Not anchored to price/time, so it stays
+  // readable regardless of where the last candle happens to sit.
   function markExpired() {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     if (allCandles.length === 0) return false;
-    const last = allCandles[allCandles.length - 1];
-    textLabelsPrimitive._labels.push({ time: last.time, price: last.close, text: 'Expired!!!', color: '#ff0000', bold: true, above: true });
+    textLabelsPrimitive._labels.push({ text: 'Expired!!!', color: '#ff0000', bold: true, fixedTop: true });
     forceRepaint();
     return true;
   }
@@ -1214,7 +1251,9 @@
                   ctx.fillStyle = '#00c853';
                   ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
                   ctx.textBaseline = 'bottom';
-                  ctx.fillText(l.label, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio - 2);
+                  ctx.textAlign = 'right';
+                  ctx.fillText(l.label, scope.bitmapSize.width - 4, y * scope.verticalPixelRatio - 2);
+                  ctx.textAlign = 'left'; // reset — other primitives assume the default
                 });
               });
             }
@@ -1525,6 +1564,19 @@
   // like the live chart does). Only force the default view on the very first call; after that,
   // behave like a live update (reapplyVisibleRangeIfLive) so a manual pan/zoom survives.
   let historyLoadedOnce = false;
+
+  // Called by the simulator (SimulatedChartPanel.ResetViewForNewDay) whenever the user loads a
+  // DIFFERENT simulation day, as opposed to just stepping ◀/▶ within the same day. Without this,
+  // historyLoadedOnce/userHasInteracted stay stuck forever on this WebView instance (it's reused
+  // across day loads, unlike the live chart which is created once per session) — the OLD day's
+  // pan/zoom window would keep being reapplied to the NEW day's candles, making e.g. the new
+  // day's 9:30 candle land wherever the old view's edge used to be instead of at the real open.
+  function resetViewForNewDay() {
+    historyLoadedOnce = false;
+    userHasInteracted = false;
+    lastAppliedRange = null;
+  }
+
   function loadHistory(candles) {
     allCandles = candles.slice().sort((a, b) => a.time - b.time);
     renderCandles();

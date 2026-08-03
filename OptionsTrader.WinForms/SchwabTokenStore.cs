@@ -17,13 +17,14 @@ public static class SchwabTokenStore
     public static SchwabTokens? Load()
     {
         if (!File.Exists(FilePath)) return null;
-        var json = File.ReadAllText(FilePath);
-        return JsonSerializer.Deserialize<SchwabTokens>(json);
+        using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return JsonSerializer.Deserialize<SchwabTokens>(stream);
     }
 
     public static void Save(SchwabTokens tokens)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(tokens));
+        using var stream = new FileStream(FilePath, FileMode.Create, FileAccess.Write, FileShare.Read);
+        JsonSerializer.Serialize(stream, tokens);
     }
 }

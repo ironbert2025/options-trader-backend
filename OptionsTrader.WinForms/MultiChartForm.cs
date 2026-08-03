@@ -36,7 +36,7 @@ public class MultiChartForm : Form
         _liveFeed      = liveFeed;
 
         Text          = $"Live Charts — {symbol}";
-        Width         = 900;
+        Width         = 1050; // +150 so the 1h/15m RTH columns keep their size while RTH+Overnight gets 50% wider
         Height        = 530;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
@@ -51,9 +51,11 @@ public class MultiChartForm : Form
             RowCount    = 1,
             Padding     = new Padding(6, 4, 6, 0)
         };
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        // 2:2:3 ratio (of 7 total) — 1h and 15m RTH stay equal, RTH+Overnight is 50% wider than
+        // them (3 vs 2), so the price action there reads more clearly.
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
         toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         var layout = new TableLayoutPanel
@@ -63,9 +65,10 @@ public class MultiChartForm : Form
             RowCount    = 1,
             Padding     = new Padding(6, 2, 6, 6)
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        // Same 2:2:3 ratio as the toolbar above, so each column still lines up with its buttons.
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         ChartPanel? overnightPanel = null;
@@ -502,6 +505,18 @@ public class MultiChartForm : Form
             };
         }
 
+        // Demand Zone rebote (15m RTH+Overnight panel) — self-contained in ChartPanel (pushes its
+        // own screenshot to Telegram + EventLogStore, same as Cross-SMA); just mirror the caption
+        // into this window's log too.
+        if (overnightPanel != null)
+        {
+            overnightPanel.OnDemandZoneReboundEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);
@@ -591,6 +606,13 @@ public class MultiChartForm : Form
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
     // the same left-to-right order they're shown on screen (1h, 15m RTH, 15m RTH+Overnight), for
     // Form1 to save as a single trade snapshot. Returns null if any panel isn't ready.
+    // Gray gap between panels (so each chart is visually distinct in the combined snapshot) and a
+    // yellow timeframe label centered at the top of each one — order matches the panels array.
+    private const int PanelGap = 6;
+    private static readonly Color PanelGapColor = Color.FromArgb(58, 58, 58);
+    private static readonly Color PanelLabelColor = Color.FromArgb(245, 216, 0);
+    private static readonly string[] PanelLabels = { "1 Hour", "15Min RTH", "15Min RTH+OVN" };
+
     public async Task<Bitmap?> CaptureCombinedChartImageAsync()
     {
         if (_hourlyPanel == null || _rthPanel == null || _overnightPanel == null) return null;
@@ -602,17 +624,25 @@ public class MultiChartForm : Form
             for (int i = 0; i < panels.Length; i++)
                 images[i] = await panels[i].CaptureImageAsync();
 
-            var width  = images.Sum(img => img.Width);
+            var width  = images.Sum(img => img.Width) + PanelGap * (images.Length - 1);
             var height = images.Max(img => img.Height);
             var combined = new Bitmap(width, height);
             using (var g = Graphics.FromImage(combined))
+            using (var labelFont = new Font("Segoe UI", 11f, FontStyle.Bold))
+            using (var labelBrush = new SolidBrush(PanelLabelColor))
             {
-                g.Clear(Color.Black);
+                g.Clear(PanelGapColor);
                 var x = 0;
-                foreach (var img in images)
+                for (int i = 0; i < images.Length; i++)
                 {
+                    var img = images[i];
                     g.DrawImage(img, x, 0);
-                    x += img.Width;
+
+                    var labelSize = g.MeasureString(PanelLabels[i], labelFont);
+                    var labelX = x + (img.Width - labelSize.Width) / 2f;
+                    g.DrawString(PanelLabels[i], labelFont, labelBrush, labelX, 8f);
+
+                    x += img.Width + PanelGap;
                 }
             }
             return combined;

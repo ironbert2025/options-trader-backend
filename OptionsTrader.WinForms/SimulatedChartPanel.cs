@@ -76,6 +76,18 @@ public class SimulatedChartPanel : Panel
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
             }
+            else if (_mode == ChartPanelMode.Fifteen_Full)
+            {
+                // Gray shading for overnight/weekend gaps — same as ChartPanel.LoadHistoryAsync's
+                // "only on the 15m RTH+Overnight panel" call. recalculateOvernightBands() re-runs
+                // automatically on every loadHistory() (chart.html), so it stays in sync as the
+                // simulator steps forward — no extra wiring needed here beyond enabling it once.
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureOvernightBands();");
+
+                // Needed for "dzsz" messages (DZ/SZ mirroring onto the RTH chart, and Demand Zone
+                // rebote tracking below) — this is the only chart with DZ/SZ armed.
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+            }
 
             _readyTcs.TrySetResult();
         }
@@ -86,6 +98,20 @@ public class SimulatedChartPanel : Panel
     }
 
     private bool _visibleDaysSet;
+
+    // Must be called before CargarHastaPasoAsync whenever the user loads a DIFFERENT simulation
+    // day (SimulatorForm.LoadSelectedDay) — this WebView instance is reused across day loads
+    // (unlike the live chart, created once per session), so without this the previous day's
+    // pan/zoom state would stick and get reapplied to the new day's candles, visually misplacing
+    // them (e.g. the new day's 9:30 candle landing wherever the old view's edge used to be).
+    // Stepping ◀/▶ within the same day must NOT call this — that's what preserves pan/zoom there.
+    public async Task ResetViewForNewDayAsync()
+    {
+        if (_readyTcs != null) await _readyTcs.Task;
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("resetViewForNewDay();");
+        _visibleDaysSet = false;
+    }
 
     // Replaces the whole visible candle series with the given list — used instead of the live
     // ChartPanel's incremental "extend current bucket" logic, since a step-through simulator can
@@ -106,7 +132,7 @@ public class SimulatedChartPanel : Panel
         }
         await RunScriptAsync("loadHistory", candles);
 
-        if (_mode == ChartPanelMode.Hourly15)
+        if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full)
             EvaluateNewlyClosedCandles(candles);
     }
 
@@ -129,21 +155,25 @@ public class SimulatedChartPanel : Panel
     // FakeUtcEpochSeconds) — Lightweight Charts renders the Unix timestamp as literal UTC digits.
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
+    // Public so SimulatorForm can compute the same fake-epoch value for a candle's real UTC time
+    // when it needs to compare against a DZ/SZ line's time (see AddMirroredZoneLineAsync callers).
+    public static long ToFakeUtcEpochSeconds(DateTime utcTime)
+    {
+        var easternWallClock = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc), EasternZone);
+        var fakeUtcForDisplay = DateTime.SpecifyKind(easternWallClock, DateTimeKind.Utc);
+        return new DateTimeOffset(fakeUtcForDisplay).ToUnixTimeSeconds();
+    }
+
     private static string ToChartJson(List<CandleData> candles)
     {
-        object Map(CandleData c)
+        object Map(CandleData c) => new
         {
-            var easternWallClock = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(c.Time, DateTimeKind.Utc), EasternZone);
-            var fakeUtcForDisplay = DateTime.SpecifyKind(easternWallClock, DateTimeKind.Utc);
-            return new
-            {
-                time  = new DateTimeOffset(fakeUtcForDisplay).ToUnixTimeSeconds(),
-                open  = c.Open,
-                high  = c.High,
-                low   = c.Low,
-                close = c.Close
-            };
-        }
+            time  = ToFakeUtcEpochSeconds(c.Time),
+            open  = c.Open,
+            high  = c.High,
+            low   = c.Low,
+            close = c.Close
+        };
 
         return System.Text.Json.JsonSerializer.Serialize(candles.Select(Map));
     }
@@ -288,6 +318,93 @@ public class SimulatedChartPanel : Panel
         _tLineSignalFired = false;
     }
 
+    // ==================================================================================
+    // DZ/SZ (Demand Zone / Supply Zone) — ported toggle from ChartPanel, plus a mirroring hook
+    // (SimulatorForm listens for OnDzSzLineDrawn on the RTH+Overnight chart and forwards each
+    // line to the 15m RTH chart's AddMirroredZoneLineAsync, at the same price).
+    // ==================================================================================
+
+    // Fires (fakeUtcTime, price, color) every time a DZ/SZ line is drawn on THIS chart.
+    public event Action<long, decimal, string>? OnDzSzLineDrawn;
+
+    public async Task<bool> ToggleDzSzModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
+        return result == "true";
+    }
+
+    // Clears everything drawn on THIS chart (same as ClearTLineAsync — chart.html's
+    // clearDrawings() is shared/global per WebView instance).
+    public async Task ClearDzSzAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
+        _dzSzPendingPrices.Clear();
+        _demandZones.Clear();
+    }
+
+    // ---- Demand Zone rebote — ported from ChartPanel.EvaluateDemandZoneRebounds. Log-only (no
+    // Telegram, no EventLogStore call here — SimulatorForm's handler does that, since it's the
+    // one that knows the current symbol; see the OnDemandZoneReboundEvent subscription). ----
+    private readonly List<decimal> _dzSzPendingPrices = new();
+    private readonly List<DemandZoneState> _demandZones = new();
+
+    private sealed class DemandZoneState
+    {
+        public decimal Proximal; // green line — upper boundary
+        public decimal Distal;   // red line — lower boundary
+        public bool Entered;
+        public bool Done;
+    }
+
+    // Fires (caption, price, proximal, distal) once per confirmed rebote.
+    public event Action<string, decimal, decimal, decimal>? OnDemandZoneReboundEvent;
+
+    private void EvaluateDemandZoneRebounds(CandleData justClosed)
+    {
+        foreach (var zone in _demandZones)
+        {
+            if (zone.Done) continue;
+
+            if (!zone.Entered)
+            {
+                if (justClosed.Low > zone.Proximal) continue;
+                zone.Entered = true;
+            }
+
+            if (justClosed.Low < zone.Distal)
+            {
+                zone.Done = true;
+                continue;
+            }
+
+            if (justClosed.Close > zone.Proximal)
+            {
+                zone.Done = true;
+                var caption = $"Rebote en Zona de Demanda — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
+                OnDemandZoneReboundEvent?.Invoke(caption, justClosed.Close, zone.Proximal, zone.Distal);
+            }
+        }
+    }
+
+    // Adds a DZ/SZ line to THIS chart without arming click mode — used to mirror a line drawn on
+    // another chart. fakeUtcTime is the same "ET wall-clock digits disguised as UTC" epoch value
+    // ToFakeUtcEpochSeconds/chart.html candles already use, so it can be forwarded verbatim from
+    // one chart's OnDzSzLineDrawn straight into another's AddMirroredZoneLineAsync.
+    public async Task AddMirroredZoneLineAsync(long fakeUtcTime, decimal price, string color)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredZoneLine({fakeUtcTime}, {priceStr}, '{color}');");
+    }
+
+    public async Task ClearMirroredZoneLinesAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearMirroredZoneLines();");
+    }
+
     private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
@@ -295,6 +412,29 @@ public class SimulatedChartPanel : Panel
             using var doc = JsonDocument.Parse(e.WebMessageAsJson);
             var root = doc.RootElement;
             var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+
+            if (type == "dzsz")
+            {
+                var dzTime  = root.GetProperty("time").GetInt64();
+                var dzPrice = root.GetProperty("price").GetDecimal();
+                var dzColor = root.GetProperty("color").GetString() ?? "#26a69a";
+                OnDzSzLineDrawn?.Invoke(dzTime, dzPrice, dzColor);
+
+                // Every 2 lines form a pair — only a genuine demand zone (green/"demand" line
+                // above red/"supply") gets tracked for rebote detection (same geometry chart.html's
+                // own fill uses). Only relevant on this chart (RTH+Overnight — the only one with
+                // DZ/SZ armed), harmless no-op on the mirror-only RTH chart since nothing evaluates it there.
+                _dzSzPendingPrices.Add(dzPrice);
+                if (_dzSzPendingPrices.Count == 2)
+                {
+                    var (demandPrice, supplyPrice) = (_dzSzPendingPrices[0], _dzSzPendingPrices[1]);
+                    _dzSzPendingPrices.Clear();
+                    if (demandPrice > supplyPrice)
+                        _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
+                }
+                return;
+            }
+
             if (type != "tline" && type != "tline_delete") return;
 
             var t1 = root.GetProperty("t1").GetInt64();
@@ -382,6 +522,7 @@ public class SimulatedChartPanel : Panel
             _crossActivePeriod = null;
             _crossFinished = false;
             _tLineSignalFired = false;
+            foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
         }
 
         for (int i = _closedCandles.Count; i < closedNow.Count; i++)
@@ -389,6 +530,7 @@ public class SimulatedChartPanel : Panel
             _closedCandles.Add(closedNow[i]);
             EvaluateCrossings(closedNow[i]);
             EvaluateTLineSignal(closedNow[i]);
+            EvaluateDemandZoneRebounds(closedNow[i]);
         }
     }
 }

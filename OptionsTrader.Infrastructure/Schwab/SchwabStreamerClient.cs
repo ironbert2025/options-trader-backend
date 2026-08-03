@@ -80,6 +80,9 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
 
     public event Action<string>? OnWsStatusEvent;
 
+    private readonly bool _allowRefresh;
+    private readonly Func<(string AccessToken, DateTime ExpiresAt)>? _reloadFromDisk;
+
     public SchwabStreamerClient(
         HttpClient httpClient,
         SchwabAuthService authService,
@@ -88,7 +91,9 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
         string refreshToken,
         string storedAccessToken,
         DateTime storedExpiresAt,
-        Func<string, DateTime, Task> onTokenRenewed)
+        Func<string, DateTime, Task> onTokenRenewed,
+        bool allowRefresh = true,
+        Func<(string AccessToken, DateTime ExpiresAt)>? reloadFromDisk = null)
     {
         _httpClient        = httpClient;
         _authService       = authService;
@@ -98,6 +103,8 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
         _storedAccessToken = storedAccessToken;
         _storedExpiresAt   = storedExpiresAt;
         _onTokenRenewed    = onTokenRenewed;
+        _allowRefresh      = allowRefresh;
+        _reloadFromDisk    = reloadFromDisk;
     }
 
     private async Task OnTokenRenewedInternal(string newAccessToken, DateTime newExpiresAt)
@@ -111,7 +118,8 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
         _authService.GetAccessTokenAsync(
             _apiKey, _apiSecret,
             _storedAccessToken, _storedExpiresAt,
-            _refreshToken, OnTokenRenewedInternal);
+            _refreshToken, OnTokenRenewedInternal,
+            _allowRefresh, _reloadFromDisk);
 
     // Fetches streamerSocketUrl + streamer credentials via the REST "User Preference" endpoint,
     // then opens the WebSocket and logs in. Call SubscribeChartEquity afterwards.

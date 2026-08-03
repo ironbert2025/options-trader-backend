@@ -28,10 +28,12 @@ public class SimulatorForm : Form
     // 3-column TableLayoutPanel (same pattern as MultiChartForm's own chart row) — deterministic
     // left-to-right order, unlike stacking multiple Dock=Left panels. Height matches the candle
     // panel area MultiChartForm actually renders at (Form Height 530, minus its 88px toolbar and
-    // title bar/padding) so the simulator's charts look the same size as the real form's.
+    // title bar/padding) so the simulator's charts look the same size as the real form's. Width
+    // is +150 over 3 equal columns so RTH+Overnight (2:2:3 ratio, same as MultiChartForm) is 50%
+    // wider than the other two instead of shrinking them.
     private readonly TableLayoutPanel _chartsHost = new()
     {
-        Location = new Point(8, 302), Size = new Size(900, 400),
+        Location = new Point(8, 302), Size = new Size(1050, 400),
         ColumnCount = 3, RowCount = 1
     };
     private readonly SimulatedChartPanel _hourlyChart = new("1h", ChartPanelMode.Hourly15) { Dock = DockStyle.Fill };
@@ -43,9 +45,15 @@ public class SimulatorForm : Form
     // request ("es un simulador"). The toggle buttons stay up top; the log itself lives below the
     // trades grid at the bottom of the form.
     private readonly Panel _pnlSmaEvents = new() { Location = new Point(590, 168), Size = new Size(440, 30) };
+
+    // DZ/SZ toggle lives on the RTH+Overnight chart, same as the live app — every line drawn
+    // there also gets mirrored onto the 15m RTH chart at the same price (see the OnDzSzLineDrawn
+    // subscription in the constructor and _rthChartMinFakeEpoch's use in RenderCurrentStep).
+    private readonly Panel _pnlDzSz = new() { Location = new Point(590, 202), Size = new Size(440, 30) };
+    private long? _rthChartMinFakeEpoch;
     private readonly TextBox _txtEventLog = new()
     {
-        Location = new Point(8, 848), Size = new Size(1000, 90),
+        Location = new Point(8, 848), Size = new Size(1050, 90),
         Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
         Font = new Font("Consolas", 8.5F), BackColor = Color.Black, ForeColor = Color.LightGreen
     };
@@ -55,7 +63,7 @@ public class SimulatorForm : Form
     // width per column (dgvTrades never sets one either).
     private readonly DataGridView _dgvTrades = new()
     {
-        Location = new Point(8, 710), Size = new Size(1000, 130),
+        Location = new Point(8, 710), Size = new Size(1050, 130),
         AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true,
         RowHeadersVisible = false,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
@@ -90,7 +98,7 @@ public class SimulatorForm : Form
     public SimulatorForm()
     {
         Text          = "Simulador";
-        Width         = 1040;
+        Width         = 1090;
         Height        = 1000;
         StartPosition = FormStartPosition.CenterScreen;
 
@@ -99,10 +107,11 @@ public class SimulatorForm : Form
         BuildCountsAndContractsGroups();
         BuildGoToTimeButtons();
         BuildSmaEventControls();
+        BuildDzSzControls();
 
-        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
         _chartsHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         _chartsHost.Controls.Add(_hourlyChart, 0, 0);
         _chartsHost.Controls.Add(_rthChart, 1, 0);
@@ -119,6 +128,7 @@ public class SimulatorForm : Form
         Controls.Add(_grpContracts);
         Controls.Add(_pnlGoToTime);
         Controls.Add(_pnlSmaEvents);
+        Controls.Add(_pnlDzSz);
         Controls.Add(_txtEventLog);
         Controls.Add(_chartsHost);
         Controls.Add(_dgvTrades);
@@ -131,7 +141,41 @@ public class SimulatorForm : Form
         _dgvChain.CellPainting  += DgvChain_CellPainting;
         _dgvChain.CellFormatting += DgvChain_CellFormatting;
 
+        // Mirror each DZ/SZ line drawn on the RTH+Overnight chart onto the 15m RTH chart at the
+        // same price. A pre-market/after-hours click has no equivalent time on the RTH-only
+        // chart, so clamp to that chart's leftmost currently-loaded candle instead of drawing
+        // nothing there.
+        _fullChart.OnDzSzLineDrawn += (time, price, color) =>
+        {
+            var mirroredTime = _rthChartMinFakeEpoch is { } minEpoch && time < minEpoch ? minEpoch : time;
+            _ = _rthChart.AddMirroredZoneLineAsync(mirroredTime, price, color);
+        };
+
         Load += (s, e) => LoadSymbols();
+    }
+
+    // "DZ/SZ" arms drawing mode on the RTH+Overnight chart only (same as the live app's toolbar);
+    // "Clear DZ/SZ" clears it there AND the mirrored lines on the 15m RTH chart, so nothing is
+    // left orphaned on one chart after clearing the other.
+    private void BuildDzSzControls()
+    {
+        var btnDzSz = new Button { Text = "DZ/SZ", Location = new Point(0, 0), Size = new Size(80, 26) };
+        var btnClear = new Button { Text = "Clear DZ/SZ", Location = new Point(90, 0), Size = new Size(110, 26) };
+
+        btnDzSz.Click += async (s, e) =>
+        {
+            var on = await _fullChart.ToggleDzSzModeAsync();
+            btnDzSz.BackColor = on ? Color.LightGreen : SystemColors.Control;
+        };
+        btnClear.Click += async (s, e) =>
+        {
+            await _fullChart.ClearDzSzAsync();
+            await _rthChart.ClearMirroredZoneLinesAsync();
+            btnDzSz.BackColor = SystemColors.Control;
+        };
+
+        _pnlDzSz.Controls.Add(btnDzSz);
+        _pnlDzSz.Controls.Add(btnClear);
     }
 
     // Same options as Form1's grpCounts (3-10, In Range) and grpContracts (1-6, PositionSize),
@@ -244,6 +288,17 @@ public class SimulatorForm : Form
 
         _hourlyChart.OnCrossSequenceEvent += msg => LogSimEvent(msg);
         _hourlyChart.OnTLineSignalEvent   += msg => LogSimEvent(msg);
+
+        // Demand Zone rebote (RTH+Overnight chart) — logged to the on-screen text log AND to the
+        // same persisted events_log.csv the live app's Cross-SMA/T-Line/Daily-bounce events use,
+        // per explicit request ("logue el evento en el file donde se almacenan los eventos de
+        // cruce/rebote") — unlike every other simulator event, which is log-only/not persisted.
+        _fullChart.OnDemandZoneReboundEvent += (caption, price, proximal, distal) =>
+        {
+            LogSimEvent(caption);
+            EventLogStore.Append(_symbol, "15Min", "DemandZoneRebound", "Alza", caption, price,
+                $"Proximal={proximal:F2};Distal={distal:F2}");
+        };
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
             if (IsDisposed) return;
@@ -343,7 +398,7 @@ public class SimulatorForm : Form
         if (_cmbDate.Items.Count > 0) _cmbDate.SelectedIndex = 0;
     }
 
-    private void LoadSelectedDay()
+    private async void LoadSelectedDay()
     {
         if (_cmbSymbol.SelectedItem is not string symbol) return;
         if (_cmbDate.SelectedItem is not string dateStr || !DateOnly.TryParse(dateStr, out var date)) return;
@@ -371,6 +426,14 @@ public class SimulatorForm : Form
 
         _txtEventLog.Clear();
         EvaluateDailyBounce();
+
+        // A new day's candles are about to load — clear each chart's stuck pan/zoom from
+        // whatever day was showing before, so this day's 9:30 candle lands at the real open
+        // instead of wherever the previous day's view happened to be scrolled/zoomed to.
+        await Task.WhenAll(
+            _hourlyChart.ResetViewForNewDayAsync(),
+            _rthChart.ResetViewForNewDayAsync(),
+            _fullChart.ResetViewForNewDayAsync());
 
         UpdateStepButtons();
         RenderCurrentStep();
@@ -454,10 +517,20 @@ public class SimulatorForm : Form
         var hourlyUpToNow   = _hourlyCandles.Where(c => c.Time <= step.Time).ToList();
         var intradayUpToNow = _intradayCandles.Where(c => c.Time <= step.Time).ToList();
 
+        var rthCandles = CandleAggregation.AggregateToInterval(
+            CandleAggregation.FilterSession(intradayUpToNow, rthOnly: true), 15, rthOnly: true);
+
+        // Earliest candle currently on the RTH chart, in the same fake-epoch units DZ/SZ line
+        // times use — lets the DZ/SZ mirror handler clamp a pre-market/after-hours click (which
+        // has no equivalent candle on this RTH-only chart) to the RTH chart's left edge instead
+        // of silently failing to draw.
+        _rthChartMinFakeEpoch = rthCandles.Count > 0
+            ? SimulatedChartPanel.ToFakeUtcEpochSeconds(rthCandles[0].Time)
+            : (long?)null;
+
         _ = _hourlyChart.CargarHastaPasoAsync(
             CandleAggregation.AggregateToHourlyRthBuckets(hourlyUpToNow), visibleDays: 7);
-        _ = _rthChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
-            CandleAggregation.FilterSession(intradayUpToNow, rthOnly: true), 15, rthOnly: true), visibleDays: 3);
+        _ = _rthChart.CargarHastaPasoAsync(rthCandles, visibleDays: 3);
         _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
             intradayUpToNow, 15, rthOnly: false), visibleDays: 3);
 
@@ -679,18 +752,21 @@ public class SimulatorForm : Form
     // Same logic as Form1's private static UpdatePnLMinMax — kept as its own copy since that one
     // isn't accessible from here (private to Form1) and this simulator is deliberately isolated
     // from the live trade flow.
+    // Min only ever tracks NEGATIVE values, Max only ever tracks POSITIVE ones — a trade that's
+    // never been profitable leaves Max blank instead of showing "the least negative point
+    // reached" (same idea mirrored for Min if it's never gone negative). See Form1's identical copy.
     private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
     {
         var minCell = row.Cells["colSimPnlMin"];
         var maxCell = row.Cells["colSimPnlMax"];
 
-        if (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min)
+        if (pnlPct < 0 && (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min))
         {
             minCell.Value           = pnlPct.ToString("F1");
             minCell.Style.ForeColor = Color.Red;
         }
 
-        if (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max)
+        if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value           = pnlPct.ToString("F1");
             maxCell.Style.ForeColor = Color.Green;
