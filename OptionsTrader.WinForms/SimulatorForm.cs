@@ -343,7 +343,7 @@ public class SimulatorForm : Form
         if (_cmbDate.Items.Count > 0) _cmbDate.SelectedIndex = 0;
     }
 
-    private void LoadSelectedDay()
+    private async void LoadSelectedDay()
     {
         if (_cmbSymbol.SelectedItem is not string symbol) return;
         if (_cmbDate.SelectedItem is not string dateStr || !DateOnly.TryParse(dateStr, out var date)) return;
@@ -371,6 +371,14 @@ public class SimulatorForm : Form
 
         _txtEventLog.Clear();
         EvaluateDailyBounce();
+
+        // A new day's candles are about to load — clear each chart's stuck pan/zoom from
+        // whatever day was showing before, so this day's 9:30 candle lands at the real open
+        // instead of wherever the previous day's view happened to be scrolled/zoomed to.
+        await Task.WhenAll(
+            _hourlyChart.ResetViewForNewDayAsync(),
+            _rthChart.ResetViewForNewDayAsync(),
+            _fullChart.ResetViewForNewDayAsync());
 
         UpdateStepButtons();
         RenderCurrentStep();

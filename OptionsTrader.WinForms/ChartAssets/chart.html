@@ -1525,6 +1525,19 @@
   // like the live chart does). Only force the default view on the very first call; after that,
   // behave like a live update (reapplyVisibleRangeIfLive) so a manual pan/zoom survives.
   let historyLoadedOnce = false;
+
+  // Called by the simulator (SimulatedChartPanel.ResetViewForNewDay) whenever the user loads a
+  // DIFFERENT simulation day, as opposed to just stepping ◀/▶ within the same day. Without this,
+  // historyLoadedOnce/userHasInteracted stay stuck forever on this WebView instance (it's reused
+  // across day loads, unlike the live chart which is created once per session) — the OLD day's
+  // pan/zoom window would keep being reapplied to the NEW day's candles, making e.g. the new
+  // day's 9:30 candle land wherever the old view's edge used to be instead of at the real open.
+  function resetViewForNewDay() {
+    historyLoadedOnce = false;
+    userHasInteracted = false;
+    lastAppliedRange = null;
+  }
+
   function loadHistory(candles) {
     allCandles = candles.slice().sort((a, b) => a.time - b.time);
     renderCandles();

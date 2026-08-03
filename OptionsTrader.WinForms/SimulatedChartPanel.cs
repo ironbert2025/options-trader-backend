@@ -87,6 +87,20 @@ public class SimulatedChartPanel : Panel
 
     private bool _visibleDaysSet;
 
+    // Must be called before CargarHastaPasoAsync whenever the user loads a DIFFERENT simulation
+    // day (SimulatorForm.LoadSelectedDay) — this WebView instance is reused across day loads
+    // (unlike the live chart, created once per session), so without this the previous day's
+    // pan/zoom state would stick and get reapplied to the new day's candles, visually misplacing
+    // them (e.g. the new day's 9:30 candle landing wherever the old view's edge used to be).
+    // Stepping ◀/▶ within the same day must NOT call this — that's what preserves pan/zoom there.
+    public async Task ResetViewForNewDayAsync()
+    {
+        if (_readyTcs != null) await _readyTcs.Task;
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("resetViewForNewDay();");
+        _visibleDaysSet = false;
+    }
+
     // Replaces the whole visible candle series with the given list — used instead of the live
     // ChartPanel's incremental "extend current bucket" logic, since a step-through simulator can
     // simply recompute "everything up to the current step" on every ◀/▶ click; no need to
