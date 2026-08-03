@@ -1459,7 +1459,13 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeForMoneyness))
             SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
 
-        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
+        // Premium = riesgo máximo de la posición = precio de entrada * 100 (por contrato) *
+        // cantidad de contratos. "ask" ya es el valor usado como EntryPrice acá mismo (ver
+        // entryStr abajo) tanto para demo como para real — el real recibe su propio log aparte
+        // cuando se confirma el fill ("Real EntryPrice confirmed"), esto es solo el de apertura.
+        decimal.TryParse(contracts, out var contractsForPremium);
+        var premium = ask * 100 * contractsForPremium;
+        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}  Premium={premium:F2}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
         System.Windows.Forms.Application.DoEvents();
