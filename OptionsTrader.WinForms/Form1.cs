@@ -1526,10 +1526,23 @@ public partial class Form1 : Form
         };
     }
 
-    // Only the hub instance (_isWebSocketHub — see SetUpLiveFeedAsync) is allowed to actually
-    // call Schwab to renew the access token; every other instance (other tickers on this same
-    // PC, or another PC pointed at the shared token folder via TokenShareSettingsStore) just
-    // re-reads whatever the hub last wrote to SchwabTokenStore.
+    // Which instance on THIS machine is allowed to actually call Schwab to renew the access
+    // token — every other instance just re-reads whatever this one last wrote to
+    // SchwabTokenStore (local %AppData% file, never shared over the network — each PC keeps and
+    // renews its own copy of the same refresh token, which gets copied over manually about once
+    // a week). Two cases:
+    //   - This PC hosts the real streaming connection (_isWebSocketHub) — the hub instance is
+    //     also the token authority, same as before.
+    //   - This PC is a pure remote client of another PC's hub (Hub Host configured) — it never
+    //     contends for the streaming port, so _isWebSocketHub is always false here. Falls back to
+    //     IsPrimaryTickerInstance() (first ticker in this PC's own TickerSettingsStore) instead,
+    //     so exactly one instance on this PC is still designated.
+    // The Hub Host gate matters: without it, a PC that DOES host the hub could end up with two
+    // simultaneous authorities (the hub winner AND whichever instance happens to be "primary
+    // ticker") if they're different processes — racing each other to renew.
+    private bool IsTokenAuthority() =>
+        _isWebSocketHub || (!string.IsNullOrWhiteSpace(HubHostSettingsStore.Load()) && IsPrimaryTickerInstance());
+
     private static (string AccessToken, DateTime ExpiresAt) ReloadTokenFromDisk()
     {
         var t = SchwabTokenStore.Load();
@@ -1547,7 +1560,7 @@ public partial class Form1 : Form
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
             OnSchwabTokenRenewed,
-            _isWebSocketHub, ReloadTokenFromDisk);
+            IsTokenAuthority(), ReloadTokenFromDisk);
     }
 
     // Same broker-dispatch pattern as CreateTradingService, for the market-data (quotes) side.
@@ -1572,17 +1585,19 @@ public partial class Form1 : Form
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
             OnSchwabTokenRenewed, enableDumps,
-            _isWebSocketHub, ReloadTokenFromDisk);
+            IsTokenAuthority(), ReloadTokenFromDisk);
     }
 
-    // allowRefresh should only be true for the instance that's actually becoming the WS hub (the
-    // one call site in SetUpLiveFeedAsync that wins the port race) — every other caller of this
-    // (client instances that just need a SchwabStreamerClient for REST history fetches) must
-    // stay false so they never race the hub to renew the access token themselves.
-    private SchwabStreamerClient CreateSchwabStreamerClient(bool allowRefresh = false)
+    // allowRefresh defaults to this instance's own IsTokenAuthority() — the one call site in
+    // SetUpLiveFeedAsync that wins the streaming port race passes true explicitly (before
+    // _isWebSocketHub itself is set, so IsTokenAuthority() can't see it yet); every other caller
+    // (client instances that just need a SchwabStreamerClient for REST history fetches) leaves it
+    // at the default so they never race the authority to renew the access token themselves.
+    private SchwabStreamerClient CreateSchwabStreamerClient(bool? allowRefresh = null)
     {
         var creds  = SchwabCredentialsStore.Load();
         var tokens = SchwabTokenStore.Load();
+        var effectiveAllowRefresh = allowRefresh ?? IsTokenAuthority();
         return new SchwabStreamerClient(
             _marketHttpClient, _schwabAuth,
             creds.ApiKey, creds.ApiSecret,
@@ -1590,7 +1605,7 @@ public partial class Form1 : Form
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
             OnSchwabTokenRenewed,
-            allowRefresh, ReloadTokenFromDisk);
+            effectiveAllowRefresh, ReloadTokenFromDisk);
     }
 
     // Opens a live-chart window (candles only, streamed via WebSocket) for the currently
@@ -1716,50 +1731,6 @@ public partial class Form1 : Form
             MessageBox.Show(
                 "Guardado. Se va a usar la próxima vez que esta instancia se conecte al streaming (cerrá y volvé a abrir la app si ya estaba conectada).",
                 "Hub Host", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-    }
-
-    // Lets the user configure a shared network folder for the Schwab access/refresh token file
-    // (schwab_tokens.json) so this PC and other PCs on the LAN all read the SAME token instead of
-    // each having their own local copy. Only the hub instance (_isWebSocketHub) ever writes there
-    // — everyone else, on any PC pointed at this same folder, only reads. Configure the SAME path
-    // on every PC involved. Empty = local %AppData% only (default, single-machine behavior).
-    private void BtnTokenShare_Click(object? sender, EventArgs e)
-    {
-        var current = TokenShareSettingsStore.Load();
-
-        using var dialog = new Form
-        {
-            Text = "Token Share Folder",
-            Width = 420,
-            Height = 160,
-            StartPosition = FormStartPosition.CenterParent,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            MaximizeBox = false,
-            MinimizeBox = false,
-        };
-        var lbl = new Label
-        {
-            Text = "Carpeta de red compartida para schwab_tokens.json (vacío = solo esta PC):",
-            Location = new Point(10, 12),
-            Size = new Size(390, 32)
-        };
-        var txt = new TextBox { Text = current, Location = new Point(10, 48), Size = new Size(385, 24) };
-        var btnOk = new Button { Text = "Guardar", Location = new Point(230, 82), Size = new Size(80, 28), DialogResult = DialogResult.OK };
-        var btnCancel = new Button { Text = "Cancelar", Location = new Point(315, 82), Size = new Size(80, 28), DialogResult = DialogResult.Cancel };
-        dialog.Controls.Add(lbl);
-        dialog.Controls.Add(txt);
-        dialog.Controls.Add(btnOk);
-        dialog.Controls.Add(btnCancel);
-        dialog.AcceptButton = btnOk;
-        dialog.CancelButton = btnCancel;
-
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-        {
-            TokenShareSettingsStore.Save(txt.Text.Trim());
-            MessageBox.Show(
-                "Guardado. Configurá la misma ruta en todas las PCs que deban compartir el token (cerrá y volvé a abrir la app para que tome efecto).",
-                "Token Share", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 

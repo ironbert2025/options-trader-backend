@@ -82,7 +82,6 @@ partial class Form1
         btnLiveChart = new Button();
         btnFourEtfCharts = new Button();
         btnHubHost = new Button();
-        btnTokenShare = new Button();
         btnSimulator = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
@@ -220,7 +219,6 @@ partial class Form1
         tabQuotes.Controls.Add(btnLiveChart);
         tabQuotes.Controls.Add(btnFourEtfCharts);
         tabQuotes.Controls.Add(btnHubHost);
-        tabQuotes.Controls.Add(btnTokenShare);
         tabQuotes.Controls.Add(btnSimulator);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
@@ -782,21 +780,12 @@ partial class Form1
         btnHubHost.Text = "Hub Host";
         btnHubHost.Click += BtnHubHost_Click;
         //
-        // btnTokenShare
-        //
-        btnTokenShare.Location = new Point(1020, 94);
-        btnTokenShare.Name = "btnTokenShare";
-        btnTokenShare.Size = new Size(90, 25);
-        btnTokenShare.TabIndex = 5;
-        btnTokenShare.Text = "Token Share";
-        btnTokenShare.Click += BtnTokenShare_Click;
-        //
         // btnSimulator
         //
-        btnSimulator.Location = new Point(1020, 124);
+        btnSimulator.Location = new Point(1020, 94);
         btnSimulator.Name = "btnSimulator";
         btnSimulator.Size = new Size(90, 25);
-        btnSimulator.TabIndex = 6;
+        btnSimulator.TabIndex = 5;
         btnSimulator.Text = "Simulador";
         btnSimulator.Click += BtnSimulator_Click;
         //
@@ -1784,7 +1773,6 @@ partial class Form1
     private Button btnLiveChart;
     private Button btnFourEtfCharts;
     private Button btnHubHost;
-    private Button btnTokenShare;
     private Button btnSimulator;
     private Button btnStartPolling;
     private Label lblExpDate;
