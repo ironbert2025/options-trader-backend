@@ -76,6 +76,14 @@ public class SimulatedChartPanel : Panel
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
             }
+            else if (_mode == ChartPanelMode.Fifteen_Full)
+            {
+                // Gray shading for overnight/weekend gaps — same as ChartPanel.LoadHistoryAsync's
+                // "only on the 15m RTH+Overnight panel" call. recalculateOvernightBands() re-runs
+                // automatically on every loadHistory() (chart.html), so it stays in sync as the
+                // simulator steps forward — no extra wiring needed here beyond enabling it once.
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureOvernightBands();");
+            }
 
             _readyTcs.TrySetResult();
         }
