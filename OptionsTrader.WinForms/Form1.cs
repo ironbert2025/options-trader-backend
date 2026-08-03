@@ -1369,14 +1369,17 @@ public partial class Form1 : Form
         // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
         if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
 
+        // rbNoTrade ("No Trade") runs free, no target auto-close; rbNoTradeTarget
+        // ("No Trade-Target") is the one that auto-closes at target — swapped 2026-08-03, the
+        // wiring had these backwards since rbNoTradeTarget was added.
         if (rbNoTrade.Checked)
-            OpenSimulatedTrade(e.RowIndex);
+            OpenSimulatedTradeNoTarget(e.RowIndex);
         else if (rbTrade.Checked)
             _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false);
         else if (rbTradeTarget.Checked)
             _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true);
         else if (rbNoTradeTarget.Checked)
-            OpenSimulatedTradeNoTarget(e.RowIndex);
+            OpenSimulatedTrade(e.RowIndex);
     }
 
     private async void OpenSimulatedTrade(int rowIndex)
