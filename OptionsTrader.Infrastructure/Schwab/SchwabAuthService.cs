@@ -14,11 +14,6 @@ public class SchwabAuthService : IBrokerAuthService
     private readonly HttpClient _httpClient;
     private Action<string>? _logCallback;
 
-    // Dedup so a non-hub instance logs "leí el token del file" once per distinct token value
-    // instead of every single poll cycle (GetAccessTokenAsync's valid-token early return fires
-    // constantly — most calls hit it, not just the rare expiry/renewal path).
-    private string? _lastLoggedReadToken;
-
     public SchwabAuthService(HttpClient httpClient)
     {
         _httpClient = httpClient;
@@ -50,10 +45,7 @@ public class SchwabAuthService : IBrokerAuthService
         Func<(string AccessToken, DateTime ExpiresAt)>? reloadFromDisk = null)
     {
         if (!string.IsNullOrEmpty(storedAccessToken) && DateTime.UtcNow < storedExpiresAt)
-        {
-            if (!allowRefresh) LogNonHubReadOnce(storedAccessToken, storedExpiresAt);
             return storedAccessToken;
-        }
 
         if (!allowRefresh)
         {
@@ -66,10 +58,7 @@ public class SchwabAuthService : IBrokerAuthService
                 if (reloadFromDisk == null) continue;
                 var (diskToken, diskExpiresAt) = reloadFromDisk();
                 if (!string.IsNullOrEmpty(diskToken) && DateTime.UtcNow < diskExpiresAt)
-                {
-                    LogNonHubReadOnce(diskToken, diskExpiresAt);
                     return diskToken;
-                }
             }
 
             throw new InvalidOperationException(
@@ -104,19 +93,9 @@ public class SchwabAuthService : IBrokerAuthService
 
         var newExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn - 30);
 
-        _logCallback?.Invoke($"{DateTime.Now:HH:mm:ss} [Token] Hub: access token creado — expira {newExpiresAt.ToLocalTime():HH:mm:ss}");
-        _lastLoggedReadToken = newAccessToken; // so this same value doesn't also log as a "read" if this process later hits a non-hub call site
-
         await onTokenRenewed(newAccessToken, newExpiresAt);
 
         return newAccessToken;
-    }
-
-    private void LogNonHubReadOnce(string accessToken, DateTime expiresAt)
-    {
-        if (accessToken == _lastLoggedReadToken) return;
-        _lastLoggedReadToken = accessToken;
-        _logCallback?.Invoke($"{DateTime.Now:HH:mm:ss} [Token] Access token leído desde el archivo (creado por el hub) — expira {expiresAt.ToLocalTime():HH:mm:ss}");
     }
 
     // Exchanges the one-time authorization code for access + refresh tokens

@@ -806,7 +806,6 @@ public partial class Form1 : Form
                 DateTime.UtcNow.AddSeconds(expiresIn - 30),
                 DateTime.UtcNow.AddDays(7));
             SchwabTokenStore.Save(tokens);
-            LogLine($"{DateTime.Now:HH:mm:ss} [Token] Access token creado (login manual) — refresh token válido hasta {DateTime.Now.AddDays(7):yyyy-MM-dd}", Color.Yellow);
 
             txtResponse.Text = string.Empty;
             lblTokenStatus.Text = "Token saved successfully";
@@ -2209,8 +2208,6 @@ public partial class Form1 : Form
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
         // and the Telegram push below, instead of each capturing its own copy.
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
-        if (closeChartPath != null)
-            _ = UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
         if (tradeId != 0)
@@ -2220,7 +2217,23 @@ public partial class Form1 : Form
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr, TradeImageKind.TradeLog);
+
+        // Uploads Close + TradeLog (fire-and-forget, doesn't block the row from showing "Closed"),
+        // then appends today's Obsidian daily-trade-log entry once both S3 URLs are actually known
+        // — EntryImageUrl is already set from when the trade opened.
+        _ = UploadCloseTradeLogAndAppendDailyAsync(closeChartPath, tradeLogPath, symbol, type, tradeId, nowStr);
+    }
+
+    private async Task UploadCloseTradeLogAndAppendDailyAsync(string? closeChartPath, string tradeLogPath,
+        string symbol, string type, int tradeId, string nowStr)
+    {
+        if (closeChartPath != null)
+            await UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
+        await UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr, TradeImageKind.TradeLog);
+
+        if (tradeId == 0) return;
+        var trade = TradeHistoryStore.Load().FirstOrDefault(t => t.Id == tradeId);
+        if (trade != null) DailyTradeLogWriter.AppendTrade(trade);
     }
 
     // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
