@@ -688,8 +688,12 @@ public partial class Form1 : Form
         var hasCreds = !string.IsNullOrEmpty(creds.ApiKey) && !string.IsNullOrEmpty(creds.ApiSecret);
         lblCredentialsSaved.Visible = hasCreds;
 
-        // Wire logger so token events appear in the log panel
-        // _schwabAuth.SetLogCallback(msg => Invoke(() => LogLine(msg, Color.Yellow)));
+        // Wire logger so token events (hub renewals, non-hub reads/waits) appear in the log
+        // panel — GetAccessTokenAsync can fire this from a background thread, hence the Invoke.
+        _schwabAuth.SetLogCallback(msg =>
+        {
+            if (IsHandleCreated) Invoke(() => LogLine(msg, Color.Yellow));
+        });
 
         var tokens = SchwabTokenStore.Load();
         if (tokens != null && !string.IsNullOrEmpty(tokens.AccessToken))
@@ -802,7 +806,7 @@ public partial class Form1 : Form
                 DateTime.UtcNow.AddSeconds(expiresIn - 30),
                 DateTime.UtcNow.AddDays(7));
             SchwabTokenStore.Save(tokens);
-            // LogLine($"{DateTime.Now:HH:mm:ss} [Token] Refresh token saved — valid until {DateTime.Now.AddDays(7):yyyy-MM-dd}", Color.Yellow);
+            LogLine($"{DateTime.Now:HH:mm:ss} [Token] Access token creado (login manual) — refresh token válido hasta {DateTime.Now.AddDays(7):yyyy-MM-dd}", Color.Yellow);
 
             txtResponse.Text = string.Empty;
             lblTokenStatus.Text = "Token saved successfully";
