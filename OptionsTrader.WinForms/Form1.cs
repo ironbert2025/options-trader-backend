@@ -1312,6 +1312,22 @@ public partial class Form1 : Form
         return !decimal.TryParse(bidStr, out var bid) || bid == 0m;
     }
 
+    // Guards the Strike button on the tradable (current-expiration) grid: blocks the trade if
+    // the option is illiquid (bid = 0), the spread is too wide (Sprd >= 5, same cents units
+    // shown in the Sprd column), or there's no room for even 1 contract at the current Position
+    // Size (Conts = 0) — any one of these makes clicking Strike a guaranteed-bad trade.
+    private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName)
+    {
+        if (IsRowBidZero(row, callBidColName, putBidColName)) return true;
+
+        var sprdColName = row.Tag?.ToString() == "PUT" ? "colPutSprd" : "colCallSprd";
+        if (decimal.TryParse(row.Cells[sprdColName].Value?.ToString(), out var sprd) && sprd >= 5) return true;
+
+        if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
+
+        return false;
+    }
+
     private void DgvQuotes_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
     {
         if (e.RowIndex < 0) return;
@@ -1320,7 +1336,7 @@ public partial class Form1 : Form
         var val     = e.Value?.ToString();
         var row     = dgvQuotes.Rows[e.RowIndex];
         var rowType = row.Tag?.ToString();
-        var disabled = IsRowBidZero(row, "colCallBid", "colPutBid");
+        var disabled = IsRowTradeBlocked(row, "colCallBid", "colPutBid");
 
         // Paint default background
         e.PaintBackground(e.ClipBounds, true);
@@ -1350,8 +1366,8 @@ public partial class Form1 : Form
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
 
-        // Block clicks on illiquid options (bid = 0) to avoid opening a guaranteed-loss order
-        if (IsRowBidZero(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
+        // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
+        if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
 
         if (rbNoTrade.Checked)
             OpenSimulatedTrade(e.RowIndex);
@@ -2720,11 +2736,11 @@ public partial class Form1 : Form
 
     private static string CalcContracts(decimal positionSize, decimal ask)
     {
-        if (ask <= 0 || positionSize <= 0) return string.Empty;
+        if (ask <= 0 || positionSize <= 0) return "0";
         // Floor, not round — Position Size % is a risk cap, so rounding up could spend more
         // than the configured budget (e.g. $300 @ 1.18 = 2.54 contracts must stay at 2, not 3).
         var contracts = Math.Floor(positionSize / (ask * 100));
-        return contracts > 0 ? contracts.ToString("F0") : string.Empty;
+        return contracts.ToString("F0");
     }
 
     private static string GetContractsValue(decimal ask)
