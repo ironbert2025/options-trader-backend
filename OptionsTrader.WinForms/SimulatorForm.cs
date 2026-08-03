@@ -288,6 +288,17 @@ public class SimulatorForm : Form
 
         _hourlyChart.OnCrossSequenceEvent += msg => LogSimEvent(msg);
         _hourlyChart.OnTLineSignalEvent   += msg => LogSimEvent(msg);
+
+        // Demand Zone rebote (RTH+Overnight chart) — logged to the on-screen text log AND to the
+        // same persisted events_log.csv the live app's Cross-SMA/T-Line/Daily-bounce events use,
+        // per explicit request ("logue el evento en el file donde se almacenan los eventos de
+        // cruce/rebote") — unlike every other simulator event, which is log-only/not persisted.
+        _fullChart.OnDemandZoneReboundEvent += (caption, price, proximal, distal) =>
+        {
+            LogSimEvent(caption);
+            EventLogStore.Append(_symbol, "15Min", "DemandZoneRebound", "Alza", caption, price,
+                $"Proximal={proximal:F2};Distal={distal:F2}");
+        };
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
             if (IsDisposed) return;

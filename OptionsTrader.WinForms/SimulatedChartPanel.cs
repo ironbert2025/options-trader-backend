@@ -83,6 +83,10 @@ public class SimulatedChartPanel : Panel
                 // automatically on every loadHistory() (chart.html), so it stays in sync as the
                 // simulator steps forward — no extra wiring needed here beyond enabling it once.
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureOvernightBands();");
+
+                // Needed for "dzsz" messages (DZ/SZ mirroring onto the RTH chart, and Demand Zone
+                // rebote tracking below) — this is the only chart with DZ/SZ armed.
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
             }
 
             _readyTcs.TrySetResult();
@@ -128,7 +132,7 @@ public class SimulatedChartPanel : Panel
         }
         await RunScriptAsync("loadHistory", candles);
 
-        if (_mode == ChartPanelMode.Hourly15)
+        if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full)
             EvaluateNewlyClosedCandles(candles);
     }
 
@@ -336,6 +340,52 @@ public class SimulatedChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
+        _dzSzPendingPrices.Clear();
+        _demandZones.Clear();
+    }
+
+    // ---- Demand Zone rebote — ported from ChartPanel.EvaluateDemandZoneRebounds. Log-only (no
+    // Telegram, no EventLogStore call here — SimulatorForm's handler does that, since it's the
+    // one that knows the current symbol; see the OnDemandZoneReboundEvent subscription). ----
+    private readonly List<decimal> _dzSzPendingPrices = new();
+    private readonly List<DemandZoneState> _demandZones = new();
+
+    private sealed class DemandZoneState
+    {
+        public decimal Proximal; // green line — upper boundary
+        public decimal Distal;   // red line — lower boundary
+        public bool Entered;
+        public bool Done;
+    }
+
+    // Fires (caption, price, proximal, distal) once per confirmed rebote.
+    public event Action<string, decimal, decimal, decimal>? OnDemandZoneReboundEvent;
+
+    private void EvaluateDemandZoneRebounds(CandleData justClosed)
+    {
+        foreach (var zone in _demandZones)
+        {
+            if (zone.Done) continue;
+
+            if (!zone.Entered)
+            {
+                if (justClosed.Low > zone.Proximal) continue;
+                zone.Entered = true;
+            }
+
+            if (justClosed.Low < zone.Distal)
+            {
+                zone.Done = true;
+                continue;
+            }
+
+            if (justClosed.Close > zone.Proximal)
+            {
+                zone.Done = true;
+                var caption = $"Rebote en Zona de Demanda — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
+                OnDemandZoneReboundEvent?.Invoke(caption, justClosed.Close, zone.Proximal, zone.Distal);
+            }
+        }
     }
 
     // Adds a DZ/SZ line to THIS chart without arming click mode — used to mirror a line drawn on
@@ -369,6 +419,19 @@ public class SimulatedChartPanel : Panel
                 var dzPrice = root.GetProperty("price").GetDecimal();
                 var dzColor = root.GetProperty("color").GetString() ?? "#26a69a";
                 OnDzSzLineDrawn?.Invoke(dzTime, dzPrice, dzColor);
+
+                // Every 2 lines form a pair — only a genuine demand zone (green/"demand" line
+                // above red/"supply") gets tracked for rebote detection (same geometry chart.html's
+                // own fill uses). Only relevant on this chart (RTH+Overnight — the only one with
+                // DZ/SZ armed), harmless no-op on the mirror-only RTH chart since nothing evaluates it there.
+                _dzSzPendingPrices.Add(dzPrice);
+                if (_dzSzPendingPrices.Count == 2)
+                {
+                    var (demandPrice, supplyPrice) = (_dzSzPendingPrices[0], _dzSzPendingPrices[1]);
+                    _dzSzPendingPrices.Clear();
+                    if (demandPrice > supplyPrice)
+                        _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
+                }
                 return;
             }
 
@@ -459,6 +522,7 @@ public class SimulatedChartPanel : Panel
             _crossActivePeriod = null;
             _crossFinished = false;
             _tLineSignalFired = false;
+            foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
         }
 
         for (int i = _closedCandles.Count; i < closedNow.Count; i++)
@@ -466,6 +530,7 @@ public class SimulatedChartPanel : Panel
             _closedCandles.Add(closedNow[i]);
             EvaluateCrossings(closedNow[i]);
             EvaluateTLineSignal(closedNow[i]);
+            EvaluateDemandZoneRebounds(closedNow[i]);
         }
     }
 }

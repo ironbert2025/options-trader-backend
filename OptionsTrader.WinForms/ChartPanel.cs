@@ -63,6 +63,22 @@ public class ChartPanel : Panel
     private bool _crossUp;      // fixed for the whole sequence once the first period is armed
     private bool _crossFinished;
 
+    // ---- Demand Zone rebote (15m RTH+Overnight panel only — see EvaluateDemandZoneRebounds) ----
+    // Every DZ/SZ line drawn (toggleDzSz — see CoreWebView2_WebMessageReceived's "dzsz" case)
+    // arrives one at a time; every 2 form a pair. A pair only becomes a tracked demand zone if the
+    // first (green/"demand") line ends up ABOVE the second (red/"supply") one — same geometry
+    // chart.html's own fill already uses to color a pair as a demand zone. Cleared by ClearDrawingsAsync.
+    private readonly List<decimal> _dzSzPendingPrices = new(); // holds an odd single line waiting for its pair
+    private readonly List<DemandZoneState> _demandZones = new();
+
+    private sealed class DemandZoneState
+    {
+        public decimal Proximal; // green line — upper boundary
+        public decimal Distal;   // red line — lower boundary
+        public bool Entered;
+        public bool Done; // Confirmed (rebote fired) or Broken (Distal breached) — stop evaluating
+    }
+
     // Fires once the last armed period's event has been reported — MultiChartForm uses this to
     // reset all 4 buttons back to their neutral/off appearance, since the sequence won't respond
     // to anything else for the rest of the session.
@@ -88,6 +104,11 @@ public class ChartPanel : Panel
     // yesterday's already-closed daily candle bounced off the daily SMA20. Purely informational —
     // the caller just logs it and shows a hint on the chart; no Telegram push, no automatic action.
     public event Action<string>? OnDailyBounceEvent;
+
+    // Fires with a human-readable caption when a Demand Zone rebote is confirmed (15m
+    // RTH+Overnight panel only — see EvaluateDemandZoneRebounds). Pushes its own screenshot to
+    // Telegram the same self-contained way Cross-SMA does (SendChartToTelegramAsync below).
+    public event Action<string>? OnDemandZoneReboundEvent;
 
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
@@ -316,6 +337,11 @@ public class ChartPanel : Panel
             _tLineSignalFired = false;
             if (_tLineHintLabel != null) _tLineHintLabel.Text = string.Empty;
         }
+        if (_mode == ChartPanelMode.Fifteen_Full)
+        {
+            _dzSzPendingPrices.Clear();
+            _demandZones.Clear();
+        }
     }
 
     // Sets the "Potencial CT al Alza/Baja" hint right after a T-Line finishes drawing — direction
@@ -394,6 +420,19 @@ public class ChartPanel : Panel
                     var newTime = root.GetProperty("newTime").GetInt64();
                     var newPrice = root.GetProperty("newPrice").GetDecimal();
                     VerticalArrowStore.Move(_symbol, oldTime, oldPrice, up, newTime, newPrice);
+                    break;
+                }
+                case "dzsz":
+                {
+                    var dzPrice = root.GetProperty("price").GetDecimal();
+                    _dzSzPendingPrices.Add(dzPrice);
+                    if (_dzSzPendingPrices.Count == 2)
+                    {
+                        var (demandPrice, supplyPrice) = (_dzSzPendingPrices[0], _dzSzPendingPrices[1]);
+                        _dzSzPendingPrices.Clear();
+                        if (demandPrice > supplyPrice) // demand (green) above supply (red) -> genuine demand zone
+                            _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
+                    }
                     break;
                 }
             }
@@ -687,6 +726,45 @@ public class ChartPanel : Panel
             $"TLine={tLineValue:F2};SMA{TLineSmaPeriod}={sma20.Value:F2}");
     }
 
+    // Demand Zone rebote (15m RTH+Overnight panel only): evaluated against every tracked demand
+    // zone (see the "dzsz" case in CoreWebView2_WebMessageReceived) on every just-closed 15m
+    // candle, independent of whichever other zones are also being tracked.
+    //   Entrada: the candle's Low reaches the zone (<= Proximal) — marks it Entered.
+    //   Rota (invalidated forever): the candle's Low breaches the Distal line (< Distal) at any
+    //     point while/after entering — no rebote can fire for this zone again.
+    //   Rebote confirmado (fires once): while Entered and not yet Broken, the candle's CLOSE ends
+    //     up back outside (above) the Proximal line. Can fire on the very same candle that enters,
+    //     if that candle's wick dips into the zone but still closes back above Proximal.
+    private void EvaluateDemandZoneRebounds(CandleData justClosed)
+    {
+        foreach (var zone in _demandZones)
+        {
+            if (zone.Done) continue;
+
+            if (!zone.Entered)
+            {
+                if (justClosed.Low > zone.Proximal) continue; // hasn't reached the zone yet
+                zone.Entered = true;
+            }
+
+            if (justClosed.Low < zone.Distal)
+            {
+                zone.Done = true; // broken — no rebote possible for this zone anymore
+                continue;
+            }
+
+            if (justClosed.Close > zone.Proximal)
+            {
+                zone.Done = true;
+                var caption = $"Rebote en Zona de Demanda — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
+                OnDemandZoneReboundEvent?.Invoke(caption);
+                _ = SendChartToTelegramAsync(caption);
+                EventLogStore.Append(_symbol, "15Min", "DemandZoneRebound", "Alza", caption, justClosed.Close,
+                    $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
+            }
+        }
+    }
+
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
     // a trend line is meant to keep projecting forward. Falls back to p1 if the 2 points share
     // the same time (shouldn't happen — chart.html requires 2 distinct clicks).
@@ -778,8 +856,13 @@ public class ChartPanel : Panel
             }
 
             // Gray shading for overnight/weekend gaps — only on the 15m RTH+Overnight panel.
+            // Also listens for "dzsz" messages (Demand Zone rebote detection, see
+            // EvaluateDemandZoneRebounds) — this panel is the only one with DZ/SZ enabled.
             if (_mode == ChartPanelMode.Fifteen_Full)
+            {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureOvernightBands();");
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+            }
 
             // Default zoom on open: 1h panel shows the last 7 days, the two 15m panels show the
             // last 3 — full history is still loaded underneath for SMA/Bollinger, this only
@@ -968,6 +1051,10 @@ public class ChartPanel : Panel
                         EvaluateCrossings(_liveBucket);
                         EvaluateTLineSignal(_liveBucket);
                     }
+                }
+                else if (_mode == ChartPanelMode.Fifteen_Full)
+                {
+                    EvaluateDemandZoneRebounds(_liveBucket);
                 }
 
                 _liveBucketIndex = index;

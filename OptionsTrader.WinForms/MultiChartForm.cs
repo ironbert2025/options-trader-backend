@@ -505,6 +505,18 @@ public class MultiChartForm : Form
             };
         }
 
+        // Demand Zone rebote (15m RTH+Overnight panel) — self-contained in ChartPanel (pushes its
+        // own screenshot to Telegram + EventLogStore, same as Cross-SMA); just mirror the caption
+        // into this window's log too.
+        if (overnightPanel != null)
+        {
+            overnightPanel.OnDemandZoneReboundEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);
