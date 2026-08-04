@@ -1197,6 +1197,59 @@
   let pisoArmed = false;
   let techoArmed = false;
 
+  // ---- Piso/Techo AUTO label (1h panel only): unlike the click-driven Piso/Techo above, this
+  // one is programmatic (markPisoTecho, called once by C# from the pre-market SMA20/40 analysis)
+  // and tracks the CURRENT last point of each SMA line on every repaint — via smaLastPoint,
+  // updated by recalculateSmas() — so the label moves right alongside the SMA all session long
+  // instead of staying pinned to where it was first drawn. ----
+
+  class PisoTechoAutoLabelPrimitive {
+    constructor() { this._text = null; this._periods = []; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || !self._text) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                ctx.fillStyle = '#ff9800'; // orange
+                ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.textBaseline = 'middle';
+                self._periods.forEach(p => {
+                  const pt = smaLastPoint[p];
+                  if (!pt) return;
+                  const x = ts.timeToCoordinate(pt.time);
+                  const y = candleSeries.priceToCoordinate(pt.value);
+                  if (x == null || y == null) return;
+                  ctx.fillText(self._text, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio);
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const pisoTechoAutoLabelPrimitive = new PisoTechoAutoLabelPrimitive();
+  let pisoTechoAutoLabelAttached = false;
+
+  // Called once by C# after the pre-market SMA20/40 read (see ChartPanel's one-time analysis).
+  // text is 'Piso', 'Techo', or null (no signal that day) — periods is always [20, 40], one label
+  // per SMA line. Safe to call again on every Live Chart reopen with the SAME remembered text —
+  // it just re-renders, the position always comes from smaLastPoint at draw time.
+  function markPisoTecho(text) {
+    if (!pisoTechoAutoLabelAttached) { candleSeries.attachPrimitive(pisoTechoAutoLabelPrimitive); pisoTechoAutoLabelAttached = true; }
+    pisoTechoAutoLabelPrimitive._text = text;
+    pisoTechoAutoLabelPrimitive._periods = [20, 40];
+    forceRepaint();
+  }
+
   function toggleFloorLabel() {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     pisoArmed = !pisoArmed;
@@ -1286,6 +1339,7 @@
   let allCandles = [];           // mirrors what's on the candle series, kept sorted by time
   let smaSeries = {};            // period -> LineSeries
   let smaPeriods = [];
+  let smaLastPoint = {};         // period -> { time, value } of that SMA's current last point (see markPisoTecho)
 
   const smaColors = { 20: '#f5a623', 40: '#ef5350', 100: '#26a69a', 200: '#a259ff' };
   const smaWidths = { 20: 1, 40: 1, 100: 2, 200: 2 };
@@ -1309,7 +1363,7 @@
   function recalculateSmas() {
     const source = displaySeries();
     smaPeriods.forEach(p => {
-      if (source.length < p) { smaSeries[p].setData([]); return; }
+      if (source.length < p) { smaSeries[p].setData([]); smaLastPoint[p] = null; return; }
       const data = [];
       let sum = 0;
       for (let i = 0; i < source.length; i++) {
@@ -1318,6 +1372,7 @@
         if (i >= p - 1) data.push({ time: source[i].time, value: sum / p });
       }
       smaSeries[p].setData(data);
+      smaLastPoint[p] = data.length > 0 ? data[data.length - 1] : null;
     });
   }
 

@@ -24,6 +24,15 @@ public enum ChartPanelMode
 // to know which.
 public class ChartPanel : Panel
 {
+    // Piso/Techo auto-analysis (1h panel only) — computed ONCE per running app instance (this
+    // process = one ticker, so "once per instance" and "once per symbol" are the same thing
+    // here), the first time Live Chart is opened and only if that happens before 9:30 AM ET.
+    // Static so the decision survives closing and reopening the Live Chart window later the same
+    // day (the WebView/ChartPanel itself gets fully disposed and recreated on each open) — see
+    // EvaluatePisoTechoOnce, called from LoadHistoryAsync's Hourly15 branch.
+    private static bool s_pisoTechoAnalyzed;
+    private static string? s_pisoTechoResult; // "Piso", "Techo", or null (no signal that day)
+
     private readonly string _symbol;
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
@@ -772,6 +781,42 @@ public class ChartPanel : Panel
         }
     }
 
+    // Piso/Techo auto-analysis (1h panel, once per app instance — see s_pisoTechoAnalyzed).
+    // Compares SMA20 vs SMA40 on the last closed hourly candle (yesterday's close, since this
+    // only runs pre-market) against that candle's own Close price:
+    //   SMA20 < SMA40 (bearish alignment) and price < SMA20 (approaching from below) -> Techo.
+    //   SMA20 > SMA40 (bullish alignment) and price > SMA20 (approaching from above) -> Piso.
+    //   Anything else -> no signal. Draws via markPisoTecho, which then tracks each SMA's live
+    // position on every repaint (chart.html's smaLastPoint) — no further updates needed from here.
+    private async Task EvaluatePisoTechoOnce()
+    {
+        // Compute only the very first time (this app instance, this process's lifetime); every
+        // later call (chart closed and reopened the same day) just redraws whatever was already
+        // decided, without re-analyzing.
+        if (!s_pisoTechoAnalyzed)
+        {
+            s_pisoTechoAnalyzed = true;
+
+            var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
+            if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0)) // only meaningful pre-market
+            {
+                var sma20 = Sma(20, _closedCandles.Count - 1);
+                var sma40 = Sma(40, _closedCandles.Count - 1);
+                if (sma20 != null && sma40 != null)
+                {
+                    var price = _closedCandles[^1].Close;
+                    if (sma20 < sma40 && price < sma20)
+                        s_pisoTechoResult = "Techo";
+                    else if (sma20 > sma40 && price > sma20)
+                        s_pisoTechoResult = "Piso";
+                }
+            }
+        }
+
+        if (s_pisoTechoResult != null)
+            await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho('{s_pisoTechoResult}');");
+    }
+
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
     // a trend line is meant to keep projecting forward. Falls back to p1 if the 2 points share
     // the same time (shouldn't happen — chart.html requires 2 distinct clicks).
@@ -926,6 +971,8 @@ public class ChartPanel : Panel
                     {
                         _closedCandles.Clear();
                         _closedCandles.AddRange(aggregated);
+
+                        await EvaluatePisoTechoOnce();
 
                         // Yesterday's LAST hourly candle (15:00-16:00) never gets a same-day
                         // follow-up tick to close it live (see Streamer_OnNewCandle's sameDay
