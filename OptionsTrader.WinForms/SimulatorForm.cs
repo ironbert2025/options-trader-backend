@@ -750,6 +750,8 @@ public class SimulatorForm : Form
             bid.ToString("F2"), ask.ToString("F2"), contracts, ask.ToString("F2"),
             ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", targetPct.ToString("F0"))];
 
+        gridRow.Cells["colSimCBid"].Style.ForeColor = Color.Orange;
+
         _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid));
         SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
@@ -777,7 +779,9 @@ public class SimulatorForm : Form
             trade.Row.Cells["colSimCBid"].Value    = quote.Bid.ToString("F2");
             trade.Row.Cells["colSimPnl"].Value     = pnl.ToString("F2");
             trade.Row.Cells["colSimPnlPct"].Value  = pnlPct.ToString("F1");
-            trade.Row.Cells["colSimPnl"].Style.ForeColor = pnl >= 0 ? Color.LimeGreen : Color.OrangeRed;
+            trade.Row.Cells["colSimCBid"].Style.ForeColor    = Color.Orange;
+            trade.Row.Cells["colSimPnl"].Style.ForeColor     = pnl >= 0 ? Color.LimeGreen : Color.OrangeRed;
+            trade.Row.Cells["colSimPnlPct"].Style.ForeColor  = pnlPct >= 0 ? Color.LimeGreen : Color.OrangeRed;
             UpdatePnLMinMax(trade.Row, pnlPct);
             SetSimMoneyness(trade.Row, trade.OptionType, trade.StrikePrice, step.UnderlyingPrice);
         }

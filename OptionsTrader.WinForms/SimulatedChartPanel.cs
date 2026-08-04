@@ -259,15 +259,20 @@ public class SimulatedChartPanel : Panel
         {
             if (watch.Done) continue;
 
-            var currentSma = Sma(watch.Period, _closedCandles.Count - 1);
+            var currentSma  = Sma(watch.Period, _closedCandles.Count - 1);
+            var previousSma = Sma(watch.Period, _closedCandles.Count - 2);
             if (currentSma == null) continue;
 
             var isGreen = justClosed.Close > justClosed.Open;
             var isRed   = justClosed.Close < justClosed.Open;
 
-            var crossed = watch.WatchingUp
-                ? isGreen && justClosed.Close > currentSma && justClosed.Open <= currentSma
-                : isRed   && justClosed.Close < currentSma && justClosed.Open >= currentSma;
+            // Same 2-point comparison as EvaluateCrossings (see ChartPanel's identical fix) — the
+            // PREVIOUS candle's close vs the PREVIOUS SMA, not this candle's own open vs its own
+            // SMA, since the SMA itself can shift enough between candles to make a real cross miss
+            // a same-bar open/close straddle check.
+            var crossed = previousSma != null && watch.WatchingUp
+                ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
+                : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
 
             var bounced = !crossed && (watch.WatchingUp
                 ? justClosed.Open < currentSma && isRed &&
