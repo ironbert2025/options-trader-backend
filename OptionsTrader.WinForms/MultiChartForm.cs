@@ -517,17 +517,19 @@ public class MultiChartForm : Form
             };
         }
 
-        // "Abriendo la Volatilidad": when the 1h panel resolves a Cruce en Techo (any SMA period),
-        // arm the 15m RTH panel's Bollinger-widening watch (bullish/CALL, upper band) from that
-        // moment on. Symmetric case: a Cruce en Piso arms the bearish/PUT watch (lower band) —
-        // see ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening.
+        // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA
+        // period), arm the 15m RTH panel's Bollinger-widening watch in the direction the
+        // resolution implies price is now headed. Cruce en Techo (breaks up through resistance)
+        // and Rebote en Piso (bounces up off support) are both bullish/CALL (upper band). Cruce
+        // en Piso (breaks down through support) and Rebote en Techo (rejected down off
+        // resistance) are both bearish/PUT (lower band) — see
+        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening.
         if (hourlyPanel != null && rthPanel != null)
         {
             hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho) =>
             {
-                if (evento != "Cruce") return;
-                if (pisoTecho == "Techo") rthPanel.ArmVolatilityOpeningWatch(bullish: true);
-                else if (pisoTecho == "Piso") rthPanel.ArmVolatilityOpeningWatch(bullish: false);
+                var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
+                rthPanel.ArmVolatilityOpeningWatch(bullish);
             };
         }
         if (rthPanel != null)

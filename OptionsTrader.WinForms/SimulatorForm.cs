@@ -305,13 +305,15 @@ public class SimulatorForm : Form
         _hourlyChart.OnPisoTechoOutcomeEvent += (caption, price, eventType, direction, reference) =>
         {
             LogSimEvent(caption);
-            if (eventType != "PisoTechoCruce") return;
-            if (direction == "Techo") _rthChart.ArmVolatilityOpeningWatch(bullish: true);
-            else if (direction == "Piso") _rthChart.ArmVolatilityOpeningWatch(bullish: false);
+            // Cruce en Techo / Rebote en Piso -> bullish (CALL, upper band). Cruce en Piso /
+            // Rebote en Techo -> bearish (PUT, lower band) — see MultiChartForm's identical
+            // mapping for the live app.
+            var bullish = direction == "Techo" ? eventType == "PisoTechoCruce" : eventType == "PisoTechoRebote";
+            _rthChart.ArmVolatilityOpeningWatch(bullish);
         };
 
         // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a
-        // Cruce en Techo; log-only, no events_log.csv, same as Piso/Techo above.
+        // Piso/Techo watch; log-only, no events_log.csv, same as Piso/Techo above.
         _rthChart.OnVolatilityOpeningEvent += msg => LogSimEvent(msg);
 
         _hourlyChart.OnCrossSequenceFinished += () =>
