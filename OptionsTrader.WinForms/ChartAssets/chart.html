@@ -1198,13 +1198,14 @@
   let techoArmed = false;
 
   // ---- Piso/Techo AUTO label (1h panel only): unlike the click-driven Piso/Techo above, this
-  // one is programmatic (markPisoTecho, called once by C# from the pre-market SMA20/40 analysis)
-  // and tracks the CURRENT last point of each SMA line on every repaint — via smaLastPoint,
-  // updated by recalculateSmas() — so the label moves right alongside the SMA all session long
-  // instead of staying pinned to where it was first drawn. ----
+  // one is programmatic (markPisoTecho, called once by C# from the pre-market SMA pair analysis
+  // — independently for the 20/40 pair and the 100/200 pair) and tracks the CURRENT last point of
+  // each SMA line on every repaint — via smaLastPoint, updated by recalculateSmas() — so each
+  // label moves right alongside its SMA all session long instead of staying pinned to where it
+  // was first drawn. ----
 
   class PisoTechoAutoLabelPrimitive {
-    constructor() { this._text = null; this._periods = []; this._chart = null; }
+    constructor() { this._entries = []; this._chart = null; } // [{ period, text }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1213,20 +1214,20 @@
         renderer() {
           return {
             draw(target) {
-              if (!self._chart || !self._text) return;
+              if (!self._chart || self._entries.length === 0) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
                 ctx.fillStyle = '#ff9800'; // orange
                 ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
                 ctx.textBaseline = 'middle';
-                self._periods.forEach(p => {
-                  const pt = smaLastPoint[p];
+                self._entries.forEach(({ period, text }) => {
+                  const pt = smaLastPoint[period];
                   if (!pt) return;
                   const x = ts.timeToCoordinate(pt.time);
                   const y = candleSeries.priceToCoordinate(pt.value);
                   if (x == null || y == null) return;
-                  ctx.fillText(self._text, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio);
+                  ctx.fillText(text, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio);
                 });
               });
             }
@@ -1239,14 +1240,19 @@
   const pisoTechoAutoLabelPrimitive = new PisoTechoAutoLabelPrimitive();
   let pisoTechoAutoLabelAttached = false;
 
-  // Called once by C# after the pre-market SMA20/40 read (see ChartPanel's one-time analysis).
-  // text is 'Piso', 'Techo', or null (no signal that day) — periods is always [20, 40], one label
-  // per SMA line. Safe to call again on every Live Chart reopen with the SAME remembered text —
-  // it just re-renders, the position always comes from smaLastPoint at draw time.
-  function markPisoTecho(text) {
+  // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
+  // analysis) — periodA/periodB identify which pair (20+40 or 100+200), text is 'Piso', 'Techo',
+  // or null (no signal for that pair that day; removes any previous entry for it). Each pair's
+  // entry is tracked independently, so the 20/40 pair and the 100/200 pair can show different (or
+  // no) signal at the same time. Safe to call again on every Live Chart reopen with the SAME
+  // remembered text — it just re-renders, the position always comes from smaLastPoint at draw time.
+  function markPisoTecho(periodA, periodB, text) {
     if (!pisoTechoAutoLabelAttached) { candleSeries.attachPrimitive(pisoTechoAutoLabelPrimitive); pisoTechoAutoLabelAttached = true; }
-    pisoTechoAutoLabelPrimitive._text = text;
-    pisoTechoAutoLabelPrimitive._periods = [20, 40];
+    pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== periodA && e.period !== periodB);
+    if (text) {
+      pisoTechoAutoLabelPrimitive._entries.push({ period: periodA, text });
+      pisoTechoAutoLabelPrimitive._entries.push({ period: periodB, text });
+    }
     forceRepaint();
   }
 

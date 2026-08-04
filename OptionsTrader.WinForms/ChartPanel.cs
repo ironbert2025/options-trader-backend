@@ -31,7 +31,10 @@ public class ChartPanel : Panel
     // day (the WebView/ChartPanel itself gets fully disposed and recreated on each open) — see
     // EvaluatePisoTechoOnce, called from LoadHistoryAsync's Hourly15 branch.
     private static bool s_pisoTechoAnalyzed;
-    private static string? s_pisoTechoResult; // "Piso", "Techo", or null (no signal that day)
+    // One independent result per SMA pair — (20,40) and (100,200) can each say "Piso", "Techo",
+    // or null (no signal that day) without affecting the other.
+    private static string? s_pisoTechoResult2040;
+    private static string? s_pisoTechoResult100200;
 
     private readonly string _symbol;
     private readonly SchwabStreamerClient _historyClient;
@@ -782,12 +785,14 @@ public class ChartPanel : Panel
     }
 
     // Piso/Techo auto-analysis (1h panel, once per app instance — see s_pisoTechoAnalyzed).
-    // Compares SMA20 vs SMA40 on the last closed hourly candle (yesterday's close, since this
-    // only runs pre-market) against that candle's own Close price:
-    //   SMA20 < SMA40 (bearish alignment) and price < SMA20 (approaching from below) -> Techo.
-    //   SMA20 > SMA40 (bullish alignment) and price > SMA20 (approaching from above) -> Piso.
-    //   Anything else -> no signal. Draws via markPisoTecho, which then tracks each SMA's live
-    // position on every repaint (chart.html's smaLastPoint) — no further updates needed from here.
+    // Evaluated independently for the (20,40) and (100,200) SMA pairs, each against the last
+    // closed hourly candle (yesterday's close, since this only runs pre-market) and that candle's
+    // own Close price:
+    //   SMA_fast < SMA_slow (bearish alignment) and price < SMA_fast (from below) -> Techo.
+    //   SMA_fast > SMA_slow (bullish alignment) and price > SMA_fast (from above) -> Piso.
+    //   Anything else -> no signal for that pair. Draws via markPisoTecho, which then tracks each
+    // SMA's live position on every repaint (chart.html's smaLastPoint) — no further updates
+    // needed from here.
     private async Task EvaluatePisoTechoOnce()
     {
         // Compute only the very first time (this app instance, this process's lifetime); every
@@ -800,22 +805,28 @@ public class ChartPanel : Panel
             var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
             if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0)) // only meaningful pre-market
             {
-                var sma20 = Sma(20, _closedCandles.Count - 1);
-                var sma40 = Sma(40, _closedCandles.Count - 1);
-                if (sma20 != null && sma40 != null)
-                {
-                    var price = _closedCandles[^1].Close;
-                    if (sma20 < sma40 && price < sma20)
-                        s_pisoTechoResult = "Techo";
-                    else if (sma20 > sma40 && price > sma20)
-                        s_pisoTechoResult = "Piso";
-                }
+                s_pisoTechoResult2040   = EvaluatePisoTechoPair(20, 40);
+                s_pisoTechoResult100200 = EvaluatePisoTechoPair(100, 200);
             }
         }
 
-        if (s_pisoTechoResult != null)
-            await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho('{s_pisoTechoResult}');");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, 40, {ToJsStringOrNull(s_pisoTechoResult2040)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, 200, {ToJsStringOrNull(s_pisoTechoResult100200)});");
     }
+
+    private string? EvaluatePisoTechoPair(int fastPeriod, int slowPeriod)
+    {
+        var fast = Sma(fastPeriod, _closedCandles.Count - 1);
+        var slow = Sma(slowPeriod, _closedCandles.Count - 1);
+        if (fast == null || slow == null) return null;
+
+        var price = _closedCandles[^1].Close;
+        if (fast < slow && price < fast) return "Techo";
+        if (fast > slow && price > fast) return "Piso";
+        return null;
+    }
+
+    private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
 
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
     // a trend line is meant to keep projecting forward. Falls back to p1 if the 2 points share
