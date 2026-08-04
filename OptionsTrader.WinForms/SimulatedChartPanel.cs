@@ -209,6 +209,13 @@ public class SimulatedChartPanel : Panel
     }
     private readonly List<PisoTechoWatch> _pisoTechoWatches = new();
 
+    // Set by SimulatorForm on every LoadSelectedDay — Cruce/Rebote only fires for candles ON OR
+    // AFTER this date. Without it, EvaluatePisoTechoWatches would evaluate the ENTIRE prior-
+    // context backlog (now up to ~200 trading days, since HourlyCandleStore's cap grew) as
+    // "already closed" the instant the day loads, firing instantly against some ancient candle
+    // instead of waiting for the actual replayed-day candle that closes past the SMA.
+    public DateOnly? WatchStartDate { get; set; }
+
     // Fires (caption, price, eventType, direction, reference) once per resolved Cruce/Rebote —
     // log-only for the simulator (no Telegram), but SimulatorForm's handler also persists it to
     // events_log.csv, same as Demand Zone, per explicit request that this one gets written to disk.
@@ -244,6 +251,10 @@ public class SimulatedChartPanel : Panel
     // period independently. Resolves once, then stops for the rest of the simulated day.
     private void EvaluatePisoTechoWatches(CandleData justClosed)
     {
+        if (WatchStartDate is { } startDate &&
+            DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(justClosed.Time, EasternZone)) < startDate)
+            return; // prior-context candle (backfilled history), not part of the replayed day
+
         foreach (var watch in _pisoTechoWatches)
         {
             if (watch.Done) continue;

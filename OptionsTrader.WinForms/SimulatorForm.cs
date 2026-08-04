@@ -418,6 +418,7 @@ public class SimulatorForm : Form
 
         _symbol  = symbol;
         _simDate = date;
+        _hourlyChart.WatchStartDate = date; // Piso/Techo Cruce/Rebote must not fire against backfilled prior-context candles
         _steps   = SimulationDataLoader.LoadDay(symbol, date);
         // Same amount of surrounding context the live charts default to (7 days for 1h, 3 for the
         // two 15m panels) — see ChartPanel.LoadHistoryAsync's visibleDays.
