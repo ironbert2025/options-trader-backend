@@ -1685,6 +1685,22 @@
     recalculateOvernightBands();
     reapplyVisibleRangeIfLive();
   }
+
+  // Same idea as addFullCandle, but for the 15m RTH panel's overnight-gap day reset (see
+  // ChartPanel.Streamer_OnNewCandle) — the new candle's time is often MANY hours away from the
+  // previous one (yesterday's last RTH bar to today's 9:30 open), and candleSeries.update()'s
+  // incremental path doesn't always recompute that single bar's width/spacing correctly across
+  // such a large gap, visually "stretching" it. A full candleSeries.setData() (via renderCandles)
+  // forces Lightweight Charts to rebuild layout from scratch instead, which doesn't have that
+  // issue — more expensive than update(), but this only runs once per day, not per tick.
+  function resetToNewDayCandle(candle) {
+    upsertCandle(candle);
+    renderCandles();
+    recalculateSmas();
+    recalculateBollinger();
+    recalculateOvernightBands();
+    reapplyVisibleRangeIfLive();
+  }
 </script>
 </body>
 </html>

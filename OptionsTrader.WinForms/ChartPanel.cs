@@ -1083,7 +1083,7 @@ public class ChartPanel : Panel
                     _liveBucketIndex = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
                     _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
                     var freshBucket = _liveBucket;
-                    BeginInvoke(async () => await RunScriptAsync("updateLastCandle", freshBucket));
+                    BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                     return;
                 }
             }
