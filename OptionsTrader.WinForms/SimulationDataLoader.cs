@@ -25,6 +25,32 @@ internal static class SimulationDataLoader
     private const string TicksFolder         = @"C:\OptionsData\MarketData\Ticks";
     private const string TicksLevelOneFolder = @"C:\OptionsData\MarketData\TicksLevelOne";
 
+    // Reads a file that may still be open for writing RIGHT NOW — CsvLogger/TickPriceStore/
+    // LevelOneTickStore keep their StreamWriter open for the whole live polling session (not a
+    // quick open-write-close per line), so loading "today" while the market's still running can
+    // catch it mid-write. FileShare.ReadWrite lets this open alongside that writer instead of
+    // fighting it for the handle, plus a short retry in case of a genuinely transient collision
+    // (e.g. the writer mid-flush) — same idea as EventLogStore/TradeHistoryStore's WithRetry.
+    private static string[] ReadAllLinesShared(string path)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                var lines = new List<string>();
+                while (reader.ReadLine() is { } line) lines.Add(line);
+                return lines.ToArray();
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(50);
+            }
+        }
+        return Array.Empty<string>();
+    }
+
     // Days that actually have recorded options-chain data for this symbol, newest first — used
     // to limit the simulator's date picker to dates that can actually be replayed.
     public static List<DateOnly> GetAvailableDates(string symbol)
@@ -154,7 +180,7 @@ internal static class SimulationDataLoader
         if (!File.Exists(path)) return new();
 
         var result = new List<(DateTime, decimal)>();
-        var lines  = File.ReadAllLines(path);
+        var lines  = ReadAllLinesShared(path);
         for (int i = 1; i < lines.Length; i++)
         {
             var parts = lines[i].Split(',');
@@ -226,7 +252,7 @@ internal static class SimulationDataLoader
 
     private static void ReadQuotesInto(string path, string symbol, OptionType type, SortedDictionary<TimeOnly, List<OptionQuoteDto>> byTime)
     {
-        var lines = File.ReadAllLines(path);
+        var lines = ReadAllLinesShared(path);
         for (int i = 1; i < lines.Length; i++)
         {
             var p = lines[i].Split(',');
