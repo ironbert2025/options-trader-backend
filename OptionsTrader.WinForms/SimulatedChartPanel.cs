@@ -621,13 +621,15 @@ public class SimulatedChartPanel : Panel
 
     private bool _volatilityOpeningArmed;
     private bool _volatilityOpeningFired;
+    private bool _volatilityOpeningBullish; // true = Techo/CALL watch (upper band), false = Piso/PUT watch (lower band)
 
     public event Action<string>? OnVolatilityOpeningEvent;
 
-    public void ArmVolatilityOpeningWatch()
+    public void ArmVolatilityOpeningWatch(bool bullish)
     {
         if (_volatilityOpeningFired) return;
         _volatilityOpeningArmed = true;
+        _volatilityOpeningBullish = bullish;
     }
 
     private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)
@@ -656,9 +658,20 @@ public class SimulatedChartPanel : Panel
         var currentWidth = current.Value.Upper - current.Value.Lower;
         var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
         if (currentWidth <= earlierWidth) return;
-        if (lastPrice < current.Value.Upper) return;
+
+        if (_volatilityOpeningBullish)
+        {
+            if (lastPrice < current.Value.Upper) return;
+        }
+        else
+        {
+            if (lastPrice > current.Value.Lower) return;
+        }
+
         _volatilityOpeningFired = true;
-        var caption = $"Abriendo la Volatilidad — spot {lastPrice:F2} toca Banda Superior {current.Value.Upper:F2}";
+        var bandLabel = _volatilityOpeningBullish ? "Superior" : "Inferior";
+        var bandValue = _volatilityOpeningBullish ? current.Value.Upper : current.Value.Lower;
+        var caption = $"Abriendo la Volatilidad — spot {lastPrice:F2} toca Banda {bandLabel} {bandValue:F2}";
         OnVolatilityOpeningEvent?.Invoke(caption);
     }
 

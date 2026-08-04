@@ -305,8 +305,9 @@ public class SimulatorForm : Form
         _hourlyChart.OnPisoTechoOutcomeEvent += (caption, price, eventType, direction, reference) =>
         {
             LogSimEvent(caption);
-            if (eventType == "PisoTechoCruce" && direction == "Techo")
-                _rthChart.ArmVolatilityOpeningWatch();
+            if (eventType != "PisoTechoCruce") return;
+            if (direction == "Techo") _rthChart.ArmVolatilityOpeningWatch(bullish: true);
+            else if (direction == "Piso") _rthChart.ArmVolatilityOpeningWatch(bullish: false);
         };
 
         // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a

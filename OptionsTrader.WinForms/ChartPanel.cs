@@ -927,14 +927,16 @@ public class ChartPanel : Panel
 
     private bool _volatilityOpeningArmed;
     private bool _volatilityOpeningFired;
+    private bool _volatilityOpeningBullish; // true = Techo/CALL watch (upper band), false = Piso/PUT watch (lower band)
 
     // Fires with a human-readable caption once "Abriendo la Volatilidad" is confirmed.
     public event Action<string>? OnVolatilityOpeningEvent;
 
-    public void ArmVolatilityOpeningWatch()
+    public void ArmVolatilityOpeningWatch(bool bullish)
     {
         if (_volatilityOpeningFired) return; // already fired once this session — don't rearm
         _volatilityOpeningArmed = true;
+        _volatilityOpeningBullish = bullish;
     }
 
     private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)
@@ -969,13 +971,23 @@ public class ChartPanel : Panel
         var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
         if (currentWidth <= earlierWidth) return; // bands aren't actually widening yet
 
-        if (livePrice < current.Value.Upper) return; // hasn't reached the upper band yet
+        if (_volatilityOpeningBullish)
+        {
+            if (livePrice < current.Value.Upper) return; // hasn't reached the upper band yet
+        }
+        else
+        {
+            if (livePrice > current.Value.Lower) return; // hasn't reached the lower band yet
+        }
 
         _volatilityOpeningFired = true;
-        var caption = $"Abriendo la Volatilidad — spot {livePrice:F2} toca Banda Superior {current.Value.Upper:F2}";
+        var bandLabel = _volatilityOpeningBullish ? "Superior" : "Inferior";
+        var bandValue = _volatilityOpeningBullish ? current.Value.Upper : current.Value.Lower;
+        var direction = _volatilityOpeningBullish ? "Alza" : "Baja";
+        var caption = $"Abriendo la Volatilidad — spot {livePrice:F2} toca Banda {bandLabel} {bandValue:F2}";
         OnVolatilityOpeningEvent?.Invoke(caption);
         _ = SendChartToTelegramAsync(caption);
-        EventLogStore.Append(_symbol, "15Min", "VolatilityOpening", "Alza", caption, livePrice,
+        EventLogStore.Append(_symbol, "15Min", "VolatilityOpening", direction, caption, livePrice,
             $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
     }
 
