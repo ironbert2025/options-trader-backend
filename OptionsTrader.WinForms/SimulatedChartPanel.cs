@@ -132,7 +132,7 @@ public class SimulatedChartPanel : Panel
         }
         await RunScriptAsync("loadHistory", candles);
 
-        if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full)
+        if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full || _mode == ChartPanelMode.Fifteen_RTH)
             EvaluateNewlyClosedCandles(candles);
     }
 
@@ -609,6 +609,60 @@ public class SimulatedChartPanel : Panel
     }
 
     // ==================================================================================
+    // "Abriendo la Volatilidad" — ported from ChartPanel. Only relevant on the Fifteen_RTH
+    // instance; armed externally (SimulatorForm) when the Hourly15 instance resolves a
+    // PisoTechoCruce/"Techo" outcome. Evaluated once per replayed closed candle (no live ticks
+    // in the simulator), against that candle's own Close, instead of a continuous price feed.
+    // ==================================================================================
+
+    private const int VolatilityBollingerPeriod = 20;
+    private const decimal VolatilityBollingerMult = 2m;
+    private const int VolatilityWidthLookback = 3;
+
+    private bool _volatilityOpeningArmed;
+    private bool _volatilityOpeningFired;
+
+    public event Action<string>? OnVolatilityOpeningEvent;
+
+    public void ArmVolatilityOpeningWatch()
+    {
+        if (_volatilityOpeningFired) return;
+        _volatilityOpeningArmed = true;
+    }
+
+    private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)
+    {
+        if (endIndex < VolatilityBollingerPeriod - 1 || endIndex >= _closedCandles.Count) return null;
+        decimal sum = 0;
+        for (int i = endIndex - VolatilityBollingerPeriod + 1; i <= endIndex; i++)
+            sum += _closedCandles[i].Close;
+        var mean = sum / VolatilityBollingerPeriod;
+        decimal sqSum = 0;
+        for (int i = endIndex - VolatilityBollingerPeriod + 1; i <= endIndex; i++)
+        {
+            var d = _closedCandles[i].Close - mean;
+            sqSum += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / VolatilityBollingerPeriod));
+        return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
+    }
+
+    private void EvaluateVolatilityOpening(decimal lastPrice)
+    {
+        if (!_volatilityOpeningArmed || _volatilityOpeningFired) return;
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (current == null || earlier == null) return;
+        var currentWidth = current.Value.Upper - current.Value.Lower;
+        var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+        if (currentWidth <= earlierWidth) return;
+        if (lastPrice < current.Value.Upper) return;
+        _volatilityOpeningFired = true;
+        var caption = $"Abriendo la Volatilidad — spot {lastPrice:F2} toca Banda Superior {current.Value.Upper:F2}";
+        OnVolatilityOpeningEvent?.Invoke(caption);
+    }
+
+    // ==================================================================================
     // Bridges the simulator's "resend the whole candle list every step" model into the live
     // chart's "evaluate once when a candle closes" model — a candle is treated as closed once a
     // NEWER one appears after it in the list (the last candle in the list is always assumed
@@ -631,6 +685,8 @@ public class SimulatedChartPanel : Panel
             _tLineSignalFired = false;
             foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
             foreach (var watch in _pisoTechoWatches) watch.Done = false;
+            _volatilityOpeningArmed = false;
+            _volatilityOpeningFired = false;
         }
 
         for (int i = _closedCandles.Count; i < closedNow.Count; i++)
@@ -640,6 +696,7 @@ public class SimulatedChartPanel : Panel
             EvaluateTLineSignal(closedNow[i]);
             EvaluateDemandZoneRebounds(closedNow[i]);
             EvaluatePisoTechoWatches(closedNow[i]);
+            EvaluateVolatilityOpening(closedNow[i].Close);
         }
     }
 }

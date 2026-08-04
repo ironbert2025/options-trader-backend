@@ -136,6 +136,11 @@ public class ChartPanel : Panel
     // Telegram the same self-contained way Cross-SMA does (SendChartToTelegramAsync below).
     public event Action<string>? OnDemandZoneReboundEvent;
 
+    // Fires (evento, pisoTecho) every time a Piso/Techo watch resolves — 1h panel only. MultiChartForm
+    // uses this specifically to arm the 15m RTH panel's "Abriendo la Volatilidad" watch when
+    // evento=="Cruce" && pisoTecho=="Techo" (see EvaluateVolatilityOpening on that panel).
+    public event Action<string, string>? OnPisoTechoResolvedEvent;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -899,10 +904,80 @@ public class ChartPanel : Panel
             var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
             _ = SendChartToTelegramAsync(caption);
             EventLogStore.Append(_symbol, "Hora", $"PisoTecho{evento}", pisoTecho, caption, justClosed.Close, $"SMA{watch.Period}={currentSma.Value:F2}");
+            OnPisoTechoResolvedEvent?.Invoke(evento, pisoTecho);
         }
     }
 
     private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
+
+    // ==================================================================================
+    // "Abriendo la Volatilidad" (15m RTH panel only) — armed externally (ArmVolatilityOpeningWatch)
+    // by MultiChartForm when the 1h panel resolves a Cruce en Techo. From then on, evaluated on
+    // every LIVE tick (not candle close — see UpdateLivePriceFromExternalSource) against the
+    // Bollinger Bands computed from this panel's own closed 15m candles: fires once the live spot
+    // reaches the Upper Band AND that band's current width is wider than it was a few candles ago
+    // (confirming genuine expansion, not a touch against a flat/contracting band). Bollinger is
+    // computed here in C# purely for this detection — chart.html's own copy (for drawing) is
+    // separate and untouched.
+    // ==================================================================================
+
+    private const int VolatilityBollingerPeriod = 20;
+    private const decimal VolatilityBollingerMult = 2m;
+    private const int VolatilityWidthLookback = 3; // candles back to compare band width against
+
+    private bool _volatilityOpeningArmed;
+    private bool _volatilityOpeningFired;
+
+    // Fires with a human-readable caption once "Abriendo la Volatilidad" is confirmed.
+    public event Action<string>? OnVolatilityOpeningEvent;
+
+    public void ArmVolatilityOpeningWatch()
+    {
+        if (_volatilityOpeningFired) return; // already fired once this session — don't rearm
+        _volatilityOpeningArmed = true;
+    }
+
+    private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)
+    {
+        if (endIndex < VolatilityBollingerPeriod - 1 || endIndex >= _closedCandles.Count) return null;
+
+        decimal sum = 0;
+        for (int i = endIndex - VolatilityBollingerPeriod + 1; i <= endIndex; i++)
+            sum += _closedCandles[i].Close;
+        var mean = sum / VolatilityBollingerPeriod;
+
+        decimal sqSum = 0;
+        for (int i = endIndex - VolatilityBollingerPeriod + 1; i <= endIndex; i++)
+        {
+            var d = _closedCandles[i].Close - mean;
+            sqSum += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / VolatilityBollingerPeriod));
+
+        return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
+    }
+
+    private void EvaluateVolatilityOpening(decimal livePrice)
+    {
+        if (!_volatilityOpeningArmed || _volatilityOpeningFired) return;
+
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (current == null || earlier == null) return;
+
+        var currentWidth = current.Value.Upper - current.Value.Lower;
+        var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+        if (currentWidth <= earlierWidth) return; // bands aren't actually widening yet
+
+        if (livePrice < current.Value.Upper) return; // hasn't reached the upper band yet
+
+        _volatilityOpeningFired = true;
+        var caption = $"Abriendo la Volatilidad — spot {livePrice:F2} toca Banda Superior {current.Value.Upper:F2}";
+        OnVolatilityOpeningEvent?.Invoke(caption);
+        _ = SendChartToTelegramAsync(caption);
+        EventLogStore.Append(_symbol, "15Min", "VolatilityOpening", "Alza", caption, livePrice,
+            $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
+    }
 
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
     // a trend line is meant to keep projecting forward. Falls back to p1 if the 2 points share
@@ -1077,6 +1152,14 @@ public class ChartPanel : Panel
                             EvaluatePisoTechoWatches(last);
                         }
                     }
+                    else if (_mode == ChartPanelMode.Fifteen_RTH)
+                    {
+                        // Own closed-candle history for this panel's Bollinger-widening watch
+                        // (EvaluateVolatilityOpening) — armed externally by MultiChartForm when the
+                        // 1h panel resolves a Cruce en Techo.
+                        _closedCandles.Clear();
+                        _closedCandles.AddRange(aggregated);
+                    }
                 }
             }
         }
@@ -1195,6 +1278,10 @@ public class ChartPanel : Panel
                 {
                     EvaluateDemandZoneRebounds(_liveBucket);
                 }
+                else if (_mode == ChartPanelMode.Fifteen_RTH)
+                {
+                    _closedCandles.Add(_liveBucket);
+                }
 
                 _liveBucketIndex = index;
                 var newTime = isHourly ? CandleAggregation.HourlyRthBucketStartUtc(candle.Time) : candle.Time;
@@ -1210,6 +1297,9 @@ public class ChartPanel : Panel
 
         var toSend = _liveBucket;
         BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
+
+        if (_mode == ChartPanelMode.Fifteen_RTH)
+            EvaluateVolatilityOpening(candle.Close);
     }
 
     // Real-time last-price update (LEVEL_ONE_EQUITIES, much higher frequency than CHART_EQUITY's
@@ -1249,6 +1339,9 @@ public class ChartPanel : Panel
 
         var toSend = _liveBucket;
         BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
+
+        if (_mode == ChartPanelMode.Fifteen_RTH)
+            EvaluateVolatilityOpening(price);
     }
 
     // Whether the header currently shows the "disconnected" message — cleared the moment real

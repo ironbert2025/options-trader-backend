@@ -517,6 +517,26 @@ public class MultiChartForm : Form
             };
         }
 
+        // "Abriendo la Volatilidad": when the 1h panel resolves a Cruce en Techo (any SMA period),
+        // arm the 15m RTH panel's Bollinger-widening watch from that moment on — see
+        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening.
+        if (hourlyPanel != null && rthPanel != null)
+        {
+            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho) =>
+            {
+                if (evento == "Cruce" && pisoTecho == "Techo")
+                    rthPanel.ArmVolatilityOpeningWatch();
+            };
+        }
+        if (rthPanel != null)
+        {
+            rthPanel.OnVolatilityOpeningEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);

@@ -302,7 +302,17 @@ public class SimulatorForm : Form
 
         // Piso/Techo auto-armed Cruce/Rebote (1h chart) — log-only, no events_log.csv (unlike
         // Demand Zone above), per explicit request.
-        _hourlyChart.OnPisoTechoOutcomeEvent += (caption, price, eventType, direction, reference) => LogSimEvent(caption);
+        _hourlyChart.OnPisoTechoOutcomeEvent += (caption, price, eventType, direction, reference) =>
+        {
+            LogSimEvent(caption);
+            if (eventType == "PisoTechoCruce" && direction == "Techo")
+                _rthChart.ArmVolatilityOpeningWatch();
+        };
+
+        // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a
+        // Cruce en Techo; log-only, no events_log.csv, same as Piso/Techo above.
+        _rthChart.OnVolatilityOpeningEvent += msg => LogSimEvent(msg);
+
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
             if (IsDisposed) return;
