@@ -36,6 +36,20 @@ public class ChartPanel : Panel
     private static string? s_pisoTechoResult2040;
     private static string? s_pisoTechoResult100200;
 
+    // Auto-armed Cruce/Rebote watch, one entry PER PERIOD (not per pair) — when a pair comes back
+    // Piso or Techo, BOTH its periods get armed independently (20 and 40 each watch their own
+    // line separately, even though they're always the same direction within a pair — Piso/Techo
+    // is decided per pair, never split). Completely separate from the manual Cross-SMA toggle
+    // buttons (ChartPanel's _crossArmedPeriods/_crossActivePeriod/_crossUp) — this doesn't touch
+    // or share that state, same "runs independently" precedent as EvaluateDemandZoneRebounds.
+    private sealed class PisoTechoWatch
+    {
+        public int Period;
+        public bool WatchingUp; // true = Techo (expects reject down / cross up), false = Piso (expects bounce up / cross down)
+        public bool Done;
+    }
+    private static readonly List<PisoTechoWatch> s_pisoTechoWatches = new();
+
     private readonly string _symbol;
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
@@ -807,6 +821,9 @@ public class ChartPanel : Panel
             {
                 s_pisoTechoResult2040   = EvaluatePisoTechoPair(20, 40);
                 s_pisoTechoResult100200 = EvaluatePisoTechoPair(100, 200);
+
+                ArmPisoTechoWatch(20, 40, s_pisoTechoResult2040);
+                ArmPisoTechoWatch(100, 200, s_pisoTechoResult100200);
             }
         }
 
@@ -824,6 +841,59 @@ public class ChartPanel : Panel
         if (fast < slow && price < fast) return "Techo";
         if (fast > slow && price > fast) return "Piso";
         return null;
+    }
+
+    // Arms BOTH periods of a pair independently (each watches its own SMA line separately) when
+    // that pair came back Piso or Techo — no-op if it didn't (result == null).
+    private static void ArmPisoTechoWatch(int fastPeriod, int slowPeriod, string? result)
+    {
+        if (result == null) return;
+        var watchingUp = result == "Techo";
+        s_pisoTechoWatches.Add(new PisoTechoWatch { Period = fastPeriod, WatchingUp = watchingUp });
+        s_pisoTechoWatches.Add(new PisoTechoWatch { Period = slowPeriod, WatchingUp = watchingUp });
+    }
+
+    // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed
+    // PisoTechoWatch — same case-1/case-2 cross-or-bounce formula as the manual Cross-SMA
+    // (EvaluateCrossings), just against that watch's own SMA period instead of the shared manual
+    // sequence. Resolves once per period, then stops (Done) — doesn't repeat for the rest of the
+    // day. Pushes its own screenshot to Telegram, same self-contained pattern as Cross-SMA/Demand
+    // Zone, with a caption explicit about which of the two outcomes fired.
+    private void EvaluatePisoTechoWatches(CandleData justClosed)
+    {
+        foreach (var watch in s_pisoTechoWatches)
+        {
+            if (watch.Done) continue;
+
+            var currentSma = Sma(watch.Period, _closedCandles.Count - 1);
+            if (currentSma == null) continue;
+
+            var isGreen = justClosed.Close > justClosed.Open;
+            var isRed   = justClosed.Close < justClosed.Open;
+
+            var crossed = watch.WatchingUp
+                ? isGreen && justClosed.Close > currentSma && justClosed.Open <= currentSma
+                : isRed   && justClosed.Close < currentSma && justClosed.Open >= currentSma;
+
+            var bounced = !crossed && (watch.WatchingUp
+                ? justClosed.Open < currentSma && isRed &&
+                    (justClosed.High > currentSma
+                        ? justClosed.Close < currentSma
+                        : (currentSma - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close))
+                : justClosed.Open > currentSma && isGreen &&
+                    (justClosed.Low < currentSma
+                        ? justClosed.Close > currentSma
+                        : (justClosed.Low - currentSma) < BounceProximityRatio * (justClosed.Close - justClosed.Low)));
+
+            if (!crossed && !bounced) continue;
+
+            watch.Done = true;
+            var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
+            var evento    = crossed ? "Cruce" : "Rebote";
+            var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            _ = SendChartToTelegramAsync(caption);
+            EventLogStore.Append(_symbol, "Hora", $"PisoTecho{evento}", pisoTecho, caption, justClosed.Close, $"SMA{watch.Period}={currentSma.Value:F2}");
+        }
     }
 
     private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
@@ -998,6 +1068,7 @@ public class ChartPanel : Panel
                         {
                             EvaluateCrossings(last);
                             EvaluateTLineSignal(last);
+                            EvaluatePisoTechoWatches(last);
                         }
                     }
                 }
@@ -1111,6 +1182,7 @@ public class ChartPanel : Panel
                     {
                         EvaluateCrossings(_liveBucket);
                         EvaluateTLineSignal(_liveBucket);
+                        EvaluatePisoTechoWatches(_liveBucket);
                     }
                 }
                 else if (_mode == ChartPanelMode.Fifteen_Full)
