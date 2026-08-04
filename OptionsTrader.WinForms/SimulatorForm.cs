@@ -586,6 +586,7 @@ public class SimulatorForm : Form
         _dgvTrades.Columns.Add("colSimTBid", "T_Bid");
         _dgvTrades.Columns.Add("colSimPnl", "PnL");
         _dgvTrades.Columns.Add("colSimPnlPct", "PnL_Percent");
+        _dgvTrades.Columns["colSimPnlPct"].DefaultCellStyle.Font = new Font(_dgvTrades.Font, FontStyle.Bold);
         _dgvTrades.Columns.Add("colSimPnlTarget", "PnL_Target");
         _dgvTrades.Columns.Add("colSimExitTime", "ExitTime");
         var closeCol = new DataGridViewButtonColumn { Name = "colSimClose", HeaderText = "", Text = "Close", UseColumnTextForButtonValue = true };

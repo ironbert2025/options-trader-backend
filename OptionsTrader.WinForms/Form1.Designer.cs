@@ -346,11 +346,12 @@ partial class Form1
         colTradePnL.ReadOnly = true;
         // 
         // colTradePnLPercent
-        // 
+        //
         colTradePnLPercent.HeaderText = "PnL_Percent";
         colTradePnLPercent.Name = "colTradePnLPercent";
         colTradePnLPercent.ReadOnly = true;
-        // 
+        colTradePnLPercent.DefaultCellStyle.Font = new Font(dgvTrades.Font, FontStyle.Bold);
+        //
         // colTradePnLTarget
         // 
         colTradePnLTarget.HeaderText = "PnL_Target";

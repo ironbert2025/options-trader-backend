@@ -1180,7 +1180,11 @@ public partial class Form1 : Form
             if (putOnly)  otmCalls = new List<OptionQuoteDto>();
         }
 
-        // Always rebuild rows so strikes that move ITM/OTM are reflected immediately
+        // Always rebuild rows so strikes that move ITM/OTM are reflected immediately — but
+        // Rows.Clear() resets the grid's scroll position to the top, so every poll cycle (every
+        // ~6s) was yanking the view back up if the user had scrolled down. Save it here and
+        // restore it (clamped) once the rows are rebuilt below.
+        var scrollRowToRestore = grid.Rows.Count > 0 ? grid.FirstDisplayedScrollingRowIndex : -1;
         grid.Rows.Clear();
 
         foreach (var call in otmCalls)
@@ -1216,6 +1220,9 @@ public partial class Form1 : Form
         }
 
         PadWithBlankRows(grid, 8);
+
+        if (scrollRowToRestore >= 0 && grid.Rows.Count > 0)
+            grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, grid.Rows.Count - 1);
 
         return (otmCalls, otmPuts);
     }
