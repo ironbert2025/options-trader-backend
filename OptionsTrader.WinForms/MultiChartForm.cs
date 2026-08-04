@@ -517,6 +517,30 @@ public class MultiChartForm : Form
             };
         }
 
+        // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA
+        // period), arm the 15m RTH panel's Bollinger-widening watch in the direction the
+        // resolution implies price is now headed. Cruce en Techo (breaks up through resistance)
+        // and Rebote en Piso (bounces up off support) are both bullish/CALL (upper band). Cruce
+        // en Piso (breaks down through support) and Rebote en Techo (rejected down off
+        // resistance) are both bearish/PUT (lower band) — see
+        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening.
+        if (hourlyPanel != null && rthPanel != null)
+        {
+            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho) =>
+            {
+                var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
+                rthPanel.ArmVolatilityOpeningWatch(bullish);
+            };
+        }
+        if (rthPanel != null)
+        {
+            rthPanel.OnVolatilityOpeningEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);
@@ -596,6 +620,8 @@ public class MultiChartForm : Form
             var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "TLineSignal", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
         }
         catch
         {

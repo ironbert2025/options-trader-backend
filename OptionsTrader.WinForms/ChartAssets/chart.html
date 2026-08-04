@@ -489,7 +489,15 @@
   }
 
   chart.subscribeClick(param => {
-    if (!param.point || param.time === undefined) return;
+    if (!param.point) return;
+    // param.time is only set when the click lands exactly on a rendered bar — during the
+    // overnight/pre-market session (15m RTH+Overnight panel) real data is sparse, so large
+    // stretches of the gray band have no bar under the cursor and param.time comes back
+    // undefined, silently swallowing every click there. Fall back to converting the raw x pixel
+    // to a time via the time scale so every drawing tool (DZ/SZ, T-Line, H-Line, Rect, etc.)
+    // works anywhere on the chart, not just where a candle happens to sit.
+    const clickTime = param.time !== undefined ? param.time : chart.timeScale().coordinateToTime(param.point.x);
+    if (clickTime == null) return;
     const price = candleSeries.coordinateToPrice(param.point.y);
     if (price == null) return;
 
@@ -576,7 +584,7 @@
     if (dzSzArmed) {
       const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
 
-      zoneLinesPrimitive._segments.push({ time: param.time, price, color });
+      zoneLinesPrimitive._segments.push({ time: clickTime, price, color });
 
       dzSzAxisLabels.push(candleSeries.createPriceLine({
         price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
@@ -587,15 +595,15 @@
       // Simulator only (SimulatorForm mirrors each line onto the 15m RTH chart at the same
       // price) — harmless on the live chart, nothing listens for it there.
       if (window.chrome && window.chrome.webview) {
-        window.chrome.webview.postMessage({ type: 'dzsz', time: param.time, price, color });
+        window.chrome.webview.postMessage({ type: 'dzsz', time: clickTime, price, color });
       }
     }
 
     if (rectArmed) {
       if (!rectPending) {
-        rectPending = { time: param.time, price };
+        rectPending = { time: clickTime, price };
       } else {
-        rectanglesPrimitive._rects.push({ t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price });
+        rectanglesPrimitive._rects.push({ t1: rectPending.time, p1: rectPending.price, t2: clickTime, p2: price });
         rectanglesPrimitive._preview = null;
         rectPending = null;
         forceRepaint();
@@ -604,9 +612,9 @@
 
     if (grayRectArmed) {
       if (!grayRectPending) {
-        grayRectPending = { time: param.time, price };
+        grayRectPending = { time: clickTime, price };
       } else {
-        grayRectPrimitive._rects.push({ t1: grayRectPending.time, p1: grayRectPending.price, t2: param.time, p2: price, selected: false });
+        grayRectPrimitive._rects.push({ t1: grayRectPending.time, p1: grayRectPending.price, t2: clickTime, p2: price, selected: false });
         grayRectPrimitive._preview = null;
         grayRectPending = null;
         forceRepaint();
@@ -615,9 +623,9 @@
 
     if (tLineArmed) {
       if (!tLinePending) {
-        tLinePending = { time: param.time, price };
+        tLinePending = { time: clickTime, price };
       } else {
-        const line = { t1: tLinePending.time, p1: tLinePending.price, t2: param.time, p2: price };
+        const line = { t1: tLinePending.time, p1: tLinePending.price, t2: clickTime, p2: price };
         tLinePrimitive._lines.push(line);
         tLinePrimitive._preview = null;
         tLinePending = null;
@@ -631,16 +639,16 @@
     }
 
     if (hLineArmed) {
-      hLinePrimitive._segments.push({ time: param.time, price, selected: false });
+      hLinePrimitive._segments.push({ time: clickTime, price, selected: false });
       forceRepaint();
     }
 
     if (arrowArmed) {
       if (!arrowPending) {
-        arrowPending = { time: param.time, price };
+        arrowPending = { time: clickTime, price };
       } else {
         const red = arrowPending.price > price; // 1st click above (higher price than) 2nd -> red
-        arrowPrimitive._arrows.push({ t1: arrowPending.time, p1: arrowPending.price, t2: param.time, p2: price, red });
+        arrowPrimitive._arrows.push({ t1: arrowPending.time, p1: arrowPending.price, t2: clickTime, p2: price, red });
         arrowPrimitive._preview = null;
         arrowPending = null;
         forceRepaint();
@@ -648,16 +656,16 @@
     }
 
     if (pisoArmed) {
-      textLabelsPrimitive._labels.push({ time: param.time, price, text: 'Piso' });
+      textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Piso' });
       forceRepaint();
     }
     if (techoArmed) {
-      textLabelsPrimitive._labels.push({ time: param.time, price, text: 'Techo' });
+      textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Techo' });
       forceRepaint();
     }
 
     if (greenArrowArmed) {
-      const arrow = { time: param.time, price, up: true, selected: false };
+      const arrow = { time: clickTime, price, up: true, selected: false };
       verticalArrowPrimitive._arrows.push(arrow);
       forceRepaint();
       // Persisted per-symbol by C# (VerticalArrowStore) — see ChartPanel.CoreWebView2_WebMessageReceived.
@@ -666,7 +674,7 @@
       }
     }
     if (redArrowArmed) {
-      const arrow = { time: param.time, price, up: false, selected: false };
+      const arrow = { time: clickTime, price, up: false, selected: false };
       verticalArrowPrimitive._arrows.push(arrow);
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
@@ -844,13 +852,15 @@
     return hLineArmed;
   }
 
-  // ---- Pre-market line (15m RTH panel only): blue line from the moment the chart was opened
-  // (only if before 9:30 AM ET) to the right edge, following the live price tick by tick until
-  // the market opens at 9:30 — after that C# simply stops sending updates, so it freezes in place
-  // on its own. Not persisted anywhere; a fresh startPreMarketLine() call replaces it entirely. ----
+  // ---- Pre-market line (1h and 15m RTH panels): blue line from the LAST candle currently
+  // loaded (yesterday's close, since the market hasn't opened today yet) to the right edge,
+  // following the live price tick by tick until the market opens at 9:30 — after that C# simply
+  // stops sending updates, so it freezes in place on its own. Same "anchor at the last loaded
+  // candle" convention as markStrike's green Stk= line. Not persisted anywhere; a fresh
+  // startPreMarketLine() call replaces it entirely. ----
 
   class PreMarketLinePrimitive {
-    constructor() { this._startTime = null; this._price = null; this._chart = null; }
+    constructor() { this._armed = false; this._price = null; this._chart = null; }
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -859,18 +869,13 @@
         renderer() {
           return {
             draw(target) {
-              if (!self._chart || self._startTime == null || self._price == null) return;
+              if (!self._chart || !self._armed || self._price == null || allCandles.length === 0) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
                 const y = candleSeries.priceToCoordinate(self._price);
                 if (y == null) return;
-                // timeToCoordinate returns null when startTime (today, pre-market) falls outside
-                // the chart's known time range — which is exactly the common case here: the RTH
-                // panel has no candle for today yet since the market hasn't opened, so its last
-                // real data point is a prior day. Fall back to the left edge instead of skipping
-                // the draw entirely — still a correct horizontal reference line either way.
-                const xRaw = ts.timeToCoordinate(self._startTime);
+                const xRaw = ts.timeToCoordinate(allCandles[allCandles.length - 1].time);
                 const x = xRaw == null ? 0 : xRaw;
                 ctx.strokeStyle = '#2196f3'; // blue
                 ctx.lineWidth = 2 * scope.horizontalPixelRatio;
@@ -890,9 +895,9 @@
   let preMarketLineAttached = false;
 
   // Called once, right when the chart opens, only if it's before 9:30 AM ET that day.
-  function startPreMarketLine(startTime) {
+  function startPreMarketLine() {
     if (!preMarketLineAttached) { candleSeries.attachPrimitive(preMarketLinePrimitive); preMarketLineAttached = true; }
-    preMarketLinePrimitive._startTime = startTime;
+    preMarketLinePrimitive._armed = true;
     preMarketLinePrimitive._price = null;
     forceRepaint();
   }
@@ -900,7 +905,7 @@
   // Called on every pre-market tick until 9:30 AM ET; C# stops calling this once the market
   // opens, which is what makes the line freeze in place with no extra logic needed here.
   function updatePreMarketLine(price) {
-    if (preMarketLinePrimitive._startTime == null) return; // startPreMarketLine wasn't called this session
+    if (!preMarketLinePrimitive._armed) return; // startPreMarketLine wasn't called this session
     preMarketLinePrimitive._price = price;
     forceRepaint();
   }
@@ -1192,6 +1197,65 @@
   let pisoArmed = false;
   let techoArmed = false;
 
+  // ---- Piso/Techo AUTO label (1h panel only): unlike the click-driven Piso/Techo above, this
+  // one is programmatic (markPisoTecho, called once by C# from the pre-market SMA pair analysis
+  // — independently for the 20/40 pair and the 100/200 pair) and tracks the CURRENT last point of
+  // each SMA line on every repaint — via smaLastPoint, updated by recalculateSmas() — so each
+  // label moves right alongside its SMA all session long instead of staying pinned to where it
+  // was first drawn. ----
+
+  class PisoTechoAutoLabelPrimitive {
+    constructor() { this._entries = []; this._chart = null; } // [{ period, text }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || self._entries.length === 0) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                ctx.fillStyle = '#ff9800'; // orange
+                ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.textBaseline = 'middle';
+                self._entries.forEach(({ period, text }) => {
+                  const pt = smaLastPoint[period];
+                  if (!pt) return;
+                  const x = ts.timeToCoordinate(pt.time);
+                  const y = candleSeries.priceToCoordinate(pt.value);
+                  if (x == null || y == null) return;
+                  ctx.fillText(text, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio);
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const pisoTechoAutoLabelPrimitive = new PisoTechoAutoLabelPrimitive();
+  let pisoTechoAutoLabelAttached = false;
+
+  // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
+  // analysis) — periodA/periodB identify which pair (20+40 or 100+200), text is 'Piso', 'Techo',
+  // or null (no signal for that pair that day; removes any previous entry for it). Each pair's
+  // entry is tracked independently, so the 20/40 pair and the 100/200 pair can show different (or
+  // no) signal at the same time. Safe to call again on every Live Chart reopen with the SAME
+  // remembered text — it just re-renders, the position always comes from smaLastPoint at draw time.
+  function markPisoTecho(periodA, periodB, text) {
+    if (!pisoTechoAutoLabelAttached) { candleSeries.attachPrimitive(pisoTechoAutoLabelPrimitive); pisoTechoAutoLabelAttached = true; }
+    pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== periodA && e.period !== periodB);
+    if (text) {
+      pisoTechoAutoLabelPrimitive._entries.push({ period: periodA, text });
+      pisoTechoAutoLabelPrimitive._entries.push({ period: periodB, text });
+    }
+    forceRepaint();
+  }
+
   function toggleFloorLabel() {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     pisoArmed = !pisoArmed;
@@ -1281,6 +1345,7 @@
   let allCandles = [];           // mirrors what's on the candle series, kept sorted by time
   let smaSeries = {};            // period -> LineSeries
   let smaPeriods = [];
+  let smaLastPoint = {};         // period -> { time, value } of that SMA's current last point (see markPisoTecho)
 
   const smaColors = { 20: '#f5a623', 40: '#ef5350', 100: '#26a69a', 200: '#a259ff' };
   const smaWidths = { 20: 1, 40: 1, 100: 2, 200: 2 };
@@ -1304,7 +1369,7 @@
   function recalculateSmas() {
     const source = displaySeries();
     smaPeriods.forEach(p => {
-      if (source.length < p) { smaSeries[p].setData([]); return; }
+      if (source.length < p) { smaSeries[p].setData([]); smaLastPoint[p] = null; return; }
       const data = [];
       let sum = 0;
       for (let i = 0; i < source.length; i++) {
@@ -1313,6 +1378,7 @@
         if (i >= p - 1) data.push({ time: source[i].time, value: sum / p });
       }
       smaSeries[p].setData(data);
+      smaLastPoint[p] = data.length > 0 ? data[data.length - 1] : null;
     });
   }
 
@@ -1614,6 +1680,22 @@
   function addFullCandle(candle) {
     upsertCandle(candle);
     if (dailyMode) renderCandles(); else candleSeries.update(candle);
+    recalculateSmas();
+    recalculateBollinger();
+    recalculateOvernightBands();
+    reapplyVisibleRangeIfLive();
+  }
+
+  // Same idea as addFullCandle, but for the 15m RTH panel's overnight-gap day reset (see
+  // ChartPanel.Streamer_OnNewCandle) — the new candle's time is often MANY hours away from the
+  // previous one (yesterday's last RTH bar to today's 9:30 open), and candleSeries.update()'s
+  // incremental path doesn't always recompute that single bar's width/spacing correctly across
+  // such a large gap, visually "stretching" it. A full candleSeries.setData() (via renderCandles)
+  // forces Lightweight Charts to rebuild layout from scratch instead, which doesn't have that
+  // issue — more expensive than update(), but this only runs once per day, not per tick.
+  function resetToNewDayCandle(candle) {
+    upsertCandle(candle);
+    renderCandles();
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();

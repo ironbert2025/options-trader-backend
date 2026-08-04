@@ -68,8 +68,6 @@ public class SchwabAuthService : IBrokerAuthService
         if (string.IsNullOrEmpty(refreshToken))
             throw new InvalidOperationException("No refresh token available. Please log in via the Settings tab.");
 
-        _logCallback?.Invoke($"{DateTime.Now:HH:mm:ss} [Token] Access token expired — renewing with refresh token...");
-
         var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{apiKey}:{apiSecret}"));
         var request = new HttpRequestMessage(HttpMethod.Post, TokenUrl);
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
@@ -124,8 +122,6 @@ public class SchwabAuthService : IBrokerAuthService
         var expiresIn     = expiresInProp.ValueKind == JsonValueKind.String
             ? int.Parse(expiresInProp.GetString()!)
             : expiresInProp.GetInt32();
-
-        _logCallback?.Invoke($"{DateTime.Now:HH:mm:ss} [Token] New refresh token obtained — valid for {RefreshTokenLifetimeDays} days");
 
         return (accessToken, refreshToken, expiresIn);
     }

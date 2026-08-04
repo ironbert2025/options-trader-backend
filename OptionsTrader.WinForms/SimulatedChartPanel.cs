@@ -132,7 +132,7 @@ public class SimulatedChartPanel : Panel
         }
         await RunScriptAsync("loadHistory", candles);
 
-        if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full)
+        if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full || _mode == ChartPanelMode.Fifteen_RTH)
             EvaluateNewlyClosedCandles(candles);
     }
 
@@ -192,6 +192,107 @@ public class SimulatedChartPanel : Panel
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
     };
+
+    // ==================================================================================
+    // Piso/Techo auto-analysis — ported from ChartPanel. Unlike ChartPanel's version (static,
+    // computed once per app instance/process), here it's an INSTANCE field recomputed once per
+    // simulated DAY LOAD (called from SimulatorForm.LoadSelectedDay, same "once per day, not per
+    // step" precedent as EvaluateDailyBounce) — a fresh simulated day is the closest equivalent to
+    // "a new pre-market session" here, there's no real wall-clock "once per process" to anchor to.
+    // ==================================================================================
+
+    private sealed class PisoTechoWatch
+    {
+        public int Period;
+        public bool WatchingUp; // true = Techo (expects reject down / cross up), false = Piso (expects bounce up / cross down)
+        public bool Done;
+    }
+    private readonly List<PisoTechoWatch> _pisoTechoWatches = new();
+
+    // Set by SimulatorForm on every LoadSelectedDay — Cruce/Rebote only fires for candles ON OR
+    // AFTER this date. Without it, EvaluatePisoTechoWatches would evaluate the ENTIRE prior-
+    // context backlog (now up to ~200 trading days, since HourlyCandleStore's cap grew) as
+    // "already closed" the instant the day loads, firing instantly against some ancient candle
+    // instead of waiting for the actual replayed-day candle that closes past the SMA.
+    public DateOnly? WatchStartDate { get; set; }
+
+    // Fires (caption, price, eventType, direction, reference) once per resolved Cruce/Rebote —
+    // log-only for the simulator (no Telegram), but SimulatorForm's handler also persists it to
+    // events_log.csv, same as Demand Zone, per explicit request that this one gets written to disk.
+    public event Action<string, decimal, string, string, string>? OnPisoTechoOutcomeEvent;
+
+    // Called once per day load with the SMA-pair results already computed by SimulatorForm
+    // (mirrors ChartPanel.EvaluatePisoTechoPair, computed there against _hourlyCandles before
+    // _simDate). Draws both labels and arms both periods of each non-null pair independently.
+    public async Task SetPisoTechoResultsAsync(string? result2040, string? result100200)
+    {
+        if (_readyTcs != null) await _readyTcs.Task;
+
+        _pisoTechoWatches.Clear();
+        ArmPisoTechoWatch(20, 40, result2040);
+        ArmPisoTechoWatch(100, 200, result100200);
+
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, 40, {ToJsStringOrNull(result2040)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, 200, {ToJsStringOrNull(result100200)});");
+    }
+
+    private void ArmPisoTechoWatch(int fastPeriod, int slowPeriod, string? result)
+    {
+        if (result == null) return;
+        var watchingUp = result == "Techo";
+        _pisoTechoWatches.Add(new PisoTechoWatch { Period = fastPeriod, WatchingUp = watchingUp });
+        _pisoTechoWatches.Add(new PisoTechoWatch { Period = slowPeriod, WatchingUp = watchingUp });
+    }
+
+    private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
+
+    // Same case-1/case-2 cross-or-bounce formula as EvaluateCrossings, evaluated per watched
+    // period independently. Resolves once, then stops for the rest of the simulated day.
+    private void EvaluatePisoTechoWatches(CandleData justClosed)
+    {
+        if (WatchStartDate is { } startDate &&
+            DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(justClosed.Time, EasternZone)) < startDate)
+            return; // prior-context candle (backfilled history), not part of the replayed day
+
+        foreach (var watch in _pisoTechoWatches)
+        {
+            if (watch.Done) continue;
+
+            var currentSma  = Sma(watch.Period, _closedCandles.Count - 1);
+            var previousSma = Sma(watch.Period, _closedCandles.Count - 2);
+            if (currentSma == null) continue;
+
+            var isGreen = justClosed.Close > justClosed.Open;
+            var isRed   = justClosed.Close < justClosed.Open;
+
+            // Same 2-point comparison as EvaluateCrossings (see ChartPanel's identical fix) — the
+            // PREVIOUS candle's close vs the PREVIOUS SMA, not this candle's own open vs its own
+            // SMA, since the SMA itself can shift enough between candles to make a real cross miss
+            // a same-bar open/close straddle check.
+            var crossed = previousSma != null && watch.WatchingUp
+                ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
+                : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
+
+            var bounced = !crossed && (watch.WatchingUp
+                ? justClosed.Open < currentSma && isRed &&
+                    (justClosed.High > currentSma
+                        ? justClosed.Close < currentSma
+                        : (currentSma - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close))
+                : justClosed.Open > currentSma && isGreen &&
+                    (justClosed.Low < currentSma
+                        ? justClosed.Close > currentSma
+                        : (justClosed.Low - currentSma) < BounceProximityRatio * (justClosed.Close - justClosed.Low)));
+
+            if (!crossed && !bounced) continue;
+
+            watch.Done = true;
+            var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
+            var evento    = crossed ? "Cruce" : "Rebote";
+            var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            OnPisoTechoOutcomeEvent?.Invoke(caption, justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
+        }
+    }
 
     public event Action? OnCrossSequenceFinished;
     public event Action<string>? OnCrossSequenceEvent;
@@ -361,6 +462,10 @@ public class SimulatedChartPanel : Panel
     // Fires (caption, price, proximal, distal) once per confirmed rebote.
     public event Action<string, decimal, decimal, decimal>? OnDemandZoneReboundEvent;
 
+    // Same case-1/case-2 proximity idea as EvaluateCrossings' bounce detection — a candle whose
+    // Low falls short of Proximal but within BounceProximityRatio of the rejection move's size
+    // (Close - Low) still counts as touching it. See ChartPanel's identical copy for the full
+    // rationale.
     private void EvaluateDemandZoneRebounds(CandleData justClosed)
     {
         foreach (var zone in _demandZones)
@@ -369,7 +474,9 @@ public class SimulatedChartPanel : Panel
 
             if (!zone.Entered)
             {
-                if (justClosed.Low > zone.Proximal) continue;
+                var touchedOrClose = justClosed.Low <= zone.Proximal ||
+                    (justClosed.Low - zone.Proximal) < BounceProximityRatio * (justClosed.Close - justClosed.Low);
+                if (!touchedOrClose) continue;
                 zone.Entered = true;
             }
 
@@ -502,6 +609,73 @@ public class SimulatedChartPanel : Panel
     }
 
     // ==================================================================================
+    // "Abriendo la Volatilidad" — ported from ChartPanel. Only relevant on the Fifteen_RTH
+    // instance; armed externally (SimulatorForm) when the Hourly15 instance resolves a
+    // PisoTechoCruce/"Techo" outcome. Evaluated once per replayed closed candle (no live ticks
+    // in the simulator), against that candle's own Close, instead of a continuous price feed.
+    // ==================================================================================
+
+    private const int VolatilityBollingerPeriod = 20;
+    private const decimal VolatilityBollingerMult = 2m;
+    private const int VolatilityWidthLookback = 3;
+
+    private bool _volatilityOpeningArmed;
+    private bool _volatilityOpeningFired;
+    private bool _volatilityOpeningBullish; // true = Techo/CALL watch (upper band), false = Piso/PUT watch (lower band)
+
+    public event Action<string>? OnVolatilityOpeningEvent;
+
+    public void ArmVolatilityOpeningWatch(bool bullish)
+    {
+        if (_volatilityOpeningFired) return;
+        _volatilityOpeningArmed = true;
+        _volatilityOpeningBullish = bullish;
+    }
+
+    private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)
+    {
+        if (endIndex < VolatilityBollingerPeriod - 1 || endIndex >= _closedCandles.Count) return null;
+        decimal sum = 0;
+        for (int i = endIndex - VolatilityBollingerPeriod + 1; i <= endIndex; i++)
+            sum += _closedCandles[i].Close;
+        var mean = sum / VolatilityBollingerPeriod;
+        decimal sqSum = 0;
+        for (int i = endIndex - VolatilityBollingerPeriod + 1; i <= endIndex; i++)
+        {
+            var d = _closedCandles[i].Close - mean;
+            sqSum += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / VolatilityBollingerPeriod));
+        return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
+    }
+
+    private void EvaluateVolatilityOpening(decimal lastPrice)
+    {
+        if (!_volatilityOpeningArmed || _volatilityOpeningFired) return;
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (current == null || earlier == null) return;
+        var currentWidth = current.Value.Upper - current.Value.Lower;
+        var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+        if (currentWidth <= earlierWidth) return;
+
+        if (_volatilityOpeningBullish)
+        {
+            if (lastPrice < current.Value.Upper) return;
+        }
+        else
+        {
+            if (lastPrice > current.Value.Lower) return;
+        }
+
+        _volatilityOpeningFired = true;
+        var bandLabel = _volatilityOpeningBullish ? "Superior" : "Inferior";
+        var bandValue = _volatilityOpeningBullish ? current.Value.Upper : current.Value.Lower;
+        var caption = $"Abriendo la Volatilidad — spot {lastPrice:F2} toca Banda {bandLabel} {bandValue:F2}";
+        OnVolatilityOpeningEvent?.Invoke(caption);
+    }
+
+    // ==================================================================================
     // Bridges the simulator's "resend the whole candle list every step" model into the live
     // chart's "evaluate once when a candle closes" model — a candle is treated as closed once a
     // NEWER one appears after it in the list (the last candle in the list is always assumed
@@ -523,6 +697,9 @@ public class SimulatedChartPanel : Panel
             _crossFinished = false;
             _tLineSignalFired = false;
             foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
+            foreach (var watch in _pisoTechoWatches) watch.Done = false;
+            _volatilityOpeningArmed = false;
+            _volatilityOpeningFired = false;
         }
 
         for (int i = _closedCandles.Count; i < closedNow.Count; i++)
@@ -531,6 +708,8 @@ public class SimulatedChartPanel : Panel
             EvaluateCrossings(closedNow[i]);
             EvaluateTLineSignal(closedNow[i]);
             EvaluateDemandZoneRebounds(closedNow[i]);
+            EvaluatePisoTechoWatches(closedNow[i]);
+            EvaluateVolatilityOpening(closedNow[i].Close);
         }
     }
 }

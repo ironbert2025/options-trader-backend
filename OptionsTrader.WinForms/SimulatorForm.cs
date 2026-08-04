@@ -299,6 +299,23 @@ public class SimulatorForm : Form
             EventLogStore.Append(_symbol, "15Min", "DemandZoneRebound", "Alza", caption, price,
                 $"Proximal={proximal:F2};Distal={distal:F2}");
         };
+
+        // Piso/Techo auto-armed Cruce/Rebote (1h chart) — log-only, no events_log.csv (unlike
+        // Demand Zone above), per explicit request.
+        _hourlyChart.OnPisoTechoOutcomeEvent += (caption, price, eventType, direction, reference) =>
+        {
+            LogSimEvent(caption);
+            // Cruce en Techo / Rebote en Piso -> bullish (CALL, upper band). Cruce en Piso /
+            // Rebote en Techo -> bearish (PUT, lower band) — see MultiChartForm's identical
+            // mapping for the live app.
+            var bullish = direction == "Techo" ? eventType == "PisoTechoCruce" : eventType == "PisoTechoRebote";
+            _rthChart.ArmVolatilityOpeningWatch(bullish);
+        };
+
+        // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a
+        // Piso/Techo watch; log-only, no events_log.csv, same as Piso/Techo above.
+        _rthChart.OnVolatilityOpeningEvent += msg => LogSimEvent(msg);
+
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
             if (IsDisposed) return;
@@ -414,6 +431,7 @@ public class SimulatorForm : Form
 
         _symbol  = symbol;
         _simDate = date;
+        _hourlyChart.WatchStartDate = date; // Piso/Techo Cruce/Rebote must not fire against backfilled prior-context candles
         _steps   = SimulationDataLoader.LoadDay(symbol, date);
         // Same amount of surrounding context the live charts default to (7 days for 1h, 3 for the
         // two 15m panels) — see ChartPanel.LoadHistoryAsync's visibleDays.
@@ -426,6 +444,7 @@ public class SimulatorForm : Form
 
         _txtEventLog.Clear();
         EvaluateDailyBounce();
+        EvaluatePisoTecho();
 
         // A new day's candles are about to load — clear each chart's stuck pan/zoom from
         // whatever day was showing before, so this day's 9:30 candle lands at the real open
@@ -473,6 +492,42 @@ public class SimulatorForm : Form
 
         var direction = bouncedUp ? "al alza" : "a la baja";
         LogSimEvent($"Rebote {direction} en Diario");
+    }
+
+    // Ported from ChartPanel.EvaluatePisoTechoPair, once per day load (not per step) — evaluates
+    // the (20,40) and (100,200) SMA pairs against the hourly candles BEFORE _simDate (the
+    // simulator's equivalent of "pre-market", since there's no real wall-clock here), then hands
+    // both results to _hourlyChart to draw the labels and arm the Cruce/Rebote watches.
+    private async void EvaluatePisoTecho()
+    {
+        var bars = _hourlyCandles
+            .Where(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date < _simDate.ToDateTime(TimeOnly.MinValue))
+            .OrderBy(c => c.Time)
+            .ToList();
+
+        var result2040   = EvaluatePisoTechoPair(bars, 20, 40);
+        var result100200 = EvaluatePisoTechoPair(bars, 100, 200);
+        await _hourlyChart.SetPisoTechoResultsAsync(result2040, result100200);
+    }
+
+    private static string? EvaluatePisoTechoPair(List<CandleData> bars, int fastPeriod, int slowPeriod)
+    {
+        if (bars.Count < slowPeriod) return null;
+
+        decimal SmaOf(int period)
+        {
+            decimal sum = 0;
+            for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
+            return sum / period;
+        }
+
+        var fast  = SmaOf(fastPeriod);
+        var slow  = SmaOf(slowPeriod);
+        var price = bars[^1].Close;
+
+        if (fast < slow && price < fast) return "Techo";
+        if (fast > slow && price > fast) return "Piso";
+        return null;
     }
 
     private void Step(int direction)
@@ -586,6 +641,7 @@ public class SimulatorForm : Form
         _dgvTrades.Columns.Add("colSimTBid", "T_Bid");
         _dgvTrades.Columns.Add("colSimPnl", "PnL");
         _dgvTrades.Columns.Add("colSimPnlPct", "PnL_Percent");
+        _dgvTrades.Columns["colSimPnlPct"].DefaultCellStyle.Font = new Font(_dgvTrades.Font, FontStyle.Bold);
         _dgvTrades.Columns.Add("colSimPnlTarget", "PnL_Target");
         _dgvTrades.Columns.Add("colSimExitTime", "ExitTime");
         var closeCol = new DataGridViewButtonColumn { Name = "colSimClose", HeaderText = "", Text = "Close", UseColumnTextForButtonValue = true };
@@ -707,6 +763,8 @@ public class SimulatorForm : Form
             bid.ToString("F2"), ask.ToString("F2"), contracts, ask.ToString("F2"),
             ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", targetPct.ToString("F0"))];
 
+        gridRow.Cells["colSimCBid"].Style.ForeColor = Color.Orange;
+
         _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid));
         SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
@@ -734,7 +792,9 @@ public class SimulatorForm : Form
             trade.Row.Cells["colSimCBid"].Value    = quote.Bid.ToString("F2");
             trade.Row.Cells["colSimPnl"].Value     = pnl.ToString("F2");
             trade.Row.Cells["colSimPnlPct"].Value  = pnlPct.ToString("F1");
-            trade.Row.Cells["colSimPnl"].Style.ForeColor = pnl >= 0 ? Color.LimeGreen : Color.OrangeRed;
+            trade.Row.Cells["colSimCBid"].Style.ForeColor    = Color.Orange;
+            trade.Row.Cells["colSimPnl"].Style.ForeColor     = pnl >= 0 ? Color.LimeGreen : Color.OrangeRed;
+            trade.Row.Cells["colSimPnlPct"].Style.ForeColor  = pnlPct >= 0 ? Color.LimeGreen : Color.OrangeRed;
             UpdatePnLMinMax(trade.Row, pnlPct);
             SetSimMoneyness(trade.Row, trade.OptionType, trade.StrikePrice, step.UnderlyingPrice);
         }

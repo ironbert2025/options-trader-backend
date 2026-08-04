@@ -24,6 +24,32 @@ public enum ChartPanelMode
 // to know which.
 public class ChartPanel : Panel
 {
+    // Piso/Techo auto-analysis (1h panel only) — computed ONCE per running app instance (this
+    // process = one ticker, so "once per instance" and "once per symbol" are the same thing
+    // here), the first time Live Chart is opened and only if that happens before 9:30 AM ET.
+    // Static so the decision survives closing and reopening the Live Chart window later the same
+    // day (the WebView/ChartPanel itself gets fully disposed and recreated on each open) — see
+    // EvaluatePisoTechoOnce, called from LoadHistoryAsync's Hourly15 branch.
+    private static bool s_pisoTechoAnalyzed;
+    // One independent result per SMA pair — (20,40) and (100,200) can each say "Piso", "Techo",
+    // or null (no signal that day) without affecting the other.
+    private static string? s_pisoTechoResult2040;
+    private static string? s_pisoTechoResult100200;
+
+    // Auto-armed Cruce/Rebote watch, one entry PER PERIOD (not per pair) — when a pair comes back
+    // Piso or Techo, BOTH its periods get armed independently (20 and 40 each watch their own
+    // line separately, even though they're always the same direction within a pair — Piso/Techo
+    // is decided per pair, never split). Completely separate from the manual Cross-SMA toggle
+    // buttons (ChartPanel's _crossArmedPeriods/_crossActivePeriod/_crossUp) — this doesn't touch
+    // or share that state, same "runs independently" precedent as EvaluateDemandZoneRebounds.
+    private sealed class PisoTechoWatch
+    {
+        public int Period;
+        public bool WatchingUp; // true = Techo (expects reject down / cross up), false = Piso (expects bounce up / cross down)
+        public bool Done;
+    }
+    private static readonly List<PisoTechoWatch> s_pisoTechoWatches = new();
+
     private readonly string _symbol;
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
@@ -109,6 +135,11 @@ public class ChartPanel : Panel
     // RTH+Overnight panel only — see EvaluateDemandZoneRebounds). Pushes its own screenshot to
     // Telegram the same self-contained way Cross-SMA does (SendChartToTelegramAsync below).
     public event Action<string>? OnDemandZoneReboundEvent;
+
+    // Fires (evento, pisoTecho) every time a Piso/Techo watch resolves — 1h panel only. MultiChartForm
+    // uses this specifically to arm the 15m RTH panel's "Abriendo la Volatilidad" watch when
+    // evento=="Cruce" && pisoTecho=="Techo" (see EvaluateVolatilityOpening on that panel).
+    public event Action<string, string>? OnPisoTechoResolvedEvent;
 
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
@@ -553,6 +584,8 @@ public class ChartPanel : Panel
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, caption);
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "CrossSMA", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             return (ok, detail);
         }
         catch (Exception ex)
@@ -729,7 +762,12 @@ public class ChartPanel : Panel
     // Demand Zone rebote (15m RTH+Overnight panel only): evaluated against every tracked demand
     // zone (see the "dzsz" case in CoreWebView2_WebMessageReceived) on every just-closed 15m
     // candle, independent of whichever other zones are also being tracked.
-    //   Entrada: the candle's Low reaches the zone (<= Proximal) — marks it Entered.
+    //   Entrada: the candle's Low reaches the zone (<= Proximal) — marks it Entered. Same
+    //     case-1/case-2 proximity idea as EvaluateCrossings' bounce detection: a candle whose Low
+    //     falls SHORT of Proximal, but within BounceProximityRatio of the rejection move's size
+    //     (Close - Low), still counts as touching it — "got close enough, rejected before
+    //     actually reaching the line". Fires as an immediate confirmed rebote (Close > Proximal
+    //     is guaranteed there, and Distal was never at risk).
     //   Rota (invalidated forever): the candle's Low breaches the Distal line (< Distal) at any
     //     point while/after entering — no rebote can fire for this zone again.
     //   Rebote confirmado (fires once): while Entered and not yet Broken, the candle's CLOSE ends
@@ -743,7 +781,9 @@ public class ChartPanel : Panel
 
             if (!zone.Entered)
             {
-                if (justClosed.Low > zone.Proximal) continue; // hasn't reached the zone yet
+                var touchedOrClose = justClosed.Low <= zone.Proximal ||
+                    (justClosed.Low - zone.Proximal) < BounceProximityRatio * (justClosed.Close - justClosed.Low);
+                if (!touchedOrClose) continue; // hasn't reached (or come close to) the zone yet
                 zone.Entered = true;
             }
 
@@ -763,6 +803,194 @@ public class ChartPanel : Panel
                     $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
             }
         }
+    }
+
+    // Piso/Techo auto-analysis (1h panel, once per app instance — see s_pisoTechoAnalyzed).
+    // Evaluated independently for the (20,40) and (100,200) SMA pairs, each against the last
+    // closed hourly candle (yesterday's close, since this only runs pre-market) and that candle's
+    // own Close price:
+    //   SMA_fast < SMA_slow (bearish alignment) and price < SMA_fast (from below) -> Techo.
+    //   SMA_fast > SMA_slow (bullish alignment) and price > SMA_fast (from above) -> Piso.
+    //   Anything else -> no signal for that pair. Draws via markPisoTecho, which then tracks each
+    // SMA's live position on every repaint (chart.html's smaLastPoint) — no further updates
+    // needed from here.
+    private async Task EvaluatePisoTechoOnce()
+    {
+        // Compute only the very first time (this app instance, this process's lifetime); every
+        // later call (chart closed and reopened the same day) just redraws whatever was already
+        // decided, without re-analyzing.
+        if (!s_pisoTechoAnalyzed)
+        {
+            s_pisoTechoAnalyzed = true;
+
+            var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
+            if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0)) // only meaningful pre-market
+            {
+                s_pisoTechoResult2040   = EvaluatePisoTechoPair(20, 40);
+                s_pisoTechoResult100200 = EvaluatePisoTechoPair(100, 200);
+
+                ArmPisoTechoWatch(20, 40, s_pisoTechoResult2040);
+                ArmPisoTechoWatch(100, 200, s_pisoTechoResult100200);
+            }
+        }
+
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, 40, {ToJsStringOrNull(s_pisoTechoResult2040)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, 200, {ToJsStringOrNull(s_pisoTechoResult100200)});");
+    }
+
+    private string? EvaluatePisoTechoPair(int fastPeriod, int slowPeriod)
+    {
+        var fast = Sma(fastPeriod, _closedCandles.Count - 1);
+        var slow = Sma(slowPeriod, _closedCandles.Count - 1);
+        if (fast == null || slow == null) return null;
+
+        var price = _closedCandles[^1].Close;
+        if (fast < slow && price < fast) return "Techo";
+        if (fast > slow && price > fast) return "Piso";
+        return null;
+    }
+
+    // Arms BOTH periods of a pair independently (each watches its own SMA line separately) when
+    // that pair came back Piso or Techo — no-op if it didn't (result == null).
+    private static void ArmPisoTechoWatch(int fastPeriod, int slowPeriod, string? result)
+    {
+        if (result == null) return;
+        var watchingUp = result == "Techo";
+        s_pisoTechoWatches.Add(new PisoTechoWatch { Period = fastPeriod, WatchingUp = watchingUp });
+        s_pisoTechoWatches.Add(new PisoTechoWatch { Period = slowPeriod, WatchingUp = watchingUp });
+    }
+
+    // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed
+    // PisoTechoWatch — same case-1/case-2 cross-or-bounce formula as the manual Cross-SMA
+    // (EvaluateCrossings), just against that watch's own SMA period instead of the shared manual
+    // sequence. Resolves once per period, then stops (Done) — doesn't repeat for the rest of the
+    // day. Pushes its own screenshot to Telegram, same self-contained pattern as Cross-SMA/Demand
+    // Zone, with a caption explicit about which of the two outcomes fired.
+    private void EvaluatePisoTechoWatches(CandleData justClosed)
+    {
+        foreach (var watch in s_pisoTechoWatches)
+        {
+            if (watch.Done) continue;
+
+            var currentSma  = Sma(watch.Period, _closedCandles.Count - 1);
+            var previousSma = Sma(watch.Period, _closedCandles.Count - 2);
+            if (currentSma == null) continue;
+
+            var isGreen = justClosed.Close > justClosed.Open;
+            var isRed   = justClosed.Close < justClosed.Open;
+
+            // Same 2-point comparison as EvaluateCrossings — the PREVIOUS candle's close vs the
+            // PREVIOUS SMA value, not this candle's own open vs its own (possibly already-moved)
+            // SMA. The SMA itself can shift enough between candles that no single bar's open/close
+            // straddles it, even though price has genuinely crossed — comparing consecutive points
+            // catches that; comparing one bar's open to its own close-time SMA doesn't.
+            var crossed = previousSma != null && watch.WatchingUp
+                ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
+                : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
+
+            var bounced = !crossed && (watch.WatchingUp
+                ? justClosed.Open < currentSma && isRed &&
+                    (justClosed.High > currentSma
+                        ? justClosed.Close < currentSma
+                        : (currentSma - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close))
+                : justClosed.Open > currentSma && isGreen &&
+                    (justClosed.Low < currentSma
+                        ? justClosed.Close > currentSma
+                        : (justClosed.Low - currentSma) < BounceProximityRatio * (justClosed.Close - justClosed.Low)));
+
+            if (!crossed && !bounced) continue;
+
+            watch.Done = true;
+            var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
+            var evento    = crossed ? "Cruce" : "Rebote";
+            var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            _ = SendChartToTelegramAsync(caption);
+            EventLogStore.Append(_symbol, "Hora", $"PisoTecho{evento}", pisoTecho, caption, justClosed.Close, $"SMA{watch.Period}={currentSma.Value:F2}");
+            OnPisoTechoResolvedEvent?.Invoke(evento, pisoTecho);
+        }
+    }
+
+    private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
+
+    // ==================================================================================
+    // "Abriendo la Volatilidad" (15m RTH panel only) — armed externally (ArmVolatilityOpeningWatch)
+    // by MultiChartForm when the 1h panel resolves a Cruce en Techo. From then on, evaluated on
+    // every LIVE tick (not candle close — see UpdateLivePriceFromExternalSource) against the
+    // Bollinger Bands computed from this panel's own closed 15m candles: fires once the live spot
+    // reaches the Upper Band AND that band's current width is wider than it was a few candles ago
+    // (confirming genuine expansion, not a touch against a flat/contracting band). Bollinger is
+    // computed here in C# purely for this detection — chart.html's own copy (for drawing) is
+    // separate and untouched.
+    // ==================================================================================
+
+    private const int VolatilityBollingerPeriod = 20;
+    private const decimal VolatilityBollingerMult = 2m;
+    private const int VolatilityWidthLookback = 3; // candles back to compare band width against
+
+    private bool _volatilityOpeningArmed;
+    private bool _volatilityOpeningFired;
+    private bool _volatilityOpeningBullish; // true = Techo/CALL watch (upper band), false = Piso/PUT watch (lower band)
+
+    // Fires with a human-readable caption once "Abriendo la Volatilidad" is confirmed.
+    public event Action<string>? OnVolatilityOpeningEvent;
+
+    public void ArmVolatilityOpeningWatch(bool bullish)
+    {
+        if (_volatilityOpeningFired) return; // already fired once this session — don't rearm
+        _volatilityOpeningArmed = true;
+        _volatilityOpeningBullish = bullish;
+    }
+
+    private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)
+    {
+        if (endIndex < VolatilityBollingerPeriod - 1 || endIndex >= _closedCandles.Count) return null;
+
+        decimal sum = 0;
+        for (int i = endIndex - VolatilityBollingerPeriod + 1; i <= endIndex; i++)
+            sum += _closedCandles[i].Close;
+        var mean = sum / VolatilityBollingerPeriod;
+
+        decimal sqSum = 0;
+        for (int i = endIndex - VolatilityBollingerPeriod + 1; i <= endIndex; i++)
+        {
+            var d = _closedCandles[i].Close - mean;
+            sqSum += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / VolatilityBollingerPeriod));
+
+        return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
+    }
+
+    private void EvaluateVolatilityOpening(decimal livePrice)
+    {
+        if (!_volatilityOpeningArmed || _volatilityOpeningFired) return;
+
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (current == null || earlier == null) return;
+
+        var currentWidth = current.Value.Upper - current.Value.Lower;
+        var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+        if (currentWidth <= earlierWidth) return; // bands aren't actually widening yet
+
+        if (_volatilityOpeningBullish)
+        {
+            if (livePrice < current.Value.Upper) return; // hasn't reached the upper band yet
+        }
+        else
+        {
+            if (livePrice > current.Value.Lower) return; // hasn't reached the lower band yet
+        }
+
+        _volatilityOpeningFired = true;
+        var bandLabel = _volatilityOpeningBullish ? "Superior" : "Inferior";
+        var bandValue = _volatilityOpeningBullish ? current.Value.Upper : current.Value.Lower;
+        var direction = _volatilityOpeningBullish ? "Alza" : "Baja";
+        var caption = $"Abriendo la Volatilidad — spot {livePrice:F2} toca Banda {bandLabel} {bandValue:F2}";
+        OnVolatilityOpeningEvent?.Invoke(caption);
+        _ = SendChartToTelegramAsync(caption);
+        EventLogStore.Append(_symbol, "15Min", "VolatilityOpening", direction, caption, livePrice,
+            $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
     }
 
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
@@ -836,23 +1064,19 @@ public class ChartPanel : Panel
                 }
             }
 
-            // Bollinger Bands (20, 2 std devs) — also on the 1h panel (see above); this block is
-            // just the 15m RTH panel's other extras (pre-market line).
+            // Bollinger Bands (20, 2 std devs) — 15m RTH panel only (1h gets its own copy above).
             if (_mode == ChartPanelMode.Fifteen_RTH)
-            {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
-                // Pre-market blue line: only if the chart is opened before 9:30 AM ET that day —
-                // starts at the moment of opening and tracks live price until the market opens,
-                // then freezes (see Streamer_OnNewCandle). Not persisted; a later re-open restarts
-                // the whole thing from scratch.
-                var nowUtc = DateTime.UtcNow;
-                var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, EasternZone);
+            // Pre-market blue line (1h and 15m RTH panels): only if the chart is opened before
+            // 9:30 AM ET that day — anchors at whatever candle is currently the last one loaded
+            // (yesterday's close) and tracks live price until the market opens, then freezes (see
+            // Streamer_OnNewCandle). Not persisted; a later re-open restarts the whole thing.
+            if (_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15)
+            {
+                var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
                 if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0))
-                {
-                    var startTime = FakeUtcEpochSeconds(nowUtc);
-                    await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({startTime});");
-                }
+                    await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
             }
 
             // Gray shading for overnight/weekend gaps — only on the 15m RTH+Overnight panel.
@@ -924,6 +1148,8 @@ public class ChartPanel : Panel
                         _closedCandles.Clear();
                         _closedCandles.AddRange(aggregated);
 
+                        await EvaluatePisoTechoOnce();
+
                         // Yesterday's LAST hourly candle (15:00-16:00) never gets a same-day
                         // follow-up tick to close it live (see Streamer_OnNewCandle's sameDay
                         // check) — evaluate it once here instead, on open, same idea as
@@ -937,7 +1163,16 @@ public class ChartPanel : Panel
                         {
                             EvaluateCrossings(last);
                             EvaluateTLineSignal(last);
+                            EvaluatePisoTechoWatches(last);
                         }
+                    }
+                    else if (_mode == ChartPanelMode.Fifteen_RTH)
+                    {
+                        // Own closed-candle history for this panel's Bollinger-widening watch
+                        // (EvaluateVolatilityOpening) — armed externally by MultiChartForm when the
+                        // 1h panel resolves a Cruce en Techo.
+                        _closedCandles.Clear();
+                        _closedCandles.AddRange(aggregated);
                     }
                 }
             }
@@ -968,11 +1203,11 @@ public class ChartPanel : Panel
         OnLiveTick?.Invoke(eastern, candle.Close);
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
         {
-            // Pre-market tick on the 15m RTH panel — doesn't form a candle, but feeds the blue
+            // Pre-market tick on the 1h/15m RTH panels — doesn't form a candle, but feeds the blue
             // pre-market line (if startPreMarketLine was called when this panel opened). Once
             // 9:30 AM ET hits this branch stops firing for that reason, which is what freezes the
             // line in place with no extra "freeze" logic needed.
-            if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
+            if ((_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15) && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
             {
                 var price = candle.Close;
                 BeginInvoke(async () =>
@@ -1022,7 +1257,7 @@ public class ChartPanel : Panel
                     _liveBucketIndex = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
                     _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
                     var freshBucket = _liveBucket;
-                    BeginInvoke(async () => await RunScriptAsync("updateLastCandle", freshBucket));
+                    BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                     return;
                 }
             }
@@ -1050,11 +1285,16 @@ public class ChartPanel : Panel
                     {
                         EvaluateCrossings(_liveBucket);
                         EvaluateTLineSignal(_liveBucket);
+                        EvaluatePisoTechoWatches(_liveBucket);
                     }
                 }
                 else if (_mode == ChartPanelMode.Fifteen_Full)
                 {
                     EvaluateDemandZoneRebounds(_liveBucket);
+                }
+                else if (_mode == ChartPanelMode.Fifteen_RTH)
+                {
+                    _closedCandles.Add(_liveBucket);
                 }
 
                 _liveBucketIndex = index;
@@ -1071,6 +1311,9 @@ public class ChartPanel : Panel
 
         var toSend = _liveBucket;
         BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
+
+        if (_mode == ChartPanelMode.Fifteen_RTH)
+            EvaluateVolatilityOpening(candle.Close);
     }
 
     // Real-time last-price update (LEVEL_ONE_EQUITIES, much higher frequency than CHART_EQUITY's
@@ -1110,6 +1353,9 @@ public class ChartPanel : Panel
 
         var toSend = _liveBucket;
         BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
+
+        if (_mode == ChartPanelMode.Fifteen_RTH)
+            EvaluateVolatilityOpening(price);
     }
 
     // Whether the header currently shows the "disconnected" message — cleared the moment real
