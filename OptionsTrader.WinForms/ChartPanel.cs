@@ -584,6 +584,8 @@ public class ChartPanel : Panel
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, caption);
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "CrossSMA", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             return (ok, detail);
         }
         catch (Exception ex)
