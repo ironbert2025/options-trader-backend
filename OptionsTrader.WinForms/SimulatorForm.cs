@@ -299,6 +299,10 @@ public class SimulatorForm : Form
             EventLogStore.Append(_symbol, "15Min", "DemandZoneRebound", "Alza", caption, price,
                 $"Proximal={proximal:F2};Distal={distal:F2}");
         };
+
+        // Piso/Techo auto-armed Cruce/Rebote (1h chart) — log-only, no events_log.csv (unlike
+        // Demand Zone above), per explicit request.
+        _hourlyChart.OnPisoTechoOutcomeEvent += (caption, price, eventType, direction, reference) => LogSimEvent(caption);
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
             if (IsDisposed) return;
@@ -426,6 +430,7 @@ public class SimulatorForm : Form
 
         _txtEventLog.Clear();
         EvaluateDailyBounce();
+        EvaluatePisoTecho();
 
         // A new day's candles are about to load — clear each chart's stuck pan/zoom from
         // whatever day was showing before, so this day's 9:30 candle lands at the real open
@@ -473,6 +478,42 @@ public class SimulatorForm : Form
 
         var direction = bouncedUp ? "al alza" : "a la baja";
         LogSimEvent($"Rebote {direction} en Diario");
+    }
+
+    // Ported from ChartPanel.EvaluatePisoTechoPair, once per day load (not per step) — evaluates
+    // the (20,40) and (100,200) SMA pairs against the hourly candles BEFORE _simDate (the
+    // simulator's equivalent of "pre-market", since there's no real wall-clock here), then hands
+    // both results to _hourlyChart to draw the labels and arm the Cruce/Rebote watches.
+    private async void EvaluatePisoTecho()
+    {
+        var bars = _hourlyCandles
+            .Where(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date < _simDate.ToDateTime(TimeOnly.MinValue))
+            .OrderBy(c => c.Time)
+            .ToList();
+
+        var result2040   = EvaluatePisoTechoPair(bars, 20, 40);
+        var result100200 = EvaluatePisoTechoPair(bars, 100, 200);
+        await _hourlyChart.SetPisoTechoResultsAsync(result2040, result100200);
+    }
+
+    private static string? EvaluatePisoTechoPair(List<CandleData> bars, int fastPeriod, int slowPeriod)
+    {
+        if (bars.Count < slowPeriod) return null;
+
+        decimal SmaOf(int period)
+        {
+            decimal sum = 0;
+            for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
+            return sum / period;
+        }
+
+        var fast  = SmaOf(fastPeriod);
+        var slow  = SmaOf(slowPeriod);
+        var price = bars[^1].Close;
+
+        if (fast < slow && price < fast) return "Techo";
+        if (fast > slow && price > fast) return "Piso";
+        return null;
     }
 
     private void Step(int direction)

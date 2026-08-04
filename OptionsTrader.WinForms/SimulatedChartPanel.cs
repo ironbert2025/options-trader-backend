@@ -193,6 +193,91 @@ public class SimulatedChartPanel : Panel
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
     };
 
+    // ==================================================================================
+    // Piso/Techo auto-analysis — ported from ChartPanel. Unlike ChartPanel's version (static,
+    // computed once per app instance/process), here it's an INSTANCE field recomputed once per
+    // simulated DAY LOAD (called from SimulatorForm.LoadSelectedDay, same "once per day, not per
+    // step" precedent as EvaluateDailyBounce) — a fresh simulated day is the closest equivalent to
+    // "a new pre-market session" here, there's no real wall-clock "once per process" to anchor to.
+    // ==================================================================================
+
+    private sealed class PisoTechoWatch
+    {
+        public int Period;
+        public bool WatchingUp; // true = Techo (expects reject down / cross up), false = Piso (expects bounce up / cross down)
+        public bool Done;
+    }
+    private readonly List<PisoTechoWatch> _pisoTechoWatches = new();
+
+    // Fires (caption, price, eventType, direction, reference) once per resolved Cruce/Rebote —
+    // log-only for the simulator (no Telegram), but SimulatorForm's handler also persists it to
+    // events_log.csv, same as Demand Zone, per explicit request that this one gets written to disk.
+    public event Action<string, decimal, string, string, string>? OnPisoTechoOutcomeEvent;
+
+    // Called once per day load with the SMA-pair results already computed by SimulatorForm
+    // (mirrors ChartPanel.EvaluatePisoTechoPair, computed there against _hourlyCandles before
+    // _simDate). Draws both labels and arms both periods of each non-null pair independently.
+    public async Task SetPisoTechoResultsAsync(string? result2040, string? result100200)
+    {
+        if (_readyTcs != null) await _readyTcs.Task;
+
+        _pisoTechoWatches.Clear();
+        ArmPisoTechoWatch(20, 40, result2040);
+        ArmPisoTechoWatch(100, 200, result100200);
+
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, 40, {ToJsStringOrNull(result2040)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, 200, {ToJsStringOrNull(result100200)});");
+    }
+
+    private void ArmPisoTechoWatch(int fastPeriod, int slowPeriod, string? result)
+    {
+        if (result == null) return;
+        var watchingUp = result == "Techo";
+        _pisoTechoWatches.Add(new PisoTechoWatch { Period = fastPeriod, WatchingUp = watchingUp });
+        _pisoTechoWatches.Add(new PisoTechoWatch { Period = slowPeriod, WatchingUp = watchingUp });
+    }
+
+    private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
+
+    // Same case-1/case-2 cross-or-bounce formula as EvaluateCrossings, evaluated per watched
+    // period independently. Resolves once, then stops for the rest of the simulated day.
+    private void EvaluatePisoTechoWatches(CandleData justClosed)
+    {
+        foreach (var watch in _pisoTechoWatches)
+        {
+            if (watch.Done) continue;
+
+            var currentSma = Sma(watch.Period, _closedCandles.Count - 1);
+            if (currentSma == null) continue;
+
+            var isGreen = justClosed.Close > justClosed.Open;
+            var isRed   = justClosed.Close < justClosed.Open;
+
+            var crossed = watch.WatchingUp
+                ? isGreen && justClosed.Close > currentSma && justClosed.Open <= currentSma
+                : isRed   && justClosed.Close < currentSma && justClosed.Open >= currentSma;
+
+            var bounced = !crossed && (watch.WatchingUp
+                ? justClosed.Open < currentSma && isRed &&
+                    (justClosed.High > currentSma
+                        ? justClosed.Close < currentSma
+                        : (currentSma - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close))
+                : justClosed.Open > currentSma && isGreen &&
+                    (justClosed.Low < currentSma
+                        ? justClosed.Close > currentSma
+                        : (justClosed.Low - currentSma) < BounceProximityRatio * (justClosed.Close - justClosed.Low)));
+
+            if (!crossed && !bounced) continue;
+
+            watch.Done = true;
+            var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
+            var evento    = crossed ? "Cruce" : "Rebote";
+            var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            OnPisoTechoOutcomeEvent?.Invoke(caption, justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
+        }
+    }
+
     public event Action? OnCrossSequenceFinished;
     public event Action<string>? OnCrossSequenceEvent;
     public event Action<string>? OnTLineSignalEvent;
@@ -529,6 +614,7 @@ public class SimulatedChartPanel : Panel
             _crossFinished = false;
             _tLineSignalFired = false;
             foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
+            foreach (var watch in _pisoTechoWatches) watch.Done = false;
         }
 
         for (int i = _closedCandles.Count; i < closedNow.Count; i++)
@@ -537,6 +623,7 @@ public class SimulatedChartPanel : Panel
             EvaluateCrossings(closedNow[i]);
             EvaluateTLineSignal(closedNow[i]);
             EvaluateDemandZoneRebounds(closedNow[i]);
+            EvaluatePisoTechoWatches(closedNow[i]);
         }
     }
 }
