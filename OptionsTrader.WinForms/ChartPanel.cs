@@ -843,23 +843,19 @@ public class ChartPanel : Panel
                 }
             }
 
-            // Bollinger Bands (20, 2 std devs) — also on the 1h panel (see above); this block is
-            // just the 15m RTH panel's other extras (pre-market line).
+            // Bollinger Bands (20, 2 std devs) — 15m RTH panel only (1h gets its own copy above).
             if (_mode == ChartPanelMode.Fifteen_RTH)
-            {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
-                // Pre-market blue line: only if the chart is opened before 9:30 AM ET that day —
-                // starts at the moment of opening and tracks live price until the market opens,
-                // then freezes (see Streamer_OnNewCandle). Not persisted; a later re-open restarts
-                // the whole thing from scratch.
-                var nowUtc = DateTime.UtcNow;
-                var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, EasternZone);
+            // Pre-market blue line (1h and 15m RTH panels): only if the chart is opened before
+            // 9:30 AM ET that day — anchors at whatever candle is currently the last one loaded
+            // (yesterday's close) and tracks live price until the market opens, then freezes (see
+            // Streamer_OnNewCandle). Not persisted; a later re-open restarts the whole thing.
+            if (_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15)
+            {
+                var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
                 if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0))
-                {
-                    var startTime = FakeUtcEpochSeconds(nowUtc);
-                    await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({startTime});");
-                }
+                    await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
             }
 
             // Gray shading for overnight/weekend gaps — only on the 15m RTH+Overnight panel.
@@ -975,11 +971,11 @@ public class ChartPanel : Panel
         OnLiveTick?.Invoke(eastern, candle.Close);
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
         {
-            // Pre-market tick on the 15m RTH panel — doesn't form a candle, but feeds the blue
+            // Pre-market tick on the 1h/15m RTH panels — doesn't form a candle, but feeds the blue
             // pre-market line (if startPreMarketLine was called when this panel opened). Once
             // 9:30 AM ET hits this branch stops firing for that reason, which is what freezes the
             // line in place with no extra "freeze" logic needed.
-            if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
+            if ((_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15) && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
             {
                 var price = candle.Close;
                 BeginInvoke(async () =>
