@@ -729,7 +729,12 @@ public class ChartPanel : Panel
     // Demand Zone rebote (15m RTH+Overnight panel only): evaluated against every tracked demand
     // zone (see the "dzsz" case in CoreWebView2_WebMessageReceived) on every just-closed 15m
     // candle, independent of whichever other zones are also being tracked.
-    //   Entrada: the candle's Low reaches the zone (<= Proximal) — marks it Entered.
+    //   Entrada: the candle's Low reaches the zone (<= Proximal) — marks it Entered. Same
+    //     case-1/case-2 proximity idea as EvaluateCrossings' bounce detection: a candle whose Low
+    //     falls SHORT of Proximal, but within BounceProximityRatio of the rejection move's size
+    //     (Close - Low), still counts as touching it — "got close enough, rejected before
+    //     actually reaching the line". Fires as an immediate confirmed rebote (Close > Proximal
+    //     is guaranteed there, and Distal was never at risk).
     //   Rota (invalidated forever): the candle's Low breaches the Distal line (< Distal) at any
     //     point while/after entering — no rebote can fire for this zone again.
     //   Rebote confirmado (fires once): while Entered and not yet Broken, the candle's CLOSE ends
@@ -743,7 +748,9 @@ public class ChartPanel : Panel
 
             if (!zone.Entered)
             {
-                if (justClosed.Low > zone.Proximal) continue; // hasn't reached the zone yet
+                var touchedOrClose = justClosed.Low <= zone.Proximal ||
+                    (justClosed.Low - zone.Proximal) < BounceProximityRatio * (justClosed.Close - justClosed.Low);
+                if (!touchedOrClose) continue; // hasn't reached (or come close to) the zone yet
                 zone.Entered = true;
             }
 

@@ -1441,13 +1441,19 @@ public partial class Form1 : Form
         var entryTime = DateTime.Now;
         var now       = entryTime.ToString("HH:mm:ss");
 
+        // Any trade opened without a target (suppressAutoClose — demo "No Trade" or real "Trade")
+        // runs free until manually closed; the target% never drives anything for it, so leave
+        // PnL_Target blank instead of showing a number that looks like it's in effect. "No
+        // Trade-Target" and "Trade-Target" (both suppressAutoClose: false) keep showing it.
+        var pnlTargetCell = suppressAutoClose ? string.Empty : targetPct.ToString("F0");
+
         RemoveBlankPlaceholderRows(dgvTrades);
 
         dgvTrades.Rows.Add(
             now, rowType, strike,
             bid.ToString("F2"), ask.ToString("F2"), contracts,
             entryStr, bid.ToString("F2"), tBid.ToString("F2"),
-            "0.00", "0.00", targetPct.ToString("F0"),
+            "0.00", "0.00", pnlTargetCell,
             string.Empty, "Close");
 
         var newRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];

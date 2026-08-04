@@ -361,6 +361,10 @@ public class SimulatedChartPanel : Panel
     // Fires (caption, price, proximal, distal) once per confirmed rebote.
     public event Action<string, decimal, decimal, decimal>? OnDemandZoneReboundEvent;
 
+    // Same case-1/case-2 proximity idea as EvaluateCrossings' bounce detection — a candle whose
+    // Low falls short of Proximal but within BounceProximityRatio of the rejection move's size
+    // (Close - Low) still counts as touching it. See ChartPanel's identical copy for the full
+    // rationale.
     private void EvaluateDemandZoneRebounds(CandleData justClosed)
     {
         foreach (var zone in _demandZones)
@@ -369,7 +373,9 @@ public class SimulatedChartPanel : Panel
 
             if (!zone.Entered)
             {
-                if (justClosed.Low > zone.Proximal) continue;
+                var touchedOrClose = justClosed.Low <= zone.Proximal ||
+                    (justClosed.Low - zone.Proximal) < BounceProximityRatio * (justClosed.Close - justClosed.Low);
+                if (!touchedOrClose) continue;
                 zone.Entered = true;
             }
 
