@@ -489,7 +489,15 @@
   }
 
   chart.subscribeClick(param => {
-    if (!param.point || param.time === undefined) return;
+    if (!param.point) return;
+    // param.time is only set when the click lands exactly on a rendered bar — during the
+    // overnight/pre-market session (15m RTH+Overnight panel) real data is sparse, so large
+    // stretches of the gray band have no bar under the cursor and param.time comes back
+    // undefined, silently swallowing every click there. Fall back to converting the raw x pixel
+    // to a time via the time scale so every drawing tool (DZ/SZ, T-Line, H-Line, Rect, etc.)
+    // works anywhere on the chart, not just where a candle happens to sit.
+    const clickTime = param.time !== undefined ? param.time : chart.timeScale().coordinateToTime(param.point.x);
+    if (clickTime == null) return;
     const price = candleSeries.coordinateToPrice(param.point.y);
     if (price == null) return;
 
@@ -576,7 +584,7 @@
     if (dzSzArmed) {
       const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
 
-      zoneLinesPrimitive._segments.push({ time: param.time, price, color });
+      zoneLinesPrimitive._segments.push({ time: clickTime, price, color });
 
       dzSzAxisLabels.push(candleSeries.createPriceLine({
         price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
@@ -587,15 +595,15 @@
       // Simulator only (SimulatorForm mirrors each line onto the 15m RTH chart at the same
       // price) — harmless on the live chart, nothing listens for it there.
       if (window.chrome && window.chrome.webview) {
-        window.chrome.webview.postMessage({ type: 'dzsz', time: param.time, price, color });
+        window.chrome.webview.postMessage({ type: 'dzsz', time: clickTime, price, color });
       }
     }
 
     if (rectArmed) {
       if (!rectPending) {
-        rectPending = { time: param.time, price };
+        rectPending = { time: clickTime, price };
       } else {
-        rectanglesPrimitive._rects.push({ t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price });
+        rectanglesPrimitive._rects.push({ t1: rectPending.time, p1: rectPending.price, t2: clickTime, p2: price });
         rectanglesPrimitive._preview = null;
         rectPending = null;
         forceRepaint();
@@ -604,9 +612,9 @@
 
     if (grayRectArmed) {
       if (!grayRectPending) {
-        grayRectPending = { time: param.time, price };
+        grayRectPending = { time: clickTime, price };
       } else {
-        grayRectPrimitive._rects.push({ t1: grayRectPending.time, p1: grayRectPending.price, t2: param.time, p2: price, selected: false });
+        grayRectPrimitive._rects.push({ t1: grayRectPending.time, p1: grayRectPending.price, t2: clickTime, p2: price, selected: false });
         grayRectPrimitive._preview = null;
         grayRectPending = null;
         forceRepaint();
@@ -615,9 +623,9 @@
 
     if (tLineArmed) {
       if (!tLinePending) {
-        tLinePending = { time: param.time, price };
+        tLinePending = { time: clickTime, price };
       } else {
-        const line = { t1: tLinePending.time, p1: tLinePending.price, t2: param.time, p2: price };
+        const line = { t1: tLinePending.time, p1: tLinePending.price, t2: clickTime, p2: price };
         tLinePrimitive._lines.push(line);
         tLinePrimitive._preview = null;
         tLinePending = null;
@@ -631,16 +639,16 @@
     }
 
     if (hLineArmed) {
-      hLinePrimitive._segments.push({ time: param.time, price, selected: false });
+      hLinePrimitive._segments.push({ time: clickTime, price, selected: false });
       forceRepaint();
     }
 
     if (arrowArmed) {
       if (!arrowPending) {
-        arrowPending = { time: param.time, price };
+        arrowPending = { time: clickTime, price };
       } else {
         const red = arrowPending.price > price; // 1st click above (higher price than) 2nd -> red
-        arrowPrimitive._arrows.push({ t1: arrowPending.time, p1: arrowPending.price, t2: param.time, p2: price, red });
+        arrowPrimitive._arrows.push({ t1: arrowPending.time, p1: arrowPending.price, t2: clickTime, p2: price, red });
         arrowPrimitive._preview = null;
         arrowPending = null;
         forceRepaint();
@@ -648,16 +656,16 @@
     }
 
     if (pisoArmed) {
-      textLabelsPrimitive._labels.push({ time: param.time, price, text: 'Piso' });
+      textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Piso' });
       forceRepaint();
     }
     if (techoArmed) {
-      textLabelsPrimitive._labels.push({ time: param.time, price, text: 'Techo' });
+      textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Techo' });
       forceRepaint();
     }
 
     if (greenArrowArmed) {
-      const arrow = { time: param.time, price, up: true, selected: false };
+      const arrow = { time: clickTime, price, up: true, selected: false };
       verticalArrowPrimitive._arrows.push(arrow);
       forceRepaint();
       // Persisted per-symbol by C# (VerticalArrowStore) — see ChartPanel.CoreWebView2_WebMessageReceived.
@@ -666,7 +674,7 @@
       }
     }
     if (redArrowArmed) {
-      const arrow = { time: param.time, price, up: false, selected: false };
+      const arrow = { time: clickTime, price, up: false, selected: false };
       verticalArrowPrimitive._arrows.push(arrow);
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
