@@ -1107,6 +1107,32 @@ public partial class Form1 : Form
             else
                 e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
         }
+
+        // Range: Strike button active (clickable — same gate as DgvQuotes_CellPainting) AND this
+        // row's Ask actually falls within the ticker's Low-High → same green as Bid above. Matters
+        // most under the "Counts" filter (PopulateQuotesGrid), which can show strikes whose Ask
+        // falls outside the range — "In Range" mode makes this condition trivially true for
+        // almost every visible row, since it already filters by Ask range.
+        var rangeCol = dgvQuotes.Columns["colRange"].Index;
+        if (e.ColumnIndex == rangeCol)
+        {
+            var active   = !IsRowTradeBlocked(row, "colCallBid", "colPutBid");
+            var askCol   = row.Tag?.ToString() == "PUT" ? "colPutAsk" : "colCallAsk";
+            var inRange  = active
+                && TryParseRange(row.Cells["colRange"].Value?.ToString(), out var low, out var high)
+                && decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask)
+                && ask >= low && ask <= high;
+
+            e.CellStyle.BackColor = inRange ? Color.LightGreen : dgvQuotes.DefaultCellStyle.BackColor;
+        }
+    }
+
+    // Parses the "Low - High" text PopulateQuotesGrid writes into colRange (e.g. "0.30 - 0.45").
+    private static bool TryParseRange(string? rangeText, out decimal low, out decimal high)
+    {
+        low = high = 0;
+        var parts = rangeText?.Split(" - ", StringSplitOptions.TrimEntries);
+        return parts?.Length == 2 && decimal.TryParse(parts[0], out low) && decimal.TryParse(parts[1], out high);
     }
 
     // Filters the chain to OTM strikes within the ticker's Ask range and (re)builds the given grid.
