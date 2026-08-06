@@ -153,6 +153,15 @@ public class ChartPanel : Panel
     // other signal.
     public event Action<string, string, string>? OnPisoTechoResolvedEvent;
 
+    // Fires (period, price) once per armed SMA, pre-market — MultiChartForm forwards this to the
+    // 15m RTH/RTH+Overnight panels (MarkPisoTechoRefLineAsync) to draw a dashed reference line at
+    // that price, same color as the SMA, so the Piso/Techo level is visible there too without
+    // needing the 1h panel open. Fires (period) alone when that level gets invalidated by the
+    // market-open gap (ValidatePisoTechoAgainstOpen/InvalidateIfBrokenByOpen below) — forwarded the
+    // same way to remove the matching reference line.
+    public event Action<int, decimal>? OnPisoTechoLevelReadyEvent;
+    public event Action<int>? OnPisoTechoLevelRemovedEvent;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -335,6 +344,22 @@ public class ChartPanel : Panel
         var closeStr  = closeSpot.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var strikeStr = strike.ToString(System.Globalization.CultureInfo.InvariantCulture);
         await _webView.CoreWebView2.ExecuteScriptAsync($"markDeltaS({entryStr}, {closeStr}, {strikeStr});");
+    }
+
+    // Dashed Piso/Techo reference line (15m RTH / RTH+Overnight panels) — called by MultiChartForm
+    // when the 1h panel's OnPisoTechoLevelReadyEvent/OnPisoTechoLevelRemovedEvent fire. See
+    // markPisoTechoRefLine/removePisoTechoRefLine in chart.html for the rendering.
+    public async Task MarkPisoTechoRefLineAsync(int period, decimal price)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr});");
+    }
+
+    public async Task RemovePisoTechoRefLineAsync(int period)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removePisoTechoRefLine({period});");
     }
 
     // Toggles the 1h panel's vertical arrow tools on/off. While on, every click places a
@@ -839,6 +864,11 @@ public class ChartPanel : Panel
                 ArmPisoTechoWatch(40, s_pisoTechoResult40);
                 ArmPisoTechoWatch(100, s_pisoTechoResult100);
                 ArmPisoTechoWatch(200, s_pisoTechoResult200);
+
+                FirePisoTechoLevelReady(20, s_pisoTechoResult20);
+                FirePisoTechoLevelReady(40, s_pisoTechoResult40);
+                FirePisoTechoLevelReady(100, s_pisoTechoResult100);
+                FirePisoTechoLevelReady(200, s_pisoTechoResult200);
             }
         }
 
@@ -872,6 +902,16 @@ public class ChartPanel : Panel
         s_pisoTechoWatches.Add(new PisoTechoWatch { Period = period, WatchingUp = result == "Techo" });
     }
 
+    // No-op if that period didn't come back Piso/Techo — otherwise fires OnPisoTechoLevelReadyEvent
+    // with the SMA's current price, for MultiChartForm to draw the reference line on panels 2/3.
+    private void FirePisoTechoLevelReady(int period, string? result)
+    {
+        if (result == null) return;
+        var sma = Sma(period, _closedCandles.Count - 1);
+        if (sma == null) return;
+        OnPisoTechoLevelReadyEvent?.Invoke(period, sma.Value);
+    }
+
     // Runs once at market open (see Streamer_OnNewCandle) — a Piso already broken by a gap-down
     // open (price below it) or a Techo already broken by a gap-up open (price above it) no longer
     // means anything, so its label is removed and its watch unarmed. Checked independently for
@@ -900,6 +940,7 @@ public class ChartPanel : Panel
         result = null;
         s_pisoTechoWatches.RemoveAll(w => w.Period == period);
         _ = _webView.CoreWebView2?.ExecuteScriptAsync($"removePisoTechoLabel({period});");
+        OnPisoTechoLevelRemovedEvent?.Invoke(period);
     }
 
     // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed

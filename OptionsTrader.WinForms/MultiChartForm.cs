@@ -558,6 +558,24 @@ public class MultiChartForm : Form
             };
         }
 
+        // Piso/Techo reference line: mirrors each armed SMA's pre-market level onto BOTH the 15m
+        // RTH and RTH+Overnight panels (dashed, same color as that SMA on the 1h panel) — visual
+        // reference for "how far price could go and bounce" without needing the 1h panel open.
+        // Removed automatically if the market-open gap later invalidates that SMA.
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
+            {
+                if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price);
+                if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price);
+            };
+            hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
+            {
+                if (rthPanel != null) _ = rthPanel.RemovePisoTechoRefLineAsync(period);
+                if (overnightPanel != null) _ = overnightPanel.RemovePisoTechoRefLineAsync(period);
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);

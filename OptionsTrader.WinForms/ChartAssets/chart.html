@@ -485,6 +485,13 @@
       return;
     }
 
+    const refLineIdx = pisoTechoRefLinePrimitive._lines.findIndex(l => l.selected);
+    if (refLineIdx !== -1) {
+      pisoTechoRefLinePrimitive._lines.splice(refLineIdx, 1);
+      forceRepaint();
+      return;
+    }
+
     const arrowIdx = verticalArrowPrimitive._arrows.findIndex(a => a.selected);
     if (arrowIdx !== -1) {
       const removed = verticalArrowPrimitive._arrows[arrowIdx];
@@ -670,6 +677,21 @@
       const hadDeltaSSelection = deltaSPrimitive._labels.some(l => l.selected);
       if (hadDeltaSSelection) {
         deltaSPrimitive._labels.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // Piso/Techo reference line click selection — same idea as above.
+    if (pisoTechoRefLinePrimitive._lines.length > 0) {
+      const hitIdx = findPisoTechoRefLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        pisoTechoRefLinePrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadRefLineSelection = pisoTechoRefLinePrimitive._lines.some(l => l.selected);
+      if (hadRefLineSelection) {
+        pisoTechoRefLinePrimitive._lines.forEach(l => { l.selected = false; });
         forceRepaint();
       }
     }
@@ -1531,6 +1553,95 @@
           py >= y + 2 - tolerance && py <= y + 2 + 14 + tolerance) {
         return i;
       }
+    }
+    return -1;
+  }
+
+  // ---- Piso/Techo reference line (15m RTH / 15m RTH+Overnight panels only) — dashed horizontal
+  // line at a Piso/Techo SMA's pre-market level, same color as that SMA on the 1h panel
+  // (smaColors), so it's visible on the RTH charts as "how far price could go and bounce" without
+  // needing the 1h panel open. Drawn once pre-market by ChartPanel (1h) pushing the value here via
+  // MultiChartForm, removed either by the user (click + Delete, same as every other tool) or
+  // automatically if the market-open gap invalidates that SMA's Piso/Techo (removePisoTechoRefLine,
+  // called from ChartPanel.ValidatePisoTechoAgainstOpen). Anchored at the last loaded candle (same
+  // "anchor to last candle, extend right" convention as markStrike/H-Line), so it covers the RTH
+  // price action from whenever it was drawn (pre-market) onward. ----
+
+  class PisoTechoRefLinePrimitive {
+    constructor() { this._lines = []; this._chart = null; } // [{ period, time, price, color, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                self._lines.forEach(l => {
+                  const xRaw = ts.timeToCoordinate(l.time);
+                  const x = xRaw == null ? 0 : xRaw;
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (y == null) return;
+
+                  ctx.strokeStyle = l.color;
+                  ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
+                  ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+
+                  if (l.selected) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
+                });
+                ctx.setLineDash([]);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const pisoTechoRefLinePrimitive = new PisoTechoRefLinePrimitive();
+  let pisoTechoRefLineAttached = false;
+
+  function markPisoTechoRefLine(period, price) {
+    if (!pisoTechoRefLineAttached) { candleSeries.attachPrimitive(pisoTechoRefLinePrimitive); pisoTechoRefLineAttached = true; }
+    if (allCandles.length === 0) return;
+    const anchorTime = allCandles[allCandles.length - 1].time;
+    pisoTechoRefLinePrimitive._lines = pisoTechoRefLinePrimitive._lines.filter(l => l.period !== period);
+    pisoTechoRefLinePrimitive._lines.push({ period, time: anchorTime, price, color: smaColors[period] || '#888888', selected: false });
+    forceRepaint();
+  }
+
+  function removePisoTechoRefLine(period) {
+    pisoTechoRefLinePrimitive._lines = pisoTechoRefLinePrimitive._lines.filter(l => l.period !== period);
+    forceRepaint();
+  }
+
+  function findPisoTechoRefLineByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = pisoTechoRefLinePrimitive._lines.length - 1; i >= 0; i--) {
+      const l = pisoTechoRefLinePrimitive._lines[i];
+      const x = ts.timeToCoordinate(l.time);
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (x == null || y == null) continue;
+      if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
     }
     return -1;
   }

@@ -526,6 +526,32 @@ public class SimulatorForm : Form
         }
 
         await _hourlyChart.SetPisoTechoResultsAsync(result20, result40, result100, result200);
+
+        // Piso/Techo reference line — mirrors each surviving SMA level onto the RTH and
+        // RTH+Overnight charts (dashed, same color as that SMA on the 1h chart), same as the live
+        // app (MultiChartForm's OnPisoTechoLevelReadyEvent forwarding). Also removes any leftover
+        // line from a previous day load whose SMA no longer has a result this time.
+        await ApplyPisoTechoRefLine(bars, 20, result20);
+        await ApplyPisoTechoRefLine(bars, 40, result40);
+        await ApplyPisoTechoRefLine(bars, 100, result100);
+        await ApplyPisoTechoRefLine(bars, 200, result200);
+    }
+
+    private async Task ApplyPisoTechoRefLine(List<CandleData> bars, int period, string? result)
+    {
+        if (result != null && bars.Count >= period)
+        {
+            decimal sum = 0;
+            for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
+            var sma = sum / period;
+            await _rthChart.MarkPisoTechoRefLineAsync(period, sma);
+            await _fullChart.MarkPisoTechoRefLineAsync(period, sma);
+        }
+        else
+        {
+            await _rthChart.RemovePisoTechoRefLineAsync(period);
+            await _fullChart.RemovePisoTechoRefLineAsync(period);
+        }
     }
 
     private static string? InvalidateIfBrokenByOpen(List<CandleData> bars, int period, string? result, decimal openPrice)
