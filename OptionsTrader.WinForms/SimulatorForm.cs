@@ -77,6 +77,10 @@ public class SimulatorForm : Form
     private readonly GroupBox _grpCounts    = new() { Text = "Counts", Location = new Point(590, 4), Size = new Size(185, 64) };
     private readonly GroupBox _grpContracts = new() { Text = "Contracts", Location = new Point(785, 4), Size = new Size(105, 96) };
     private string _selectedCounts    = "6"; // same default as Form1's _selectedCounts
+
+    // Strikes force-shown in _dgvChain regardless of the OTM-only filter — same idea as Form1's
+    // identical field, set by clicking a trade's Strike button in _dgvTrades. Cleared on day load.
+    private readonly HashSet<(string Type, decimal Strike)> _forcedStrikes = new();
     private string _selectedContracts = "1"; // same default as Form1's rbContracts1.Checked
 
     // "Go to time" — two rows of plain buttons (no typing): pick an RTH hour, then which 15-min
@@ -433,6 +437,8 @@ public class SimulatorForm : Form
         if (_cmbSymbol.SelectedItem is not string symbol) return;
         if (_cmbDate.SelectedItem is not string dateStr || !DateOnly.TryParse(dateStr, out var date)) return;
 
+        _forcedStrikes.Clear();
+
         var tickers = TickerSettingsStore.Load();
         _ticker = tickers.FirstOrDefault(t => t.Symbol == symbol);
         if (_ticker == null)
@@ -643,7 +649,7 @@ public class SimulatorForm : Form
         var step = _steps[_currentIndex];
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
-        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts);
+        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes);
 
         // PopulateQuotesGrid computes its own Conts column from the REAL (persisted)
         // ContractsSettingsStore — override it here with the simulator's own local Contracts
@@ -978,12 +984,36 @@ public class SimulatorForm : Form
     private void DgvTrades_CellContentClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || _currentIndex < 0) return;
-        if (_dgvTrades.Columns[e.ColumnIndex].Name != "colSimClose") return;
 
-        var row   = _dgvTrades.Rows[e.RowIndex];
+        var columnName = _dgvTrades.Columns[e.ColumnIndex].Name;
+        var row = _dgvTrades.Rows[e.RowIndex];
+
+        if (columnName == "colSimStrike")
+        {
+            ForceStrikeInChainGrid(row);
+            return;
+        }
+
+        if (columnName != "colSimClose") return;
+
         var trade = _openSimTrades.FirstOrDefault(t => t.Row == row);
         if (trade == null) return; // already closed
 
         CloseSimTrade(trade, _steps[_currentIndex], auto: false);
+    }
+
+    // Same idea as Form1.ForceStrikeInQuotesGrid — pin a trade's (type, strike) so it keeps
+    // showing in _dgvChain even after it goes ITM, for the rest of the loaded day.
+    private void ForceStrikeInChainGrid(DataGridViewRow row)
+    {
+        var type = row.Cells["colSimType"].Value?.ToString();
+        if (string.IsNullOrEmpty(type) || !decimal.TryParse(row.Cells["colSimStrike"].Value?.ToString(), out var strike))
+            return;
+
+        _forcedStrikes.Add((type, strike));
+
+        if (_currentIndex >= 0)
+            Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
+                selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes);
     }
 }

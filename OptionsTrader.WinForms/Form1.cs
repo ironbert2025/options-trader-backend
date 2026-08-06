@@ -76,6 +76,11 @@ public partial class Form1 : Form
     private string _selectedCounts = "6"; // session-only, always defaults to 6 on launch
     private List<OptionQuoteDto> _lastAllQuotes = new(); // current-expiration chain from the last fetch, for instant re-filtering
 
+    // Strikes force-shown in dgvQuotes regardless of the OTM-only filter — set by clicking a
+    // trade's Strike cell in dgvTrades (DgvTrades_CellClick), so a trade that's gone ITM (and
+    // would otherwise vanish from the grid) stays visible from then on. Cleared on ticker switch.
+    private readonly HashSet<(string Type, decimal Strike)> _forcedStrikes = new();
+
     public Form1()
     {
         InitializeComponent();
@@ -486,7 +491,8 @@ public partial class Form1 : Form
     {
         if (_selectedTicker == null || _lastAllQuotes.Count == 0) return;
         PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
-            selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked);
+            selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+            forcedStrikes: _forcedStrikes);
     }
 
     private static void ApplyRadioStyle(GroupBox group)
@@ -552,6 +558,7 @@ public partial class Form1 : Form
 
         _selectedTicker = clicked.Tag as TickerEntry;
         UpdateEarningsStatusLabel();
+        _forcedStrikes.Clear();
 
         // Reset to blank placeholder rows — real quotes arrive once Start Polling/Fetch Quotes
         // is used, so keep the grids looking like ready tables in the meantime.
@@ -1058,7 +1065,8 @@ public partial class Form1 : Form
             }
 
             PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true,
-                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked);
+                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+                forcedStrikes: _forcedStrikes);
 
             // Update PnL for open trades against the FULL chain (not the range-filtered grid),
             // so a trade's current bid keeps updating even after its strike leaves the display range.
@@ -1176,7 +1184,8 @@ public partial class Form1 : Form
     // parameters instead (same values, callers just pass them through).
     internal static (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
         DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false,
-        string? selectedCounts = null, bool callOnly = false, bool putOnly = false)
+        string? selectedCounts = null, bool callOnly = false, bool putOnly = false,
+        IEnumerable<(string Type, decimal Strike)>? forcedStrikes = null)
     {
         decimal.TryParse(ticker.Low,  out var rangeLow);
         decimal.TryParse(ticker.High, out var rangeHigh);
@@ -1230,6 +1239,31 @@ public partial class Form1 : Form
                          && q.Ask >= rangeLow && q.Ask <= rangeHigh)
                 .OrderByDescending(q => q.StrikePrice)
                 .ToList();
+        }
+
+        // Force-include specific strikes regardless of the OTM filter above (see
+        // DgvTrades_CellClick — a trade whose strike went ITM would otherwise silently vanish from
+        // the grid). Only added if a real quote for that (type, strike) actually exists and isn't
+        // already in the list; re-sorted afterward to keep the usual descending-by-strike order.
+        if (forcedStrikes != null)
+        {
+            var addedCall = false;
+            var addedPut  = false;
+            foreach (var (type, strike) in forcedStrikes)
+            {
+                if (type == "CALL" && !otmCalls.Any(q => q.StrikePrice == strike))
+                {
+                    var quote = allQuotes.FirstOrDefault(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && q.StrikePrice == strike);
+                    if (quote != null) { otmCalls.Add(quote); addedCall = true; }
+                }
+                else if (type == "PUT" && !otmPuts.Any(q => q.StrikePrice == strike))
+                {
+                    var quote = allQuotes.FirstOrDefault(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && q.StrikePrice == strike);
+                    if (quote != null) { otmPuts.Add(quote); addedPut = true; }
+                }
+            }
+            if (addedCall) otmCalls = otmCalls.OrderByDescending(q => q.StrikePrice).ToList();
+            if (addedPut)  otmPuts  = otmPuts.OrderByDescending(q => q.StrikePrice).ToList();
         }
 
         // CALL/PUT checkbox filter (current grid only): one checked shows only that side;
@@ -2115,11 +2149,37 @@ public partial class Form1 : Form
 
     private async void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
-        if (e.RowIndex < 0 || e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
+        if (e.RowIndex < 0) return;
         var row = dgvTrades.Rows[e.RowIndex];
+
+        if (e.ColumnIndex == dgvTrades.Columns["colTradeStrike"].Index)
+        {
+            ForceStrikeInQuotesGrid(row);
+            return;
+        }
+
+        if (e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
         if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return;
 
         await CloseTradeRowAsync(row, "MANUAL");
+    }
+
+    // Clicking a trade's Strike cell pins that (type, strike) so it keeps showing in dgvQuotes even
+    // after it goes ITM (PopulateQuotesGrid's OTM-only filter would otherwise silently drop it the
+    // moment spot crosses it) — stays pinned for the rest of the session on this ticker (cleared on
+    // ticker switch, see the Tickers button handler).
+    private void ForceStrikeInQuotesGrid(DataGridViewRow row)
+    {
+        var type = row.Cells["colTradeType"].Value?.ToString();
+        if (string.IsNullOrEmpty(type) || !decimal.TryParse(row.Cells["colTradeStrike"].Value?.ToString(), out var strike))
+            return;
+
+        _forcedStrikes.Add((type, strike));
+
+        if (_selectedTicker != null && _lastAllQuotes.Count > 0)
+            PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
+                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+                forcedStrikes: _forcedStrikes);
     }
 
     private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType)
