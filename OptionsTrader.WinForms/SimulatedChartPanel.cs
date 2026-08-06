@@ -335,6 +335,51 @@ public class SimulatedChartPanel : Panel
         }
     }
 
+    // Live-tick counterpart to EvaluatePisoTechoWatches' crossedByGapOpen — ported from ChartPanel.
+    // No real ticks in the simulator, so "live" here means the currently-forming candle (last item
+    // in the list CargarHastaPasoAsync was just given), whose Close already tracks the latest
+    // price known as of this step. Evaluated on every step, not just newly-closed candles, so the
+    // gap-cross can resolve well before the forming candle actually closes — same as the live app.
+    private void EvaluatePisoTechoGapLive(CandleData forming)
+    {
+        if (_closedCandles.Count == 0) return;
+        if (WatchStartDate is { } startDate &&
+            DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(forming.Time, EasternZone)) < startDate)
+            return;
+
+        foreach (var watch in _pisoTechoWatches)
+        {
+            if (watch.Done) continue;
+
+            var previousSma = Sma(watch.Period, _closedCandles.Count - 1);
+            var liveSma = LiveSma(watch.Period, forming.Close);
+            if (previousSma == null || liveSma == null) continue;
+
+            var lastClosed = _closedCandles[^1];
+            var crossedByGapLive = watch.WatchingUp
+                ? forming.Open > liveSma.Value && lastClosed.Close <= previousSma.Value
+                : forming.Open < liveSma.Value && lastClosed.Close >= previousSma.Value;
+
+            if (!crossedByGapLive) continue;
+
+            watch.Done = true;
+            var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
+            var caption = $"Cruce (gap) en {pisoTecho} — SMA{watch.Period} — Open {forming.Open:F2} (SMA{watch.Period} en vivo {liveSma.Value:F2})";
+            OnPisoTechoOutcomeEvent?.Invoke(caption, forming.Close, "PisoTechoCruce", pisoTecho, $"SMA{watch.Period}={liveSma.Value:F2}");
+        }
+    }
+
+    // Same SMA window as Sma(period, endIndex), but the newest point is the live/forming candle's
+    // Close instead of a closed candle's — i.e. what the chart itself is showing right now.
+    private decimal? LiveSma(int period, decimal livePrice)
+    {
+        if (_closedCandles.Count < period - 1) return null;
+        decimal sum = livePrice;
+        for (int i = _closedCandles.Count - (period - 1); i < _closedCandles.Count; i++)
+            sum += _closedCandles[i].Close;
+        return sum / period;
+    }
+
     public event Action? OnCrossSequenceFinished;
     public event Action<string>? OnCrossSequenceEvent;
     public event Action<string>? OnTLineSignalEvent;
@@ -752,5 +797,10 @@ public class SimulatedChartPanel : Panel
             EvaluatePisoTechoWatches(closedNow[i]);
             EvaluateVolatilityOpening(closedNow[i].Close);
         }
+
+        // Every step, not just newly-closed candles — the forming (last) candle's Close already
+        // tracks the latest known price for this step, so the gap-cross can resolve mid-candle.
+        if (candles.Count > 0)
+            EvaluatePisoTechoGapLive(candles[^1]);
     }
 }

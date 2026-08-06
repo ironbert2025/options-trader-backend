@@ -1043,6 +1043,53 @@ public class ChartPanel : Panel
         }
     }
 
+    // Live-tick counterpart to EvaluatePisoTechoWatches' crossedByGapOpen — that one only fires
+    // once the gapping candle itself CLOSES, per request this now fires the moment the live price
+    // makes it obvious mid-candle, using the SAME comparison the chart itself draws in real time:
+    // the SMA recalculated with the CURRENT live price as its newest point (LiveSma), not the
+    // stale previous-candle SMA. Evaluated on every tick for the still-forming candle — its Open
+    // never changes, so this settles into either firing early (as soon as the live SMA moves far
+    // enough) or never, well before the candle actually closes.
+    private void EvaluatePisoTechoGapLive(decimal livePrice)
+    {
+        if (_liveBucket == null || _closedCandles.Count == 0) return;
+
+        foreach (var watch in s_pisoTechoWatches)
+        {
+            if (watch.Done) continue;
+
+            var previousSma = Sma(watch.Period, _closedCandles.Count - 1);
+            var liveSma = LiveSma(watch.Period, livePrice);
+            if (previousSma == null || liveSma == null) continue;
+
+            var lastClosed = _closedCandles[^1];
+            var crossedByGapLive = watch.WatchingUp
+                ? _liveBucket.Open > liveSma.Value && lastClosed.Close <= previousSma.Value
+                : _liveBucket.Open < liveSma.Value && lastClosed.Close >= previousSma.Value;
+
+            if (!crossedByGapLive) continue;
+
+            watch.Done = true;
+            var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
+            var caption = $"Cruce (gap) en {pisoTecho} — SMA{watch.Period} — Open {_liveBucket.Open:F2} (SMA{watch.Period} en vivo {liveSma.Value:F2})";
+            _ = SendChartToTelegramAsync(caption);
+            EventLogStore.Append(_symbol, "Hora", "PisoTechoCruce", pisoTecho, caption, livePrice, $"SMA{watch.Period}={liveSma.Value:F2}");
+            OnPisoTechoResolvedEvent?.Invoke("Cruce", pisoTecho, caption);
+        }
+    }
+
+    // Same SMA window as Sma(period, endIndex), but the newest point is the LIVE price of the
+    // still-forming candle instead of a closed candle's close — i.e. exactly what the chart itself
+    // is drawing at this instant, before that candle has actually closed.
+    private decimal? LiveSma(int period, decimal livePrice)
+    {
+        if (_closedCandles.Count < period - 1) return null;
+        decimal sum = livePrice;
+        for (int i = _closedCandles.Count - (period - 1); i < _closedCandles.Count; i++)
+            sum += _closedCandles[i].Close;
+        return sum / period;
+    }
+
     private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
 
     // ==================================================================================
@@ -1467,6 +1514,8 @@ public class ChartPanel : Panel
 
         if (_mode == ChartPanelMode.Fifteen_RTH)
             EvaluateVolatilityOpening(candle.Close);
+        else if (_mode == ChartPanelMode.Hourly15)
+            EvaluatePisoTechoGapLive(candle.Close);
     }
 
     // Real-time last-price update (LEVEL_ONE_EQUITIES, much higher frequency than CHART_EQUITY's
@@ -1509,6 +1558,8 @@ public class ChartPanel : Panel
 
         if (_mode == ChartPanelMode.Fifteen_RTH)
             EvaluateVolatilityOpening(price);
+        else if (_mode == ChartPanelMode.Hourly15)
+            EvaluatePisoTechoGapLive(price);
     }
 
     // Whether the header currently shows the "disconnected" message — cleared the moment real
