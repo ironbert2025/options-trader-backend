@@ -57,8 +57,6 @@ public class ChartPanel : Panel
     private int _intervalMinutes; // mutable only for Fifteen_Full, via ToggleIntervalAsync (5m <-> 15m)
     private readonly bool _rthOnly;
     private readonly Label _header;
-    private readonly Label? _tLineHintLabel; // "Potencial CT al Alza/Baja" — Hourly15 only
-    private readonly Label? _dailyBounceHintLabel; // "Análisis Diario: Rebote ..." — Hourly15 only
     private WebView2 _webView = null!;
     private bool _closing;
 
@@ -177,34 +175,12 @@ public class ChartPanel : Panel
         Controls.Add(_webView);
         Controls.Add(_header);
 
-        // "Potencial CT al Alza/Baja" hint — 1h panel only, shown as soon as the T-Line finishes
-        // drawing (see CoreWebView2_WebMessageReceived) and cleared when it's deleted.
-        if (mode == ChartPanelMode.Hourly15)
-        {
-            _tLineHintLabel = new Label
-            {
-                Dock      = DockStyle.Bottom,
-                Height    = 18,
-                TextAlign = ContentAlignment.MiddleCenter,
-                ForeColor = Color.LimeGreen,
-                BackColor = Color.FromArgb(19, 23, 34),
-                Text      = string.Empty
-            };
-            Controls.Add(_tLineHintLabel);
-
-            // Daily-candle bounce-off-SMA20 hint — set once per app run, right after history
-            // loads (EvaluateDailyBounce), if yesterday's daily candle bounced.
-            _dailyBounceHintLabel = new Label
-            {
-                Dock      = DockStyle.Bottom,
-                Height    = 18,
-                TextAlign = ContentAlignment.MiddleCenter,
-                ForeColor = Color.LimeGreen,
-                BackColor = Color.FromArgb(19, 23, 34),
-                Text      = string.Empty
-            };
-            Controls.Add(_dailyBounceHintLabel);
-        }
+        // "Potencial CT al Alza/Baja" and daily-bounce hints — 1h panel only, rendered as a green
+        // overlay INSIDE the chart itself (chart.html's #hints div, via setTLineHint/
+        // setDailyBounceHint) rather than a WinForms Label docked below the WebView. A docked
+        // Label reserves its Height even with empty Text, which made the 1h panel's chart area
+        // shorter than the other 2 panels (no such labels) whenever no hint was active — an
+        // overlay costs no layout space either way, so all 3 panels stay the same height.
 
         _liveFeed.OnNewCandle     += Streamer_OnNewCandle;
         _liveFeed.OnLevelOneTick  += Streamer_OnLevelOneTick;
@@ -366,7 +342,7 @@ public class ChartPanel : Panel
             TLineStore.Clear(_symbol);
             VerticalArrowStore.Clear(_symbol);
             _tLineSignalFired = false;
-            if (_tLineHintLabel != null) _tLineHintLabel.Text = string.Empty;
+            _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
         }
         if (_mode == ChartPanelMode.Fifteen_Full)
         {
@@ -383,8 +359,8 @@ public class ChartPanel : Panel
     //   drawn bottom-to-top (1st click's price BELOW the 2nd's) → ascending  → "a la Baja"
     private void UpdateTLineHint(decimal p1, decimal p2)
     {
-        if (_tLineHintLabel == null) return;
-        _tLineHintLabel.Text = p1 > p2 ? "Potencial CT al Alza" : "Potencial CT a la Baja";
+        var text = p1 > p2 ? "Potencial CT al Alza" : "Potencial CT a la Baja";
+        _ = _webView.CoreWebView2?.ExecuteScriptAsync($"setTLineHint({JsonSerializer.Serialize(text)});");
     }
 
     // Receives T-Line and vertical-arrow events from the 1h panel (window.chrome.webview.
@@ -429,7 +405,7 @@ public class ChartPanel : Panel
                     {
                         TLineStore.Remove(_symbol, t1, p1, t2, p2);
                         _tLineSignalFired = false;
-                        if (_tLineHintLabel != null) _tLineHintLabel.Text = string.Empty;
+                        _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
                     }
                     break;
                 }
@@ -707,8 +683,8 @@ public class ChartPanel : Panel
         var direction = bouncedUp ? "al alza" : "a la baja";
         var description = $"Rebote {direction} en Diario";
         OnDailyBounceEvent?.Invoke(description);
-        if (_dailyBounceHintLabel != null)
-            _dailyBounceHintLabel.Text = $"Análisis Diario: {description}";
+        var hintText = $"Análisis Diario: {description}";
+        _ = _webView.CoreWebView2?.ExecuteScriptAsync($"setDailyBounceHint({JsonSerializer.Serialize(hintText)});");
 
         var eventDirection = bouncedUp ? "Alza" : "Baja";
         EventLogStore.Append(_symbol, "Diario", "DailyBounce", eventDirection, description, justClosed.Close, $"SMA20={sma20:F2}");

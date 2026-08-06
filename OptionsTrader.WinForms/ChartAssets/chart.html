@@ -10,6 +10,10 @@
 </head>
 <body>
 <div id="chart"></div>
+<div id="hints" style="position:absolute; left:0; right:0; bottom:4px; text-align:center; pointer-events:none; z-index:5; font: 12px sans-serif; color:#3cd070;">
+  <div id="hintTLine"></div>
+  <div id="hintDailyBounce"></div>
+</div>
 <script>
   const container = document.getElementById('chart');
 
@@ -1246,6 +1250,12 @@
   // entry is tracked independently, so the 20/40 pair and the 100/200 pair can show different (or
   // no) signal at the same time. Safe to call again on every Live Chart reopen with the SAME
   // remembered text — it just re-renders, the position always comes from smaLastPoint at draw time.
+  // Green hint lines overlaid at the bottom of the chart itself (not a WinForms Label docked
+  // below it) — so an empty hint reserves no layout space and every panel stays the same height
+  // regardless of which hints are active. Called by ChartPanel via ExecuteScriptAsync.
+  function setTLineHint(text) { document.getElementById('hintTLine').textContent = text || ''; }
+  function setDailyBounceHint(text) { document.getElementById('hintDailyBounce').textContent = text || ''; }
+
   function markPisoTecho(periodA, periodB, text) {
     if (!pisoTechoAutoLabelAttached) { candleSeries.attachPrimitive(pisoTechoAutoLabelPrimitive); pisoTechoAutoLabelAttached = true; }
     pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== periodA && e.period !== periodB);
