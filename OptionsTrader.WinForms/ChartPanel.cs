@@ -41,6 +41,12 @@ public class ChartPanel : Panel
     private static string? s_pisoTechoResult100;
     private static string? s_pisoTechoResult200;
 
+    // Runs once, at the RTH market-open transition (see Streamer_OnNewCandle's !sameDay branch) —
+    // if the actual opening price already broke a Piso/Techo SMA before the regular session even
+    // started (gapped through it), that label no longer means anything and gets removed. Static
+    // for the same "survives closing/reopening Live Chart" reason as s_pisoTechoAnalyzed.
+    private static bool s_pisoTechoOpenValidated;
+
     // Auto-armed Cruce/Rebote watch, one entry PER PERIOD (not per pair) — when a pair comes back
     // Piso or Techo, BOTH its periods get armed independently (20 and 40 each watch their own
     // line separately, even though they're always the same direction within a pair — Piso/Techo
@@ -864,6 +870,36 @@ public class ChartPanel : Panel
         s_pisoTechoWatches.Add(new PisoTechoWatch { Period = period, WatchingUp = result == "Techo" });
     }
 
+    // Runs once at market open (see Streamer_OnNewCandle) — a Piso already broken by a gap-down
+    // open (price below it) or a Techo already broken by a gap-up open (price above it) no longer
+    // means anything, so its label is removed and its watch unarmed. Checked independently for
+    // each of the 4 SMAs, same as the rest of this feature.
+    private void ValidatePisoTechoAgainstOpen(decimal openPrice)
+    {
+        if (s_pisoTechoOpenValidated) return;
+        s_pisoTechoOpenValidated = true;
+
+        InvalidateIfBrokenByOpen(20, ref s_pisoTechoResult20, openPrice);
+        InvalidateIfBrokenByOpen(40, ref s_pisoTechoResult40, openPrice);
+        InvalidateIfBrokenByOpen(100, ref s_pisoTechoResult100, openPrice);
+        InvalidateIfBrokenByOpen(200, ref s_pisoTechoResult200, openPrice);
+    }
+
+    private void InvalidateIfBrokenByOpen(int period, ref string? result, decimal openPrice)
+    {
+        if (result == null) return;
+
+        var sma = Sma(period, _closedCandles.Count - 1);
+        if (sma == null) return;
+
+        var broken = result == "Piso" ? openPrice < sma.Value : openPrice > sma.Value;
+        if (!broken) return;
+
+        result = null;
+        s_pisoTechoWatches.RemoveAll(w => w.Period == period);
+        _ = _webView.CoreWebView2?.ExecuteScriptAsync($"removePisoTechoLabel({period});");
+    }
+
     // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed
     // PisoTechoWatch — same case-1/case-2 cross-or-bounce formula as the manual Cross-SMA
     // (EvaluateCrossings), just against that watch's own SMA period instead of the shared manual
@@ -1290,6 +1326,12 @@ public class ChartPanel : Panel
                         EvaluateCrossings(_liveBucket);
                         EvaluateTLineSignal(_liveBucket);
                         EvaluatePisoTechoWatches(_liveBucket);
+                    }
+                    else
+                    {
+                        // This transition IS today's market open (the outgoing bucket was
+                        // yesterday's) — candle.Open below is the actual RTH opening price.
+                        ValidatePisoTechoAgainstOpen(candle.Open);
                     }
                 }
                 else if (_mode == ChartPanelMode.Fifteen_Full)

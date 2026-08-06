@@ -507,7 +507,37 @@ public class SimulatorForm : Form
 
         var (result20, result40)   = EvaluatePisoTechoPair(bars, 20, 40);
         var (result100, result200) = EvaluatePisoTechoPair(bars, 100, 200);
+
+        // If the replayed day's own opening price already broke a Piso (opened below it) or a
+        // Techo (opened above it) before the SMA watch could ever fire, that label is stale —
+        // drop it instead of arming a watch for something already invalidated. Mirrors
+        // ChartPanel.ValidatePisoTechoAgainstOpen for the live app.
+        var todaysFirstBar = _hourlyCandles
+            .Where(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date == _simDate.ToDateTime(TimeOnly.MinValue))
+            .OrderBy(c => c.Time)
+            .FirstOrDefault();
+        if (todaysFirstBar != null)
+        {
+            var openPrice = todaysFirstBar.Open;
+            result20  = InvalidateIfBrokenByOpen(bars, 20, result20, openPrice);
+            result40  = InvalidateIfBrokenByOpen(bars, 40, result40, openPrice);
+            result100 = InvalidateIfBrokenByOpen(bars, 100, result100, openPrice);
+            result200 = InvalidateIfBrokenByOpen(bars, 200, result200, openPrice);
+        }
+
         await _hourlyChart.SetPisoTechoResultsAsync(result20, result40, result100, result200);
+    }
+
+    private static string? InvalidateIfBrokenByOpen(List<CandleData> bars, int period, string? result, decimal openPrice)
+    {
+        if (result == null || bars.Count < period) return result;
+
+        decimal sum = 0;
+        for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
+        var sma = sum / period;
+
+        var broken = result == "Piso" ? openPrice < sma : openPrice > sma;
+        return broken ? null : result;
     }
 
     // Returns (fastResult, slowResult) — each independently "Piso", "Techo", or null. Alignment

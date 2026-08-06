@@ -1339,6 +1339,14 @@
     forceRepaint();
   }
 
+  // Called by C# (ValidatePisoTechoAgainstOpen) when the actual market-open price already broke
+  // a single SMA's Piso/Techo label — removes just that one period's entry, leaving the other
+  // SMA of the pair (if any) untouched.
+  function removePisoTechoLabel(period) {
+    pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== period);
+    forceRepaint();
+  }
+
   function toggleFloorLabel() {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     pisoArmed = !pisoArmed;
