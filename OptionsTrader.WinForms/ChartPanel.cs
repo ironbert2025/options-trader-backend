@@ -31,10 +31,15 @@ public class ChartPanel : Panel
     // day (the WebView/ChartPanel itself gets fully disposed and recreated on each open) — see
     // EvaluatePisoTechoOnce, called from LoadHistoryAsync's Hourly15 branch.
     private static bool s_pisoTechoAnalyzed;
-    // One independent result per SMA pair — (20,40) and (100,200) can each say "Piso", "Techo",
-    // or null (no signal that day) without affecting the other.
-    private static string? s_pisoTechoResult2040;
-    private static string? s_pisoTechoResult100200;
+    // One independent result PER SMA (not per pair) — within the (20,40) pair, 20 and 40 can each
+    // independently say "Piso", "Techo", or null. This matters when price opens BETWEEN the two:
+    // e.g. bearish alignment (20 < 40) with 20 < price < 40 means 40 still hasn't been broken
+    // (Techo) but 20 already has (nothing) — evaluating the pair as one unit would have missed
+    // this and left both blank. See EvaluatePisoTechoPair.
+    private static string? s_pisoTechoResult20;
+    private static string? s_pisoTechoResult40;
+    private static string? s_pisoTechoResult100;
+    private static string? s_pisoTechoResult200;
 
     // Auto-armed Cruce/Rebote watch, one entry PER PERIOD (not per pair) — when a pair comes back
     // Piso or Techo, BOTH its periods get armed independently (20 and 40 each watch their own
@@ -787,10 +792,15 @@ public class ChartPanel : Panel
     // Piso/Techo auto-analysis (1h panel, once per app instance — see s_pisoTechoAnalyzed).
     // Evaluated independently for the (20,40) and (100,200) SMA pairs, each against the last
     // closed hourly candle (yesterday's close, since this only runs pre-market) and that candle's
-    // own Close price:
-    //   SMA_fast < SMA_slow (bearish alignment) and price < SMA_fast (from below) -> Techo.
-    //   SMA_fast > SMA_slow (bullish alignment) and price > SMA_fast (from above) -> Piso.
-    //   Anything else -> no signal for that pair. Draws via markPisoTecho, which then tracks each
+    // own Close price. Alignment comes from the PAIR (fast vs slow), but whether each individual
+    // SMA still counts as Piso/Techo depends on price vs THAT SMA specifically — not just the
+    // fast one — since price can open between the two:
+    //   Bearish alignment (SMA_fast < SMA_slow): a given SMA is Techo only if price is still
+    //     below IT. Price below both -> both Techo. Price between them -> only the slow one is
+    //     still Techo (the fast one has already been broken through -> nothing).
+    //   Bullish alignment (SMA_fast > SMA_slow): a given SMA is Piso only if price is still above
+    //     IT. Symmetric to the above.
+    //   Anything else -> no signal for that SMA. Draws via markPisoTecho, which then tracks each
     // SMA's live position on every repaint (chart.html's smaLastPoint) — no further updates
     // needed from here.
     private async Task EvaluatePisoTechoOnce()
@@ -805,38 +815,44 @@ public class ChartPanel : Panel
             var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
             if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0)) // only meaningful pre-market
             {
-                s_pisoTechoResult2040   = EvaluatePisoTechoPair(20, 40);
-                s_pisoTechoResult100200 = EvaluatePisoTechoPair(100, 200);
+                (s_pisoTechoResult20, s_pisoTechoResult40)   = EvaluatePisoTechoPair(20, 40);
+                (s_pisoTechoResult100, s_pisoTechoResult200) = EvaluatePisoTechoPair(100, 200);
 
-                ArmPisoTechoWatch(20, 40, s_pisoTechoResult2040);
-                ArmPisoTechoWatch(100, 200, s_pisoTechoResult100200);
+                ArmPisoTechoWatch(20, s_pisoTechoResult20);
+                ArmPisoTechoWatch(40, s_pisoTechoResult40);
+                ArmPisoTechoWatch(100, s_pisoTechoResult100);
+                ArmPisoTechoWatch(200, s_pisoTechoResult200);
             }
         }
 
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, 40, {ToJsStringOrNull(s_pisoTechoResult2040)});");
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, 200, {ToJsStringOrNull(s_pisoTechoResult100200)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync(
+            $"markPisoTecho(20, {ToJsStringOrNull(s_pisoTechoResult20)}, 40, {ToJsStringOrNull(s_pisoTechoResult40)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync(
+            $"markPisoTecho(100, {ToJsStringOrNull(s_pisoTechoResult100)}, 200, {ToJsStringOrNull(s_pisoTechoResult200)});");
     }
 
-    private string? EvaluatePisoTechoPair(int fastPeriod, int slowPeriod)
+    // Returns (fastResult, slowResult) — each independently "Piso", "Techo", or null.
+    private (string? FastResult, string? SlowResult) EvaluatePisoTechoPair(int fastPeriod, int slowPeriod)
     {
         var fast = Sma(fastPeriod, _closedCandles.Count - 1);
         var slow = Sma(slowPeriod, _closedCandles.Count - 1);
-        if (fast == null || slow == null) return null;
+        if (fast == null || slow == null || fast == slow) return (null, null);
 
         var price = _closedCandles[^1].Close;
-        if (fast < slow && price < fast) return "Techo";
-        if (fast > slow && price > fast) return "Piso";
-        return null;
+        var bearish = fast < slow;
+        return (EvaluateSingleSmaPisoTecho(fast.Value, price, bearish), EvaluateSingleSmaPisoTecho(slow.Value, price, bearish));
     }
 
-    // Arms BOTH periods of a pair independently (each watches its own SMA line separately) when
-    // that pair came back Piso or Techo — no-op if it didn't (result == null).
-    private static void ArmPisoTechoWatch(int fastPeriod, int slowPeriod, string? result)
+    private static string? EvaluateSingleSmaPisoTecho(decimal sma, decimal price, bool bearishAlignment) =>
+        bearishAlignment ? (price < sma ? "Techo" : null) : (price > sma ? "Piso" : null);
+
+    // Arms a single SMA period's watch when it came back Piso or Techo — no-op if it didn't
+    // (result == null). Each period is independent now (see EvaluatePisoTechoPair) — within the
+    // same pair, one period can end up armed while the other isn't.
+    private static void ArmPisoTechoWatch(int period, string? result)
     {
         if (result == null) return;
-        var watchingUp = result == "Techo";
-        s_pisoTechoWatches.Add(new PisoTechoWatch { Period = fastPeriod, WatchingUp = watchingUp });
-        s_pisoTechoWatches.Add(new PisoTechoWatch { Period = slowPeriod, WatchingUp = watchingUp });
+        s_pisoTechoWatches.Add(new PisoTechoWatch { Period = period, WatchingUp = result == "Techo" });
     }
 
     // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed

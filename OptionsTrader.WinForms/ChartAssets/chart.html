@@ -1258,25 +1258,23 @@
   const pisoTechoAutoLabelPrimitive = new PisoTechoAutoLabelPrimitive();
   let pisoTechoAutoLabelAttached = false;
 
-  // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
-  // analysis) — periodA/periodB identify which pair (20+40 or 100+200), text is 'Piso', 'Techo',
-  // or null (no signal for that pair that day; removes any previous entry for it). Each pair's
-  // entry is tracked independently, so the 20/40 pair and the 100/200 pair can show different (or
-  // no) signal at the same time. Safe to call again on every Live Chart reopen with the SAME
-  // remembered text — it just re-renders, the position always comes from smaLastPoint at draw time.
   // Green hint lines overlaid at the bottom of the chart itself (not a WinForms Label docked
   // below it) — so an empty hint reserves no layout space and every panel stays the same height
   // regardless of which hints are active. Called by ChartPanel via ExecuteScriptAsync.
   function setTLineHint(text) { document.getElementById('hintTLine').textContent = text || ''; }
   function setDailyBounceHint(text) { document.getElementById('hintDailyBounce').textContent = text || ''; }
 
-  function markPisoTecho(periodA, periodB, text) {
+  // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
+  // analysis) — periodA/periodB identify which pair (20+40 or 100+200). textA/textB are each
+  // independently 'Piso', 'Techo', or null (no signal for THAT specific SMA — e.g. price opened
+  // between the two, so only the slower one still counts) — no longer forced to match each other.
+  // Safe to call again on every Live Chart reopen with the SAME remembered text — it just
+  // re-renders, the position always comes from smaLastPoint at draw time.
+  function markPisoTecho(periodA, textA, periodB, textB) {
     if (!pisoTechoAutoLabelAttached) { candleSeries.attachPrimitive(pisoTechoAutoLabelPrimitive); pisoTechoAutoLabelAttached = true; }
     pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== periodA && e.period !== periodB);
-    if (text) {
-      pisoTechoAutoLabelPrimitive._entries.push({ period: periodA, text });
-      pisoTechoAutoLabelPrimitive._entries.push({ period: periodB, text });
-    }
+    if (textA) pisoTechoAutoLabelPrimitive._entries.push({ period: periodA, text: textA });
+    if (textB) pisoTechoAutoLabelPrimitive._entries.push({ period: periodB, text: textB });
     forceRepaint();
   }
 

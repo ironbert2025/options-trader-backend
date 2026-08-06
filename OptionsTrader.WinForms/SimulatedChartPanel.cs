@@ -221,28 +221,29 @@ public class SimulatedChartPanel : Panel
     // events_log.csv, same as Demand Zone, per explicit request that this one gets written to disk.
     public event Action<string, decimal, string, string, string>? OnPisoTechoOutcomeEvent;
 
-    // Called once per day load with the SMA-pair results already computed by SimulatorForm
+    // Called once per day load with each SMA's own result already computed by SimulatorForm
     // (mirrors ChartPanel.EvaluatePisoTechoPair, computed there against _hourlyCandles before
-    // _simDate). Draws both labels and arms both periods of each non-null pair independently.
-    public async Task SetPisoTechoResultsAsync(string? result2040, string? result100200)
+    // _simDate) — each of the 4 SMAs is independent now (price opening between a pair's fast and
+    // slow SMA means only the slow one still counts; see ChartPanel for the full rationale).
+    public async Task SetPisoTechoResultsAsync(string? result20, string? result40, string? result100, string? result200)
     {
         if (_readyTcs != null) await _readyTcs.Task;
 
         _pisoTechoWatches.Clear();
-        ArmPisoTechoWatch(20, 40, result2040);
-        ArmPisoTechoWatch(100, 200, result100200);
+        ArmPisoTechoWatch(20, result20);
+        ArmPisoTechoWatch(40, result40);
+        ArmPisoTechoWatch(100, result100);
+        ArmPisoTechoWatch(200, result200);
 
         if (_webView.CoreWebView2 == null) return;
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, 40, {ToJsStringOrNull(result2040)});");
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, 200, {ToJsStringOrNull(result100200)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, {ToJsStringOrNull(result20)}, 40, {ToJsStringOrNull(result40)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, {ToJsStringOrNull(result100)}, 200, {ToJsStringOrNull(result200)});");
     }
 
-    private void ArmPisoTechoWatch(int fastPeriod, int slowPeriod, string? result)
+    private void ArmPisoTechoWatch(int period, string? result)
     {
         if (result == null) return;
-        var watchingUp = result == "Techo";
-        _pisoTechoWatches.Add(new PisoTechoWatch { Period = fastPeriod, WatchingUp = watchingUp });
-        _pisoTechoWatches.Add(new PisoTechoWatch { Period = slowPeriod, WatchingUp = watchingUp });
+        _pisoTechoWatches.Add(new PisoTechoWatch { Period = period, WatchingUp = result == "Techo" });
     }
 
     private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";

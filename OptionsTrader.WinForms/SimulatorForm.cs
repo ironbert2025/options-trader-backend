@@ -505,14 +505,19 @@ public class SimulatorForm : Form
             .OrderBy(c => c.Time)
             .ToList();
 
-        var result2040   = EvaluatePisoTechoPair(bars, 20, 40);
-        var result100200 = EvaluatePisoTechoPair(bars, 100, 200);
-        await _hourlyChart.SetPisoTechoResultsAsync(result2040, result100200);
+        var (result20, result40)   = EvaluatePisoTechoPair(bars, 20, 40);
+        var (result100, result200) = EvaluatePisoTechoPair(bars, 100, 200);
+        await _hourlyChart.SetPisoTechoResultsAsync(result20, result40, result100, result200);
     }
 
-    private static string? EvaluatePisoTechoPair(List<CandleData> bars, int fastPeriod, int slowPeriod)
+    // Returns (fastResult, slowResult) — each independently "Piso", "Techo", or null. Alignment
+    // comes from the pair (fast vs slow), but whether each SMA individually still counts as
+    // Piso/Techo depends on price vs THAT SMA specifically, since price can open between the two
+    // (e.g. bearish alignment with price between them: the slow SMA is still Techo, the fast one
+    // isn't — see ChartPanel.EvaluatePisoTechoPair for the full rationale).
+    private static (string? FastResult, string? SlowResult) EvaluatePisoTechoPair(List<CandleData> bars, int fastPeriod, int slowPeriod)
     {
-        if (bars.Count < slowPeriod) return null;
+        if (bars.Count < slowPeriod) return (null, null);
 
         decimal SmaOf(int period)
         {
@@ -523,11 +528,12 @@ public class SimulatorForm : Form
 
         var fast  = SmaOf(fastPeriod);
         var slow  = SmaOf(slowPeriod);
+        if (fast == slow) return (null, null);
         var price = bars[^1].Close;
+        var bearish = fast < slow;
 
-        if (fast < slow && price < fast) return "Techo";
-        if (fast > slow && price > fast) return "Piso";
-        return null;
+        string? EvalSingle(decimal sma) => bearish ? (price < sma ? "Techo" : null) : (price > sma ? "Piso" : null);
+        return (EvalSingle(fast), EvalSingle(slow));
     }
 
     private void Step(int direction)
