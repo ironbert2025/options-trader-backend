@@ -526,10 +526,22 @@ public class MultiChartForm : Form
         // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening.
         if (hourlyPanel != null && rthPanel != null)
         {
-            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho) =>
+            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
             {
                 var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
                 rthPanel.ArmVolatilityOpeningWatch(bullish);
+            };
+        }
+
+        // Only the pre-market Piso/Techo LABELS are chart-only (drawn once, no log line) — the
+        // real-time Cruce/Rebote resolution itself does get mirrored into crossLog, same as every
+        // other signal (Telegram + EventLogStore already happen inside ChartPanel itself).
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
             };
         }
         if (rthPanel != null)

@@ -134,10 +134,13 @@ public class ChartPanel : Panel
     // Telegram the same self-contained way Cross-SMA does (SendChartToTelegramAsync below).
     public event Action<string>? OnDemandZoneReboundEvent;
 
-    // Fires (evento, pisoTecho) every time a Piso/Techo watch resolves — 1h panel only. MultiChartForm
-    // uses this specifically to arm the 15m RTH panel's "Abriendo la Volatilidad" watch when
-    // evento=="Cruce" && pisoTecho=="Techo" (see EvaluateVolatilityOpening on that panel).
-    public event Action<string, string>? OnPisoTechoResolvedEvent;
+    // Fires (evento, pisoTecho, caption) every time a Piso/Techo watch resolves — 1h panel only.
+    // MultiChartForm uses evento/pisoTecho to arm the 15m RTH panel's "Abriendo la Volatilidad"
+    // watch (see EvaluateVolatilityOpening on that panel), and mirrors caption into crossLog —
+    // only the pre-market Piso/Techo LABELS are chart-only; the real-time Cruce/Rebote resolution
+    // itself does get logged everywhere else (crossLog, Telegram, EventLogStore), same as every
+    // other signal.
+    public event Action<string, string, string>? OnPisoTechoResolvedEvent;
 
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
@@ -557,7 +560,7 @@ public class ChartPanel : Panel
             }
 
             var (botToken, chatId) = TelegramSettingsStore.Load();
-            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, caption);
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "CrossSMA", DateTime.Now));
             if (ok)
@@ -882,7 +885,7 @@ public class ChartPanel : Panel
             var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
             _ = SendChartToTelegramAsync(caption);
             EventLogStore.Append(_symbol, "Hora", $"PisoTecho{evento}", pisoTecho, caption, justClosed.Close, $"SMA{watch.Period}={currentSma.Value:F2}");
-            OnPisoTechoResolvedEvent?.Invoke(evento, pisoTecho);
+            OnPisoTechoResolvedEvent?.Invoke(evento, pisoTecho, caption);
         }
     }
 
