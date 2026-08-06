@@ -77,6 +77,14 @@ public class SimulatorForm : Form
     // ContractsSettingsStore) — this is a simulator, it must never touch the real app's settings.
     private readonly GroupBox _grpCounts    = new() { Text = "Counts", Location = new Point(590, 4), Size = new Size(185, 64) };
     private readonly GroupBox _grpContracts = new() { Text = "Contracts", Location = new Point(785, 4), Size = new Size(105, 96) };
+
+    // "No Trade" (default) = manual close only, no auto-close-at-target — mirrors Form1's real
+    // rbNoTrade/rbNoTradeTarget pair (the only 2 relevant here; the simulator has no real-broker
+    // "Trade"/"Trade-Target" options). Read at open time by DgvChain_CellClick and stored per
+    // OpenSimTrade so changing the radio later doesn't retroactively affect already-open trades.
+    private readonly GroupBox _grpTrade = new() { Text = "Trade", Location = new Point(896, 4), Size = new Size(120, 64) };
+    private readonly RadioButton _rbNoTrade = new() { Text = "No Trade", Checked = true, AutoSize = true, Location = new Point(6, 20) };
+    private readonly RadioButton _rbNoTradeTarget = new() { Text = "No Trade-Target", AutoSize = true, Location = new Point(6, 40) };
     private string _selectedCounts    = "6"; // same default as Form1's _selectedCounts
 
     // Strikes force-shown in _dgvChain regardless of the OTM-only filter — same idea as Form1's
@@ -132,6 +140,9 @@ public class SimulatorForm : Form
         Controls.Add(_dgvChain);
         Controls.Add(_grpCounts);
         Controls.Add(_grpContracts);
+        Controls.Add(_grpTrade);
+        _grpTrade.Controls.Add(_rbNoTrade);
+        _grpTrade.Controls.Add(_rbNoTradeTarget);
         Controls.Add(_pnlGoToTime);
         Controls.Add(_pnlSmaEvents);
         Controls.Add(_pnlDzSz);
@@ -722,7 +733,7 @@ public class SimulatorForm : Form
 
     // ----- Demo trades (practice only — separate from real/demo trades in Form1) -----
 
-    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid);
+    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid, bool SuppressAutoClose);
     private readonly List<OpenSimTrade> _openSimTrades = new();
 
     // step.Time / trade.EntryTime are real UTC (same convention as CandleData.Time, needed so the
@@ -881,19 +892,24 @@ public class SimulatorForm : Form
 
         // Same target% source and formula Form1.RecordEntryAsync uses. Once opened, T_Bid also
         // drives auto-close now (see RefreshOpenSimTradesPnL) — C_Bid reaching it closes the trade
-        // automatically on the next step, same as a real Trade-Target position at the broker.
+        // automatically on the next step, same as a real Trade-Target position at the broker —
+        // UNLESS "No Trade" is selected (suppressAutoClose), matching Form1's identical rule: that
+        // trade only ever closes manually, and PnL_Target is left blank instead of showing a
+        // number that isn't actually driving anything.
+        var suppressAutoClose = _rbNoTrade.Checked;
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var tBid = Math.Round(ask * (1 + targetPct / 100m), 2);
+        var pnlTargetCell = suppressAutoClose ? string.Empty : targetPct.ToString("F0");
 
         var step = _steps[_currentIndex];
         var gridRow = _dgvTrades.Rows[_dgvTrades.Rows.Add(
             EasternTime(step.Time).ToString("HH:mm:ss"), rowType, strike.ToString("F2"),
             bid.ToString("F2"), ask.ToString("F2"), contracts, ask.ToString("F2"),
-            ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", targetPct.ToString("F0"))];
+            ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", pnlTargetCell)];
 
         gridRow.Cells["colSimCBid"].Style.ForeColor = Color.Orange;
 
-        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid));
+        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid, suppressAutoClose));
         SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
         // Green "Stk=xxx" line on all 3 simulated charts — same as the real app's demo/real trades.
@@ -937,7 +953,7 @@ public class SimulatorForm : Form
             UpdatePnLMinMax(trade.Row, pnlPct);
             SetSimMoneyness(trade.Row, trade.OptionType, trade.StrikePrice, step.UnderlyingPrice);
 
-            if (quote.Bid >= trade.TBid)
+            if (!trade.SuppressAutoClose && quote.Bid >= trade.TBid)
                 (toAutoClose ??= new List<OpenSimTrade>()).Add(trade);
         }
 
