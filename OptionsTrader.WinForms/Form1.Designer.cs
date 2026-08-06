@@ -17,6 +17,8 @@ partial class Form1
     {
         statusStrip1 = new StatusStrip();
         lblStatusUser = new ToolStripStatusLabel();
+        lblEarningsDate = new ToolStripStatusLabel();
+        lblEarningsRemaining = new ToolStripStatusLabel();
         tabControl = new TabControl();
         tabQuotes = new TabPage();
         grpLogger = new GroupBox();
@@ -1622,7 +1624,7 @@ partial class Form1
         //
         // statusStrip1
         //
-        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser });
+        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser, lblEarningsDate, lblEarningsRemaining });
         statusStrip1.Location = new Point(0, 578);
         statusStrip1.Name = "statusStrip1";
         statusStrip1.Size = new Size(1181, 22);
@@ -1632,6 +1634,17 @@ partial class Form1
         //
         lblStatusUser.Name = "lblStatusUser";
         lblStatusUser.Size = new Size(0, 17);
+        //
+        // lblEarningsDate
+        //
+        lblEarningsDate.Name = "lblEarningsDate";
+        lblEarningsDate.Margin = new Padding(12, 3, 0, 2);
+        lblEarningsDate.Size = new Size(0, 17);
+        //
+        // lblEarningsRemaining
+        //
+        lblEarningsRemaining.Name = "lblEarningsRemaining";
+        lblEarningsRemaining.Size = new Size(0, 17);
         //
         // Form1
         //
@@ -1685,6 +1698,8 @@ partial class Form1
 
     private StatusStrip statusStrip1;
     private ToolStripStatusLabel lblStatusUser;
+    private ToolStripStatusLabel lblEarningsDate;
+    private ToolStripStatusLabel lblEarningsRemaining;
     private TabControl tabControl;
     private TabPage tabQuotes;
     private TabPage tabSettings;

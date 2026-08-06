@@ -551,6 +551,7 @@ public partial class Form1 : Form
         clicked.Font = new Font(clicked.Font, FontStyle.Bold);
 
         _selectedTicker = clicked.Tag as TickerEntry;
+        UpdateEarningsStatusLabel();
 
         // Reset to blank placeholder rows — real quotes arrive once Start Polling/Fetch Quotes
         // is used, so keep the grids looking like ready tables in the meantime.
@@ -562,6 +563,38 @@ public partial class Form1 : Form
 
         RestoreOpenTrades(_selectedTicker?.Symbol ?? string.Empty);
         PadWithBlankRows(dgvTrades, 4);
+    }
+
+    // Shows the next earnings date for the selected symbol next to "User: ..." in the status bar
+    // (EarningsDateStore, filled in by hand for now — no UI to edit it yet). Split across 2
+    // ToolStripStatusLabels (date + "(remaining N days)") since a single label can't mix 2 fonts/
+    // colors — only the "remaining" part changes styling.
+    private void UpdateEarningsStatusLabel()
+    {
+        var entry = _selectedTicker != null
+            ? EarningsDateStore.Load().FirstOrDefault(e => e.Symbol.Equals(_selectedTicker.Symbol, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        if (entry == null)
+        {
+            lblEarningsDate.Text = string.Empty;
+            lblEarningsRemaining.Text = string.Empty;
+            return;
+        }
+
+        var remainingDays = entry.EarningDate.DayNumber - DateOnly.FromDateTime(DateTime.Today).DayNumber;
+
+        lblEarningsDate.Text = entry.EarningDate.ToString("yyyy-MM-dd");
+        lblEarningsRemaining.Text = $"( remaining {remainingDays} days)";
+
+        Color color;
+        FontStyle style;
+        if (remainingDays < 0)      { color = Color.Orange; style = FontStyle.Bold; }
+        else if (remainingDays < 5) { color = Color.Red;     style = FontStyle.Bold; }
+        else                        { color = Color.Green;   style = FontStyle.Regular; }
+
+        lblEarningsRemaining.ForeColor = color;
+        lblEarningsRemaining.Font = new Font(statusStrip1.Font, style);
     }
 
     private void RestoreOpenTrades(string symbol)
