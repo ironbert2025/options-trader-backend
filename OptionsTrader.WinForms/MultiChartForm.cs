@@ -639,17 +639,10 @@ public class MultiChartForm : Form
     public Task MarkDeltaSOnOvernightChartAsync(decimal entrySpot, decimal closeSpot, decimal strike) =>
         _overnightPanel?.MarkDeltaSAsync(entrySpot, closeSpot, strike) ?? Task.CompletedTask;
 
-    // Green "Stk=xxx" line on all 3 panels — fired when a trade (demo or real) opens.
-    public async Task MarkStrikeOnAllChartsAsync(decimal strike)
-    {
-        var tasks = new[]
-        {
-            _hourlyPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask,
-            _rthPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask,
-            _overnightPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask
-        };
-        await Task.WhenAll(tasks);
-    }
+    // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, per explicit request. Fired when a
+    // trade (demo or real) opens.
+    public Task MarkStrikeOnOvernightChartAsync(decimal strike) =>
+        _overnightPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask;
 
     // Forwards an already-timestamped WS connect/disconnect/reconnect line from Form1 (which owns
     // the actual Schwab streamer connection) into this window's small event log — safe to call

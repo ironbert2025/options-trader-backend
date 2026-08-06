@@ -912,9 +912,7 @@ public class SimulatorForm : Form
         _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid, suppressAutoClose));
         SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
-        // Green "Stk=xxx" line on all 3 simulated charts — same as the real app's demo/real trades.
-        _ = _hourlyChart.MarkStrikeAsync(strike);
-        _ = _rthChart.MarkStrikeAsync(strike);
+        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
         _ = _fullChart.MarkStrikeAsync(strike);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.

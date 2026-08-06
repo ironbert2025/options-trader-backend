@@ -1600,9 +1600,9 @@ public partial class Form1 : Form
 
         _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
 
-        // Green "Stk=xxx" line on all 3 charts — demo and real trades both flow through here.
+        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow through here.
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
-            _ = chartFormForStrike.MarkStrikeOnAllChartsAsync(strikeVal);
+            _ = chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
 
         return (tradeId, newRow);
     }
