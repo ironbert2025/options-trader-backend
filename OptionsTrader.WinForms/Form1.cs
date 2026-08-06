@@ -584,8 +584,8 @@ public partial class Form1 : Form
 
         var remainingDays = entry.EarningDate.DayNumber - DateOnly.FromDateTime(DateTime.Today).DayNumber;
 
-        lblEarningsDate.Text = entry.EarningDate.ToString("yyyy-MM-dd");
-        lblEarningsRemaining.Text = $"( remaining {remainingDays} days)";
+        lblEarningsDate.Text = $"Earning Date: {entry.EarningDate:yyyy-MM-dd}";
+        lblEarningsRemaining.Text = $"( Remaining {remainingDays} days)";
 
         Color color;
         FontStyle style;
