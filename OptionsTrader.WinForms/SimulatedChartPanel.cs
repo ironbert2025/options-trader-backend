@@ -237,6 +237,11 @@ public class SimulatedChartPanel : Panel
     // events_log.csv, same as Demand Zone, per explicit request that this one gets written to disk.
     public event Action<string, decimal, string, string, string>? OnPisoTechoOutcomeEvent;
 
+    // Fires (period, price) for every watched SMA on every newly-closed candle — SimulatorForm
+    // uses this to keep the Piso/Techo reference line on the RTH/RTH+Overnight charts tracking the
+    // LIVE SMA value through the session instead of staying frozen at its pre-market snapshot.
+    public event Action<int, decimal>? OnPisoTechoLevelUpdatedEvent;
+
     // Called once per day load with each SMA's own result already computed by SimulatorForm
     // (mirrors ChartPanel.EvaluatePisoTechoPair, computed there against _hourlyCandles before
     // _simDate) — each of the 4 SMAs is independent now (price opening between a pair's fast and
@@ -308,6 +313,14 @@ public class SimulatedChartPanel : Panel
             var evento    = crossed ? "Cruce" : "Rebote";
             var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
             OnPisoTechoOutcomeEvent?.Invoke(caption, justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
+        }
+
+        // Reference-line update — every watched period (Done or not, so the line keeps tracking
+        // the live SMA even after a Cruce/Rebote already resolved), on every newly-closed candle.
+        foreach (var period in _pisoTechoWatches.Select(w => w.Period).Distinct())
+        {
+            var sma = Sma(period, _closedCandles.Count - 1);
+            if (sma != null) OnPisoTechoLevelUpdatedEvent?.Invoke(period, sma.Value);
         }
     }
 

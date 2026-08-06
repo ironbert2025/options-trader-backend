@@ -153,12 +153,14 @@ public class ChartPanel : Panel
     // other signal.
     public event Action<string, string, string>? OnPisoTechoResolvedEvent;
 
-    // Fires (period, price) once per armed SMA, pre-market — MultiChartForm forwards this to the
-    // 15m RTH/RTH+Overnight panels (MarkPisoTechoRefLineAsync) to draw a dashed reference line at
-    // that price, same color as the SMA, so the Piso/Techo level is visible there too without
-    // needing the 1h panel open. Fires (period) alone when that level gets invalidated by the
-    // market-open gap (ValidatePisoTechoAgainstOpen/InvalidateIfBrokenByOpen below) — forwarded the
-    // same way to remove the matching reference line.
+    // Fires (period, price) for each armed SMA — first pre-market (EvaluatePisoTechoOnce), then
+    // again on every closed 1h candle for the rest of the session (see the sameDay branch below),
+    // so the price always reflects that SMA's CURRENT value, not a frozen pre-market snapshot.
+    // MultiChartForm forwards this to the 15m RTH/RTH+Overnight panels (MarkPisoTechoRefLineAsync)
+    // to draw/move a dashed reference line at that price, same color as the SMA, so the level is
+    // visible there too without needing the 1h panel open. Fires (period) alone when that level
+    // gets invalidated by the market-open gap (ValidatePisoTechoAgainstOpen/
+    // InvalidateIfBrokenByOpen below) — forwarded the same way to remove the matching reference line.
     public event Action<int, decimal>? OnPisoTechoLevelReadyEvent;
     public event Action<int>? OnPisoTechoLevelRemovedEvent;
 
@@ -1410,6 +1412,15 @@ public class ChartPanel : Panel
                         EvaluateCrossings(_liveBucket);
                         EvaluateTLineSignal(_liveBucket);
                         EvaluatePisoTechoWatches(_liveBucket);
+
+                        // The Piso/Techo reference line (15m RTH/RTH+Overnight panels) tracks the
+                        // live SMA, not just its pre-market snapshot — re-fire with each period's
+                        // CURRENT value on every closed candle so MultiChartForm redraws it in
+                        // place (markPisoTechoRefLine already replaces the old entry per period).
+                        FirePisoTechoLevelReady(20, s_pisoTechoResult20);
+                        FirePisoTechoLevelReady(40, s_pisoTechoResult40);
+                        FirePisoTechoLevelReady(100, s_pisoTechoResult100);
+                        FirePisoTechoLevelReady(200, s_pisoTechoResult200);
                     }
                     else
                     {

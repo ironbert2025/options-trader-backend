@@ -312,6 +312,14 @@ public class SimulatorForm : Form
             _rthChart.ArmVolatilityOpeningWatch(bullish);
         };
 
+        // Piso/Techo reference line: keeps tracking the LIVE SMA through the session (not just its
+        // pre-market snapshot) — same as the live app's identical ChartPanel wiring.
+        _hourlyChart.OnPisoTechoLevelUpdatedEvent += (period, price) =>
+        {
+            _ = _rthChart.MarkPisoTechoRefLineAsync(period, price);
+            _ = _fullChart.MarkPisoTechoRefLineAsync(period, price);
+        };
+
         // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a
         // Piso/Techo watch; log-only, no events_log.csv, same as Piso/Techo above.
         _rthChart.OnVolatilityOpeningEvent += msg => LogSimEvent(msg);
