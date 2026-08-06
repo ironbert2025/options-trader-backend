@@ -617,6 +617,7 @@ public partial class Form1 : Form
                 restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+                restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
                 restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
                 SetTradeTypeColor(restoredRow, t.OptionType);
 
@@ -1492,6 +1493,7 @@ public partial class Form1 : Form
         var newRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
         newRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
         newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+        newRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
         newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
         SetTradeTypeColor(newRow, rowType);
         if (decimal.TryParse(strike, out var strikeForMoneyness))
@@ -2685,6 +2687,7 @@ public partial class Form1 : Form
 
             row.Cells["colTradeCBid"].Value                  = currentBid.ToString("F2");
             row.Cells["colTradeCBid"].Style.ForeColor        = Color.Orange;
+            row.Cells["colTradeCBid"].Style.Font             = new Font(dgvTrades.Font, FontStyle.Bold);
             row.Cells["colTradePnL"].Value        = pnl.ToString("F2");
             row.Cells["colTradePnLPercent"].Value = pnlPct.ToString("F1");
 
