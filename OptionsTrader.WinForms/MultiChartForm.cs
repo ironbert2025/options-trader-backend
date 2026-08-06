@@ -566,8 +566,9 @@ public class MultiChartForm : Form
         {
             hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
             {
-                if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price);
-                if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price);
+                var sessionStart = GetTodaySessionStartFakeEpoch();
+                if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+                if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
             };
             hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
             {
@@ -665,6 +666,20 @@ public class MultiChartForm : Form
     public void ReplayWebSocketEvents(IEnumerable<string> lines)
     {
         foreach (var line in lines) LogWebSocketEvent(line);
+    }
+
+    // Today's 9:30 AM ET, in the same "ET wall-clock digits disguised as UTC" fake-epoch units the
+    // chart itself uses (ChartPanel.FakeUtcEpochSeconds) — the Piso/Techo reference line's anchor,
+    // computed independently of any candle data so it can't race against history loading (see
+    // markPisoTechoRefLine in chart.html for the full rationale).
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
+    private static long GetTodaySessionStartFakeEpoch()
+    {
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).Date;
+        var sessionStartEastern = todayEastern.AddHours(9).AddMinutes(30);
+        var sessionStartUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionStartEastern, DateTimeKind.Unspecified), EasternZone);
+        return ChartPanel.FakeUtcEpochSeconds(sessionStartUtc);
     }
 
     // Pushes the combined 3-chart snapshot to Telegram for the T-Line+SMA20 breakout signal —

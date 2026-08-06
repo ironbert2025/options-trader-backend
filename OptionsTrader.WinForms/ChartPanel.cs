@@ -371,11 +371,11 @@ public class ChartPanel : Panel
     // Dashed Piso/Techo reference line (15m RTH / RTH+Overnight panels) — called by MultiChartForm
     // when the 1h panel's OnPisoTechoLevelReadyEvent/OnPisoTechoLevelRemovedEvent fire. See
     // markPisoTechoRefLine/removePisoTechoRefLine in chart.html for the rendering.
-    public async Task MarkPisoTechoRefLineAsync(int period, decimal price)
+    public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch});");
     }
 
     public async Task RemovePisoTechoRefLineAsync(int period)
@@ -1005,9 +1005,20 @@ public class ChartPanel : Panel
             // SMA. The SMA itself can shift enough between candles that no single bar's open/close
             // straddles it, even though price has genuinely crossed — comparing consecutive points
             // catches that; comparing one bar's open to its own close-time SMA doesn't.
-            var crossed = previousSma != null && watch.WatchingUp
+            var crossedByClose = previousSma != null && watch.WatchingUp
                 ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
                 : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
+
+            // Gap cross: the previous candle closed on the "not yet broken" side, and THIS candle
+            // opened straight through to the other side — a genuine cross that happened in the gap
+            // between the two candles, which crossedByClose can miss if this candle's own Close
+            // ends up back on the original side (e.g. it gapped down through a Piso at the open,
+            // then recovered enough to close above it again).
+            var crossedByGapOpen = previousSma != null && watch.WatchingUp
+                ? justClosed.Open > currentSma && _closedCandles[^2].Close <= previousSma
+                : justClosed.Open < currentSma && _closedCandles[^2].Close >= previousSma;
+
+            var crossed = crossedByClose || crossedByGapOpen;
 
             var bounced = !crossed && (watch.WatchingUp
                 ? justClosed.Open < currentSma && isRed &&
@@ -1024,7 +1035,8 @@ public class ChartPanel : Panel
             watch.Done = true;
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
             var evento    = crossed ? "Cruce" : "Rebote";
-            var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            var gapTag    = crossedByGapOpen && !crossedByClose ? " (gap)" : "";
+            var caption   = $"{evento}{gapTag} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
             _ = SendChartToTelegramAsync(caption);
             EventLogStore.Append(_symbol, "Hora", $"PisoTecho{evento}", pisoTecho, caption, justClosed.Close, $"SMA{watch.Period}={currentSma.Value:F2}");
             OnPisoTechoResolvedEvent?.Invoke(evento, pisoTecho, caption);
@@ -1564,8 +1576,10 @@ public class ChartPanel : Panel
     }
 
     // Same "ET wall-clock digits disguised as UTC" conversion ToChartJson uses for candles, split
-    // out so the pre-market line's start time (not a candle) can use it too.
-    private static long FakeUtcEpochSeconds(DateTime utcTime)
+    // out so the pre-market line's start time (not a candle) can use it too. Public so
+    // MultiChartForm can compute the Piso/Techo reference line's session-start anchor the same way
+    // (mirrors SimulatedChartPanel.ToFakeUtcEpochSeconds, already public for the same reason).
+    public static long FakeUtcEpochSeconds(DateTime utcTime)
     {
         var easternWallClock = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc), EasternZone);
         var fakeUtcForDisplay = DateTime.SpecifyKind(easternWallClock, DateTimeKind.Utc);

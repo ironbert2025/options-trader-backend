@@ -148,11 +148,11 @@ public class SimulatedChartPanel : Panel
     // Dashed Piso/Techo reference line (15m RTH / RTH+Overnight charts) — ported from ChartPanel,
     // called by SimulatorForm.EvaluatePisoTecho for each SMA that survived the market-open-gap
     // check. See markPisoTechoRefLine/removePisoTechoRefLine in chart.html.
-    public async Task MarkPisoTechoRefLineAsync(int period, decimal price)
+    public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch});");
     }
 
     public async Task RemovePisoTechoRefLineAsync(int period)
@@ -292,9 +292,19 @@ public class SimulatedChartPanel : Panel
             // PREVIOUS candle's close vs the PREVIOUS SMA, not this candle's own open vs its own
             // SMA, since the SMA itself can shift enough between candles to make a real cross miss
             // a same-bar open/close straddle check.
-            var crossed = previousSma != null && watch.WatchingUp
+            var crossedByClose = previousSma != null && watch.WatchingUp
                 ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
                 : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
+
+            // Gap cross: the previous candle closed on the "not yet broken" side, and THIS candle
+            // opened straight through to the other side — see ChartPanel's identical copy for the
+            // full rationale (crossedByClose can miss it if this candle's Close recovers back to
+            // the original side after gapping through at the open).
+            var crossedByGapOpen = previousSma != null && watch.WatchingUp
+                ? justClosed.Open > currentSma && _closedCandles[^2].Close <= previousSma
+                : justClosed.Open < currentSma && _closedCandles[^2].Close >= previousSma;
+
+            var crossed = crossedByClose || crossedByGapOpen;
 
             var bounced = !crossed && (watch.WatchingUp
                 ? justClosed.Open < currentSma && isRed &&
@@ -311,7 +321,8 @@ public class SimulatedChartPanel : Panel
             watch.Done = true;
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
             var evento    = crossed ? "Cruce" : "Rebote";
-            var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            var gapTag    = crossedByGapOpen && !crossedByClose ? " (gap)" : "";
+            var caption   = $"{evento}{gapTag} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
             OnPisoTechoOutcomeEvent?.Invoke(caption, justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
         }
 
