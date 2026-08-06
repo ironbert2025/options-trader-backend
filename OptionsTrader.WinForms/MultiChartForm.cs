@@ -589,6 +589,22 @@ public class MultiChartForm : Form
             };
         }
 
+        // Stk line delete: markStrike draws the same green line on all 3 panels at trade open —
+        // deleting it (click + Delete) on any ONE panel removes it from the other 2 as well, so
+        // the user doesn't have to repeat the same delete 3 times.
+        var allChartPanels = new[] { hourlyPanel, rthPanel, overnightPanel };
+        foreach (var panel in allChartPanels)
+        {
+            if (panel == null) continue;
+            panel.OnStrikeDeletedEvent += price =>
+            {
+                foreach (var sibling in allChartPanels)
+                {
+                    if (sibling != null && sibling != panel) _ = sibling.RemoveStrikeLineAsync(price);
+                }
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);

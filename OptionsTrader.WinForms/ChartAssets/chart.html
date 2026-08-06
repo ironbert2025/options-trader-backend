@@ -485,6 +485,20 @@
       return;
     }
 
+    // Stk line: removed here AND reported to C# (ChartPanel.CoreWebView2_WebMessageReceived),
+    // which relays it to the other 2 panels' removeStrikeLine so deleting from any one chart
+    // removes it from all 3 — markStrike draws the same line on all 3 panels at trade open.
+    const strikeIdx = strikeLinesPrimitive._lines.findIndex(l => l.selected);
+    if (strikeIdx !== -1) {
+      const removed = strikeLinesPrimitive._lines[strikeIdx];
+      strikeLinesPrimitive._lines.splice(strikeIdx, 1);
+      forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'strike_delete', price: removed.price });
+      }
+      return;
+    }
+
     const refLineIdx = pisoTechoRefLinePrimitive._lines.findIndex(l => l.selected);
     if (refLineIdx !== -1) {
       pisoTechoRefLinePrimitive._lines.splice(refLineIdx, 1);
@@ -677,6 +691,21 @@
       const hadDeltaSSelection = deltaSPrimitive._labels.some(l => l.selected);
       if (hadDeltaSSelection) {
         deltaSPrimitive._labels.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // Stk line click selection — same idea as above.
+    if (strikeLinesPrimitive._lines.length > 0) {
+      const hitIdx = findStrikeLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        strikeLinesPrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadStrikeSelection = strikeLinesPrimitive._lines.some(l => l.selected);
+      if (hadStrikeSelection) {
+        strikeLinesPrimitive._lines.forEach(l => { l.selected = false; });
         forceRepaint();
       }
     }
@@ -1420,7 +1449,7 @@
   // automatically (stays as a historical reference even after the trade closes). ----
 
   class StrikeLinesPrimitive {
-    constructor() { this._lines = []; this._chart = null; } // [{ time, price, label }, ...]
+    constructor() { this._lines = []; this._chart = null; } // [{ time, price, label, selected }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1453,6 +1482,18 @@
                   ctx.textAlign = 'right';
                   ctx.fillText(l.label, scope.bitmapSize.width - 4, y * scope.verticalPixelRatio - 2);
                   ctx.textAlign = 'left'; // reset — other primitives assume the default
+
+                  if (l.selected) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio);
+                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
                 });
               });
             }
@@ -1471,8 +1512,32 @@
     if (!strikeLinesAttached) { candleSeries.attachPrimitive(strikeLinesPrimitive); strikeLinesAttached = true; }
     if (allCandles.length === 0) return;
     const anchorTime = allCandles[allCandles.length - 1].time;
-    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: `Stk=${price}` });
+    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: `Stk=${price}`, selected: false });
     forceRepaint();
+  }
+
+  // Called by C# to remove a Stk line pushed here as the ECHO of a deletion that happened on a
+  // SIBLING panel (see the 'strike_delete' postMessage in the keydown handler below) — no
+  // postMessage sent back out from here, so the 3 panels don't ping-pong the same delete forever.
+  function removeStrikeLine(price) {
+    strikeLinesPrimitive._lines = strikeLinesPrimitive._lines.filter(l => l.price !== price);
+    forceRepaint();
+  }
+
+  // Returns the index of the Stk line (full-width, click point -> right edge, same shape as
+  // H-Line) within a few pixels of (px,py), or -1.
+  function findStrikeLineByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = strikeLinesPrimitive._lines.length - 1; i >= 0; i--) {
+      const l = strikeLinesPrimitive._lines[i];
+      const xRaw = ts.timeToCoordinate(l.time);
+      const x = xRaw == null ? 0 : xRaw;
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (y == null) continue;
+      if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
+    }
+    return -1;
   }
 
   // ---- "ΔS=value" label at trade close — own dedicated primitive (not TextLabelsPrimitive,

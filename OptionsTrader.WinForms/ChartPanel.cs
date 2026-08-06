@@ -168,6 +168,11 @@ public class ChartPanel : Panel
     // that a push never went out. MultiChartForm mirrors this into crossLog so it's diagnosable.
     public event Action<string>? OnTelegramPushFailedEvent;
 
+    // Fires (price) when a Stk line gets deleted (selected + Delete) on THIS panel — MultiChartForm
+    // uses this to remove the matching Stk line on the other 2 panels too, since markStrike draws
+    // the same line on all 3 at once. See CoreWebView2_WebMessageReceived's "strike_delete" case.
+    public event Action<decimal>? OnStrikeDeletedEvent;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -341,6 +346,15 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markStrike({priceStr});");
     }
 
+    // Removes a Stk line at the given price — called on the 2 SIBLING panels when OnStrikeDeletedEvent
+    // fires from wherever the user actually clicked + pressed Delete (see MultiChartForm).
+    public async Task RemoveStrikeLineAsync(decimal strike)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = strike.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeStrikeLine({priceStr});");
+    }
+
     // "ΔS=value" label at trade close — anchored at the trade's strike (same price as its green
     // "Stk=xxx" line), drawn just below it. See markDeltaS in chart.html for the exact rationale.
     public async Task MarkDeltaSAsync(decimal entrySpot, decimal closeSpot, decimal strike)
@@ -496,6 +510,15 @@ public class ChartPanel : Panel
                         if (demandPrice > supplyPrice) // demand (green) above supply (red) -> genuine demand zone
                             _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
                     }
+                    break;
+                }
+                case "strike_delete":
+                {
+                    // Deleted on THIS panel already (chart.html removes it locally before posting
+                    // this) — fire the event so MultiChartForm can remove the matching line from
+                    // the other 2 panels too (markStrike draws the same Stk line on all 3 at once).
+                    var strikePrice = root.GetProperty("price").GetDecimal();
+                    OnStrikeDeletedEvent?.Invoke(strikePrice);
                     break;
                 }
             }
@@ -1161,8 +1184,13 @@ public class ChartPanel : Panel
             }
 
             // Bollinger Bands (20, 2 std devs) — 15m RTH panel only (1h gets its own copy above).
+            // Also listens for "strike_delete" (see below) — needed here too now that Stk lines
+            // can be deleted from ANY of the 3 panels, not just 1h/RTH+Overnight.
             if (_mode == ChartPanelMode.Fifteen_RTH)
+            {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+            }
 
             // Pre-market blue line (1h and 15m RTH panels): only if the chart is opened before
             // 9:30 AM ET that day — anchors at whatever candle is currently the last one loaded
