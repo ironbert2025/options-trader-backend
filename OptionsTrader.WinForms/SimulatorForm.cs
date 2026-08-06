@@ -813,9 +813,9 @@ public class SimulatorForm : Form
         int.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts);
         if (contracts <= 0) contracts = 1;
 
-        // Same target% source and formula Form1.RecordEntryAsync uses — informational only here
-        // (T_Bid/PnL_Target are shown for parity with the real grid; the simulator's trades still
-        // only close via the Close button, no auto-close-at-target).
+        // Same target% source and formula Form1.RecordEntryAsync uses. Once opened, T_Bid also
+        // drives auto-close now (see RefreshOpenSimTradesPnL) — C_Bid reaching it closes the trade
+        // automatically on the next step, same as a real Trade-Target position at the broker.
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var tBid = Math.Round(ask * (1 + targetPct / 100m), 2);
 
@@ -834,13 +834,24 @@ public class SimulatorForm : Form
         _ = _hourlyChart.MarkStrikeAsync(strike);
         _ = _rthChart.MarkStrikeAsync(strike);
         _ = _fullChart.MarkStrikeAsync(strike);
+
+        // Same log message shape as Form1.RecordEntryAsync's live log lines.
+        var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
+        LogSimEvent($"{nowStr} Trade Manual ({rowType})  SpotPrice: {step.UnderlyingPrice:F2}  StrikePrice: {strike:F2}  Ask: {ask:F2}  Contracts: {contracts}");
+        LogSimEvent($"{nowStr} EntryPrice: {ask:F2}");
+        LogSimEvent($"{nowStr} Set Target: {tBid:F2}");
     }
 
     // Recomputes PnL for every open demo trade against the current step's chain — same formula
     // Form1 uses for real/demo trades (currentBid - entryPrice) * contracts * 100 — and the same
     // Min/Max PnL% tracking (UpdatePnLMinMax below, copied from Form1's private static method).
+    // Also checks each trade's target (C_Bid >= T_Bid) and auto-closes it right here — this runs
+    // on every step/click that feeds the grid, same as the real Trade-Target auto-close reacting
+    // to every live tick, just driven by the simulator's step advance instead.
     private void RefreshOpenSimTradesPnL(SimulationStep step)
     {
+        List<OpenSimTrade>? toAutoClose = null;
+
         foreach (var trade in _openSimTrades)
         {
             var quote = step.Quotes.FirstOrDefault(q =>
@@ -859,7 +870,52 @@ public class SimulatorForm : Form
             trade.Row.Cells["colSimPnlPct"].Style.ForeColor  = pnlPct >= 0 ? Color.LimeGreen : Color.OrangeRed;
             UpdatePnLMinMax(trade.Row, pnlPct);
             SetSimMoneyness(trade.Row, trade.OptionType, trade.StrikePrice, step.UnderlyingPrice);
+
+            if (quote.Bid >= trade.TBid)
+                (toAutoClose ??= new List<OpenSimTrade>()).Add(trade);
         }
+
+        // Closed AFTER the loop, not during — CloseSimTrade removes from _openSimTrades, which
+        // would otherwise mutate the collection the foreach above is iterating.
+        if (toAutoClose != null)
+            foreach (var trade in toAutoClose)
+                CloseSimTrade(trade, step, auto: true);
+    }
+
+    // Shared by the manual Close button and the auto-close-at-target check above — same PnL math,
+    // SimTradesStore.Append, and grid/log updates either way; only the log message says whether it
+    // was manual or automatic (simulating a real Trade-Target's LIMIT exit at the broker).
+    private void CloseSimTrade(OpenSimTrade trade, SimulationStep step, bool auto)
+    {
+        var quote = step.Quotes.FirstOrDefault(q =>
+            q.StrikePrice == trade.StrikePrice &&
+            q.OptionType.ToString().ToUpperInvariant() == trade.OptionType);
+        var exitPrice = quote?.Bid ?? decimal.Parse(trade.Row.Cells["colSimCBid"].Value?.ToString() ?? "0");
+
+        var pnl    = Math.Round((exitPrice - trade.EntryPrice) * trade.Contracts * 100, 2);
+        var pnlPct = trade.EntryPrice > 0 ? Math.Round((exitPrice - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
+
+        SimTradesStore.Append(_symbol, _simDate, trade.OptionType, trade.StrikePrice, trade.Contracts,
+            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct);
+
+        var row = trade.Row;
+        row.Cells["colSimExitTime"].Value = EasternTime(step.Time).ToString("HH:mm:ss");
+        UpdatePnLMinMax(row, pnlPct);
+
+        // DataGridViewButtonColumn with UseColumnTextForButtonValue=true always shows the
+        // column's own Text ("Close") regardless of the cell's Value, so gray out the row instead
+        // to signal visually that it's closed (row.ReadOnly already blocks re-clicking it).
+        foreach (DataGridViewCell cell in row.Cells) cell.Style.BackColor = Color.Gainsboro;
+        row.ReadOnly = true;
+        _openSimTrades.Remove(trade);
+
+        // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
+        var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");
+        var closeType   = auto ? "TARGET (auto)" : "MANUAL";
+        var duration    = step.Time - trade.EntryTime;
+        LogSimEvent($"{nowStr} Close {closeType} ({trade.OptionType})  SpotPrice: {step.UnderlyingPrice:F2}  Strike: {trade.StrikePrice:F2}  C_Bid: {exitPrice:F2}");
+        LogSimEvent($"{nowStr} PnL: {pnl:F2}  PnL_Percent: {pnlPct:F1}");
+        LogSimEvent($"{nowStr} Duration: {duration:hh\\:mm\\:ss}");
     }
 
     // Same rule as Form1's SetMoneyness: CALL is ITM once spot > strike, PUT once spot < strike.
@@ -904,26 +960,6 @@ public class SimulatorForm : Form
         var trade = _openSimTrades.FirstOrDefault(t => t.Row == row);
         if (trade == null) return; // already closed
 
-        var step  = _steps[_currentIndex];
-        var quote = step.Quotes.FirstOrDefault(q =>
-            q.StrikePrice == trade.StrikePrice &&
-            q.OptionType.ToString().ToUpperInvariant() == trade.OptionType);
-        var exitPrice = quote?.Bid ?? decimal.Parse(row.Cells["colSimCBid"].Value?.ToString() ?? "0");
-
-        var pnl    = Math.Round((exitPrice - trade.EntryPrice) * trade.Contracts * 100, 2);
-        var pnlPct = trade.EntryPrice > 0 ? Math.Round((exitPrice - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
-
-        SimTradesStore.Append(_symbol, _simDate, trade.OptionType, trade.StrikePrice, trade.Contracts,
-            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct);
-
-        row.Cells["colSimExitTime"].Value = EasternTime(step.Time).ToString("HH:mm:ss");
-        UpdatePnLMinMax(row, pnlPct);
-
-        // DataGridViewButtonColumn with UseColumnTextForButtonValue=true always shows the
-        // column's own Text ("Close") regardless of the cell's Value, so gray out the row instead
-        // to signal visually that it's closed (row.ReadOnly already blocks re-clicking it).
-        foreach (DataGridViewCell cell in row.Cells) cell.Style.BackColor = Color.Gainsboro;
-        row.ReadOnly = true;
-        _openSimTrades.Remove(trade);
+        CloseSimTrade(trade, _steps[_currentIndex], auto: false);
     }
 }
