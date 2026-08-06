@@ -15,6 +15,7 @@ public class SimulatorForm : Form
     private readonly Button _btnCargar   = new() { Text = "Cargar", Location = new Point(244, 8), Size = new Size(70, 24) };
     private readonly Button _btnAtras    = new() { Text = "◀ Atrás", Location = new Point(8, 40), Size = new Size(90, 26), Enabled = false };
     private readonly Button _btnAdelante = new() { Text = "Adelante ▶", Location = new Point(102, 40), Size = new Size(90, 26), Enabled = false };
+    private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
 
     // Width matches Form1's real dgvQuotes (566) — see BuildChainColumns' per-column widths.
@@ -126,6 +127,7 @@ public class SimulatorForm : Form
         Controls.Add(_btnCargar);
         Controls.Add(_btnAtras);
         Controls.Add(_btnAdelante);
+        Controls.Add(_btnPlus1Min);
         Controls.Add(_lblStep);
         Controls.Add(_dgvChain);
         Controls.Add(_grpCounts);
@@ -141,6 +143,7 @@ public class SimulatorForm : Form
         _btnCargar.Click    += (s, e) => LoadSelectedDay();
         _btnAtras.Click     += (s, e) => Step(-1);
         _btnAdelante.Click  += (s, e) => Step(1);
+        _btnPlus1Min.Click  += (s, e) => StepOneMinute();
         _dgvChain.CellClick     += DgvChain_CellClick;
         _dgvChain.CellPainting  += DgvChain_CellPainting;
         _dgvChain.CellFormatting += DgvChain_CellFormatting;
@@ -631,10 +634,43 @@ public class SimulatorForm : Form
         RenderCurrentStep();
     }
 
+    // Advances roughly 1 real minute of steps in one click — before ~11am the poll cycle is every
+    // ~6s, so reaching a trade's outcome a few minutes out means many individual ▶ clicks;
+    // pressing this once does the same walk automatically. Every step strictly between the
+    // current one and the target gets processed through RefreshOpenSimTradesPnL (PnL, Min/Max,
+    // auto-close-at-target) exactly as if ▶ had been clicked that many times — not skipped over —
+    // so an open trade's Min/Max PnL% and any auto-close in between are captured correctly, not
+    // just the state at the final minute mark.
+    private void StepOneMinute()
+    {
+        if (_steps.Count == 0 || _currentIndex < 0) return;
+
+        var targetTime = _steps[_currentIndex].Time.AddMinutes(1);
+        var targetIndex = _currentIndex;
+        while (targetIndex + 1 < _steps.Count && _steps[targetIndex + 1].Time <= targetTime)
+            targetIndex++;
+
+        // Granularity dropped below 1/min at this point in the day (e.g. after ~11am) — the very
+        // next step is already more than a minute out. Still advance one step, same as ▶, instead
+        // of doing nothing.
+        if (targetIndex == _currentIndex)
+        {
+            if (_currentIndex + 1 >= _steps.Count) return;
+            targetIndex = _currentIndex + 1;
+        }
+
+        for (int i = _currentIndex + 1; i < targetIndex; i++)
+            RefreshOpenSimTradesPnL(_steps[i]);
+
+        _currentIndex = targetIndex;
+        RenderCurrentStep();
+    }
+
     private void UpdateStepButtons()
     {
         _btnAtras.Enabled    = _currentIndex > 0;
         _btnAdelante.Enabled = _currentIndex >= 0 && _currentIndex < _steps.Count - 1;
+        _btnPlus1Min.Enabled = _btnAdelante.Enabled;
     }
 
     private void RenderCurrentStep()
