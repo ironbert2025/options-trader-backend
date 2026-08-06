@@ -1362,6 +1362,23 @@
     forceRepaint();
   }
 
+  // "ΔS=value" label at trade close — value is the absolute move of the underlying between entry
+  // and close (no sign, magnitude only). Δ is the actual Greek delta character (a triangle), per
+  // request, instead of spelling out "Delta". Reuses TextLabelsPrimitive (same as markExpired),
+  // anchored at the last candle like markStrike, drawn above the point to clear Lightweight
+  // Charts' own last-price label box.
+  function markDeltaS(entrySpot, closeSpot) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    if (allCandles.length === 0) return;
+    const last = allCandles[allCandles.length - 1];
+    const delta = Math.abs(closeSpot - entrySpot);
+    textLabelsPrimitive._labels.push({
+      time: last.time, price: last.close, text: `ΔS=${delta.toFixed(2)}`,
+      color: '#ffeb3b', bold: true, above: true
+    });
+    forceRepaint();
+  }
+
   // ---- SMA overlay (optional — only enabled on panels that call configureSmas) ----
 
   let allCandles = [];           // mirrors what's on the candle series, kept sorted by time

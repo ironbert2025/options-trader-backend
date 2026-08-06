@@ -15,7 +15,7 @@ namespace OptionsTrader.WinForms;
 // ExitOrderId is the pending Trade-Target LIMIT exit (if any), cancelled before a manual close.
 file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false,
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
-    DateOnly ExpirationDate = default);
+    DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m);
 
 public partial class Form1 : Form
 {
@@ -647,7 +647,7 @@ public partial class Form1 : Form
                     string.Empty, "Close");
 
                 var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate);
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
                 restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
@@ -1547,7 +1547,8 @@ public partial class Form1 : Form
         int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
-        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity, ExpirationDate: expDate);
+        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
+            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice);
         PadWithBlankRows(dgvTrades, 4);
 
         OpenTradesStore.Add(new PersistedTrade(
@@ -1560,7 +1561,8 @@ public partial class Form1 : Form
             EntryTime:      entryTime,
             ExpirationDate: expDate,
             Level:          level,
-            PnlTarget:      targetPct.ToString("F0")));
+            PnlTarget:      targetPct.ToString("F0"),
+            EntrySpotPrice: _lastSpotPrice));
 
         _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
 
@@ -2185,7 +2187,8 @@ public partial class Form1 : Form
 
         var duration = TimeSpan.Zero;
         int tradeId  = 0;
-        if (row.Tag is TradeRowTag tag)
+        var tag = row.Tag as TradeRowTag;
+        if (tag != null)
         {
             duration = now - tag.EntryTime;
             tradeId  = tag.TradeId;
@@ -2247,6 +2250,16 @@ public partial class Form1 : Form
         if (closeType == "EXPIRED" && _liveChartForms.TryGetValue(symbol, out var chartFormExpired) && !chartFormExpired.IsDisposed)
         {
             await chartFormExpired.MarkExpiredOnRthChartAsync();
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
+
+        // "ΔS=value" marker on the 15m RTH+Overnight chart — |spot at close - spot at entry|.
+        // EntrySpotPrice is 0 for trades opened before this feature shipped (no reliable value to
+        // show), so those are skipped rather than drawing a misleading ΔS=<currentSpot>.
+        if (tag is { EntrySpotPrice: > 0 } && _lastSpotPrice > 0 &&
+            _liveChartForms.TryGetValue(symbol, out var chartFormDelta) && !chartFormDelta.IsDisposed)
+        {
+            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, _lastSpotPrice);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 

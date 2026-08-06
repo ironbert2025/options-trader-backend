@@ -320,6 +320,15 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markStrike({priceStr});");
     }
 
+    // "ΔS=value" label at trade close — see markDeltaS in chart.html for the exact rationale.
+    public async Task MarkDeltaSAsync(decimal entrySpot, decimal closeSpot)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var entryStr = entrySpot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var closeStr = closeSpot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDeltaS({entryStr}, {closeStr});");
+    }
+
     // Toggles the 1h panel's vertical arrow tools on/off. While on, every click places a
     // fixed-length vertical arrow with its tip at the clicked point — green points up, red points
     // down. Selectable by clicking the shaft and removable with Delete, same as the gray Rect
