@@ -162,6 +162,12 @@ public class ChartPanel : Panel
     public event Action<int, decimal>? OnPisoTechoLevelReadyEvent;
     public event Action<int>? OnPisoTechoLevelRemovedEvent;
 
+    // Fires (detail) whenever SendChartToTelegramAsync fails — previously every call site was
+    // fire-and-forget with the failure silently discarded (bad/missing credentials, network error,
+    // Telegram API error, or the chart WebView2 not being ready yet), leaving no trace anywhere
+    // that a push never went out. MultiChartForm mirrors this into crossLog so it's diagnosable.
+    public event Action<string>? OnTelegramPushFailedEvent;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -593,7 +599,11 @@ public class ChartPanel : Panel
     // pushes it to the configured Telegram channel.
     private async Task<(bool Ok, string Detail)> SendChartToTelegramAsync(string caption)
     {
-        if (_webView.CoreWebView2 == null) return (false, "Chart not loaded yet.");
+        if (_webView.CoreWebView2 == null)
+        {
+            OnTelegramPushFailedEvent?.Invoke("Chart not loaded yet.");
+            return (false, "Chart not loaded yet.");
+        }
 
         try
         {
@@ -612,10 +622,13 @@ public class ChartPanel : Panel
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "CrossSMA", DateTime.Now));
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                OnTelegramPushFailedEvent?.Invoke(detail);
             return (ok, detail);
         }
         catch (Exception ex)
         {
+            OnTelegramPushFailedEvent?.Invoke(ex.Message);
             return (false, ex.Message);
         }
     }

@@ -576,6 +576,19 @@ public class MultiChartForm : Form
             };
         }
 
+        // Telegram push failures previously vanished silently (fire-and-forget from every call
+        // site) — mirror the failure detail into crossLog on whichever panel it happened on, so a
+        // missed push is diagnosable instead of just "the event logged but nothing arrived".
+        foreach (var panel in new[] { hourlyPanel, rthPanel, overnightPanel })
+        {
+            if (panel == null) continue;
+            panel.OnTelegramPushFailedEvent += detail =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);
@@ -646,26 +659,44 @@ public class MultiChartForm : Form
         try
         {
             var (botToken, chatId) = TelegramSettingsStore.Load();
-            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
 
             using var combined = await CaptureCombinedChartImageAsync();
-            if (combined == null) return;
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);
             var path = Path.Combine(folder, $"{_symbol}_TLineSignal_{DateTime.Now:yyyyMMdd_HHmmss}.png");
             combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
 
-            var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "TLineSignal", DateTime.Now));
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort — never let a Telegram failure affect the chart/detection logic.
+            // Best-effort — never let a Telegram failure affect the chart/detection logic, but no
+            // longer silent: mirrored into crossLog same as every other push failure.
+            LogTelegramPushFailure(ex.Message);
         }
+    }
+
+    private void LogTelegramPushFailure(string detail)
+    {
+        if (IsDisposed || _crossLog == null) return;
+        BeginInvoke(() => _crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
     }
 
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
