@@ -494,6 +494,27 @@
 
   chart.subscribeClick(param => {
     if (!param.point) return;
+    // Arrow tool handled here, BEFORE the clickTime/price guard below — clickTime falls back to
+    // coordinateToTime, which (unlike coordinateToLogical) still returns null in truly empty
+    // space (e.g. right of the last candle), which used to make the whole handler return early
+    // and silently swallow the 2nd click of an arrow drawn into that space. Self-contained: uses
+    // its own logical/price and returns immediately, without falling through to the rest of the
+    // click handler (hit-testing for other tools, which arrow doesn't need).
+    if (arrowArmed) {
+      const logicalX = chart.timeScale().coordinateToLogical(param.point.x);
+      const arrowPrice = candleSeries.coordinateToPrice(param.point.y);
+      if (arrowPrice == null) return;
+      if (!arrowPending) {
+        arrowPending = { logical: logicalX, price: arrowPrice };
+      } else {
+        const red = arrowPending.price > arrowPrice; // 1st click above (higher price than) 2nd -> red
+        arrowPrimitive._arrows.push({ l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: arrowPrice, red });
+        arrowPrimitive._preview = null;
+        arrowPending = null;
+        forceRepaint();
+      }
+      return;
+    }
     // param.time is only set when the click lands exactly on a rendered bar — during the
     // overnight/pre-market session (15m RTH+Overnight panel) real data is sparse, so large
     // stretches of the gray band have no bar under the cursor and param.time comes back
@@ -647,18 +668,6 @@
       forceRepaint();
     }
 
-    if (arrowArmed) {
-      if (!arrowPending) {
-        arrowPending = { time: clickTime, price };
-      } else {
-        const red = arrowPending.price > price; // 1st click above (higher price than) 2nd -> red
-        arrowPrimitive._arrows.push({ t1: arrowPending.time, p1: arrowPending.price, t2: clickTime, p2: price, red });
-        arrowPrimitive._preview = null;
-        arrowPending = null;
-        forceRepaint();
-      }
-    }
-
     if (pisoArmed) {
       textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Piso' });
       forceRepaint();
@@ -721,11 +730,14 @@
 
     if (!arrowArmed || !arrowPending) {
       if (arrowPrimitive._preview) { arrowPrimitive._preview = null; forceRepaint(); }
-    } else if (param.point && param.time !== undefined) {
+    } else if (param.point) {
+      // No param.time !== undefined gate here (unlike the other tools' previews) — the preview
+      // must keep following the cursor into the empty space beyond the last candle too.
       const price = candleSeries.coordinateToPrice(param.point.y);
       if (price != null) {
+        const logicalX = chart.timeScale().coordinateToLogical(param.point.x);
         const red = arrowPending.price > price;
-        arrowPrimitive._preview = { t1: arrowPending.time, p1: arrowPending.price, t2: param.time, p2: price, red };
+        arrowPrimitive._preview = { l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: price, red };
         forceRepaint();
       }
     }
@@ -918,7 +930,7 @@
   // price than) the 2nd click, green otherwise ----
 
   class ArrowPrimitive {
-    constructor() { this._arrows = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, red }, ...]
+    constructor() { this._arrows = []; this._preview = null; this._chart = null; } // [{ l1, p1, l2, p2, red }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -932,8 +944,10 @@
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
                 const drawArrow = (a, alpha) => {
-                  const x1 = ts.timeToCoordinate(a.t1);
-                  const x2 = ts.timeToCoordinate(a.t2);
+                  // logicalToCoordinate (not timeToCoordinate) — extrapolates past the last/first
+                  // candle, so the arrow renders correctly even into space with no bar underneath.
+                  const x1 = ts.logicalToCoordinate(a.l1);
+                  const x2 = ts.logicalToCoordinate(a.l2);
                   const y1 = candleSeries.priceToCoordinate(a.p1);
                   const y2 = candleSeries.priceToCoordinate(a.p2);
                   if (x1 == null || x2 == null || y1 == null || y2 == null) return;
