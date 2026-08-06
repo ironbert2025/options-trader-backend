@@ -478,6 +478,13 @@
       return;
     }
 
+    const deltaSIdx = deltaSPrimitive._labels.findIndex(l => l.selected);
+    if (deltaSIdx !== -1) {
+      deltaSPrimitive._labels.splice(deltaSIdx, 1);
+      forceRepaint();
+      return;
+    }
+
     const arrowIdx = verticalArrowPrimitive._arrows.findIndex(a => a.selected);
     if (arrowIdx !== -1) {
       const removed = verticalArrowPrimitive._arrows[arrowIdx];
@@ -648,6 +655,21 @@
       const hadDzSzSelection = zoneLinesPrimitive._segments.some(s => s.selected);
       if (hadDzSzSelection) {
         zoneLinesPrimitive._segments.forEach(s => { s.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // ΔS label click selection — same idea as above.
+    if (deltaSPrimitive._labels.length > 0) {
+      const hitIdx = findDeltaSByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        deltaSPrimitive._labels.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadDeltaSSelection = deltaSPrimitive._labels.some(l => l.selected);
+      if (hadDeltaSSelection) {
+        deltaSPrimitive._labels.forEach(l => { l.selected = false; });
         forceRepaint();
       }
     }
@@ -1431,21 +1453,86 @@
     forceRepaint();
   }
 
-  // "ΔS=value" label at trade close — value is the absolute move of the underlying between entry
-  // and close (no sign, magnitude only). Δ is the actual Greek delta character (a triangle), per
-  // request, instead of spelling out "Delta". Reuses TextLabelsPrimitive (same as markExpired),
-  // anchored at the last candle like markStrike, drawn above the point to clear Lightweight
-  // Charts' own last-price label box.
-  function markDeltaS(entrySpot, closeSpot) {
-    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
-    if (allCandles.length === 0) return;
-    const last = allCandles[allCandles.length - 1];
+  // ---- "ΔS=value" label at trade close — own dedicated primitive (not TextLabelsPrimitive,
+  // which has no selection) so it can be click-selected and removed with Delete, same as the
+  // other drawing tools. value is the absolute move of the underlying between entry and close (no
+  // sign, magnitude only). Δ is the actual Greek delta character (a triangle), per request,
+  // instead of spelling out "Delta". Anchored at the trade's STRIKE price (same y as its green
+  // "Stk=xxx" line) and drawn right-aligned at the right edge, just BELOW that line — mirrors
+  // StrikeLinesPrimitive's own label, which sits just above it. ----
+
+  class DeltaSPrimitive {
+    constructor() { this._labels = []; this._chart = null; } // [{ price, text, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                self._labels.forEach(l => {
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (y == null) return;
+
+                  ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textBaseline = 'top';
+                  ctx.textAlign = 'right';
+                  const textX = scope.bitmapSize.width - 4 * scope.horizontalPixelRatio;
+                  const textY = y * scope.verticalPixelRatio + 2 * scope.verticalPixelRatio;
+
+                  if (l.selected) {
+                    const width = ctx.measureText(l.text).width;
+                    const height = 14 * scope.verticalPixelRatio;
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.strokeRect(textX - width - 2, textY - 2, width + 4, height + 4);
+                    ctx.restore();
+                  }
+
+                  ctx.fillStyle = '#ffeb3b';
+                  ctx.fillText(l.text, textX, textY);
+                  ctx.textAlign = 'left';
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const deltaSPrimitive = new DeltaSPrimitive();
+  let deltaSAttached = false;
+
+  function markDeltaS(entrySpot, closeSpot, strike) {
+    if (!deltaSAttached) { candleSeries.attachPrimitive(deltaSPrimitive); deltaSAttached = true; }
     const delta = Math.abs(closeSpot - entrySpot);
-    textLabelsPrimitive._labels.push({
-      time: last.time, price: last.close, text: `ΔS=${delta.toFixed(2)}`,
-      color: '#ffeb3b', bold: true, above: true
-    });
+    deltaSPrimitive._labels.push({ price: strike, text: `ΔS=${delta.toFixed(2)}`, selected: false });
     forceRepaint();
+  }
+
+  // Approximate CSS-pixel hit box for a right-aligned ΔS label (no exact ctx.measureText
+  // available outside the bitmap draw() context) — same tolerance-based approach as the other
+  // click hit-tests in this file.
+  function findDeltaSByClick(px, py) {
+    const chartWidthCss = chart.timeScale().width();
+    const tolerance = 4;
+    for (let i = deltaSPrimitive._labels.length - 1; i >= 0; i--) {
+      const l = deltaSPrimitive._labels[i];
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (y == null) continue;
+      const approxWidth = l.text.length * 7 + 8;
+      if (px >= chartWidthCss - 4 - approxWidth - tolerance && px <= chartWidthCss + tolerance &&
+          py >= y + 2 - tolerance && py <= y + 2 + 14 + tolerance) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   // ---- SMA overlay (optional — only enabled on panels that call configureSmas) ----

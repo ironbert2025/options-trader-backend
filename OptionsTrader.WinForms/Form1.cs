@@ -2253,13 +2253,14 @@ public partial class Form1 : Form
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
-        // "ΔS=value" marker on the 15m RTH+Overnight chart — |spot at close - spot at entry|.
-        // EntrySpotPrice is 0 for trades opened before this feature shipped (no reliable value to
-        // show), so those are skipped rather than drawing a misleading ΔS=<currentSpot>.
-        if (tag is { EntrySpotPrice: > 0 } && _lastSpotPrice > 0 &&
+        // "ΔS=value" marker on the 15m RTH+Overnight chart — |spot at close - spot at entry|,
+        // anchored at the trade's strike (same price as its green "Stk=xxx" line). EntrySpotPrice
+        // is 0 for trades opened before this feature shipped (no reliable value to show), so those
+        // are skipped rather than drawing a misleading ΔS=<currentSpot>.
+        if (tag is { EntrySpotPrice: > 0 } && _lastSpotPrice > 0 && decimal.TryParse(strike, out var strikeForDelta) &&
             _liveChartForms.TryGetValue(symbol, out var chartFormDelta) && !chartFormDelta.IsDisposed)
         {
-            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, _lastSpotPrice);
+            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDelta);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 

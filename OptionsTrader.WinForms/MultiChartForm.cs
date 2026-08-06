@@ -583,8 +583,8 @@ public class MultiChartForm : Form
     public Task MarkExpiredOnRthChartAsync() => _rthPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
 
     // "ΔS=value" label at trade close — panel 3 (15m RTH+Overnight) only, per explicit request.
-    public Task MarkDeltaSOnOvernightChartAsync(decimal entrySpot, decimal closeSpot) =>
-        _overnightPanel?.MarkDeltaSAsync(entrySpot, closeSpot) ?? Task.CompletedTask;
+    public Task MarkDeltaSOnOvernightChartAsync(decimal entrySpot, decimal closeSpot, decimal strike) =>
+        _overnightPanel?.MarkDeltaSAsync(entrySpot, closeSpot, strike) ?? Task.CompletedTask;
 
     // Green "Stk=xxx" line on all 3 panels — fired when a trade (demo or real) opens.
     public async Task MarkStrikeOnAllChartsAsync(decimal strike)
