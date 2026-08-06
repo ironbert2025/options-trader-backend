@@ -129,7 +129,7 @@
   let dzSzAttached = false;
 
   class ZoneLinesPrimitive {
-    constructor() { this._segments = []; this._chart = null; } // [{ time, price, color }, ...] — pairs at (2i, 2i+1) = (demand, supply)
+    constructor() { this._segments = []; this._chart = null; } // [{ time, price, color, selected }, ...] — pairs at (2i, 2i+1) = (demand, supply)
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -173,6 +173,18 @@
                   ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
                   ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
                   ctx.stroke();
+
+                  // Selected = yellow dashed overlay, same convention as gray Rect/T-Line/H-Line.
+                  if (seg.selected) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
                 });
               });
             }
@@ -198,7 +210,7 @@
   // handling needed) — just pushes the line C# already decided the time/price for.
   function addMirroredZoneLine(time, price, color) {
     if (!dzSzAttached) { candleSeries.attachPrimitive(zoneLinesPrimitive); dzSzAttached = true; }
-    zoneLinesPrimitive._segments.push({ time, price, color });
+    zoneLinesPrimitive._segments.push({ time, price, color, selected: false });
     dzSzAxisLabels.push(candleSeries.createPriceLine({
       price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
     }));
@@ -396,6 +408,21 @@
     return -1;
   }
 
+  // Returns the index of the DZ/SZ line (demand or supply, click point -> right edge, same shape
+  // as H-Line) within a few pixels of (px,py), or -1.
+  function findDzSzByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = zoneLinesPrimitive._segments.length - 1; i >= 0; i--) {
+      const seg = zoneLinesPrimitive._segments[i];
+      const x = ts.timeToCoordinate(seg.time);
+      const y = candleSeries.priceToCoordinate(seg.price);
+      if (x == null || y == null) continue;
+      if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
+    }
+    return -1;
+  }
+
   // Delete removes whichever gray rect, T-Line, H-Line, or vertical arrow is currently selected
   // (click on its border/line). A deleted T-Line is also reported to C# (TLineStore) so it
   // doesn't come back on the next session.
@@ -430,6 +457,23 @@
     const hLineIdx = hLinePrimitive._segments.findIndex(s => s.selected);
     if (hLineIdx !== -1) {
       hLinePrimitive._segments.splice(hLineIdx, 1);
+      forceRepaint();
+      return;
+    }
+
+    // DZ/SZ: removes the WHOLE zone (both demand+supply lines of the pair the selected line
+    // belongs to), not just the one line clicked — pairs are strictly consecutive (2i, 2i+1), so
+    // splicing only one would shift the pairing of every zone drawn after it. Splice the higher
+    // index first so the lower index stays valid.
+    const dzSzIdx = zoneLinesPrimitive._segments.findIndex(s => s.selected);
+    if (dzSzIdx !== -1) {
+      const pairStart = dzSzIdx % 2 === 0 ? dzSzIdx : dzSzIdx - 1;
+      zoneLinesPrimitive._segments.splice(pairStart + 1, 1);
+      zoneLinesPrimitive._segments.splice(pairStart, 1);
+      // dzSzAxisLabels stays in lockstep with _segments (1 price-line handle per pushed line, same
+      // index) — remove the same 2 slots so the right-axis price labels don't linger orphaned.
+      const removedLabels = dzSzAxisLabels.splice(pairStart, 2);
+      removedLabels.forEach(l => candleSeries.removePriceLine(l));
       forceRepaint();
       return;
     }
@@ -591,6 +635,23 @@
       }
     }
 
+    // DZ/SZ click selection — same idea as above, regardless of whether DZ/SZ drawing is armed.
+    // Delete removes the whole zone (both the demand and supply line of the pair), not just the
+    // one line clicked — see the keydown handler below.
+    if (zoneLinesPrimitive._segments.length > 0) {
+      const hitIdx = findDzSzByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        zoneLinesPrimitive._segments.forEach((s, i) => { s.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadDzSzSelection = zoneLinesPrimitive._segments.some(s => s.selected);
+      if (hadDzSzSelection) {
+        zoneLinesPrimitive._segments.forEach(s => { s.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // Vertical arrow click selection (1h panel) — same idea as gray rect/T-Line above.
     if (verticalArrowPrimitive._arrows.length > 0) {
       const hitIdx = findVerticalArrowByClick(param.point.x, param.point.y);
@@ -609,7 +670,7 @@
     if (dzSzArmed) {
       const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
 
-      zoneLinesPrimitive._segments.push({ time: clickTime, price, color });
+      zoneLinesPrimitive._segments.push({ time: clickTime, price, color, selected: false });
 
       dzSzAxisLabels.push(candleSeries.createPriceLine({
         price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
