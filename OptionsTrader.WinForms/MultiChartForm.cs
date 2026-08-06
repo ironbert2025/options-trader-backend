@@ -523,20 +523,25 @@ public class MultiChartForm : Form
         // and Rebote en Piso (bounces up off support) are both bullish/CALL (upper band). Cruce
         // en Piso (breaks down through support) and Rebote en Techo (rejected down off
         // resistance) are both bearish/PUT (lower band) — see
-        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening.
+        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening. Also mirrors the
+        // resolution's caption into crossLog (only the pre-market Piso/Techo LABELS are
+        // chart-only) with the armed direction appended on the same line, so it's clear at a
+        // glance what the next expected event is — crossLog-only, doesn't touch the Telegram
+        // caption or what gets persisted to EventLogStore/EventLogMarkdownWriter.
         if (hourlyPanel != null && rthPanel != null)
         {
             hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
             {
                 var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
                 rthPanel.ArmVolatilityOpeningWatch(bullish);
+
+                if (IsDisposed) return;
+                var direction = bullish ? "Alza" : "Baja";
+                BeginInvoke(() => crossLog.AppendText(
+                    $"{DateTime.Now:HH:mm:ss}  {caption} — evaluando Abriendo la Volatilidad ({direction}){Environment.NewLine}"));
             };
         }
-
-        // Only the pre-market Piso/Techo LABELS are chart-only (drawn once, no log line) — the
-        // real-time Cruce/Rebote resolution itself does get mirrored into crossLog, same as every
-        // other signal (Telegram + EventLogStore already happen inside ChartPanel itself).
-        if (hourlyPanel != null)
+        else if (hourlyPanel != null)
         {
             hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
             {
