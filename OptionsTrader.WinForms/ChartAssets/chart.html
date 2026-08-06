@@ -1633,7 +1633,7 @@
   // price action from whenever it was drawn (pre-market) onward. ----
 
   class PisoTechoRefLinePrimitive {
-    constructor() { this._lines = []; this._chart = null; } // [{ period, time, price, color, selected }, ...]
+    constructor() { this._lines = []; this._chart = null; } // [{ period, price, color, selected }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1645,10 +1645,8 @@
               if (!self._chart) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
-                const ts = self._chart.timeScale();
                 self._lines.forEach(l => {
-                  const xRaw = ts.timeToCoordinate(l.time);
-                  const x = xRaw == null ? 0 : xRaw;
+                  const x = 0; // full-width — see markPisoTechoRefLine for why it's not time-anchored
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (y == null) return;
 
@@ -1685,11 +1683,14 @@
   let pisoTechoRefLineAttached = false;
 
   function markPisoTechoRefLine(period, price) {
+    // Deliberately NOT anchored to allCandles (unlike markStrike) — this gets called right after
+    // a day/history load, before allCandles is necessarily populated yet (SimulatorForm calls
+    // EvaluatePisoTecho before RenderCurrentStep, and both are fire-and-forget into the WebView,
+    // so the order isn't guaranteed). Drawing full-width (left edge to right edge) sidesteps the
+    // race entirely instead of depending on timing.
     if (!pisoTechoRefLineAttached) { candleSeries.attachPrimitive(pisoTechoRefLinePrimitive); pisoTechoRefLineAttached = true; }
-    if (allCandles.length === 0) return;
-    const anchorTime = allCandles[allCandles.length - 1].time;
     pisoTechoRefLinePrimitive._lines = pisoTechoRefLinePrimitive._lines.filter(l => l.period !== period);
-    pisoTechoRefLinePrimitive._lines.push({ period, time: anchorTime, price, color: smaColors[period] || '#888888', selected: false });
+    pisoTechoRefLinePrimitive._lines.push({ period, price, color: smaColors[period] || '#888888', selected: false });
     forceRepaint();
   }
 
@@ -1699,14 +1700,12 @@
   }
 
   function findPisoTechoRefLineByClick(px, py) {
-    const ts = chart.timeScale();
     const tolerance = 6;
     for (let i = pisoTechoRefLinePrimitive._lines.length - 1; i >= 0; i--) {
       const l = pisoTechoRefLinePrimitive._lines[i];
-      const x = ts.timeToCoordinate(l.time);
       const y = candleSeries.priceToCoordinate(l.price);
-      if (x == null || y == null) continue;
-      if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
+      if (y == null) continue;
+      if (distToSegment(px, py, 0, y, chart.timeScale().width(), y) <= tolerance) return i;
     }
     return -1;
   }
