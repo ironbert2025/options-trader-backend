@@ -323,7 +323,7 @@ public class SimulatedChartPanel : Panel
             var evento    = crossed ? "Cruce" : "Rebote";
             var gapTag    = crossedByGapOpen && !crossedByClose ? " (gap)" : "";
             var caption   = $"{evento}{gapTag} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
-            OnPisoTechoOutcomeEvent?.Invoke(caption, justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
+            OnPisoTechoOutcomeEvent?.Invoke(AppendVolatilityArmSuffix(evento, pisoTecho, caption), justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
         }
 
         // Reference-line update — every watched period (Done or not, so the line keeps tracking
@@ -365,8 +365,18 @@ public class SimulatedChartPanel : Panel
             watch.Done = true;
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
             var caption = $"Cruce (gap) en {pisoTecho} — SMA{watch.Period} — Open {forming.Open:F2} (SMA{watch.Period} en vivo {liveSma.Value:F2})";
-            OnPisoTechoOutcomeEvent?.Invoke(caption, forming.Close, "PisoTechoCruce", pisoTecho, $"SMA{watch.Period}={liveSma.Value:F2}");
+            OnPisoTechoOutcomeEvent?.Invoke(AppendVolatilityArmSuffix("Cruce", pisoTecho, caption), forming.Close, "PisoTechoCruce", pisoTecho, $"SMA{watch.Period}={liveSma.Value:F2}");
         }
+    }
+
+    // Same rule as ChartPanel.AppendVolatilityArmSuffix — which direction "Abriendo la
+    // Volatilidad" gets armed in, appended directly to the caption so it's guaranteed to show up
+    // wherever this caption ends up logged.
+    private static string AppendVolatilityArmSuffix(string evento, string pisoTecho, string caption)
+    {
+        var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
+        var direction = bullish ? "Alza" : "Baja";
+        return $"{caption} — evaluando Abriendo la Volatilidad ({direction})";
     }
 
     // Same SMA window as Sma(period, endIndex), but the newest point is the live/forming candle's
@@ -711,11 +721,28 @@ public class SimulatedChartPanel : Panel
 
     public event Action<string>? OnVolatilityOpeningEvent;
 
+    // Informational only, log-only — see ChartPanel's identical copy for the full rationale: fires
+    // once at arm time if the bands are already widening right then, without waiting for the spot
+    // to touch a band (that's still what OnVolatilityOpeningEvent itself requires).
+    public event Action<string>? OnVolatilityAlreadyOpenEvent;
+
     public void ArmVolatilityOpeningWatch(bool bullish)
     {
         if (_volatilityOpeningFired) return;
         _volatilityOpeningArmed = true;
         _volatilityOpeningBullish = bullish;
+
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (current == null || earlier == null) return;
+
+        var currentWidth = current.Value.Upper - current.Value.Lower;
+        var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+        if (currentWidth <= earlierWidth) return;
+
+        var bandLabel = bullish ? "Superior" : "Inferior";
+        var caption = $"Bandas de Bollinger ya abiertas al armar — ancho {currentWidth:F2} (vs {earlierWidth:F2} hace {VolatilityWidthLookback} velas) — esperando que el spot toque la Banda {bandLabel}";
+        OnVolatilityAlreadyOpenEvent?.Invoke(caption);
     }
 
     private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)

@@ -523,11 +523,10 @@ public class MultiChartForm : Form
         // and Rebote en Piso (bounces up off support) are both bullish/CALL (upper band). Cruce
         // en Piso (breaks down through support) and Rebote en Techo (rejected down off
         // resistance) are both bearish/PUT (lower band) — see
-        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening. Also mirrors the
-        // resolution's caption into crossLog (only the pre-market Piso/Techo LABELS are
-        // chart-only) with the armed direction appended on the same line, so it's clear at a
-        // glance what the next expected event is — crossLog-only, doesn't touch the Telegram
-        // caption or what gets persisted to EventLogStore/EventLogMarkdownWriter.
+        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening. caption already carries
+        // the "evaluando Abriendo la Volatilidad (Alza/Baja)" suffix (ChartPanel.
+        // AppendVolatilityArmSuffix) — baked in at the source instead of appended here, so it can't
+        // be silently dropped for any resolution path (close-based, live gap-cross, etc).
         if (hourlyPanel != null && rthPanel != null)
         {
             hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
@@ -536,9 +535,7 @@ public class MultiChartForm : Form
                 rthPanel.ArmVolatilityOpeningWatch(bullish);
 
                 if (IsDisposed) return;
-                var direction = bullish ? "Alza" : "Baja";
-                BeginInvoke(() => crossLog.AppendText(
-                    $"{DateTime.Now:HH:mm:ss}  {caption} — evaluando Abriendo la Volatilidad ({direction}){Environment.NewLine}"));
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
             };
         }
         else if (hourlyPanel != null)
@@ -552,6 +549,14 @@ public class MultiChartForm : Form
         if (rthPanel != null)
         {
             rthPanel.OnVolatilityOpeningEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+
+            // "Ya abiertas al armar" — informational heads-up, log-only, doesn't wait for the
+            // spot to actually touch a band (see ChartPanel.OnVolatilityAlreadyOpenEvent).
+            rthPanel.OnVolatilityAlreadyOpenEvent += message =>
             {
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));

@@ -325,6 +325,10 @@ public class SimulatorForm : Form
         // Piso/Techo watch; log-only, no events_log.csv, same as Piso/Techo above.
         _rthChart.OnVolatilityOpeningEvent += msg => LogSimEvent(msg);
 
+        // "Ya abiertas al armar" — informational heads-up, doesn't wait for the spot to touch a
+        // band (see SimulatedChartPanel.OnVolatilityAlreadyOpenEvent).
+        _rthChart.OnVolatilityAlreadyOpenEvent += msg => LogSimEvent(msg);
+
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
             if (IsDisposed) return;

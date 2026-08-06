@@ -1039,7 +1039,7 @@ public class ChartPanel : Panel
             var caption   = $"{evento}{gapTag} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
             _ = SendChartToTelegramAsync(caption);
             EventLogStore.Append(_symbol, "Hora", $"PisoTecho{evento}", pisoTecho, caption, justClosed.Close, $"SMA{watch.Period}={currentSma.Value:F2}");
-            OnPisoTechoResolvedEvent?.Invoke(evento, pisoTecho, caption);
+            OnPisoTechoResolvedEvent?.Invoke(evento, pisoTecho, AppendVolatilityArmSuffix(evento, pisoTecho, caption));
         }
     }
 
@@ -1074,7 +1074,7 @@ public class ChartPanel : Panel
             var caption = $"Cruce (gap) en {pisoTecho} — SMA{watch.Period} — Open {_liveBucket.Open:F2} (SMA{watch.Period} en vivo {liveSma.Value:F2})";
             _ = SendChartToTelegramAsync(caption);
             EventLogStore.Append(_symbol, "Hora", "PisoTechoCruce", pisoTecho, caption, livePrice, $"SMA{watch.Period}={liveSma.Value:F2}");
-            OnPisoTechoResolvedEvent?.Invoke("Cruce", pisoTecho, caption);
+            OnPisoTechoResolvedEvent?.Invoke("Cruce", pisoTecho, AppendVolatilityArmSuffix("Cruce", pisoTecho, caption));
         }
     }
 
@@ -1114,11 +1114,43 @@ public class ChartPanel : Panel
     // Fires with a human-readable caption once "Abriendo la Volatilidad" is confirmed.
     public event Action<string>? OnVolatilityOpeningEvent;
 
+    // Informational only — fires once, right when the watch is armed, if the Bollinger Bands
+    // already show widening AT THAT INSTANT (before any tick has even been checked against them).
+    // Doesn't wait for the spot to touch a band — that's still required for OnVolatilityOpeningEvent
+    // itself; this is purely a heads-up that the "bands widening" half of the condition is already
+    // satisfied, so from here it's just a matter of price reaching the band. Log-only (crossLog),
+    // no Telegram/EventLogStore — those still only fire once the real event confirms.
+    public event Action<string>? OnVolatilityAlreadyOpenEvent;
+
     public void ArmVolatilityOpeningWatch(bool bullish)
     {
         if (_volatilityOpeningFired) return; // already fired once this session — don't rearm
         _volatilityOpeningArmed = true;
         _volatilityOpeningBullish = bullish;
+
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (current == null || earlier == null) return;
+
+        var currentWidth = current.Value.Upper - current.Value.Lower;
+        var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+        if (currentWidth <= earlierWidth) return; // not open yet at arm time — nothing to report
+
+        var bandLabel = bullish ? "Superior" : "Inferior";
+        var caption = $"Bandas de Bollinger ya abiertas al armar — ancho {currentWidth:F2} (vs {earlierWidth:F2} hace {VolatilityWidthLookback} velas) — esperando que el spot toque la Banda {bandLabel}";
+        OnVolatilityAlreadyOpenEvent?.Invoke(caption);
+    }
+
+    // Shared by every Piso/Techo resolution path (close-based Cruce/Rebote, live gap-cross) — the
+    // rule for which direction "Abriendo la Volatilidad" gets armed in, kept in one place instead
+    // of duplicated in MultiChartForm. Appended directly to the caption BEFORE it's fired, so the
+    // crossLog line always carries it — a downstream consumer appending it separately (the
+    // previous design) turned out to silently miss it for the live gap-cross path.
+    private static string AppendVolatilityArmSuffix(string evento, string pisoTecho, string caption)
+    {
+        var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
+        var direction = bullish ? "Alza" : "Baja";
+        return $"{caption} — evaluando Abriendo la Volatilidad ({direction})";
     }
 
     private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)
