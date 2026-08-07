@@ -515,6 +515,13 @@ public class MultiChartForm : Form
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
+
+            // Supply Zone rebote — symmetric counterpart, same self-contained pattern.
+            overnightPanel.OnSupplyZoneReboundEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
         }
 
         // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA

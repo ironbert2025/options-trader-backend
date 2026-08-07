@@ -396,6 +396,14 @@ public class SimulatorForm : Form
                 $"Proximal={proximal:F2};Distal={distal:F2}");
         };
 
+        // Supply Zone rebote — symmetric counterpart, same treatment (logged + persisted).
+        _fullChart.OnSupplyZoneReboundEvent += (caption, price, proximal, distal) =>
+        {
+            LogSimEvent(caption);
+            EventLogStore.Append(_symbol, "15Min", "SupplyZoneRebound", "Baja", caption, price,
+                $"Proximal={proximal:F2};Distal={distal:F2}");
+        };
+
         // Piso/Techo auto-armed Cruce/Rebote (1h chart) — log-only, no events_log.csv (unlike
         // Demand Zone above), per explicit request.
         _hourlyChart.OnPisoTechoOutcomeEvent += (caption, price, eventType, direction, reference) =>

@@ -98,20 +98,32 @@ public class ChartPanel : Panel
     private bool _crossUp;      // fixed for the whole sequence once the first period is armed
     private bool _crossFinished;
 
-    // ---- Demand Zone rebote (15m RTH+Overnight panel only — see EvaluateDemandZoneRebounds) ----
+    // ---- Demand/Supply Zone rebote (15m RTH+Overnight panel only) ----
     // Every DZ/SZ line drawn (toggleDzSz — see CoreWebView2_WebMessageReceived's "dzsz" case)
-    // arrives one at a time; every 2 form a pair. A pair only becomes a tracked demand zone if the
-    // first (green/"demand") line ends up ABOVE the second (red/"supply") one — same geometry
-    // chart.html's own fill already uses to color a pair as a demand zone. Cleared by ClearDrawingsAsync.
+    // arrives one at a time; every 2 form a pair. Geometry decides which kind of zone it is (per
+    // the user's own convention — 1st click is always the green/Proximal line, 2nd is always the
+    // red/Distal line, but which one ends up numerically higher tells them apart):
+    //   Proximal ABOVE Distal -> Demand Zone, drawn BELOW price (bounce UP expected).
+    //   Proximal BELOW Distal -> Supply Zone, drawn ABOVE price (bounce DOWN expected).
+    // Cleared by ClearDrawingsAsync.
     private readonly List<decimal> _dzSzPendingPrices = new(); // holds an odd single line waiting for its pair
     private readonly List<DemandZoneState> _demandZones = new();
+    private readonly List<SupplyZoneState> _supplyZones = new();
 
     private sealed class DemandZoneState
     {
-        public decimal Proximal; // green line — upper boundary
+        public decimal Proximal; // green line — upper boundary (closer to price, zone is below it)
         public decimal Distal;   // red line — lower boundary
         public bool Entered;
         public bool Done; // Confirmed (rebote fired) or Broken (Distal breached) — stop evaluating
+    }
+
+    private sealed class SupplyZoneState
+    {
+        public decimal Proximal; // green line — lower boundary (closer to price, zone is above it)
+        public decimal Distal;   // red line — upper boundary
+        public bool Entered;
+        public bool Done;
     }
 
     // Fires once the last armed period's event has been reported — MultiChartForm uses this to
@@ -144,6 +156,9 @@ public class ChartPanel : Panel
     // RTH+Overnight panel only — see EvaluateDemandZoneRebounds). Pushes its own screenshot to
     // Telegram the same self-contained way Cross-SMA does (SendChartToTelegramAsync below).
     public event Action<string>? OnDemandZoneReboundEvent;
+
+    // Symmetric counterpart — Rebote en Zona de Supply (see EvaluateSupplyZoneRebounds).
+    public event Action<string>? OnSupplyZoneReboundEvent;
 
     // Fires (evento, pisoTecho, caption) every time a Piso/Techo watch resolves — 1h panel only.
     // MultiChartForm uses evento/pisoTecho to arm the 15m RTH panel's "Abriendo la Volatilidad"
@@ -420,6 +435,7 @@ public class ChartPanel : Panel
         {
             _dzSzPendingPrices.Clear();
             _demandZones.Clear();
+            _supplyZones.Clear();
         }
     }
 
@@ -509,8 +525,10 @@ public class ChartPanel : Panel
                     {
                         var (demandPrice, supplyPrice) = (_dzSzPendingPrices[0], _dzSzPendingPrices[1]);
                         _dzSzPendingPrices.Clear();
-                        if (demandPrice > supplyPrice) // demand (green) above supply (red) -> genuine demand zone
+                        if (demandPrice > supplyPrice) // 1st line (green) above 2nd (red) -> Demand Zone
                             _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
+                        else if (demandPrice < supplyPrice) // 1st line (green) below 2nd (red) -> Supply Zone
+                            _supplyZones.Add(new SupplyZoneState { Proximal = demandPrice, Distal = supplyPrice });
                     }
                     break;
                 }
@@ -864,6 +882,42 @@ public class ChartPanel : Panel
                 OnDemandZoneReboundEvent?.Invoke(caption);
                 _ = SendChartToTelegramAsync(caption);
                 EventLogStore.Append(_symbol, "15Min", "DemandZoneRebound", "Alza", caption, justClosed.Close,
+                    $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
+            }
+        }
+    }
+
+    // Supply Zone rebote — exact mirror of EvaluateDemandZoneRebounds, flipped: the zone sits
+    // ABOVE price (Proximal below Distal), approached from below by the candle's High instead of
+    // Low, broken if High breaches Distal, and confirmed once Close ends up back BELOW Proximal
+    // (bearish rejection instead of bullish).
+    private void EvaluateSupplyZoneRebounds(CandleData justClosed)
+    {
+        foreach (var zone in _supplyZones)
+        {
+            if (zone.Done) continue;
+
+            if (!zone.Entered)
+            {
+                var touchedOrClose = justClosed.High >= zone.Proximal ||
+                    (zone.Proximal - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close);
+                if (!touchedOrClose) continue;
+                zone.Entered = true;
+            }
+
+            if (justClosed.High > zone.Distal)
+            {
+                zone.Done = true; // broken
+                continue;
+            }
+
+            if (justClosed.Close < zone.Proximal)
+            {
+                zone.Done = true;
+                var caption = $"Rebote en Zona de Supply — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
+                OnSupplyZoneReboundEvent?.Invoke(caption);
+                _ = SendChartToTelegramAsync(caption);
+                EventLogStore.Append(_symbol, "15Min", "SupplyZoneRebound", "Baja", caption, justClosed.Close,
                     $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
             }
         }
@@ -1523,6 +1577,7 @@ public class ChartPanel : Panel
                 else if (_mode == ChartPanelMode.Fifteen_Full)
                 {
                     EvaluateDemandZoneRebounds(_liveBucket);
+                    EvaluateSupplyZoneRebounds(_liveBucket);
                 }
                 else if (_mode == ChartPanelMode.Fifteen_RTH)
                 {

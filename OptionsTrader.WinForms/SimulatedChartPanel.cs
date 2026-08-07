@@ -549,24 +549,36 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
         _dzSzPendingPrices.Clear();
         _demandZones.Clear();
+        _supplyZones.Clear();
     }
 
-    // ---- Demand Zone rebote — ported from ChartPanel.EvaluateDemandZoneRebounds. Log-only (no
-    // Telegram, no EventLogStore call here — SimulatorForm's handler does that, since it's the
-    // one that knows the current symbol; see the OnDemandZoneReboundEvent subscription). ----
+    // ---- Demand/Supply Zone rebote — ported from ChartPanel.EvaluateDemandZoneRebounds/
+    // EvaluateSupplyZoneRebounds. Log-only (no Telegram, no EventLogStore call here —
+    // SimulatorForm's handler does that, since it's the one that knows the current symbol; see the
+    // OnDemandZoneReboundEvent/OnSupplyZoneReboundEvent subscriptions). ----
     private readonly List<decimal> _dzSzPendingPrices = new();
     private readonly List<DemandZoneState> _demandZones = new();
+    private readonly List<SupplyZoneState> _supplyZones = new();
 
     private sealed class DemandZoneState
     {
-        public decimal Proximal; // green line — upper boundary
+        public decimal Proximal; // green line — upper boundary (closer to price, zone is below it)
         public decimal Distal;   // red line — lower boundary
+        public bool Entered;
+        public bool Done;
+    }
+
+    private sealed class SupplyZoneState
+    {
+        public decimal Proximal; // green line — lower boundary (closer to price, zone is above it)
+        public decimal Distal;   // red line — upper boundary
         public bool Entered;
         public bool Done;
     }
 
     // Fires (caption, price, proximal, distal) once per confirmed rebote.
     public event Action<string, decimal, decimal, decimal>? OnDemandZoneReboundEvent;
+    public event Action<string, decimal, decimal, decimal>? OnSupplyZoneReboundEvent;
 
     // Same case-1/case-2 proximity idea as EvaluateCrossings' bounce detection — a candle whose
     // Low falls short of Proximal but within BounceProximityRatio of the rejection move's size
@@ -597,6 +609,37 @@ public class SimulatedChartPanel : Panel
                 zone.Done = true;
                 var caption = $"Rebote en Zona de Demanda — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
                 OnDemandZoneReboundEvent?.Invoke(caption, justClosed.Close, zone.Proximal, zone.Distal);
+            }
+        }
+    }
+
+    // Supply Zone rebote — exact mirror, flipped (High instead of Low, broken if High > Distal,
+    // confirmed if Close ends up back BELOW Proximal). See ChartPanel's identical copy.
+    private void EvaluateSupplyZoneRebounds(CandleData justClosed)
+    {
+        foreach (var zone in _supplyZones)
+        {
+            if (zone.Done) continue;
+
+            if (!zone.Entered)
+            {
+                var touchedOrClose = justClosed.High >= zone.Proximal ||
+                    (zone.Proximal - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close);
+                if (!touchedOrClose) continue;
+                zone.Entered = true;
+            }
+
+            if (justClosed.High > zone.Distal)
+            {
+                zone.Done = true;
+                continue;
+            }
+
+            if (justClosed.Close < zone.Proximal)
+            {
+                zone.Done = true;
+                var caption = $"Rebote en Zona de Supply — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
+                OnSupplyZoneReboundEvent?.Invoke(caption, justClosed.Close, zone.Proximal, zone.Distal);
             }
         }
     }
@@ -655,6 +698,8 @@ public class SimulatedChartPanel : Panel
                     _dzSzPendingPrices.Clear();
                     if (demandPrice > supplyPrice)
                         _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
+                    else if (demandPrice < supplyPrice)
+                        _supplyZones.Add(new SupplyZoneState { Proximal = demandPrice, Distal = supplyPrice });
                 }
                 return;
             }
@@ -839,6 +884,7 @@ public class SimulatedChartPanel : Panel
             _crossFinished = false;
             _tLineSignalFired = false;
             foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
+            foreach (var zone in _supplyZones) { zone.Entered = false; zone.Done = false; }
             foreach (var watch in _pisoTechoWatches) watch.Done = false;
             _volatilityOpeningArmed = false;
             _volatilityOpeningFired = false;
@@ -850,6 +896,7 @@ public class SimulatedChartPanel : Panel
             EvaluateCrossings(closedNow[i]);
             EvaluateTLineSignal(closedNow[i]);
             EvaluateDemandZoneRebounds(closedNow[i]);
+            EvaluateSupplyZoneRebounds(closedNow[i]);
             EvaluatePisoTechoWatches(closedNow[i]);
             EvaluateVolatilityOpening(closedNow[i].Close);
         }
