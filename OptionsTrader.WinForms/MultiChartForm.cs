@@ -1,3 +1,4 @@
+using OptionsTrader.Application.DTOs.Streaming;
 using OptionsTrader.Application.Interfaces;
 using OptionsTrader.Infrastructure.Schwab;
 using System.Linq;
@@ -402,6 +403,16 @@ public class MultiChartForm : Form
             Size     = new Size(70, 24)
         };
 
+        // Stops the auto-push-on-every-closed-candle Telegram loop that starts automatically once
+        // a Demand/Supply zone rebote confirms (see ChartPanel.OnAutoZonePushTickEvent) — this is
+        // the ONLY way to stop it; a future rebote (a different zone) re-arms it again.
+        var btnStopPush = new Button
+        {
+            Text     = "Stop Push",
+            Location = new Point(152, 30),
+            Size     = new Size(80, 24)
+        };
+
         // Live "time — price" readout, updated on every raw tick this panel receives via the
         // WebSocket — not tied to candle formation, so it updates even mid-bucket.
         var lblLiveTick = new Label
@@ -455,12 +466,14 @@ public class MultiChartForm : Form
             var on = await overnightPanel.ToggleArrowModeAsync();
             btnArrow.BackColor = on ? Color.LightYellow : SystemColors.Control;
         };
+        btnStopPush.Click += (s, e) => overnightPanel?.StopAutoZonePush();
 
         toolsHost.Controls.Add(btnDzSz);
         toolsHost.Controls.Add(btnRect);
         toolsHost.Controls.Add(btnClear);
         toolsHost.Controls.Add(btn5Min);
         toolsHost.Controls.Add(btnArrow);
+        toolsHost.Controls.Add(btnStopPush);
         toolsHost.Controls.Add(lblLiveTick);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
@@ -522,6 +535,11 @@ public class MultiChartForm : Form
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
+
+            // Auto-push loop armed by either rebote above — fires on EVERY closed 15m candle from
+            // then on, pushing the combined 3-chart snapshot each time, until "Stop Push" is
+            // clicked (see btnStopPush) or a fresh rebote later re-arms it.
+            overnightPanel.OnAutoZonePushTickEvent += candle => _ = SendAutoZonePushAsync(candle);
         }
 
         // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA
@@ -743,6 +761,48 @@ public class MultiChartForm : Form
         {
             // Best-effort — never let a Telegram failure affect the chart/detection logic, but no
             // longer silent: mirrored into crossLog same as every other push failure.
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined 3-chart snapshot on every closed 15m candle while the auto-push loop is
+    // armed (see ChartPanel.OnAutoZonePushTickEvent) — a Demand/Supply zone rebote confirmed and
+    // "Stop Push" hasn't been clicked since. Same best-effort pattern as every other Telegram push.
+    private async Task SendAutoZonePushAsync(CandleData candle)
+    {
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
+
+            var caption = $"Auto-push Rebote — Close {candle.Close:F2}";
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_AutoZonePush_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "AutoZonePush", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
             LogTelegramPushFailure(ex.Message);
         }
     }

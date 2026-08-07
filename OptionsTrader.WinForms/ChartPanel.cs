@@ -170,6 +170,14 @@ public class ChartPanel : Panel
     // Symmetric counterpart — Rebote en Zona de Supply (see EvaluateSupplyZoneRebounds).
     public event Action<string>? OnSupplyZoneReboundEvent;
 
+    // Armed by EvaluateDemandZoneRebounds/EvaluateSupplyZoneRebounds the moment a rebote confirms
+    // — from then on, OnAutoZonePushTickEvent fires on every closed 15m candle (below) until
+    // StopAutoZonePush() disarms it (or a new rebote re-arms it later). MultiChartForm listens for
+    // the tick event and pushes the combined 3-chart snapshot to Telegram each time.
+    private bool _autoZonePushArmed;
+    public event Action<CandleData>? OnAutoZonePushTickEvent;
+    public void StopAutoZonePush() => _autoZonePushArmed = false;
+
     // Fires (evento, pisoTecho, caption) every time a Piso/Techo watch resolves — 1h panel only.
     // MultiChartForm uses evento/pisoTecho to arm the 15m RTH panel's "Abriendo la Volatilidad"
     // watch (see EvaluateVolatilityOpening on that panel), and mirrors caption into crossLog —
@@ -888,6 +896,7 @@ public class ChartPanel : Panel
             if (justClosed.Close > zone.Proximal)
             {
                 zone.Done = true;
+                _autoZonePushArmed = true; // start auto-pushing the combined 3-chart image on every closed candle from here
                 var caption = $"Rebote en Zona de Demanda — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
                 OnDemandZoneReboundEvent?.Invoke(caption);
                 _ = SendChartToTelegramAsync(caption);
@@ -924,6 +933,7 @@ public class ChartPanel : Panel
             if (justClosed.Close < zone.Proximal)
             {
                 zone.Done = true;
+                _autoZonePushArmed = true; // start auto-pushing the combined 3-chart image on every closed candle from here
                 var caption = $"Rebote en Zona de Supply — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
                 OnSupplyZoneReboundEvent?.Invoke(caption);
                 _ = SendChartToTelegramAsync(caption);
@@ -1720,6 +1730,11 @@ public class ChartPanel : Panel
                 {
                     EvaluateDemandZoneRebounds(_liveBucket);
                     EvaluateSupplyZoneRebounds(_liveBucket);
+
+                    // Fires on EVERY closed 15m candle while armed (a rebote just confirmed above,
+                    // possibly on this very candle, or on an earlier one still in progress) —
+                    // MultiChartForm captures+pushes the combined 3-chart snapshot each time.
+                    if (_autoZonePushArmed) OnAutoZonePushTickEvent?.Invoke(_liveBucket);
                 }
                 else if (_mode == ChartPanelMode.Fifteen_RTH)
                 {
