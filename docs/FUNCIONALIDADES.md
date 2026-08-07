@@ -218,7 +218,7 @@ A partir del radio **Trade** / **Trade-Target**, el click en un Strike envía un
 - **Dos fuentes en paralelo**, guardadas por separado para poder comparar cuál sigue mejor al precio real (ej. ThinkorSwim):
   - `TickPriceStore` — una fila por minuto, derivada del cierre de cada barra de `CHART_EQUITY`. `C:\OptionsData\MarketData\Ticks\{Symbol}\{Symbol}_Ticks_{yyyyMMdd}.csv` (segundos).
   - `LevelOneTickStore` — el último precio real (`LEVEL_ONE_EQUITIES`), varias veces por segundo. `C:\OptionsData\MarketData\TicksLevelOne\{Symbol}\{Symbol}_L1Ticks_{yyyyMMdd}.csv` (milisegundos).
-- Solo la instancia "hub" (la que tiene la conexión real a Schwab) escribe — sin riesgo de filas duplicadas entre instancias. Ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md#fuentes-de-precio-chart_equity-vs-level_one_equities).
+- La instancia "hub" (conexión real a Schwab) escribe siempre; una instancia que lee un hub **remoto** en otra PC ahora también escribe su propio historial local (mismas rutas), para poder correr el Simulador/Sim 4 ETF en esa máquina. Un cliente del hub en la misma PC no vuelve a escribir (evita duplicar lo que el hub ya guardó). Ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md#fuentes-de-precio-chart_equity-vs-level_one_equities).
 
 ---
 
@@ -311,12 +311,16 @@ Puntos clave (detalle completo en [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_ST
 
 - **Una sola conexión de streaming** compartida entre los 3 paneles, y entre múltiples instancias del programa corriendo a la vez (una por ticker) vía un **hub local** (`CandleHubServer`/`CandleHubClient`) — incluso puede leerse desde **otra PC en la misma red** (botón "Hub Host").
 - **Dos fuentes de precio en paralelo**: `CHART_EQUITY` (barras de 1 minuto, gobierna Open/High/Low y los límites de cada vela) y `LEVEL_ONE_EQUITIES` (último precio real, varias veces por segundo, actualiza el `Close` de la vela en formación en tiempo real).
-- **Indicadores**: SMA 20/40/100/200 (panel 1h), Bollinger Bands 20/2 (panel 15m RTH), monitores de cruce de SMA con push a Telegram.
+- **Indicadores**: SMA 20/40/100/200 (panel 1h), Bollinger Bands 20/2 (panel 15m RTH).
+- **Líneas rojas de High/Low del día anterior**: se dibujan automáticamente al abrir el chart (en los 3 paneles), salteando el lado si el precio ya gapeó más allá de él. Borrar una H-Line (manual o auto-dibujada) se sincroniza en los 3 paneles.
+- **Banner "Expuesto en 3 charts"**: en premarket, si el precio rompe el mismo lado de Bollinger(20,2) en Daily, 1h y 15m RTH a la vez, aparece un banner amarillo arriba del panel 15m RTH.
+- **Auto-push a Telegram tras rebote DZ/SZ**: una vez confirmado un rebote de Zona de Demanda/Oferta en el panel 15m RTH+Overnight, se envía automáticamente un snapshot combinado de los 3 charts a Telegram en cada vela de 15m que cierra, hasta pulsar "Stop Push".
 - **Vista Daily** en el panel 1h: agrega hasta 200 días de historial horario en velas diarias.
-- **Herramientas de dibujo** (T-Line, H-Line, rectángulos, zonas DZ/SZ, flechas, texto Piso/Techo) — seleccionables y borrables con la tecla Delete; T-Line y flechas verticales del panel 1h se **persisten por símbolo** entre sesiones.
+- **Herramientas de dibujo** (T-Line, H-Line, rectángulos, zonas DZ/SZ, flechas) — seleccionables y borrables con la tecla Delete; T-Line y flechas verticales del panel 1h se **persisten por símbolo** entre sesiones. El toggle manual Cross-SMA y la herramienta de texto Piso/Techo fueron removidos del Live Chart en vivo (el sistema automático de Piso/Techo sigue activo — ver [`SENALES_Y_ESTRATEGIAS.md`](SENALES_Y_ESTRATEGIAS.md)).
 - **Línea azul de pre-market** (panel 15m RTH): si se abre el chart antes de las 9:30 AM ET, sigue el precio en vivo hasta la apertura y ahí se congela — no se persiste, cada apertura reinicia el proceso.
 - **Snapshot local de los 3 charts** al registrar un trade (ver §7).
 - Ventana **"Block Mov"**: 4 charts de 1h (SPY/QQQ/DIA/IWM) lado a lado, para ver el movimiento del mercado en conjunto.
+- Ventana **"Sim 4 ETF"** (`FourEtfSimulatorForm`): simulador de repetición offline (disco, sin streaming) de SPY/QQQ/IWM/DIA en grid 2x2 (15m RTH+Overnight), con Play/pause compartido y un único toggle DZ/SZ para las 4 charts, más grid de cadena de opciones con selector de símbolo.
 
 ---
 

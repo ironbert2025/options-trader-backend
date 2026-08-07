@@ -12,9 +12,13 @@ duplicación intencional.
 
 ---
 
-## 1. Cross-SMA manual (Cruce / Rebote) — panel 1h
+## 1. Cross-SMA manual (Cruce / Rebote) — panel 1h (solo Simulador)
 
-Monitores manuales activables por botón (↑/↓ × SMA 20/40/100/200) en el panel de 1h. Al armar un
+Removido del Live Chart en vivo (los 4 pares de toggles ↑/↓ y la lógica que los maneja se sacaron
+de `ChartPanel.cs`/`MultiChartForm.cs`). La misma mecánica sigue viva únicamente en el
+**Simulador** (`SimulatorForm.cs`/`SimulatedChartPanel.cs` — ver
+[`SIMULADOR_TELEGRAM_Y_REGISTRO.md`](SIMULADOR_TELEGRAM_Y_REGISTRO.md) §2), sin equivalente en la
+app en vivo. Monitores manuales activables por botón (↑/↓ × SMA 20/40/100/200). Al armar un
 monitor:
 
 - Se determina la dirección (`_crossUp`) comparando el precio actual contra la SMA elegida: si el
@@ -45,8 +49,9 @@ la SMA desde su lado y fue rechazada de vuelta, cerrando del lado original.
 - **Caso 2** — la mecha se quedó corta, pero a menos del 30% (`BounceProximityRatio`) del tamaño
   del propio movimiento de rechazo — "fue a buscarla y casi la toca".
 
-Cada resolución (Cruce o Rebote) dispara `SendChartToTelegramAsync` (captura del panel + caption) y
-`EventLogStore.Append(..., "CrossSMA...", ...)`.
+Cada resolución (Cruce o Rebote) solo escribe una línea en el log de texto del Simulador
+(`LogSimEvent`) — sin Telegram ni `EventLogStore`, a diferencia de las demás señales de este
+documento que sí corren en la app en vivo.
 
 ## 2. Piso / Techo auto-armado — panel 1h
 

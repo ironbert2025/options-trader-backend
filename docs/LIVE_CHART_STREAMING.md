@@ -48,7 +48,7 @@ Al validar contra tráfico real se detectó que el chart no coincidía exactamen
 - **Se guarda la data cruda de ambas fuentes por separado**, justo para poder comparar mañana cuál sigue mejor al precio real:
   - `TickPriceStore` (existente) — 1 fila/minuto, derivada de `CHART_EQUITY`. `C:\OptionsData\MarketData\Ticks\{Symbol}\{Symbol}_Ticks_{yyyyMMdd}.csv`.
   - `LevelOneTickStore` (nuevo) — cada tick de `LEVEL_ONE_EQUITIES`, milisegundos. `C:\OptionsData\MarketData\TicksLevelOne\{Symbol}\{Symbol}_L1Ticks_{yyyyMMdd}.csv`.
-- Relayado por el hub local (`CandleHubServer.BroadcastLevelOne` / `CandleHubClient.OnLevelOneTick`) — todas las instancias se benefician, no solo la que tiene la conexión real.
+- Relayado por el hub local (`CandleHubServer.BroadcastLevelOne` / `CandleHubClient.OnLevelOneTick`) — todas las instancias se benefician, no solo la que tiene la conexión real. Una instancia que lee un hub **remoto** (otra PC en la LAN) también escribe su propio `TickPriceStore`/`LevelOneTickStore` local (antes solo escribía la instancia hub) — necesario para que el Simulador/"Sim 4 ETF" tengan datos que reproducir en esa máquina.
 
 ## 4. Manejo de zona horaria (resuelto, no tocar sin razón)
 
@@ -64,7 +64,9 @@ Schwab's `pricehistory` (REST, historial) solo devuelve velas de 1 minuto — `C
 
 - **SMA 20/40/100/200** — panel 1h, calculadas en JS (`configureSmas`). Sin marcadores de hover (`crosshairMarkerVisible: false`).
 - **Bollinger Bands (20, 2 std devs)** — panel 1h y 15m RTH (`configureBollinger`).
-- **Monitores Cross-SMA** — panel 1h, 8 toggles (↑/↓ × 20/40/100/200). Al armarse, cada cruce genuino de una vela cerrada dispara un push a Telegram con el chart (`SendChartToTelegramAsync`).
+- **Monitores Cross-SMA (manual)** — **removidos del Live Chart en vivo**; la misma lógica de toggles (↑/↓ × 20/40/100/200) y push a Telegram sigue existiendo, pero solo en el **Simulador** (`SimulatorForm.cs`/`SimulatedChartPanel.cs`), sin equivalente en `MultiChartForm`.
+- **Líneas rojas de High/Low del día anterior** — auto-dibujadas al abrir el chart en los 3 paneles (`ChartPanel.EvaluatePrevDayHiLoAsync`/`DrawPrevDayHiLoAsync`); un lado se salta si el precio ya gapeó más allá de él. Borrar una H-Line se sincroniza entre los 3 paneles (`OnHLineDeletedEvent`).
+- **Banner "Expuesto en 3 charts"** — en premarket, si el precio en vivo rompe el mismo lado de Bollinger(20,2) en Daily + 1h + 15m RTH simultáneamente, aparece arriba del panel 15m RTH (`ChartPanel.GetBollingerDirection`/`GetDailyBollingerDirection`, orquestado en `MultiChartForm`).
 
 ## 7. Herramientas de dibujo
 
@@ -79,7 +81,6 @@ Todas implementadas como *Series Primitives* de Lightweight Charts v4 en `chart.
 | DZ/SZ | 15m RTH+Overnight | Zonas de demanda/oferta, relleno entre pares |
 | Arrow (diagonal) | 15m RTH+Overnight | Rojo si el 1er click es más alto que el 2do, verde si no |
 | Flechas verticales (↑/↓) | 1h | Punta en el punto de click; arrastrables; persistidas por símbolo (`VerticalArrowStore`) |
-| Piso / Techo (texto) | 1h | Etiqueta naranja en el punto de click |
 
 **Patrón seleccionable/borrable** (gris, azul, T-Line, flechas verticales): click cerca del borde/línea selecciona (contorno amarillo), tecla `Delete` borra el seleccionado. `Clear` (por panel) borra todo lo dibujado en ese panel — y en el 1h también limpia los stores persistidos.
 
@@ -96,6 +97,7 @@ Al registrar un trade (demo o real, punto único de convergencia: `Form1.RecordE
 ## 10. Otras ventanas relacionadas
 
 - **"Block Mov"** (`FourEtfChartsForm.cs`): ventana con 4 charts de 1h (SPY, QQQ, DIA, IWM) lado a lado, sin toolbar — para ver el movimiento del mercado en conjunto. DIA/IWM se agregan a mano a la lista de suscripción (`Form1.SetUpLiveFeedAsync`), pendiente de que salga de la tabla de Tickers como los demás.
+- **"Sim 4 ETF"** (`FourEtfSimulatorForm.cs`): a diferencia de "Block Mov" (arriba, en vivo), esta es una ventana de **repetición offline** (disco, sin streaming) — SPY/QQQ/IWM/DIA en grid 2x2, 15m RTH+Overnight, Play/pause compartido, un único toggle DZ/SZ para las 4 charts, y grid de cadena de opciones con selector de símbolo.
 
 ## 11. Archivos involucrados
 
@@ -108,6 +110,7 @@ Al registrar un trade (demo o real, punto único de convergencia: `Form1.RecordE
 - **`OptionsTrader.WinForms/LocalCandleHub.cs`** — `CandleHubServer`/`CandleHubClient` (ver §2 y §3).
 - **`OptionsTrader.WinForms/HubHostSettingsStore.cs`**, **`TLineStore.cs`**, **`VerticalArrowStore.cs`**, **`HourlyCandleStore.cs`** — persistencia local (ver secciones correspondientes).
 - **`OptionsTrader.WinForms/FourEtfChartsForm.cs`** — ventana "Block Mov".
+- **`OptionsTrader.WinForms/FourEtfSimulatorForm.cs`** — ventana "Sim 4 ETF" (repetición offline, distinta de "Block Mov").
 - **`OptionsTrader.WinForms/ChartAssets/`** — `lightweight-charts.js` (v4.1.3, local, sin CDN) + `chart.html` (todo el JS del chart: indicadores, dibujo, líneas, vista Daily).
 - **`Form1.cs` / `Form1.Designer.cs`** — botones `btnLiveChart`, `btnFourEtfCharts`, `btnHubHost`; `SetUpLiveFeedAsync` (elección de hub/cliente, suscripciones); `RecordEntryAsync` (snapshot de trade).
 
@@ -121,4 +124,4 @@ Al registrar un trade (demo o real, punto único de convergencia: `Form1.RecordE
 
 1. Confirmar los números de campo de `LEVEL_ONE_EQUITIES` (`3`, `35`) contra `ws_raw.log` con tráfico real — comparar `TickPriceStore` vs `LevelOneTickStore` vs precio real (ej. ThinkorSwim) para decidir si el `Close` en vivo debería basarse 100% en L1.
 2. Mover DIA/IWM de "agregados a mano" a la tabla de Tickers real.
-3. Simulador offline (fase 2) sobre los ticks capturados — todavía no empezado.
+3. ~~Simulador offline (fase 2) sobre los ticks capturados~~ — implementado: ver el Simulador individual (`SimulatorForm.cs`) y "Sim 4 ETF" (`FourEtfSimulatorForm.cs`, §10), documentados en detalle en [`SIMULADOR_TELEGRAM_Y_REGISTRO.md`](SIMULADOR_TELEGRAM_Y_REGISTRO.md).
