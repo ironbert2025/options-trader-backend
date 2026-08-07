@@ -85,7 +85,7 @@ public class SimulatorForm : Form
     // Counts and Contracts, same options/behavior as Form1's grpCounts/grpContracts, but session-
     // only local fields (never written to CountsSettingsStore-equivalent or
     // ContractsSettingsStore) — this is a simulator, it must never touch the real app's settings.
-    private readonly GroupBox _grpCounts    = new() { Text = "Counts", Location = new Point(590, 4), Size = new Size(185, 64) };
+    private readonly GroupBox _grpCounts    = new() { Text = "Counts", Location = new Point(590, 4), Size = new Size(140, 64) };
     private readonly GroupBox _grpContracts = new() { Text = "Contracts", Location = new Point(785, 4), Size = new Size(105, 96) };
 
     // "No Trade" (default) = manual close only, no auto-close-at-target — mirrors Form1's real
@@ -279,7 +279,9 @@ public class SimulatorForm : Form
     // just updates the local field and re-renders the current step — no settings file touched.
     private void BuildCountsAndContractsGroups()
     {
-        var counts = new[] { "3", "4", "5", "6", "In Range" };
+        // Numeric options (3/4/5/6) tight in one row — only "In Range" needs real width, so it
+        // gets its own row instead of forcing all 5 into an evenly-spaced 3-column grid.
+        var counts = new[] { "3", "4", "5", "6" };
         for (int i = 0; i < counts.Length; i++)
         {
             var rb = new RadioButton
@@ -287,7 +289,7 @@ public class SimulatorForm : Form
                 Text     = counts[i],
                 Checked  = counts[i] == _selectedCounts,
                 AutoSize = true,
-                Location = new Point(6 + (i % 3) * 58, 20 + (i / 3) * 20)
+                Location = new Point(6 + i * 32, 20)
             };
             rb.CheckedChanged += (s, e) =>
             {
@@ -295,6 +297,19 @@ public class SimulatorForm : Form
             };
             _grpCounts.Controls.Add(rb);
         }
+
+        var rbInRange = new RadioButton
+        {
+            Text     = "In Range",
+            Checked  = _selectedCounts == "In Range",
+            AutoSize = true,
+            Location = new Point(6, 40)
+        };
+        rbInRange.CheckedChanged += (s, e) =>
+        {
+            if (rbInRange.Checked) { _selectedCounts = rbInRange.Text; ApplyRadioStyle(_grpCounts); RenderCurrentStep(); }
+        };
+        _grpCounts.Controls.Add(rbInRange);
         ApplyRadioStyle(_grpCounts);
 
         var contracts = new[] { "1", "2", "3", "4", "5", "6", "PositionSize" };
