@@ -610,6 +610,27 @@
       }
       return;
     }
+
+    // Stk line click selection — handled here, BEFORE the clickTime/price guard below, same
+    // reason as the arrow tool above: the Stk= line is drawn from its anchor candle all the way
+    // to the right edge of the chart (see markStrike/StrikeLinesPrimitive), so a large part of its
+    // clickable length sits in truly empty space where coordinateToTime returns null — the guard
+    // below used to swallow those clicks before ever reaching the hit test further down.
+    // findStrikeLineByClick only needs the raw pixel coordinates, not clickTime/price.
+    if (strikeLinesPrimitive._lines.length > 0) {
+      const hitIdx = findStrikeLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        strikeLinesPrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadStrikeSelection = strikeLinesPrimitive._lines.some(l => l.selected);
+      if (hadStrikeSelection) {
+        strikeLinesPrimitive._lines.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // param.time is only set when the click lands exactly on a rendered bar — during the
     // overnight/pre-market session (15m RTH+Overnight panel) real data is sparse, so large
     // stretches of the gray band have no bar under the cursor and param.time comes back
@@ -714,21 +735,6 @@
       const hadDeltaSSelection = deltaSPrimitive._labels.some(l => l.selected);
       if (hadDeltaSSelection) {
         deltaSPrimitive._labels.forEach(l => { l.selected = false; });
-        forceRepaint();
-      }
-    }
-
-    // Stk line click selection — same idea as above.
-    if (strikeLinesPrimitive._lines.length > 0) {
-      const hitIdx = findStrikeLineByClick(param.point.x, param.point.y);
-      if (hitIdx !== -1) {
-        strikeLinesPrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
-        forceRepaint();
-        return;
-      }
-      const hadStrikeSelection = strikeLinesPrimitive._lines.some(l => l.selected);
-      if (hadStrikeSelection) {
-        strikeLinesPrimitive._lines.forEach(l => { l.selected = false; });
         forceRepaint();
       }
     }

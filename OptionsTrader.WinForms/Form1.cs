@@ -729,13 +729,6 @@ public partial class Form1 : Form
         var hasCreds = !string.IsNullOrEmpty(creds.ApiKey) && !string.IsNullOrEmpty(creds.ApiSecret);
         lblCredentialsSaved.Visible = hasCreds;
 
-        // Wire logger so token events (hub renewals, non-hub reads/waits) appear in the log
-        // panel — GetAccessTokenAsync can fire this from a background thread, hence the Invoke.
-        _schwabAuth.SetLogCallback(msg =>
-        {
-            if (IsHandleCreated) Invoke(() => LogLine(msg, Color.Yellow));
-        });
-
         var tokens = SchwabTokenStore.Load();
         if (tokens != null && !string.IsNullOrEmpty(tokens.AccessToken))
         {
@@ -1851,6 +1844,14 @@ public partial class Form1 : Form
     {
         var simulatorForm = new SimulatorForm();
         simulatorForm.Show();
+    }
+
+    // Same disk-only pattern as BtnSimulator_Click — the 4-ETF (SPY/QQQ/IWM/DIA) replay window
+    // needs no Schwab creds or live feed, so it can open independently of everything else.
+    private void BtnFourEtfSimulator_Click(object? sender, EventArgs e)
+    {
+        var fourEtfSimulatorForm = new FourEtfSimulatorForm();
+        fourEtfSimulatorForm.Show();
     }
 
     // Lazily decides whether this instance is the hub or a client, then sets up _historyClient +
