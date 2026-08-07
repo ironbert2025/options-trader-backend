@@ -33,8 +33,8 @@ public class FourEtfSimulatorForm : Form
 
     private readonly System.Windows.Forms.Timer _playTimer = new();
     private bool _isPlaying;
-    private int _ticksPerSecond = 10;
-    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(620, 4), Size = new Size(110, 96) };
+    private int _ticksPerSecond = 60;
+    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(620, 4), Size = new Size(130, 96) };
 
     // 2x2 grid, each cell the same size as SimulatorForm's RTH+Overnight panel (~460x400) — SPY/QQQ
     // top, IWM/DIA bottom. Single shared DZ/SZ toggle (above) arms drawing on all 4 at once; each
@@ -285,7 +285,7 @@ public class FourEtfSimulatorForm : Form
 
     private void BuildSpeedControls()
     {
-        var speeds = new (string Label, int TicksPerSecond)[] { ("1 tick/seg", 1), ("3 tick/seg", 3), ("5 tick/seg", 5), ("10 tick/seg", 10) };
+        var speeds = new (string Label, int TicksPerSecond)[] { ("60 tick/seg", 60), ("120 tick/seg", 120), ("180 tick/seg", 180), ("240 tick/seg", 240) };
         for (int i = 0; i < speeds.Length; i++)
         {
             var (label, ticksPerSecond) = speeds[i];
@@ -300,7 +300,6 @@ public class FourEtfSimulatorForm : Form
             {
                 if (!rb.Checked) return;
                 _ticksPerSecond = ticksPerSecond;
-                if (_isPlaying) _playTimer.Interval = 1000 / _ticksPerSecond;
             };
             _grpSpeed.Controls.Add(rb);
         }
@@ -377,12 +376,21 @@ public class FourEtfSimulatorForm : Form
         else StartPlay();
     }
 
+    // Rendering all 4 charts (+ options grid) into WebView2 is far too heavy to do 60-240
+    // times/sec — that's what made "N tick/seg" feel wrong (the timer couldn't keep up, so actual
+    // playback speed lagged well below what was selected). So the render rate is fixed and low
+    // (10/sec), and each render jumps the simulated-time cursor forward by however many
+    // 1-second steps "N tick/seg" implies per render — "60 tick/seg" means 60 simulated seconds
+    // (~1 real minute of market data) advance per real second, spread over 10 renders, i.e. 6
+    // steps per render — instead of trying to render 60 times/sec.
+    private const int RenderHz = 10;
+
     private void StartPlay()
     {
         if (_currentIndex < 0 || _currentIndex >= _totalSteps - 1) return;
         _isPlaying = true;
         _btnPlayPause.Text = "Pause";
-        _playTimer.Interval = 1000 / _ticksPerSecond;
+        _playTimer.Interval = 1000 / RenderHz;
         _playTimer.Start();
         UpdateStepButtons();
     }
@@ -399,7 +407,9 @@ public class FourEtfSimulatorForm : Form
     private void PlayTimer_Tick(object? sender, EventArgs e)
     {
         if (_currentIndex >= _totalSteps - 1) { PausePlay(); return; }
-        Step(1);
+        var stepsPerTick = Math.Max(1, _ticksPerSecond / RenderHz);
+        _currentIndex = Math.Min(_currentIndex + stepsPerTick, _totalSteps - 1);
+        RenderCurrentStep();
         if (_currentIndex >= _totalSteps - 1) PausePlay();
     }
 
@@ -476,7 +486,7 @@ public class FourEtfSimulatorForm : Form
 
             var lastTick = candlesUpToNow.Count > 0 ? candlesUpToNow[^1].Time : (DateTime?)null;
             _timeLabels[symbol].Text = lastTick is { } t
-                ? $"{symbol} — {TimeZoneInfo.ConvertTimeFromUtc(t, easternZone):HH:mm:ss.fff}"
+                ? $"{symbol} — {TimeZoneInfo.ConvertTimeFromUtc(t, easternZone):HH:mm:ss}"
                 : $"{symbol} — sin datos";
         }
 
