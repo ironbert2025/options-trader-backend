@@ -26,7 +26,7 @@ public class SimulatorForm : Form
     private readonly System.Windows.Forms.Timer _playTimer = new();
     private bool _isPlaying;
     private int _ticksPerSecond = 10;
-    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(1020, 4), Size = new Size(110, 96) };
+    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(1050, 4), Size = new Size(110, 96) };
 
     // Width matches Form1's real dgvQuotes (566) — see BuildChainColumns' per-column widths.
     private readonly DataGridView _dgvChain = new()
@@ -86,13 +86,13 @@ public class SimulatorForm : Form
     // only local fields (never written to CountsSettingsStore-equivalent or
     // ContractsSettingsStore) — this is a simulator, it must never touch the real app's settings.
     private readonly GroupBox _grpCounts    = new() { Text = "Counts", Location = new Point(590, 4), Size = new Size(140, 64) };
-    private readonly GroupBox _grpContracts = new() { Text = "Contracts", Location = new Point(785, 4), Size = new Size(105, 96) };
+    private readonly GroupBox _grpContracts = new() { Text = "Contracts", Location = new Point(815, 4), Size = new Size(105, 96) };
 
     // "No Trade" (default) = manual close only, no auto-close-at-target — mirrors Form1's real
     // rbNoTrade/rbNoTradeTarget pair (the only 2 relevant here; the simulator has no real-broker
     // "Trade"/"Trade-Target" options). Read at open time by DgvChain_CellClick and stored per
     // OpenSimTrade so changing the radio later doesn't retroactively affect already-open trades.
-    private readonly GroupBox _grpTrade = new() { Text = "Trade", Location = new Point(896, 4), Size = new Size(120, 64) };
+    private readonly GroupBox _grpTrade = new() { Text = "Trade", Location = new Point(926, 4), Size = new Size(120, 64) };
     private readonly RadioButton _rbNoTrade = new() { Text = "No Trade", Checked = true, AutoSize = true, Location = new Point(6, 20) };
     private readonly RadioButton _rbNoTradeTarget = new() { Text = "No Trade-Target", AutoSize = true, Location = new Point(6, 40) };
     private string _selectedCounts    = "6"; // same default as Form1's _selectedCounts
@@ -121,7 +121,7 @@ public class SimulatorForm : Form
     public SimulatorForm()
     {
         Text          = "Simulador";
-        Width         = 1090;
+        Width         = 1190;
         Height        = 1000;
         StartPosition = FormStartPosition.CenterScreen;
 
