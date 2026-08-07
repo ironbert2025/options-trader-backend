@@ -46,6 +46,10 @@ public class FourEtfSimulatorForm : Form
     };
 
     private readonly Dictionary<string, SimulatedChartPanel> _charts = new();
+    // Hora (ET) del último tick realmente usado en el render de cada chart en el paso actual —
+    // permite ver si algún símbolo se está quedando atrás del cursor compartido (cada uno solo
+    // tiene los ticks reales que le tocaron, no todos avanzan parejo tick a tick).
+    private readonly Dictionary<string, Label> _timeLabels = new();
     private readonly Dictionary<string, List<CandleData>> _candlesBySymbol = new();
     private readonly Dictionary<string, List<SimulationStep>> _optionStepsBySymbol = new();
     private readonly Dictionary<string, TickerEntry> _tickers = new();
@@ -95,10 +99,10 @@ public class FourEtfSimulatorForm : Form
         _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
         _chartsHost.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
         _chartsHost.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
-        _chartsHost.Controls.Add(_charts["SPY"], 0, 0);
-        _chartsHost.Controls.Add(_charts["QQQ"], 1, 0);
-        _chartsHost.Controls.Add(_charts["IWM"], 0, 1);
-        _chartsHost.Controls.Add(_charts["DIA"], 1, 1);
+        _chartsHost.Controls.Add(BuildChartCell("SPY"), 0, 0);
+        _chartsHost.Controls.Add(BuildChartCell("QQQ"), 1, 0);
+        _chartsHost.Controls.Add(BuildChartCell("IWM"), 0, 1);
+        _chartsHost.Controls.Add(BuildChartCell("DIA"), 1, 1);
 
         BuildChainColumns();
         BuildSymbolSelector();
@@ -146,6 +150,25 @@ public class FourEtfSimulatorForm : Form
         }
 
         Load += (s, e) => { RefreshAvailableDates(); LoadTickers(); };
+    }
+
+    // Wraps each chart with a label on top showing the timestamp (ET) of the last tick actually
+    // rendered for that symbol in the current step — lets you see at a glance whether one of the
+    // 4 is lagging behind the shared time cursor (each symbol only has whatever real ticks it got).
+    private Panel BuildChartCell(string symbol)
+    {
+        var lbl = new Label
+        {
+            Dock = DockStyle.Top, Height = 20, TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font("Consolas", 9F, FontStyle.Bold),
+            Text = $"{symbol} — sin datos"
+        };
+        _timeLabels[symbol] = lbl;
+
+        var cell = new Panel { Dock = DockStyle.Fill };
+        cell.Controls.Add(_charts[symbol]);
+        cell.Controls.Add(lbl);
+        return cell;
     }
 
     private void LogEvent(string symbol, string message)
@@ -441,7 +464,8 @@ public class FourEtfSimulatorForm : Form
         }
 
         var stepTime = CurrentStepTime();
-        var eastern = TimeZoneInfo.ConvertTimeFromUtc(stepTime, TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
+        var easternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(stepTime, easternZone);
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_totalSteps} — {eastern:HH:mm:ss}";
 
         foreach (var symbol in Symbols)
@@ -449,6 +473,11 @@ public class FourEtfSimulatorForm : Form
             var candlesUpToNow = CandlesUpTo(_candlesBySymbol[symbol], stepTime);
             var fifteenMin = CandleAggregation.AggregateToInterval(candlesUpToNow, 15, rthOnly: false);
             _ = _charts[symbol].CargarHastaPasoAsync(fifteenMin, visibleDays: 3);
+
+            var lastTick = candlesUpToNow.Count > 0 ? candlesUpToNow[^1].Time : (DateTime?)null;
+            _timeLabels[symbol].Text = lastTick is { } t
+                ? $"{symbol} — {TimeZoneInfo.ConvertTimeFromUtc(t, easternZone):HH:mm:ss.fff}"
+                : $"{symbol} — sin datos";
         }
 
         RenderOptionsGrid();
