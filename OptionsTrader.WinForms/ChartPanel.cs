@@ -75,6 +75,11 @@ public class ChartPanel : Panel
     // ToggleIntervalAsync can re-aggregate at a different interval without re-fetching from Schwab.
     private List<CandleData> _rawHistory = new();
 
+    // Auto-drawn prev-day High/Low red H-Lines (see DrawPrevDayHiLoAsync) fire exactly once per
+    // chart open — either synchronously at load (after 9:30, or Fifteen_Full before it) or on the
+    // first pre-market tick (Hourly15/Fifteen_RTH before 9:30). This guards against firing twice.
+    private bool _drewPrevDayHiLo;
+
     // The bucket currently being built from live 1-min ticks, and which bucket index it belongs
     // to (so we know when a new tick starts a new bucket vs. extends the current one).
     private CandleData? _liveBucket;
@@ -1279,6 +1284,73 @@ public class ChartPanel : Panel
         return sum / period;
     }
 
+    // Decides WHEN to evaluate the auto-drawn prev-day High/Low (see DrawPrevDayHiLoAsync),
+    // called once right after this panel's historical fetch finishes loading:
+    //   - At/after 9:30 AM ET: today's RTH opening price is already in `aggregated` — draw now.
+    //   - Fifteen_Full before 9:30 (no blue pre-market line on this panel): use the last loaded
+    //     candle's Close (most recent price available at open) — draw now.
+    //   - Hourly15/Fifteen_RTH before 9:30: deferred to the first live pre-market tick, see
+    //     Streamer_OnNewCandle — that's the moment the blue pre-market line itself first gets a
+    //     price, per explicit request.
+    private async Task EvaluatePrevDayHiLoAsync(List<CandleData> aggregated)
+    {
+        if (aggregated.Count == 0) return;
+
+        var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
+        if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0))
+        {
+            if (_mode == ChartPanelMode.Fifteen_Full)
+                await DrawPrevDayHiLoAsync(aggregated, aggregated[^1].Close);
+            return; // Hourly15/Fifteen_RTH: wait for the first pre-market tick instead.
+        }
+
+        var today = DateOnly.FromDateTime(nowEastern);
+        var todaysFirstBar = aggregated
+            .Where(c => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone)) == today)
+            .OrderBy(c => c.Time)
+            .FirstOrDefault();
+
+        await DrawPrevDayHiLoAsync(aggregated, todaysFirstBar?.Open ?? aggregated[^1].Close);
+    }
+
+    // Finds the most recent day strictly before today with data in `candles`, and draws its
+    // High/Low as red H-Lines (see markPrevDayHiLo in chart.html) — but only the side(s)
+    // `referencePrice` hasn't already broken through (e.g. skips the High line on a gap-open
+    // above yesterday's high). Fires at most once per chart open (see _drewPrevDayHiLo).
+    private async Task DrawPrevDayHiLoAsync(List<CandleData> candles, decimal referencePrice)
+    {
+        if (_drewPrevDayHiLo || candles.Count == 0 || _webView.CoreWebView2 == null) return;
+
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        var byDate = candles
+            .Select(c => (Candle: c, Date: DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))))
+            .Where(x => x.Date < today)
+            .ToList();
+        if (byDate.Count == 0) return;
+
+        var prevDate = byDate.Max(x => x.Date);
+        var prevDayBars = byDate.Where(x => x.Date == prevDate).Select(x => x.Candle).ToList();
+
+        var highBar = prevDayBars.OrderByDescending(c => c.High).First();
+        var lowBar  = prevDayBars.OrderBy(c => c.Low).First();
+
+        var drawHigh = referencePrice < highBar.High;
+        var drawLow  = referencePrice > lowBar.Low;
+        _drewPrevDayHiLo = true;
+        if (!drawHigh && !drawLow) return;
+
+        static string TimeArg(CandleData c) =>
+            new DateTimeOffset(DateTime.SpecifyKind(c.Time, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString();
+        static string PriceArg(decimal p) => p.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        var highTimeJs  = drawHigh ? TimeArg(highBar) : "null";
+        var highPriceJs = drawHigh ? PriceArg(highBar.High) : "null";
+        var lowTimeJs   = drawLow ? TimeArg(lowBar) : "null";
+        var lowPriceJs  = drawLow ? PriceArg(lowBar.Low) : "null";
+
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPrevDayHiLo({highTimeJs}, {highPriceJs}, {lowTimeJs}, {lowPriceJs});");
+    }
+
     // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is
     // MultiChartForm's job (once for all 3 panels), not each panel's.
     private async Task LoadHistoryAsync()
@@ -1445,6 +1517,8 @@ public class ChartPanel : Panel
                         _closedCandles.Clear();
                         _closedCandles.AddRange(aggregated);
                     }
+
+                    await EvaluatePrevDayHiLoAsync(aggregated);
                 }
             }
         }
@@ -1486,6 +1560,13 @@ public class ChartPanel : Panel
                     if (_webView.CoreWebView2 == null) return;
                     await _webView.CoreWebView2.ExecuteScriptAsync(
                         $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)});");
+
+                    // First pre-market tick this session (and only the first — DrawPrevDayHiLoAsync
+                    // is itself once-only) is also this panel's first real "current price", so
+                    // that's the moment the auto-drawn prev-day High/Low red lines get evaluated —
+                    // deferred here instead of at chart-open per explicit request ("que se dibuje
+                    // luego que se muestre la línea azul de precio premarket").
+                    await DrawPrevDayHiLoAsync(_rawHistory, price);
                 });
             }
             return; // outside this panel's session — ignore the tick entirely
