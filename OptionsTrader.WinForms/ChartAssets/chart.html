@@ -582,8 +582,6 @@
     arrowPending = null;
 
     textLabelsPrimitive._labels = [];
-    pisoArmed = false;
-    techoArmed = false;
 
     verticalArrowPrimitive._arrows = [];
     greenArrowArmed = false;
@@ -839,15 +837,6 @@
 
     if (hLineArmed) {
       hLinePrimitive._segments.push({ time: clickTime, price, selected: false });
-      forceRepaint();
-    }
-
-    if (pisoArmed) {
-      textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Piso' });
-      forceRepaint();
-    }
-    if (techoArmed) {
-      textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Techo' });
       forceRepaint();
     }
 
@@ -1408,15 +1397,12 @@
 
   const textLabelsPrimitive = new TextLabelsPrimitive();
   let textLabelsAttached = false;
-  let pisoArmed = false;
-  let techoArmed = false;
 
-  // ---- Piso/Techo AUTO label (1h panel only): unlike the click-driven Piso/Techo above, this
-  // one is programmatic (markPisoTecho, called once by C# from the pre-market SMA pair analysis
-  // — independently for the 20/40 pair and the 100/200 pair) and tracks the CURRENT last point of
-  // each SMA line on every repaint — via smaLastPoint, updated by recalculateSmas() — so each
-  // label moves right alongside its SMA all session long instead of staying pinned to where it
-  // was first drawn. ----
+  // ---- Piso/Techo AUTO label (1h panel only): programmatic (markPisoTecho, called once by C#
+  // from the pre-market SMA pair analysis — independently for the 20/40 pair and the 100/200
+  // pair) and tracks the CURRENT last point of each SMA line on every repaint — via smaLastPoint,
+  // updated by recalculateSmas() — so each label moves right alongside its SMA all session long
+  // instead of staying pinned to where it was first drawn. ----
 
   class PisoTechoAutoLabelPrimitive {
     constructor() { this._entries = []; this._chart = null; } // [{ period, text }, ...]
@@ -1493,18 +1479,6 @@
   function removePisoTechoLabel(period) {
     pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== period);
     forceRepaint();
-  }
-
-  function toggleFloorLabel() {
-    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
-    pisoArmed = !pisoArmed;
-    return pisoArmed;
-  }
-
-  function toggleCeilingLabel() {
-    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
-    techoArmed = !techoArmed;
-    return techoArmed;
   }
 
   // Programmatic (not click-driven) red "Expired!!!" marker — fixed at the top-center of the

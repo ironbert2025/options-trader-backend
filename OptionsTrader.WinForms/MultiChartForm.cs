@@ -94,73 +94,13 @@ public class MultiChartForm : Form
         _rthPanel       = rthPanel;
         _overnightPanel = overnightPanel;
 
-        // Cross-SMA monitors: one toggle per period (20/40/100/200) in the toolbar column above
-        // the 1h panel (column 0) — the direction (UP or DOWN) is picked automatically from where
-        // price currently sits relative to that SMA when the button is armed, instead of having
-        // separate UP/DOWN buttons. While armed, it pushes the 1h chart to Telegram the moment a
-        // candle closes with a genuine crossover in that direction.
+        // T-Line / H-Line drawing tools for the 1h panel (column 0). T-Line and H-Line share the
+        // top row (side by side); Clear/Rect sit below, arrows + Daily on the third row.
         var crossHost = new Panel { Dock = DockStyle.Fill };
-        var periods = new[] { 20, 40, 100, 200 };
-        var smaButtons = new List<Button>();
-        for (int col = 0; col < periods.Length; col++)
-        {
-            var period = periods[col];
-
-            var btnSma = new Button
-            {
-                Text     = $"{period}",
-                Location = new Point(col * 42, 2),
-                Size     = new Size(40, 24)
-            };
-            btnSma.Click += (s, e) =>
-            {
-                if (hourlyPanel == null) return;
-                var (armed, up) = hourlyPanel.ToggleCrossMonitor(period);
-                if (armed)
-                {
-                    btnSma.Text = up ? $"↑{period}" : $"↓{period}";
-                    btnSma.BackColor = up ? Color.LightGreen : Color.LightSalmon;
-                }
-                else
-                {
-                    btnSma.Text = $"{period}";
-                    btnSma.BackColor = SystemColors.Control;
-                }
-            };
-
-            smaButtons.Add(btnSma);
-            crossHost.Controls.Add(btnSma);
-        }
-
-        // Once the cross/bounce sequence resolves its last armed period, it stops responding for
-        // the rest of the session — reset all 4 buttons back to neutral so the UI doesn't keep
-        // showing them as armed when they no longer do anything.
-        if (hourlyPanel != null)
-        {
-            hourlyPanel.OnCrossSequenceFinished += () =>
-            {
-                // Streamer_OnNewCandle (where this fires from) runs on whatever thread the live
-                // feed raises its event on, not necessarily the UI thread.
-                if (IsDisposed) return;
-                BeginInvoke(() =>
-                {
-                    foreach (var (btn, period) in smaButtons.Zip(periods))
-                    {
-                        btn.Text = $"{period}";
-                        btn.BackColor = SystemColors.Control;
-                    }
-                });
-            };
-        }
-
-        // T-Line / H-Line drawing tools, also on the 1h panel — placed to the right of the 8
-        // Cross-SMA toggles. T-Line and H-Line share the top row (side by side); Clear sits
-        // directly below T-Line on the second row.
-        var toolsStartX = periods.Length * 42 + 6;
         var btnTLine = new Button
         {
             Text     = "T-Line",
-            Location = new Point(toolsStartX, 2),
+            Location = new Point(0, 2),
             Size     = new Size(60, 24)
         };
         btnTLine.Click += async (s, e) =>
@@ -173,7 +113,7 @@ public class MultiChartForm : Form
         var btnHLine = new Button
         {
             Text     = "H-Line",
-            Location = new Point(toolsStartX + 66, 2),
+            Location = new Point(66, 2),
             Size     = new Size(60, 24)
         };
         btnHLine.Click += async (s, e) =>
@@ -205,45 +145,18 @@ public class MultiChartForm : Form
             btnRectGris.BackColor = on ? Color.LightGray : SystemColors.Control;
         };
 
-        // Writes orange "Piso"/"Techo" text at the clicked point — one click per label, both
-        // independently toggleable (same pattern as the other drawing tools).
-        var btnPiso = new Button
-        {
-            Text     = "Piso",
-            Location = new Point(toolsStartX, 30),
-            Size     = new Size(60, 24)
-        };
-        var btnTecho = new Button
-        {
-            Text     = "Techo",
-            Location = new Point(toolsStartX + 66, 30),
-            Size     = new Size(60, 24)
-        };
-        btnPiso.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.TogglePisoModeAsync();
-            btnPiso.BackColor = on ? Color.Orange : SystemColors.Control;
-        };
-        btnTecho.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleTechoModeAsync();
-            btnTecho.BackColor = on ? Color.Orange : SystemColors.Control;
-        };
-
         // Single-click vertical arrows: green points up, red points down, tip at the click point.
         // Click the shaft to select (yellow dashed overlay), Delete removes it.
         var btnFlechaVerde = new Button
         {
             Text     = "↑ Verde",
-            Location = new Point(toolsStartX, 56),
+            Location = new Point(0, 56),
             Size     = new Size(60, 24)
         };
         var btnFlechaRoja = new Button
         {
             Text     = "↓ Roja",
-            Location = new Point(toolsStartX + 66, 56),
+            Location = new Point(66, 56),
             Size     = new Size(60, 24)
         };
         btnFlechaVerde.Click += async (s, e) =>
@@ -266,19 +179,16 @@ public class MultiChartForm : Form
             btnTLine.BackColor = SystemColors.Control;
             btnHLine.BackColor = SystemColors.Control;
             btnRectGris.BackColor = SystemColors.Control;
-            btnPiso.BackColor = SystemColors.Control;
-            btnTecho.BackColor = SystemColors.Control;
             btnFlechaVerde.BackColor = SystemColors.Control;
             btnFlechaRoja.BackColor = SystemColors.Control;
         };
 
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
-        // days of persisted hourly history) and plain Hourly candles. Sits in the space below the
-        // Cross-SMA grid (which only uses the first 2 rows in this column).
+        // days of persisted hourly history) and plain Hourly candles.
         var btnDaily = new Button
         {
             Text     = "Daily",
-            Location = new Point(0, 56),
+            Location = new Point(132, 56),
             Size     = new Size(70, 24)
         };
         btnDaily.Click += async (s, e) =>
@@ -294,8 +204,6 @@ public class MultiChartForm : Form
         crossHost.Controls.Add(btnRectGris);
         crossHost.Controls.Add(btnFlechaVerde);
         crossHost.Controls.Add(btnFlechaRoja);
-        crossHost.Controls.Add(btnPiso);
-        crossHost.Controls.Add(btnTecho);
         crossHost.Controls.Add(btnDaily);
         toolbar.Controls.Add(crossHost, 0, 0);
 
@@ -494,14 +402,7 @@ public class MultiChartForm : Form
         };
         if (hourlyPanel != null)
         {
-            hourlyPanel.OnCrossSequenceEvent += message =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
-            };
-
-            // T-Line + SMA20 breakout — unlike Cross-SMA (which only pushes this panel's own
-            // screenshot), the user wants the combined 3-chart image, same as a trade close.
+            // T-Line + SMA20 breakout — pushes the combined 3-chart image, same as a trade close.
             hourlyPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;

@@ -55,9 +55,8 @@ public class ChartPanel : Panel
     // Auto-armed Cruce/Rebote watch, one entry PER PERIOD (not per pair) — when a pair comes back
     // Piso or Techo, BOTH its periods get armed independently (20 and 40 each watch their own
     // line separately, even though they're always the same direction within a pair — Piso/Techo
-    // is decided per pair, never split). Completely separate from the manual Cross-SMA toggle
-    // buttons (ChartPanel's _crossArmedPeriods/_crossActivePeriod/_crossUp) — this doesn't touch
-    // or share that state, same "runs independently" precedent as EvaluateDemandZoneRebounds.
+    // is decided per pair, never split). Runs independently, same precedent as
+    // EvaluateDemandZoneRebounds.
     private sealed class PisoTechoWatch
     {
         public int Period;
@@ -91,22 +90,10 @@ public class ChartPanel : Panel
     private long? _liveBucketIndex;
     private DateTime _liveAnchor;
 
-    // Cross-SMA sequence monitoring (Hourly15 panel only) — closed 1h candles kept for computing
-    // SMA ourselves in C# (same simple-average formula as the JS overlay).
-    //
-    // The user picks which periods participate by arming their buttons (e.g. 20 and 40) — at any
-    // given moment only ONE of them is "active" (the nearest one price hasn't gotten past yet).
-    // Each closed candle is checked against the active period for exactly one of two outcomes:
-    //   - Bounce (rejected before/at getting through) → reported, stays on the SAME active period.
-    //   - Genuine cross (gets cleanly through) → reported, ADVANCES to the next armed period.
-    // Once the last armed period resolves (either way), the whole sequence stops firing for the
-    // rest of the session — each app instance only runs one RTH session anyway, so there's no
-    // "reset" to wire up.
+    // Closed candles (Hourly15/Fifteen_RTH) kept for computing SMA/Bollinger ourselves in C# (same
+    // simple-average formula as the JS overlay) — used by the Piso/Techo watch system, T-Line
+    // signal, and the premarket Bollinger-exposure check.
     private readonly List<CandleData> _closedCandles = new();
-    private readonly SortedSet<int> _crossArmedPeriods = new();
-    private int? _crossActivePeriod;
-    private bool _crossUp;      // fixed for the whole sequence once the first period is armed
-    private bool _crossFinished;
 
     // ---- Demand/Supply Zone rebote (15m RTH+Overnight panel only) ----
     // Every DZ/SZ line drawn (toggleDzSz — see CoreWebView2_WebMessageReceived's "dzsz" case)
@@ -135,16 +122,6 @@ public class ChartPanel : Panel
         public bool Entered;
         public bool Done;
     }
-
-    // Fires once the last armed period's event has been reported — MultiChartForm uses this to
-    // reset all 4 buttons back to their neutral/off appearance, since the sequence won't respond
-    // to anything else for the rest of the session.
-    public event Action? OnCrossSequenceFinished;
-
-    // Fires with a human-readable message every time a cross or bounce event is detected —
-    // regardless of whether the Telegram push actually succeeds — so the caller can log it
-    // locally (e.g. to verify the detection logic is firing as expected).
-    public event Action<string>? OnCrossSequenceEvent;
 
     // T-Line + SMA20 breakout signal (Hourly15 panel only, see EvaluateTLineSignal): only one
     // T-Line is ever allowed to exist for a symbol at a time — enforced in
@@ -213,11 +190,6 @@ public class ChartPanel : Panel
     // on all 3 panels by markPrevDayHiLo). MultiChartForm uses this to remove the matching line on
     // the other 2 panels too. See CoreWebView2_WebMessageReceived's "hline_delete" case.
     public event Action<decimal>? OnHLineDeletedEvent;
-
-    private static readonly Dictionary<int, string> SmaColorNames = new()
-    {
-        [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
-    };
 
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
@@ -351,22 +323,6 @@ public class ChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return false;
         var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleArrow();");
-        return result == "true";
-    }
-
-    // Toggles Piso/Techo text-label drawing mode on/off. While on, every click writes the given
-    // orange text at that point (no pairing — one click per label). Same toggle pattern as H-Line.
-    public async Task<bool> TogglePisoModeAsync()
-    {
-        if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleFloorLabel();");
-        return result == "true";
-    }
-
-    public async Task<bool> ToggleTechoModeAsync()
-    {
-        if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleCeilingLabel();");
         return result == "true";
     }
 
@@ -628,56 +584,6 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Toggles whether `period` participates in the cross/bounce sequence. Arming the FIRST period
-    // of a fresh sequence decides the direction for the whole sequence from where price currently
-    // sits relative to that period's SMA: below it → watch for cross UP / bounce DOWN; above it →
-    // the mirror (cross DOWN / bounce UP). Later periods armed while a sequence is already running
-    // just join the pool of periods it can advance through — they don't re-decide direction.
-    // Returns (Armed, Up) so the caller can show which direction the sequence is using.
-    public (bool Armed, bool Up) ToggleCrossMonitor(int period)
-    {
-        if (_crossArmedPeriods.Remove(period))
-        {
-            if (_crossActivePeriod == period)
-                AdvanceCrossSequence(period); // was watching this one — move on (or finish)
-            return (false, false);
-        }
-
-        if (_crossFinished) return (false, false); // sequence already ran its course this session
-
-        if (_crossActivePeriod == null)
-        {
-            // Starting a brand new sequence — decide direction from price vs. this (first) period.
-            var currentPrice = _liveBucket?.Close ?? _closedCandles.LastOrDefault()?.Close;
-            var currentSma   = _closedCandles.Count > 0 ? Sma(period, _closedCandles.Count - 1) : null;
-            if (currentPrice == null || currentSma == null) return (false, false); // not enough data yet
-
-            _crossUp = currentPrice < currentSma;
-            _crossActivePeriod = period;
-        }
-
-        _crossArmedPeriods.Add(period);
-        return (true, _crossUp);
-    }
-
-    // Moves the active period forward to the next still-armed period greater than `resolved`, or
-    // ends the sequence for the rest of the session if there isn't one.
-    private void AdvanceCrossSequence(int resolved)
-    {
-        _crossArmedPeriods.Remove(resolved);
-        var next = _crossArmedPeriods.Where(p => p > resolved).OrderBy(p => p).Cast<int?>().FirstOrDefault();
-        if (next == null)
-        {
-            _crossActivePeriod = null;
-            _crossFinished = true;
-            OnCrossSequenceFinished?.Invoke();
-        }
-        else
-        {
-            _crossActivePeriod = next;
-        }
-    }
-
     // Captures this panel's chart as a PNG (via WebView2's native preview capture — pixel-exact,
     // doesn't depend on the window being visible/on top, unlike a screen-coordinate capture) and
     // pushes it to the configured Telegram channel.
@@ -722,75 +628,11 @@ public class ChartPanel : Panel
     // move for it to count as "went looking for the SMA and got rejected near it".
     private const decimal BounceProximityRatio = 0.30m;
 
-    // Evaluates the candle that just closed against whichever period is currently active in the
-    // cross/bounce sequence (see the fields above) — only ONE period is ever checked per candle.
-    //
-    // Genuine cross (advances the sequence to the next armed period): candle color matches the
-    // sequence's direction (green for UP, red for DOWN), its close ends up on the crossed side of
-    // the SMA(period), AND the previous candle was still on the other side (or on the line).
-    //
-    // Bounce (reported, but stays on the SAME period — case 1 or case 2, mirrored for the DOWN
-    // direction): price went looking for the SMA from its side and got rejected back the way it
-    // came, closing red (UP direction) or green (DOWN direction) instead of getting through.
-    //   Case 1 — touched/crossed intra-candle but rejected: the wick reached past the SMA, but
-    //            price closed back on the original side by the close.
-    //   Case 2 — didn't quite reach it: the wick fell short of the SMA, but came within
-    //            BounceProximityRatio of the rejection move's size (i.e. "closely missed it").
-    private void EvaluateCrossings(CandleData justClosed)
-    {
-        if (_crossFinished || _crossActivePeriod == null) return;
-
-        var period = _crossActivePeriod.Value;
-        if (_closedCandles.Count < period + 1) return; // not enough history for this + the prior SMA
-
-        var currentSma  = Sma(period, _closedCandles.Count - 1);
-        var previousSma = Sma(period, _closedCandles.Count - 2);
-        if (currentSma == null) return;
-
-        var isGreen = justClosed.Close > justClosed.Open;
-        var isRed   = justClosed.Close < justClosed.Open;
-
-        var crossed = previousSma != null && _crossUp
-            ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
-            : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
-
-        if (crossed)
-        {
-            FireCrossSequenceEvent(period, "Cruce", justClosed.Close, currentSma!.Value);
-            AdvanceCrossSequence(period);
-            return;
-        }
-
-        var bounced = _crossUp
-            ? justClosed.Open < currentSma && isRed &&
-                (justClosed.High > currentSma
-                    ? justClosed.Close < currentSma                                            // case 1: crossed, rejected back down
-                    : (currentSma - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close)) // case 2: fell short, closely
-            : justClosed.Open > currentSma && isGreen &&
-                (justClosed.Low < currentSma
-                    ? justClosed.Close > currentSma                                             // case 1 mirrored: crossed, rejected back up
-                    : (justClosed.Low - currentSma) < BounceProximityRatio * (justClosed.Close - justClosed.Low)); // case 2 mirrored
-
-        if (bounced) FireCrossSequenceEvent(period, "Rebote", justClosed.Close, currentSma!.Value); // stays on the same active period
-    }
-
-    private void FireCrossSequenceEvent(int period, string eventLabel, decimal price, decimal smaValue)
-    {
-        var direction = _crossUp ? "UP" : "DOWN";
-        var colorName = SmaColorNames.TryGetValue(period, out var c) ? c : string.Empty;
-        var caption = $"{eventLabel} {direction} SMA {period}({colorName})";
-        OnCrossSequenceEvent?.Invoke(caption);
-        _ = SendChartToTelegramAsync(caption);
-
-        var eventDirection = direction == "UP" ? "Alza" : "Baja";
-        EventLogStore.Append(_symbol, "Hora", "CrossSMA", eventDirection, caption, price, $"SMA{period}={smaValue:F2}");
-    }
-
     // Daily-candle bounce off the daily SMA20 — evaluated once per app run, right after the 1h
     // panel's history loads (only if this window is open at all; if it's closed, this never
     // runs). Checks the last already-CLOSED daily bar (yesterday — today's bar, if present in
     // `hourly`, is still forming and is excluded) against the daily SMA20, using the exact same
-    // case-1/case-2 bounce formula as EvaluateCrossings (BounceProximityRatio), just on daily bars
+    // case-1/case-2 bounce formula used elsewhere (BounceProximityRatio), just on daily bars
     // instead of 1h ones, and with no Cruce detection at all — only Rebote.
     private void EvaluateDailyBounce(List<CandleData> hourly)
     {
@@ -886,7 +728,7 @@ public class ChartPanel : Panel
     // zone (see the "dzsz" case in CoreWebView2_WebMessageReceived) on every just-closed 15m
     // candle, independent of whichever other zones are also being tracked.
     //   Entrada: the candle's Low reaches the zone (<= Proximal) — marks it Entered. Same
-    //     case-1/case-2 proximity idea as EvaluateCrossings' bounce detection: a candle whose Low
+    //     case-1/case-2 proximity idea used elsewhere (BounceProximityRatio): a candle whose Low
     //     falls SHORT of Proximal, but within BounceProximityRatio of the rejection move's size
     //     (Close - Low), still counts as touching it — "got close enough, rejected before
     //     actually reaching the line". Fires as an immediate confirmed rebote (Close > Proximal
@@ -1079,11 +921,11 @@ public class ChartPanel : Panel
     }
 
     // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed
-    // PisoTechoWatch — same case-1/case-2 cross-or-bounce formula as the manual Cross-SMA
-    // (EvaluateCrossings), just against that watch's own SMA period instead of the shared manual
-    // sequence. Resolves once per period, then stops (Done) — doesn't repeat for the rest of the
-    // day. Pushes its own screenshot to Telegram, same self-contained pattern as Cross-SMA/Demand
-    // Zone, with a caption explicit about which of the two outcomes fired.
+    // PisoTechoWatch — same case-1/case-2 cross-or-bounce formula used elsewhere
+    // (BounceProximityRatio), against that watch's own SMA period. Resolves once per period, then
+    // stops (Done) — doesn't repeat for the rest of the day. Pushes its own screenshot to
+    // Telegram, same self-contained pattern as Demand Zone, with a caption explicit about which of
+    // the two outcomes fired.
     private void EvaluatePisoTechoWatches(CandleData justClosed)
     {
         foreach (var watch in s_pisoTechoWatches)
@@ -1097,7 +939,7 @@ public class ChartPanel : Panel
             var isGreen = justClosed.Close > justClosed.Open;
             var isRed   = justClosed.Close < justClosed.Open;
 
-            // Same 2-point comparison as EvaluateCrossings — the PREVIOUS candle's close vs the
+            // 2-point comparison — the PREVIOUS candle's close vs the
             // PREVIOUS SMA value, not this candle's own open vs its own (possibly already-moved)
             // SMA. The SMA itself can shift enough between candles that no single bar's open/close
             // straddles it, even though price has genuinely crossed — comparing consecutive points
@@ -1594,7 +1436,6 @@ public class ChartPanel : Panel
                         var lastBarDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(last.Time, EasternZone));
                         if (lastBarDate < today)
                         {
-                            EvaluateCrossings(last);
                             EvaluateTLineSignal(last);
                             EvaluatePisoTechoWatches(last);
                         }
@@ -1722,14 +1563,13 @@ public class ChartPanel : Panel
                     // (LoadHistoryAsync seeds it with YESTERDAY's last hourly bar, e.g. 15:00-16:00,
                     // so live ticks extend it correctly instead of starting a spurious bucket).
                     // That seeded bucket already closed yesterday — it must NOT be evaluated again
-                    // here just because today's session started; doing so previously fired
-                    // Cross-SMA/T-Line events at ~9:31 AM using yesterday's stale close. Only
-                    // evaluate when the outgoing bucket is from the SAME trading day as this tick
-                    // (HourlyRthBucketKey = dayNumber*100+slot, so dividing by 100 isolates the day).
+                    // here just because today's session started; doing so previously fired T-Line
+                    // events at ~9:31 AM using yesterday's stale close. Only evaluate when the
+                    // outgoing bucket is from the SAME trading day as this tick (HourlyRthBucketKey
+                    // = dayNumber*100+slot, so dividing by 100 isolates the day).
                     var sameDay = _liveBucketIndex is { } prevIndex && prevIndex / 100 == index / 100;
                     if (sameDay)
                     {
-                        EvaluateCrossings(_liveBucket);
                         EvaluateTLineSignal(_liveBucket);
                         EvaluatePisoTechoWatches(_liveBucket);
 
