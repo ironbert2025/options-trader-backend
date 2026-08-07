@@ -192,28 +192,19 @@ public class SimulatorForm : Form
         Load += (s, e) => LoadSymbols();
     }
 
-    // "DZ/SZ" arms drawing mode on the RTH+Overnight chart only (same as the live app's toolbar);
-    // "Clear DZ/SZ" clears it there AND the mirrored lines on the 15m RTH chart, so nothing is
-    // left orphaned on one chart after clearing the other.
+    // "DZ/SZ" arms drawing mode on the RTH+Overnight chart only (same as the live app's toolbar).
+    // Zones are deleted individually (click + Delete), same as every other drawing tool.
     private void BuildDzSzControls()
     {
         var btnDzSz = new Button { Text = "DZ/SZ", Location = new Point(0, 0), Size = new Size(80, 26) };
-        var btnClear = new Button { Text = "Clear DZ/SZ", Location = new Point(90, 0), Size = new Size(110, 26) };
 
         btnDzSz.Click += async (s, e) =>
         {
             var on = await _fullChart.ToggleDzSzModeAsync();
             btnDzSz.BackColor = on ? Color.LightGreen : SystemColors.Control;
         };
-        btnClear.Click += async (s, e) =>
-        {
-            await _fullChart.ClearDzSzAsync();
-            await _rthChart.ClearMirroredZoneLinesAsync();
-            btnDzSz.BackColor = SystemColors.Control;
-        };
 
         _pnlDzSz.Controls.Add(btnDzSz);
-        _pnlDzSz.Controls.Add(btnClear);
     }
 
     // 4 fixed speeds for "Play" (ticks/sec) — 10 is the default (fastest/most steps per real
