@@ -53,7 +53,7 @@ public class FourEtfSimulatorForm : Form
     // Options-chain grid — one symbol at a time, picked via the selector buttons below.
     private readonly Panel _pnlSymbolSelector = new() { Location = new Point(940, 104), Size = new Size(332, 34) };
     private readonly Dictionary<string, Button> _symbolSelectorButtons = new();
-    private string _selectedGridSymbol = "SPY";
+    private string? _selectedGridSymbol;
     private readonly DataGridView _dgvChain = new()
     {
         Location = new Point(940, 144), Size = new Size(332, 400),
@@ -183,7 +183,7 @@ public class FourEtfSimulatorForm : Form
             _symbolSelectorButtons[symbol] = btn;
             _pnlSymbolSelector.Controls.Add(btn);
         }
-        _symbolSelectorButtons[_selectedGridSymbol].BackColor = Color.LightGreen;
+        // No symbol pre-selected — the grid stays empty until the user explicitly picks one.
     }
 
     private void BuildChainColumns()
@@ -303,6 +303,10 @@ public class FourEtfSimulatorForm : Form
 
         PausePlay();
         _simDate = date;
+
+        // Grid goes back to empty on a new day load — the user has to pick a symbol again.
+        _selectedGridSymbol = null;
+        foreach (var b in _symbolSelectorButtons.Values) b.BackColor = SystemColors.Control;
 
         _candlesBySymbol.Clear();
         _optionStepsBySymbol.Clear();
@@ -452,7 +456,8 @@ public class FourEtfSimulatorForm : Form
 
     private void RenderOptionsGrid()
     {
-        if (_currentIndex < 0 || !_tickers.TryGetValue(_selectedGridSymbol, out var ticker))
+        // No symbol picked yet via the selector buttons — leave the grid empty.
+        if (_selectedGridSymbol == null || _currentIndex < 0 || !_tickers.TryGetValue(_selectedGridSymbol, out var ticker))
         {
             _dgvChain.Rows.Clear();
             return;
