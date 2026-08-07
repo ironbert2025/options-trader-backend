@@ -479,10 +479,17 @@
       return;
     }
 
+    // H-Line: removed here AND reported to C# (ChartPanel.CoreWebView2_WebMessageReceived), which
+    // relays it (by price) to the other 2 panels' removeHLine — covers both manually-drawn H-Lines
+    // and the auto-drawn prev-day High/Low (markPrevDayHiLo draws the same price on all 3 panels).
     const hLineIdx = hLinePrimitive._segments.findIndex(s => s.selected);
     if (hLineIdx !== -1) {
+      const removed = hLinePrimitive._segments[hLineIdx];
       hLinePrimitive._segments.splice(hLineIdx, 1);
       forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'hline_delete', price: removed.price });
+      }
       return;
     }
 
@@ -1033,6 +1040,16 @@
     if (!hLineAttached) { candleSeries.attachPrimitive(hLinePrimitive); hLineAttached = true; }
     hLineArmed = !hLineArmed;
     return hLineArmed;
+  }
+
+  // Called by C# to remove an H-Line at the given price as the ECHO of a deletion that happened
+  // on a SIBLING panel (see the 'hline_delete' postMessage above) — no postMessage sent back out
+  // from here, so the 3 panels don't ping-pong the same delete forever. Removes every matching
+  // line at that price (there's normally at most one, but this stays correct even if two happen
+  // to coincide, e.g. a manual H-Line drawn at the same price as the auto prev-day high/low).
+  function removeHLine(price) {
+    hLinePrimitive._segments = hLinePrimitive._segments.filter(s => s.price !== price);
+    forceRepaint();
   }
 
   // Auto-drawn previous-day High/Low — same red H-Line primitive as the manual tool above (same

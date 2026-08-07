@@ -208,6 +208,12 @@ public class ChartPanel : Panel
     // the same line on all 3 at once. See CoreWebView2_WebMessageReceived's "strike_delete" case.
     public event Action<decimal>? OnStrikeDeletedEvent;
 
+    // Fires (price) when an H-Line gets deleted (selected + Delete) on THIS panel — covers both
+    // manually-drawn H-Lines and the auto-drawn prev-day High/Low (same price drawn independently
+    // on all 3 panels by markPrevDayHiLo). MultiChartForm uses this to remove the matching line on
+    // the other 2 panels too. See CoreWebView2_WebMessageReceived's "hline_delete" case.
+    public event Action<decimal>? OnHLineDeletedEvent;
+
     private static readonly Dictionary<int, string> SmaColorNames = new()
     {
         [20] = "Yellow", [40] = "Red", [100] = "Green", [200] = "Purple"
@@ -390,6 +396,15 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"removeStrikeLine({priceStr});");
     }
 
+    // Removes an H-Line at the given price — called on the 2 SIBLING panels when
+    // OnHLineDeletedEvent fires from wherever the user actually clicked + pressed Delete.
+    public async Task RemoveHLineAsync(decimal price)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeHLine({priceStr});");
+    }
+
     // "ΔS=value" label at trade close — anchored at the trade's strike (same price as its green
     // "Stk=xxx" line), drawn just below it. See markDeltaS in chart.html for the exact rationale.
     public async Task MarkDeltaSAsync(decimal entrySpot, decimal closeSpot, decimal strike)
@@ -557,6 +572,14 @@ public class ChartPanel : Panel
                     // the other 2 panels too (markStrike draws the same Stk line on all 3 at once).
                     var strikePrice = root.GetProperty("price").GetDecimal();
                     OnStrikeDeletedEvent?.Invoke(strikePrice);
+                    break;
+                }
+                case "hline_delete":
+                {
+                    // Deleted on THIS panel already — fire the event so MultiChartForm can remove
+                    // the matching line (by price) from the other 2 panels too.
+                    var hLinePrice = root.GetProperty("price").GetDecimal();
+                    OnHLineDeletedEvent?.Invoke(hLinePrice);
                     break;
                 }
             }

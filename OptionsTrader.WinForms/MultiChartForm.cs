@@ -654,6 +654,21 @@ public class MultiChartForm : Form
             };
         }
 
+        // H-Line delete: same idea as the Stk line above — manually-drawn H-Lines and the
+        // auto-drawn prev-day High/Low both get mirrored (by price) onto the other 2 panels when
+        // deleted (click + Delete) from any one of them.
+        foreach (var panel in allChartPanels)
+        {
+            if (panel == null) continue;
+            panel.OnHLineDeletedEvent += price =>
+            {
+                foreach (var sibling in allChartPanels)
+                {
+                    if (sibling != null && sibling != panel) _ = sibling.RemoveHLineAsync(price);
+                }
+            };
+        }
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);
