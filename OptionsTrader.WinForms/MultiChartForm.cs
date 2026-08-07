@@ -570,6 +570,24 @@ public class MultiChartForm : Form
             };
         }
 
+        // "Expuesto en 3 charts" — premarket-only: on every premarket tick (fired from the 1h
+        // panel, see ChartPanel.OnPreMarketPriceUpdated), check whether that price broke the SAME
+        // side (upper or lower) of the Bollinger(20,2) band on Daily, 1h AND 15m RTH all at once.
+        // Shown as a yellow banner at the top of the 15m RTH panel — hidden again the moment any
+        // one of the 3 stops agreeing (re-evaluated fresh on every tick, nothing latched).
+        if (hourlyPanel != null && rthPanel != null)
+        {
+            hourlyPanel.OnPreMarketPriceUpdated += price =>
+            {
+                var dailyDir  = ChartPanel.GetDailyBollingerDirection(_symbol, price);
+                var hourlyDir = hourlyPanel.GetBollingerDirection(price);
+                var rthDir    = rthPanel.GetBollingerDirection(price);
+
+                var exposed = dailyDir != BollingerDirection.None && dailyDir == hourlyDir && dailyDir == rthDir;
+                _ = exposed ? rthPanel.ShowExposureBannerAsync("Expuesto en 3 charts") : rthPanel.HideExposureBannerAsync();
+            };
+        }
+
         // Piso/Techo reference line: mirrors each armed SMA's pre-market level onto BOTH the 15m
         // RTH and RTH+Overnight panels (dashed, same color as that SMA on the 1h panel) — visual
         // reference for "how far price could go and bounce" without needing the 1h panel open.

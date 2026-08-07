@@ -15,6 +15,11 @@ public enum ChartPanelMode
     Fifteen_Full    // 15m candles, regular session + pre/after-hours (whatever Schwab returns)
 }
 
+// A price's position relative to a Bollinger Bands(20,2) envelope — used by the premarket
+// "Expuesto en 3 charts" check (see ChartPanel.GetBollingerDirection/GetDailyBollingerDirection
+// and MultiChartForm's wiring of OnPreMarketPriceUpdated).
+public enum BollingerDirection { None, Above, Below }
+
 // One WebView2-hosted candlestick chart. Does NOT own a streaming connection — it's handed a
 // SchwabStreamerClient for one-off REST history fetches (GetHistoricalCandlesAsync, no per-
 // account limit on that) and a separate ICandleFeed for live ticks. In this app instance's own
@@ -1232,6 +1237,58 @@ public class ChartPanel : Panel
         return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
     }
 
+    // This panel's own Bollinger(20,2) position for `price` — used by MultiChartForm's premarket
+    // "Expuesto en 3 charts" check (Daily + 1h + 15m RTH all breaking the SAME band side). Reuses
+    // this panel's own _closedCandles (Hourly15/Fifteen_RTH only — Fifteen_Full never populates it).
+    public BollingerDirection GetBollingerDirection(decimal price)
+    {
+        var bands = BollingerBandsAt(_closedCandles.Count - 1);
+        if (bands == null) return BollingerDirection.None;
+        if (price > bands.Value.Upper) return BollingerDirection.Above;
+        if (price < bands.Value.Lower) return BollingerDirection.Below;
+        return BollingerDirection.None;
+    }
+
+    // Daily Bollinger(20,2) position for `price` — "managed in memory": there's no dedicated Daily
+    // ChartPanel, so this aggregates HourlyCandleStore's persisted history (same pipeline
+    // EvaluateDailyBounce uses) into daily bars on demand, dropping today's still-forming bar.
+    public static BollingerDirection GetDailyBollingerDirection(string symbol, decimal price)
+    {
+        var hourly = HourlyCandleStore.Load(symbol);
+        var daily = CandleAggregation.AggregateToDaily(hourly);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        var closes = daily.Where(d => d.Date < today).Select(d => d.Candle.Close).ToList();
+        if (closes.Count < VolatilityBollingerPeriod) return BollingerDirection.None;
+
+        var window = closes.Skip(closes.Count - VolatilityBollingerPeriod).ToList();
+        var mean = window.Average();
+        var sqSum = window.Sum(c => (c - mean) * (c - mean));
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / VolatilityBollingerPeriod));
+        var upper = mean + VolatilityBollingerMult * stdDev;
+        var lower = mean - VolatilityBollingerMult * stdDev;
+
+        if (price > upper) return BollingerDirection.Above;
+        if (price < lower) return BollingerDirection.Below;
+        return BollingerDirection.None;
+    }
+
+    // Fires on every premarket tick (Hourly15 panel only — see Streamer_OnNewCandle) with the
+    // live price, so MultiChartForm can re-evaluate the "Expuesto en 3 charts" Bollinger check.
+    public event Action<decimal>? OnPreMarketPriceUpdated;
+
+    public async Task ShowExposureBannerAsync(string text)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var json = JsonSerializer.Serialize(text);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"showExposureBanner({json});");
+    }
+
+    public async Task HideExposureBannerAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("hideExposureBanner();");
+    }
+
     private void EvaluateVolatilityOpening(decimal livePrice)
     {
         if (!_volatilityOpeningArmed || _volatilityOpeningFired) return;
@@ -1568,6 +1625,10 @@ public class ChartPanel : Panel
                     // luego que se muestre la línea azul de precio premarket").
                     await DrawPrevDayHiLoAsync(_rawHistory, price);
                 });
+
+                // Only from the 1h panel (fires on every premarket tick, not just the first) —
+                // MultiChartForm re-evaluates the "Expuesto en 3 charts" Bollinger check from here.
+                if (_mode == ChartPanelMode.Hourly15) OnPreMarketPriceUpdated?.Invoke(price);
             }
             return; // outside this panel's session — ignore the tick entirely
         }

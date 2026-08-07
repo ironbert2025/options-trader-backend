@@ -14,6 +14,10 @@
   <div id="hintTLine"></div>
   <div id="hintDailyBounce"></div>
 </div>
+<!-- Premarket Bollinger-exposure banner (15m RTH panel only) — see showExposureBanner/
+     hideExposureBanner below. Plain overlay text, not a canvas primitive: no time/price anchor,
+     no selection, just a static top-of-chart notice. -->
+<div id="exposureBanner" style="position:absolute; left:0; right:0; top:4px; text-align:center; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b; display:none;"></div>
 <script>
   const container = document.getElementById('chart');
 
@@ -1438,6 +1442,19 @@
   // regardless of which hints are active. Called by ChartPanel via ExecuteScriptAsync.
   function setTLineHint(text) { document.getElementById('hintTLine').textContent = text || ''; }
   function setDailyBounceHint(text) { document.getElementById('hintDailyBounce').textContent = text || ''; }
+
+  // Premarket Bollinger-exposure banner — shown when C# (MultiChartForm) determines the premarket
+  // price broke the SAME side of the Bollinger band (upper or lower) on Daily, 1h, AND 15m RTH
+  // simultaneously. Re-evaluated on every premarket tick, so hideExposureBanner is called just as
+  // often once the condition stops holding.
+  function showExposureBanner(text) {
+    const el = document.getElementById('exposureBanner');
+    el.textContent = text;
+    el.style.display = 'block';
+  }
+  function hideExposureBanner() {
+    document.getElementById('exposureBanner').style.display = 'none';
+  }
 
   // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
   // analysis) — periodA/periodB identify which pair (20+40 or 100+200). textA/textB are each
