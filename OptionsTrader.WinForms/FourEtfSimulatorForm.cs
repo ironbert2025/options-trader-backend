@@ -33,15 +33,14 @@ public class FourEtfSimulatorForm : Form
 
     private readonly System.Windows.Forms.Timer _playTimer = new();
     private bool _isPlaying;
-    private int _ticksPerSecond = 60;
-    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(620, 4), Size = new Size(130, 96) };
+    private const int TicksPerSecond = 60; // fixed — no speed selector
 
     // 2x2 grid, each cell the same size as SimulatorForm's RTH+Overnight panel (~460x400) — SPY/QQQ
     // top, IWM/DIA bottom. Single shared DZ/SZ toggle (above) arms drawing on all 4 at once; each
     // chart still selects/deletes (click + Del) its own zones independently, same as always.
     private readonly TableLayoutPanel _chartsHost = new()
     {
-        Location = new Point(8, 104), Size = new Size(920, 800),
+        Location = new Point(8, 104), Size = new Size(736, 640), // 80% of the original 920x800
         ColumnCount = 2, RowCount = 2
     };
 
@@ -54,21 +53,23 @@ public class FourEtfSimulatorForm : Form
     private readonly Dictionary<string, List<SimulationStep>> _optionStepsBySymbol = new();
     private readonly Dictionary<string, TickerEntry> _tickers = new();
 
-    // Options-chain grid — one symbol at a time, picked via the selector buttons below.
-    private readonly Panel _pnlSymbolSelector = new() { Location = new Point(940, 104), Size = new Size(332, 34) };
+    // Options-chain grid — one symbol at a time, picked via the selector buttons below. Right
+    // next to the (now smaller, 80%) charts. Same width as Form1's real dgvQuotes (566).
+    private readonly Panel _pnlSymbolSelector = new() { Location = new Point(752, 104), Size = new Size(566, 34) };
     private readonly Dictionary<string, Button> _symbolSelectorButtons = new();
     private string? _selectedGridSymbol;
     private readonly DataGridView _dgvChain = new()
     {
-        Location = new Point(940, 144), Size = new Size(332, 400),
+        Location = new Point(752, 144), Size = new Size(566, 600),
         AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true,
         RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.CellSelect
     };
 
-    // "Rebote en Zona" log — the only event logged for now, per explicit request.
+    // "Rebote en Zona" log — the only event logged for now, per explicit request. Right below the
+    // (shorter) charts/grid row instead of way down at the bottom of a much taller form.
     private readonly TextBox _txtEventLog = new()
     {
-        Location = new Point(8, 914), Size = new Size(1264, 90),
+        Location = new Point(8, 754), Size = new Size(1264, 90),
         Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
         Font = new Font("Consolas", 8.5F), BackColor = Color.Black, ForeColor = Color.LightGreen
     };
@@ -88,8 +89,8 @@ public class FourEtfSimulatorForm : Form
     public FourEtfSimulatorForm()
     {
         Text          = "Simulador 4 ETF";
-        Width         = 1300;
-        Height        = 1080;
+        Width         = 1340;
+        Height        = 900;
         StartPosition = FormStartPosition.CenterScreen;
 
         foreach (var symbol in Symbols)
@@ -114,8 +115,6 @@ public class FourEtfSimulatorForm : Form
         Controls.Add(_lblStep);
         Controls.Add(_btnAtras);
         Controls.Add(_btnAdelante);
-        Controls.Add(_grpSpeed);
-        BuildSpeedControls();
         Controls.Add(_chartsHost);
         Controls.Add(_pnlSymbolSelector);
         Controls.Add(_dgvChain);
@@ -224,7 +223,8 @@ public class FourEtfSimulatorForm : Form
         _dgvChain.Columns.Add("colContracts", "Conts");
         _dgvChain.Columns.Add("colLevel", "Level");
 
-        int[] widths = { 60, 55, 30, 30, 30, 45, 55, 30, 30, 30, 40, 40 };
+        // Same per-column widths as Form1's real dgvQuotes (same column order too).
+        int[] widths = { 57, 62, 33, 33, 33, 50, 60, 33, 33, 33, 48, 45 };
         for (int i = 0; i < _dgvChain.Columns.Count; i++) _dgvChain.Columns[i].Width = widths[i];
     }
 
@@ -280,28 +280,6 @@ public class FourEtfSimulatorForm : Form
         {
             e.CellStyle.ForeColor = Color.DarkGreen;
             e.CellStyle.Font = new Font(_dgvChain.Font, FontStyle.Bold);
-        }
-    }
-
-    private void BuildSpeedControls()
-    {
-        var speeds = new (string Label, int TicksPerSecond)[] { ("60 tick/seg", 60), ("120 tick/seg", 120), ("180 tick/seg", 180), ("240 tick/seg", 240) };
-        for (int i = 0; i < speeds.Length; i++)
-        {
-            var (label, ticksPerSecond) = speeds[i];
-            var rb = new RadioButton
-            {
-                Text     = label,
-                Checked  = ticksPerSecond == _ticksPerSecond,
-                AutoSize = true,
-                Location = new Point(6, 18 + i * 18)
-            };
-            rb.CheckedChanged += (s, e) =>
-            {
-                if (!rb.Checked) return;
-                _ticksPerSecond = ticksPerSecond;
-            };
-            _grpSpeed.Controls.Add(rb);
         }
     }
 
@@ -407,7 +385,7 @@ public class FourEtfSimulatorForm : Form
     private void PlayTimer_Tick(object? sender, EventArgs e)
     {
         if (_currentIndex >= _totalSteps - 1) { PausePlay(); return; }
-        var stepsPerTick = Math.Max(1, _ticksPerSecond / RenderHz);
+        var stepsPerTick = Math.Max(1, TicksPerSecond / RenderHz);
         _currentIndex = Math.Min(_currentIndex + stepsPerTick, _totalSteps - 1);
         RenderCurrentStep();
         if (_currentIndex >= _totalSteps - 1) PausePlay();
