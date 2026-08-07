@@ -6,11 +6,14 @@ namespace OptionsTrader.Infrastructure.Schwab;
 // (C:\OptionsData\{Symbol}_Ticks_{yyyyMMdd}.csv), for a later offline simulator (phase 2, not
 // built yet — phase 1 here is just capturing the data starting now).
 //
-// Only ever called from SchwabStreamerClient.HandleMessage on the instance that's actually
-// connected to Schwab (the "hub" — see CandleHubServer/CandleHubClient in OptionsTrader.WinForms).
-// Other app instances relay candles via CandleHubClient instead, which never touches this, so
-// there's no risk of multiple processes writing duplicate rows for the same symbol/tick.
-internal static class TickPriceStore
+// Called from SchwabStreamerClient.HandleMessage on the instance actually connected to Schwab
+// (the "hub" — see CandleHubServer/CandleHubClient in OptionsTrader.WinForms), AND from
+// Form1.SetUpLiveFeedAsync on an instance connecting to a REMOTE hub on another machine (so that
+// machine also builds up its own local tick history to run simulators against, since it never
+// touches the hub machine's C:\OptionsData). NOT called for a client of a hub on the SAME
+// machine — that machine's disk already got the row directly from the hub, writing it again from
+// the client side would just duplicate it.
+public static class TickPriceStore
 {
     private const string OutputFolder = @"C:\OptionsData\MarketData\Ticks";
     private const string Header = "Time,Price";

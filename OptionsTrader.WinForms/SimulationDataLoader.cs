@@ -148,7 +148,10 @@ internal static class SimulationDataLoader
             .ToList();
     }
 
-    private static List<DateOnly> GetAvailableTickDates(string symbol)
+    // Days that actually have recorded underlying tick data for this symbol — used by
+    // FourEtfSimulatorForm, which (unlike SimulatorForm) needs no options-chain/IV data at all, so
+    // GetAvailableDates' IV-folder-based listing would show dates with no underlying ticks to play.
+    public static List<DateOnly> GetAvailableTickDates(string symbol)
     {
         var dates = new HashSet<DateOnly>();
 

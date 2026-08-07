@@ -10,6 +10,10 @@
 </head>
 <body>
 <div id="chart"></div>
+<div id="hints" style="position:absolute; left:0; right:0; bottom:4px; text-align:center; pointer-events:none; z-index:5; font: 12px sans-serif; color:#3cd070;">
+  <div id="hintTLine"></div>
+  <div id="hintDailyBounce"></div>
+</div>
 <script>
   const container = document.getElementById('chart');
 
@@ -125,7 +129,7 @@
   let dzSzAttached = false;
 
   class ZoneLinesPrimitive {
-    constructor() { this._segments = []; this._chart = null; } // [{ time, price, color }, ...] — pairs at (2i, 2i+1) = (demand, supply)
+    constructor() { this._segments = []; this._chart = null; } // [{ time, price, color, selected }, ...] — pairs at (2i, 2i+1) = (demand, supply)
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -169,6 +173,18 @@
                   ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
                   ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
                   ctx.stroke();
+
+                  // Selected = yellow dashed overlay, same convention as gray Rect/T-Line/H-Line.
+                  if (seg.selected) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
                 });
               });
             }
@@ -194,7 +210,7 @@
   // handling needed) — just pushes the line C# already decided the time/price for.
   function addMirroredZoneLine(time, price, color) {
     if (!dzSzAttached) { candleSeries.attachPrimitive(zoneLinesPrimitive); dzSzAttached = true; }
-    zoneLinesPrimitive._segments.push({ time, price, color });
+    zoneLinesPrimitive._segments.push({ time, price, color, selected: false });
     dzSzAxisLabels.push(candleSeries.createPriceLine({
       price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
     }));
@@ -206,6 +222,27 @@
     dzSzAxisLabels.forEach(l => candleSeries.removePriceLine(l));
     dzSzAxisLabels.length = 0;
     forceRepaint();
+  }
+
+  // Removes the demand+supply pair starting at pairStart (always even — 2i/2i+1) from both
+  // _segments and the matching right-axis price-line labels. Shared by the Delete-key handler and
+  // removeMirroredZonePair below.
+  function removeZonePairAtIndex(pairStart) {
+    zoneLinesPrimitive._segments.splice(pairStart + 1, 1);
+    zoneLinesPrimitive._segments.splice(pairStart, 1);
+    const removedLabels = dzSzAxisLabels.splice(pairStart, 2);
+    removedLabels.forEach(l => candleSeries.removePriceLine(l));
+    forceRepaint();
+  }
+
+  // Simulator only: called on the SIBLING chart when a mirrored zone gets deleted on the other one
+  // (either direction — RTH+Overnight is the "source" but the mirror on RTH is independently
+  // selectable/deletable too) — matched by price since that's shared between the original and its
+  // mirror, unlike time (mirrored lines can clamp to a different anchor on the RTH-only chart).
+  function removeMirroredZonePair(price1, price2) {
+    const idx = zoneLinesPrimitive._segments.findIndex(s => s.price === price1 || s.price === price2);
+    if (idx === -1) return;
+    removeZonePairAtIndex(idx % 2 === 0 ? idx : idx - 1);
   }
 
   // ---- Rect tool: sky-blue rectangle between 2 clicks (opposite corners, no value labels) ----
@@ -392,6 +429,21 @@
     return -1;
   }
 
+  // Returns the index of the DZ/SZ line (demand or supply, click point -> right edge, same shape
+  // as H-Line) within a few pixels of (px,py), or -1.
+  function findDzSzByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = zoneLinesPrimitive._segments.length - 1; i >= 0; i--) {
+      const seg = zoneLinesPrimitive._segments[i];
+      const x = ts.timeToCoordinate(seg.time);
+      const y = candleSeries.priceToCoordinate(seg.price);
+      if (x == null || y == null) continue;
+      if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
+    }
+    return -1;
+  }
+
   // Delete removes whichever gray rect, T-Line, H-Line, or vertical arrow is currently selected
   // (click on its border/line). A deleted T-Line is also reported to C# (TLineStore) so it
   // doesn't come back on the next session.
@@ -426,6 +478,53 @@
     const hLineIdx = hLinePrimitive._segments.findIndex(s => s.selected);
     if (hLineIdx !== -1) {
       hLinePrimitive._segments.splice(hLineIdx, 1);
+      forceRepaint();
+      return;
+    }
+
+    // DZ/SZ: removes the WHOLE zone (both demand+supply lines of the pair the selected line
+    // belongs to), not just the one line clicked — pairs are strictly consecutive (2i, 2i+1), so
+    // splicing only one would shift the pairing of every zone drawn after it.
+    const dzSzIdx = zoneLinesPrimitive._segments.findIndex(s => s.selected);
+    if (dzSzIdx !== -1) {
+      const pairStart = dzSzIdx % 2 === 0 ? dzSzIdx : dzSzIdx - 1;
+      const removedPrice1 = zoneLinesPrimitive._segments[pairStart].price;
+      const removedPrice2 = zoneLinesPrimitive._segments[pairStart + 1].price;
+      removeZonePairAtIndex(pairStart);
+      // Simulator only (SimulatorForm mirrors each DZ/SZ zone onto the sibling RTH/RTH+Overnight
+      // chart) — harmless on the live chart, nothing listens for it there. Reported by price
+      // (not time) since a mirrored pair shares the same price but not necessarily the same
+      // fake-UTC anchor time as the original.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'dzsz_delete', price1: removedPrice1, price2: removedPrice2 });
+      }
+      return;
+    }
+
+    const deltaSIdx = deltaSPrimitive._labels.findIndex(l => l.selected);
+    if (deltaSIdx !== -1) {
+      deltaSPrimitive._labels.splice(deltaSIdx, 1);
+      forceRepaint();
+      return;
+    }
+
+    // Stk line: removed here AND reported to C# (ChartPanel.CoreWebView2_WebMessageReceived),
+    // which relays it to the other 2 panels' removeStrikeLine so deleting from any one chart
+    // removes it from all 3 — markStrike draws the same line on all 3 panels at trade open.
+    const strikeIdx = strikeLinesPrimitive._lines.findIndex(l => l.selected);
+    if (strikeIdx !== -1) {
+      const removed = strikeLinesPrimitive._lines[strikeIdx];
+      strikeLinesPrimitive._lines.splice(strikeIdx, 1);
+      forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'strike_delete', price: removed.price });
+      }
+      return;
+    }
+
+    const refLineIdx = pisoTechoRefLinePrimitive._lines.findIndex(l => l.selected);
+    if (refLineIdx !== -1) {
+      pisoTechoRefLinePrimitive._lines.splice(refLineIdx, 1);
       forceRepaint();
       return;
     }
@@ -490,6 +589,48 @@
 
   chart.subscribeClick(param => {
     if (!param.point) return;
+    // Arrow tool handled here, BEFORE the clickTime/price guard below — clickTime falls back to
+    // coordinateToTime, which (unlike coordinateToLogical) still returns null in truly empty
+    // space (e.g. right of the last candle), which used to make the whole handler return early
+    // and silently swallow the 2nd click of an arrow drawn into that space. Self-contained: uses
+    // its own logical/price and returns immediately, without falling through to the rest of the
+    // click handler (hit-testing for other tools, which arrow doesn't need).
+    if (arrowArmed) {
+      const logicalX = chart.timeScale().coordinateToLogical(param.point.x);
+      const arrowPrice = candleSeries.coordinateToPrice(param.point.y);
+      if (arrowPrice == null) return;
+      if (!arrowPending) {
+        arrowPending = { logical: logicalX, price: arrowPrice };
+      } else {
+        const red = arrowPending.price > arrowPrice; // 1st click above (higher price than) 2nd -> red
+        arrowPrimitive._arrows.push({ l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: arrowPrice, red });
+        arrowPrimitive._preview = null;
+        arrowPending = null;
+        forceRepaint();
+      }
+      return;
+    }
+
+    // Stk line click selection — handled here, BEFORE the clickTime/price guard below, same
+    // reason as the arrow tool above: the Stk= line is drawn from its anchor candle all the way
+    // to the right edge of the chart (see markStrike/StrikeLinesPrimitive), so a large part of its
+    // clickable length sits in truly empty space where coordinateToTime returns null — the guard
+    // below used to swallow those clicks before ever reaching the hit test further down.
+    // findStrikeLineByClick only needs the raw pixel coordinates, not clickTime/price.
+    if (strikeLinesPrimitive._lines.length > 0) {
+      const hitIdx = findStrikeLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        strikeLinesPrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadStrikeSelection = strikeLinesPrimitive._lines.some(l => l.selected);
+      if (hadStrikeSelection) {
+        strikeLinesPrimitive._lines.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // param.time is only set when the click lands exactly on a rendered bar — during the
     // overnight/pre-market session (15m RTH+Overnight panel) real data is sparse, so large
     // stretches of the gray band have no bar under the cursor and param.time comes back
@@ -566,6 +707,53 @@
       }
     }
 
+    // DZ/SZ click selection — same idea as above, regardless of whether DZ/SZ drawing is armed.
+    // Delete removes the whole zone (both the demand and supply line of the pair), not just the
+    // one line clicked — see the keydown handler below.
+    if (zoneLinesPrimitive._segments.length > 0) {
+      const hitIdx = findDzSzByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        zoneLinesPrimitive._segments.forEach((s, i) => { s.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadDzSzSelection = zoneLinesPrimitive._segments.some(s => s.selected);
+      if (hadDzSzSelection) {
+        zoneLinesPrimitive._segments.forEach(s => { s.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // ΔS label click selection — same idea as above.
+    if (deltaSPrimitive._labels.length > 0) {
+      const hitIdx = findDeltaSByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        deltaSPrimitive._labels.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadDeltaSSelection = deltaSPrimitive._labels.some(l => l.selected);
+      if (hadDeltaSSelection) {
+        deltaSPrimitive._labels.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // Piso/Techo reference line click selection — same idea as above.
+    if (pisoTechoRefLinePrimitive._lines.length > 0) {
+      const hitIdx = findPisoTechoRefLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        pisoTechoRefLinePrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadRefLineSelection = pisoTechoRefLinePrimitive._lines.some(l => l.selected);
+      if (hadRefLineSelection) {
+        pisoTechoRefLinePrimitive._lines.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // Vertical arrow click selection (1h panel) — same idea as gray rect/T-Line above.
     if (verticalArrowPrimitive._arrows.length > 0) {
       const hitIdx = findVerticalArrowByClick(param.point.x, param.point.y);
@@ -584,7 +772,7 @@
     if (dzSzArmed) {
       const color = dzSzNextIsSupply ? '#ef5350' : '#26a69a';
 
-      zoneLinesPrimitive._segments.push({ time: clickTime, price, color });
+      zoneLinesPrimitive._segments.push({ time: clickTime, price, color, selected: false });
 
       dzSzAxisLabels.push(candleSeries.createPriceLine({
         price, color, lineWidth: 1, lineVisible: false, axisLabelVisible: true, title: '',
@@ -641,18 +829,6 @@
     if (hLineArmed) {
       hLinePrimitive._segments.push({ time: clickTime, price, selected: false });
       forceRepaint();
-    }
-
-    if (arrowArmed) {
-      if (!arrowPending) {
-        arrowPending = { time: clickTime, price };
-      } else {
-        const red = arrowPending.price > price; // 1st click above (higher price than) 2nd -> red
-        arrowPrimitive._arrows.push({ t1: arrowPending.time, p1: arrowPending.price, t2: clickTime, p2: price, red });
-        arrowPrimitive._preview = null;
-        arrowPending = null;
-        forceRepaint();
-      }
     }
 
     if (pisoArmed) {
@@ -717,11 +893,14 @@
 
     if (!arrowArmed || !arrowPending) {
       if (arrowPrimitive._preview) { arrowPrimitive._preview = null; forceRepaint(); }
-    } else if (param.point && param.time !== undefined) {
+    } else if (param.point) {
+      // No param.time !== undefined gate here (unlike the other tools' previews) — the preview
+      // must keep following the cursor into the empty space beyond the last candle too.
       const price = candleSeries.coordinateToPrice(param.point.y);
       if (price != null) {
+        const logicalX = chart.timeScale().coordinateToLogical(param.point.x);
         const red = arrowPending.price > price;
-        arrowPrimitive._preview = { t1: arrowPending.time, p1: arrowPending.price, t2: param.time, p2: price, red };
+        arrowPrimitive._preview = { l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: price, red };
         forceRepaint();
       }
     }
@@ -914,7 +1093,7 @@
   // price than) the 2nd click, green otherwise ----
 
   class ArrowPrimitive {
-    constructor() { this._arrows = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, red }, ...]
+    constructor() { this._arrows = []; this._preview = null; this._chart = null; } // [{ l1, p1, l2, p2, red }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -928,8 +1107,10 @@
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
                 const drawArrow = (a, alpha) => {
-                  const x1 = ts.timeToCoordinate(a.t1);
-                  const x2 = ts.timeToCoordinate(a.t2);
+                  // logicalToCoordinate (not timeToCoordinate) — extrapolates past the last/first
+                  // candle, so the arrow renders correctly even into space with no bar underneath.
+                  const x1 = ts.logicalToCoordinate(a.l1);
+                  const x2 = ts.logicalToCoordinate(a.l2);
                   const y1 = candleSeries.priceToCoordinate(a.p1);
                   const y2 = candleSeries.priceToCoordinate(a.p2);
                   if (x1 == null || x2 == null || y1 == null || y2 == null) return;
@@ -1240,19 +1421,31 @@
   const pisoTechoAutoLabelPrimitive = new PisoTechoAutoLabelPrimitive();
   let pisoTechoAutoLabelAttached = false;
 
+  // Green hint lines overlaid at the bottom of the chart itself (not a WinForms Label docked
+  // below it) — so an empty hint reserves no layout space and every panel stays the same height
+  // regardless of which hints are active. Called by ChartPanel via ExecuteScriptAsync.
+  function setTLineHint(text) { document.getElementById('hintTLine').textContent = text || ''; }
+  function setDailyBounceHint(text) { document.getElementById('hintDailyBounce').textContent = text || ''; }
+
   // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
-  // analysis) — periodA/periodB identify which pair (20+40 or 100+200), text is 'Piso', 'Techo',
-  // or null (no signal for that pair that day; removes any previous entry for it). Each pair's
-  // entry is tracked independently, so the 20/40 pair and the 100/200 pair can show different (or
-  // no) signal at the same time. Safe to call again on every Live Chart reopen with the SAME
-  // remembered text — it just re-renders, the position always comes from smaLastPoint at draw time.
-  function markPisoTecho(periodA, periodB, text) {
+  // analysis) — periodA/periodB identify which pair (20+40 or 100+200). textA/textB are each
+  // independently 'Piso', 'Techo', or null (no signal for THAT specific SMA — e.g. price opened
+  // between the two, so only the slower one still counts) — no longer forced to match each other.
+  // Safe to call again on every Live Chart reopen with the SAME remembered text — it just
+  // re-renders, the position always comes from smaLastPoint at draw time.
+  function markPisoTecho(periodA, textA, periodB, textB) {
     if (!pisoTechoAutoLabelAttached) { candleSeries.attachPrimitive(pisoTechoAutoLabelPrimitive); pisoTechoAutoLabelAttached = true; }
     pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== periodA && e.period !== periodB);
-    if (text) {
-      pisoTechoAutoLabelPrimitive._entries.push({ period: periodA, text });
-      pisoTechoAutoLabelPrimitive._entries.push({ period: periodB, text });
-    }
+    if (textA) pisoTechoAutoLabelPrimitive._entries.push({ period: periodA, text: textA });
+    if (textB) pisoTechoAutoLabelPrimitive._entries.push({ period: periodB, text: textB });
+    forceRepaint();
+  }
+
+  // Called by C# (ValidatePisoTechoAgainstOpen) when the actual market-open price already broke
+  // a single SMA's Piso/Techo label — removes just that one period's entry, leaving the other
+  // SMA of the pair (if any) untouched.
+  function removePisoTechoLabel(period) {
+    pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== period);
     forceRepaint();
   }
 
@@ -1285,7 +1478,7 @@
   // automatically (stays as a historical reference even after the trade closes). ----
 
   class StrikeLinesPrimitive {
-    constructor() { this._lines = []; this._chart = null; } // [{ time, price, label }, ...]
+    constructor() { this._lines = []; this._chart = null; } // [{ time, price, label, selected }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1318,6 +1511,18 @@
                   ctx.textAlign = 'right';
                   ctx.fillText(l.label, scope.bitmapSize.width - 4, y * scope.verticalPixelRatio - 2);
                   ctx.textAlign = 'left'; // reset — other primitives assume the default
+
+                  if (l.selected) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio);
+                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
                 });
               });
             }
@@ -1336,8 +1541,208 @@
     if (!strikeLinesAttached) { candleSeries.attachPrimitive(strikeLinesPrimitive); strikeLinesAttached = true; }
     if (allCandles.length === 0) return;
     const anchorTime = allCandles[allCandles.length - 1].time;
-    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: `Stk=${price}` });
+    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: `Stk=${price}`, selected: false });
     forceRepaint();
+  }
+
+  // Called by C# to remove a Stk line pushed here as the ECHO of a deletion that happened on a
+  // SIBLING panel (see the 'strike_delete' postMessage in the keydown handler below) — no
+  // postMessage sent back out from here, so the 3 panels don't ping-pong the same delete forever.
+  function removeStrikeLine(price) {
+    strikeLinesPrimitive._lines = strikeLinesPrimitive._lines.filter(l => l.price !== price);
+    forceRepaint();
+  }
+
+  // Returns the index of the Stk line (full-width, click point -> right edge, same shape as
+  // H-Line) within a few pixels of (px,py), or -1.
+  function findStrikeLineByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = strikeLinesPrimitive._lines.length - 1; i >= 0; i--) {
+      const l = strikeLinesPrimitive._lines[i];
+      const xRaw = ts.timeToCoordinate(l.time);
+      const x = xRaw == null ? 0 : xRaw;
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (y == null) continue;
+      if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
+    }
+    return -1;
+  }
+
+  // ---- "ΔS=value" label at trade close — own dedicated primitive (not TextLabelsPrimitive,
+  // which has no selection) so it can be click-selected and removed with Delete, same as the
+  // other drawing tools. value is the absolute move of the underlying between entry and close (no
+  // sign, magnitude only). Δ is the actual Greek delta character (a triangle), per request,
+  // instead of spelling out "Delta". Anchored at the trade's STRIKE price (same y as its green
+  // "Stk=xxx" line) and drawn right-aligned at the right edge, just BELOW that line — mirrors
+  // StrikeLinesPrimitive's own label, which sits just above it. ----
+
+  class DeltaSPrimitive {
+    constructor() { this._labels = []; this._chart = null; } // [{ price, text, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                self._labels.forEach(l => {
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (y == null) return;
+
+                  ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textBaseline = 'top';
+                  ctx.textAlign = 'right';
+                  const textX = scope.bitmapSize.width - 4 * scope.horizontalPixelRatio;
+                  const textY = y * scope.verticalPixelRatio + 2 * scope.verticalPixelRatio;
+
+                  if (l.selected) {
+                    const width = ctx.measureText(l.text).width;
+                    const height = 14 * scope.verticalPixelRatio;
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.strokeRect(textX - width - 2, textY - 2, width + 4, height + 4);
+                    ctx.restore();
+                  }
+
+                  ctx.fillStyle = '#ffeb3b';
+                  ctx.fillText(l.text, textX, textY);
+                  ctx.textAlign = 'left';
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const deltaSPrimitive = new DeltaSPrimitive();
+  let deltaSAttached = false;
+
+  function markDeltaS(entrySpot, closeSpot, strike) {
+    if (!deltaSAttached) { candleSeries.attachPrimitive(deltaSPrimitive); deltaSAttached = true; }
+    const delta = Math.abs(closeSpot - entrySpot);
+    deltaSPrimitive._labels.push({ price: strike, text: `ΔS=${delta.toFixed(2)}`, selected: false });
+    forceRepaint();
+  }
+
+  // Approximate CSS-pixel hit box for a right-aligned ΔS label (no exact ctx.measureText
+  // available outside the bitmap draw() context) — same tolerance-based approach as the other
+  // click hit-tests in this file.
+  function findDeltaSByClick(px, py) {
+    const chartWidthCss = chart.timeScale().width();
+    const tolerance = 4;
+    for (let i = deltaSPrimitive._labels.length - 1; i >= 0; i--) {
+      const l = deltaSPrimitive._labels[i];
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (y == null) continue;
+      const approxWidth = l.text.length * 7 + 8;
+      if (px >= chartWidthCss - 4 - approxWidth - tolerance && px <= chartWidthCss + tolerance &&
+          py >= y + 2 - tolerance && py <= y + 2 + 14 + tolerance) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // ---- Piso/Techo reference line (15m RTH / 15m RTH+Overnight panels only) — dashed horizontal
+  // line at a Piso/Techo SMA's pre-market level, same color as that SMA on the 1h panel
+  // (smaColors), so it's visible on the RTH charts as "how far price could go and bounce" without
+  // needing the 1h panel open. Drawn once pre-market by ChartPanel (1h) pushing the value here via
+  // MultiChartForm, removed either by the user (click + Delete, same as every other tool) or
+  // automatically if the market-open gap invalidates that SMA's Piso/Techo (removePisoTechoRefLine,
+  // called from ChartPanel.ValidatePisoTechoAgainstOpen). Anchored at the last loaded candle (same
+  // "anchor to last candle, extend right" convention as markStrike/H-Line), so it covers the RTH
+  // price action from whenever it was drawn (pre-market) onward. ----
+
+  class PisoTechoRefLinePrimitive {
+    constructor() { this._lines = []; this._chart = null; } // [{ period, time, price, color, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                self._lines.forEach(l => {
+                  const xRaw = ts.timeToCoordinate(l.time);
+                  const x = xRaw == null ? 0 : xRaw; // falls back to left edge until session-start time is in range
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (y == null) return;
+
+                  ctx.strokeStyle = l.color;
+                  ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
+                  ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+
+                  if (l.selected) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
+                });
+                ctx.setLineDash([]);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const pisoTechoRefLinePrimitive = new PisoTechoRefLinePrimitive();
+  let pisoTechoRefLineAttached = false;
+
+  // sessionStartTime is the RTH session's own 9:30 ET anchor, computed in C# (ChartPanel/
+  // SimulatedChartPanel.ToFakeUtcEpochSeconds) — NOT derived from allCandles (unlike markStrike),
+  // since this gets called right after a day/history load, before allCandles is necessarily
+  // populated yet (SimulatorForm calls EvaluatePisoTecho before RenderCurrentStep, and both are
+  // fire-and-forget into the WebView, so the order isn't guaranteed). A fixed, independently
+  // computed timestamp sidesteps that race entirely.
+  function markPisoTechoRefLine(period, price, sessionStartTime) {
+    if (!pisoTechoRefLineAttached) { candleSeries.attachPrimitive(pisoTechoRefLinePrimitive); pisoTechoRefLineAttached = true; }
+    pisoTechoRefLinePrimitive._lines = pisoTechoRefLinePrimitive._lines.filter(l => l.period !== period);
+    pisoTechoRefLinePrimitive._lines.push({ period, time: sessionStartTime, price, color: smaColors[period] || '#888888', selected: false });
+    forceRepaint();
+  }
+
+  function removePisoTechoRefLine(period) {
+    pisoTechoRefLinePrimitive._lines = pisoTechoRefLinePrimitive._lines.filter(l => l.period !== period);
+    forceRepaint();
+  }
+
+  function findPisoTechoRefLineByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = pisoTechoRefLinePrimitive._lines.length - 1; i >= 0; i--) {
+      const l = pisoTechoRefLinePrimitive._lines[i];
+      const xRaw = ts.timeToCoordinate(l.time);
+      const x = xRaw == null ? 0 : xRaw;
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (y == null) continue;
+      if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
+    }
+    return -1;
   }
 
   // ---- SMA overlay (optional — only enabled on panels that call configureSmas) ----

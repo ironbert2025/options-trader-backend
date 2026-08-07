@@ -15,7 +15,7 @@ namespace OptionsTrader.WinForms;
 // ExitOrderId is the pending Trade-Target LIMIT exit (if any), cancelled before a manual close.
 file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false,
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
-    DateOnly ExpirationDate = default);
+    DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m);
 
 public partial class Form1 : Form
 {
@@ -75,6 +75,11 @@ public partial class Form1 : Form
     private List<BrokerAccountDto> _accounts = new();
     private string _selectedCounts = "6"; // session-only, always defaults to 6 on launch
     private List<OptionQuoteDto> _lastAllQuotes = new(); // current-expiration chain from the last fetch, for instant re-filtering
+
+    // Strikes force-shown in dgvQuotes regardless of the OTM-only filter — set by clicking a
+    // trade's Strike cell in dgvTrades (DgvTrades_CellClick), so a trade that's gone ITM (and
+    // would otherwise vanish from the grid) stays visible from then on. Cleared on ticker switch.
+    private readonly HashSet<(string Type, decimal Strike)> _forcedStrikes = new();
 
     public Form1()
     {
@@ -486,7 +491,8 @@ public partial class Form1 : Form
     {
         if (_selectedTicker == null || _lastAllQuotes.Count == 0) return;
         PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
-            selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked);
+            selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+            forcedStrikes: _forcedStrikes);
     }
 
     private static void ApplyRadioStyle(GroupBox group)
@@ -551,6 +557,8 @@ public partial class Form1 : Form
         clicked.Font = new Font(clicked.Font, FontStyle.Bold);
 
         _selectedTicker = clicked.Tag as TickerEntry;
+        UpdateEarningsStatusLabel();
+        _forcedStrikes.Clear();
 
         // Reset to blank placeholder rows — real quotes arrive once Start Polling/Fetch Quotes
         // is used, so keep the grids looking like ready tables in the meantime.
@@ -562,6 +570,38 @@ public partial class Form1 : Form
 
         RestoreOpenTrades(_selectedTicker?.Symbol ?? string.Empty);
         PadWithBlankRows(dgvTrades, 4);
+    }
+
+    // Shows the next earnings date for the selected symbol next to "User: ..." in the status bar
+    // (EarningsDateStore, filled in by hand for now — no UI to edit it yet). Split across 2
+    // ToolStripStatusLabels (date + "(remaining N days)") since a single label can't mix 2 fonts/
+    // colors — only the "remaining" part changes styling.
+    private void UpdateEarningsStatusLabel()
+    {
+        var entry = _selectedTicker != null
+            ? EarningsDateStore.Load().FirstOrDefault(e => e.Symbol.Equals(_selectedTicker.Symbol, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        if (entry == null)
+        {
+            lblEarningsDate.Text = string.Empty;
+            lblEarningsRemaining.Text = string.Empty;
+            return;
+        }
+
+        var remainingDays = entry.EarningDate.DayNumber - DateOnly.FromDateTime(DateTime.Today).DayNumber;
+
+        lblEarningsDate.Text = $"Earning Date: {entry.EarningDate:yyyy-MM-dd}";
+        lblEarningsRemaining.Text = $"( Remaining {remainingDays} days)";
+
+        Color color;
+        FontStyle style;
+        if (remainingDays < 0)      { color = Color.Orange; style = FontStyle.Bold; }
+        else if (remainingDays < 5) { color = Color.Red;     style = FontStyle.Bold; }
+        else                        { color = Color.Green;   style = FontStyle.Regular; }
+
+        lblEarningsRemaining.ForeColor = color;
+        lblEarningsRemaining.Font = new Font(statusStrip1.Font, style);
     }
 
     private void RestoreOpenTrades(string symbol)
@@ -614,9 +654,10 @@ public partial class Form1 : Form
                     string.Empty, "Close");
 
                 var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate);
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+                restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
                 restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
                 SetTradeTypeColor(restoredRow, t.OptionType);
 
@@ -687,13 +728,6 @@ public partial class Form1 : Form
         var creds = SchwabCredentialsStore.Load();
         var hasCreds = !string.IsNullOrEmpty(creds.ApiKey) && !string.IsNullOrEmpty(creds.ApiSecret);
         lblCredentialsSaved.Visible = hasCreds;
-
-        // Wire logger so token events (hub renewals, non-hub reads/waits) appear in the log
-        // panel — GetAccessTokenAsync can fire this from a background thread, hence the Invoke.
-        _schwabAuth.SetLogCallback(msg =>
-        {
-            if (IsHandleCreated) Invoke(() => LogLine(msg, Color.Yellow));
-        });
 
         var tokens = SchwabTokenStore.Load();
         if (tokens != null && !string.IsNullOrEmpty(tokens.AccessToken))
@@ -1024,7 +1058,8 @@ public partial class Form1 : Form
             }
 
             PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true,
-                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked);
+                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+                forcedStrikes: _forcedStrikes);
 
             // Update PnL for open trades against the FULL chain (not the range-filtered grid),
             // so a trade's current bid keeps updating even after its strike leaves the display range.
@@ -1107,6 +1142,32 @@ public partial class Form1 : Form
             else
                 e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
         }
+
+        // Range: Strike button active (clickable — same gate as DgvQuotes_CellPainting) AND this
+        // row's Ask actually falls within the ticker's Low-High → same green as Bid above. Matters
+        // most under the "Counts" filter (PopulateQuotesGrid), which can show strikes whose Ask
+        // falls outside the range — "In Range" mode makes this condition trivially true for
+        // almost every visible row, since it already filters by Ask range.
+        var rangeCol = dgvQuotes.Columns["colRange"].Index;
+        if (e.ColumnIndex == rangeCol)
+        {
+            var active   = !IsRowTradeBlocked(row, "colCallBid", "colPutBid");
+            var askCol   = row.Tag?.ToString() == "PUT" ? "colPutAsk" : "colCallAsk";
+            var inRange  = active
+                && TryParseRange(row.Cells["colRange"].Value?.ToString(), out var low, out var high)
+                && decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask)
+                && ask >= low && ask <= high;
+
+            e.CellStyle.BackColor = inRange ? Color.LightGreen : dgvQuotes.DefaultCellStyle.BackColor;
+        }
+    }
+
+    // Parses the "Low - High" text PopulateQuotesGrid writes into colRange (e.g. "0.30 - 0.45").
+    private static bool TryParseRange(string? rangeText, out decimal low, out decimal high)
+    {
+        low = high = 0;
+        var parts = rangeText?.Split(" - ", StringSplitOptions.TrimEntries);
+        return parts?.Length == 2 && decimal.TryParse(parts[0], out low) && decimal.TryParse(parts[1], out high);
     }
 
     // Filters the chain to OTM strikes within the ticker's Ask range and (re)builds the given grid.
@@ -1116,7 +1177,8 @@ public partial class Form1 : Form
     // parameters instead (same values, callers just pass them through).
     internal static (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
         DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false,
-        string? selectedCounts = null, bool callOnly = false, bool putOnly = false)
+        string? selectedCounts = null, bool callOnly = false, bool putOnly = false,
+        IEnumerable<(string Type, decimal Strike)>? forcedStrikes = null)
     {
         decimal.TryParse(ticker.Low,  out var rangeLow);
         decimal.TryParse(ticker.High, out var rangeHigh);
@@ -1170,6 +1232,31 @@ public partial class Form1 : Form
                          && q.Ask >= rangeLow && q.Ask <= rangeHigh)
                 .OrderByDescending(q => q.StrikePrice)
                 .ToList();
+        }
+
+        // Force-include specific strikes regardless of the OTM filter above (see
+        // DgvTrades_CellClick — a trade whose strike went ITM would otherwise silently vanish from
+        // the grid). Only added if a real quote for that (type, strike) actually exists and isn't
+        // already in the list; re-sorted afterward to keep the usual descending-by-strike order.
+        if (forcedStrikes != null)
+        {
+            var addedCall = false;
+            var addedPut  = false;
+            foreach (var (type, strike) in forcedStrikes)
+            {
+                if (type == "CALL" && !otmCalls.Any(q => q.StrikePrice == strike))
+                {
+                    var quote = allQuotes.FirstOrDefault(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && q.StrikePrice == strike);
+                    if (quote != null) { otmCalls.Add(quote); addedCall = true; }
+                }
+                else if (type == "PUT" && !otmPuts.Any(q => q.StrikePrice == strike))
+                {
+                    var quote = allQuotes.FirstOrDefault(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && q.StrikePrice == strike);
+                    if (quote != null) { otmPuts.Add(quote); addedPut = true; }
+                }
+            }
+            if (addedCall) otmCalls = otmCalls.OrderByDescending(q => q.StrikePrice).ToList();
+            if (addedPut)  otmPuts  = otmPuts.OrderByDescending(q => q.StrikePrice).ToList();
         }
 
         // CALL/PUT checkbox filter (current grid only): one checked shows only that side;
@@ -1466,6 +1553,7 @@ public partial class Form1 : Form
         var newRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
         newRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
         newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+        newRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
         newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
         SetTradeTypeColor(newRow, rowType);
         if (decimal.TryParse(strike, out var strikeForMoneyness))
@@ -1486,7 +1574,8 @@ public partial class Form1 : Form
         int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
-        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity, ExpirationDate: expDate);
+        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
+            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice);
         PadWithBlankRows(dgvTrades, 4);
 
         OpenTradesStore.Add(new PersistedTrade(
@@ -1499,13 +1588,14 @@ public partial class Form1 : Form
             EntryTime:      entryTime,
             ExpirationDate: expDate,
             Level:          level,
-            PnlTarget:      targetPct.ToString("F0")));
+            PnlTarget:      targetPct.ToString("F0"),
+            EntrySpotPrice: _lastSpotPrice));
 
         _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
 
-        // Green "Stk=xxx" line on all 3 charts — demo and real trades both flow through here.
+        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow through here.
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
-            _ = chartFormForStrike.MarkStrikeOnAllChartsAsync(strikeVal);
+            _ = chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
 
         return (tradeId, newRow);
     }
@@ -1756,6 +1846,14 @@ public partial class Form1 : Form
         simulatorForm.Show();
     }
 
+    // Same disk-only pattern as BtnSimulator_Click — the 4-ETF (SPY/QQQ/IWM/DIA) replay window
+    // needs no Schwab creds or live feed, so it can open independently of everything else.
+    private void BtnFourEtfSimulator_Click(object? sender, EventArgs e)
+    {
+        var fourEtfSimulatorForm = new FourEtfSimulatorForm();
+        fourEtfSimulatorForm.Show();
+    }
+
     // Lazily decides whether this instance is the hub or a client, then sets up _historyClient +
     // _liveFeed accordingly — cheap to call repeatedly, does nothing once already set up.
     //
@@ -1791,6 +1889,14 @@ public partial class Form1 : Form
         {
             var remoteHubClient = new CandleHubClient();
             remoteHubClient.OnWsStatusEvent += msg => BroadcastWebSocketEventToCharts(msg);
+
+            // This machine never touches Schwab or the hub machine's C:\OptionsData — without
+            // this, it has no local tick history at all, so its own Simulator/4-ETF Simulator
+            // windows have nothing to replay. Mirror every relayed candle/tick straight to this
+            // machine's own disk, same folder structure the hub itself writes to.
+            remoteHubClient.OnNewCandle    += (symbol, candle) => TickPriceStore.Append(symbol, candle.Time, candle.Close);
+            remoteHubClient.OnLevelOneTick += (symbol, price, time) => LevelOneTickStore.Append(symbol, time, price);
+
             await remoteHubClient.ConnectAsync(LiveHubPort, remoteHost);
 
             _candleHubClient = remoteHubClient;
@@ -2052,11 +2158,37 @@ public partial class Form1 : Form
 
     private async void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
-        if (e.RowIndex < 0 || e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
+        if (e.RowIndex < 0) return;
         var row = dgvTrades.Rows[e.RowIndex];
+
+        if (e.ColumnIndex == dgvTrades.Columns["colTradeStrike"].Index)
+        {
+            ForceStrikeInQuotesGrid(row);
+            return;
+        }
+
+        if (e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
         if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return;
 
         await CloseTradeRowAsync(row, "MANUAL");
+    }
+
+    // Clicking a trade's Strike cell pins that (type, strike) so it keeps showing in dgvQuotes even
+    // after it goes ITM (PopulateQuotesGrid's OTM-only filter would otherwise silently drop it the
+    // moment spot crosses it) — stays pinned for the rest of the session on this ticker (cleared on
+    // ticker switch, see the Tickers button handler).
+    private void ForceStrikeInQuotesGrid(DataGridViewRow row)
+    {
+        var type = row.Cells["colTradeType"].Value?.ToString();
+        if (string.IsNullOrEmpty(type) || !decimal.TryParse(row.Cells["colTradeStrike"].Value?.ToString(), out var strike))
+            return;
+
+        _forcedStrikes.Add((type, strike));
+
+        if (_selectedTicker != null && _lastAllQuotes.Count > 0)
+            PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
+                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+                forcedStrikes: _forcedStrikes);
     }
 
     private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType)
@@ -2124,7 +2256,8 @@ public partial class Form1 : Form
 
         var duration = TimeSpan.Zero;
         int tradeId  = 0;
-        if (row.Tag is TradeRowTag tag)
+        var tag = row.Tag as TradeRowTag;
+        if (tag != null)
         {
             duration = now - tag.EntryTime;
             tradeId  = tag.TradeId;
@@ -2186,6 +2319,17 @@ public partial class Form1 : Form
         if (closeType == "EXPIRED" && _liveChartForms.TryGetValue(symbol, out var chartFormExpired) && !chartFormExpired.IsDisposed)
         {
             await chartFormExpired.MarkExpiredOnRthChartAsync();
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
+
+        // "ΔS=value" marker on the 15m RTH+Overnight chart — |spot at close - spot at entry|,
+        // anchored at the trade's strike (same price as its green "Stk=xxx" line). EntrySpotPrice
+        // is 0 for trades opened before this feature shipped (no reliable value to show), so those
+        // are skipped rather than drawing a misleading ΔS=<currentSpot>.
+        if (tag is { EntrySpotPrice: > 0 } && _lastSpotPrice > 0 && decimal.TryParse(strike, out var strikeForDelta) &&
+            _liveChartForms.TryGetValue(symbol, out var chartFormDelta) && !chartFormDelta.IsDisposed)
+        {
+            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDelta);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -2659,6 +2803,7 @@ public partial class Form1 : Form
 
             row.Cells["colTradeCBid"].Value                  = currentBid.ToString("F2");
             row.Cells["colTradeCBid"].Style.ForeColor        = Color.Orange;
+            row.Cells["colTradeCBid"].Style.Font             = new Font(dgvTrades.Font, FontStyle.Bold);
             row.Cells["colTradePnL"].Value        = pnl.ToString("F2");
             row.Cells["colTradePnLPercent"].Value = pnlPct.ToString("F1");
 

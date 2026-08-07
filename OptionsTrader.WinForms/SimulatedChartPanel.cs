@@ -75,6 +75,11 @@ public class SimulatedChartPanel : Panel
             else if (_mode == ChartPanelMode.Fifteen_RTH)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+
+                // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
+                // arms DZ/SZ itself), but the mirrored copy is still independently selectable/
+                // deletable there, and that deletion needs to reach C# to relay to the sibling.
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
             }
             else if (_mode == ChartPanelMode.Fifteen_Full)
             {
@@ -143,6 +148,22 @@ public class SimulatedChartPanel : Panel
         if (_webView.CoreWebView2 == null) return;
         var priceStr = strike.ToString(System.Globalization.CultureInfo.InvariantCulture);
         await _webView.CoreWebView2.ExecuteScriptAsync($"markStrike({priceStr});");
+    }
+
+    // Dashed Piso/Techo reference line (15m RTH / RTH+Overnight charts) — ported from ChartPanel,
+    // called by SimulatorForm.EvaluatePisoTecho for each SMA that survived the market-open-gap
+    // check. See markPisoTechoRefLine/removePisoTechoRefLine in chart.html.
+    public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch});");
+    }
+
+    public async Task RemovePisoTechoRefLineAsync(int period)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removePisoTechoRefLine({period});");
     }
 
     private async Task RunScriptAsync(string jsFunction, List<CandleData> candles)
@@ -221,28 +242,34 @@ public class SimulatedChartPanel : Panel
     // events_log.csv, same as Demand Zone, per explicit request that this one gets written to disk.
     public event Action<string, decimal, string, string, string>? OnPisoTechoOutcomeEvent;
 
-    // Called once per day load with the SMA-pair results already computed by SimulatorForm
+    // Fires (period, price) for every watched SMA on every newly-closed candle — SimulatorForm
+    // uses this to keep the Piso/Techo reference line on the RTH/RTH+Overnight charts tracking the
+    // LIVE SMA value through the session instead of staying frozen at its pre-market snapshot.
+    public event Action<int, decimal>? OnPisoTechoLevelUpdatedEvent;
+
+    // Called once per day load with each SMA's own result already computed by SimulatorForm
     // (mirrors ChartPanel.EvaluatePisoTechoPair, computed there against _hourlyCandles before
-    // _simDate). Draws both labels and arms both periods of each non-null pair independently.
-    public async Task SetPisoTechoResultsAsync(string? result2040, string? result100200)
+    // _simDate) — each of the 4 SMAs is independent now (price opening between a pair's fast and
+    // slow SMA means only the slow one still counts; see ChartPanel for the full rationale).
+    public async Task SetPisoTechoResultsAsync(string? result20, string? result40, string? result100, string? result200)
     {
         if (_readyTcs != null) await _readyTcs.Task;
 
         _pisoTechoWatches.Clear();
-        ArmPisoTechoWatch(20, 40, result2040);
-        ArmPisoTechoWatch(100, 200, result100200);
+        ArmPisoTechoWatch(20, result20);
+        ArmPisoTechoWatch(40, result40);
+        ArmPisoTechoWatch(100, result100);
+        ArmPisoTechoWatch(200, result200);
 
         if (_webView.CoreWebView2 == null) return;
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, 40, {ToJsStringOrNull(result2040)});");
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, 200, {ToJsStringOrNull(result100200)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, {ToJsStringOrNull(result20)}, 40, {ToJsStringOrNull(result40)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, {ToJsStringOrNull(result100)}, 200, {ToJsStringOrNull(result200)});");
     }
 
-    private void ArmPisoTechoWatch(int fastPeriod, int slowPeriod, string? result)
+    private void ArmPisoTechoWatch(int period, string? result)
     {
         if (result == null) return;
-        var watchingUp = result == "Techo";
-        _pisoTechoWatches.Add(new PisoTechoWatch { Period = fastPeriod, WatchingUp = watchingUp });
-        _pisoTechoWatches.Add(new PisoTechoWatch { Period = slowPeriod, WatchingUp = watchingUp });
+        _pisoTechoWatches.Add(new PisoTechoWatch { Period = period, WatchingUp = result == "Techo" });
     }
 
     private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
@@ -270,9 +297,19 @@ public class SimulatedChartPanel : Panel
             // PREVIOUS candle's close vs the PREVIOUS SMA, not this candle's own open vs its own
             // SMA, since the SMA itself can shift enough between candles to make a real cross miss
             // a same-bar open/close straddle check.
-            var crossed = previousSma != null && watch.WatchingUp
+            var crossedByClose = previousSma != null && watch.WatchingUp
                 ? isGreen && justClosed.Close > currentSma && _closedCandles[^2].Close <= previousSma
                 : isRed   && justClosed.Close < currentSma && _closedCandles[^2].Close >= previousSma;
+
+            // Gap cross: the previous candle closed on the "not yet broken" side, and THIS candle
+            // opened straight through to the other side — see ChartPanel's identical copy for the
+            // full rationale (crossedByClose can miss it if this candle's Close recovers back to
+            // the original side after gapping through at the open).
+            var crossedByGapOpen = previousSma != null && watch.WatchingUp
+                ? justClosed.Open > currentSma && _closedCandles[^2].Close <= previousSma
+                : justClosed.Open < currentSma && _closedCandles[^2].Close >= previousSma;
+
+            var crossed = crossedByClose || crossedByGapOpen;
 
             var bounced = !crossed && (watch.WatchingUp
                 ? justClosed.Open < currentSma && isRed &&
@@ -289,9 +326,73 @@ public class SimulatedChartPanel : Panel
             watch.Done = true;
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
             var evento    = crossed ? "Cruce" : "Rebote";
-            var caption   = $"{evento} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
-            OnPisoTechoOutcomeEvent?.Invoke(caption, justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
+            var gapTag    = crossedByGapOpen && !crossedByClose ? " (gap)" : "";
+            var caption   = $"{evento}{gapTag} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            OnPisoTechoOutcomeEvent?.Invoke(AppendVolatilityArmSuffix(evento, pisoTecho, caption), justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
         }
+
+        // Reference-line update — every watched period (Done or not, so the line keeps tracking
+        // the live SMA even after a Cruce/Rebote already resolved), on every newly-closed candle.
+        foreach (var period in _pisoTechoWatches.Select(w => w.Period).Distinct())
+        {
+            var sma = Sma(period, _closedCandles.Count - 1);
+            if (sma != null) OnPisoTechoLevelUpdatedEvent?.Invoke(period, sma.Value);
+        }
+    }
+
+    // Live-tick counterpart to EvaluatePisoTechoWatches' crossedByGapOpen — ported from ChartPanel.
+    // No real ticks in the simulator, so "live" here means the currently-forming candle (last item
+    // in the list CargarHastaPasoAsync was just given), whose Close already tracks the latest
+    // price known as of this step. Evaluated on every step, not just newly-closed candles, so the
+    // gap-cross can resolve well before the forming candle actually closes — same as the live app.
+    private void EvaluatePisoTechoGapLive(CandleData forming)
+    {
+        if (_closedCandles.Count == 0) return;
+        if (WatchStartDate is { } startDate &&
+            DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(forming.Time, EasternZone)) < startDate)
+            return;
+
+        foreach (var watch in _pisoTechoWatches)
+        {
+            if (watch.Done) continue;
+
+            var previousSma = Sma(watch.Period, _closedCandles.Count - 1);
+            var liveSma = LiveSma(watch.Period, forming.Close);
+            if (previousSma == null || liveSma == null) continue;
+
+            var lastClosed = _closedCandles[^1];
+            var crossedByGapLive = watch.WatchingUp
+                ? forming.Open > liveSma.Value && lastClosed.Close <= previousSma.Value
+                : forming.Open < liveSma.Value && lastClosed.Close >= previousSma.Value;
+
+            if (!crossedByGapLive) continue;
+
+            watch.Done = true;
+            var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
+            var caption = $"Cruce (gap) en {pisoTecho} — SMA{watch.Period} — Open {forming.Open:F2} (SMA{watch.Period} en vivo {liveSma.Value:F2})";
+            OnPisoTechoOutcomeEvent?.Invoke(AppendVolatilityArmSuffix("Cruce", pisoTecho, caption), forming.Close, "PisoTechoCruce", pisoTecho, $"SMA{watch.Period}={liveSma.Value:F2}");
+        }
+    }
+
+    // Same rule as ChartPanel.AppendVolatilityArmSuffix — which direction "Abriendo la
+    // Volatilidad" gets armed in, appended directly to the caption so it's guaranteed to show up
+    // wherever this caption ends up logged.
+    private static string AppendVolatilityArmSuffix(string evento, string pisoTecho, string caption)
+    {
+        var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
+        var direction = bullish ? "Alza" : "Baja";
+        return $"{caption} — evaluando Abriendo la Volatilidad ({direction})";
+    }
+
+    // Same SMA window as Sma(period, endIndex), but the newest point is the live/forming candle's
+    // Close instead of a closed candle's — i.e. what the chart itself is showing right now.
+    private decimal? LiveSma(int period, decimal livePrice)
+    {
+        if (_closedCandles.Count < period - 1) return null;
+        decimal sum = livePrice;
+        for (int i = _closedCandles.Count - (period - 1); i < _closedCandles.Count; i++)
+            sum += _closedCandles[i].Close;
+        return sum / period;
     }
 
     public event Action? OnCrossSequenceFinished;
@@ -428,6 +529,11 @@ public class SimulatedChartPanel : Panel
     // Fires (fakeUtcTime, price, color) every time a DZ/SZ line is drawn on THIS chart.
     public event Action<long, decimal, string>? OnDzSzLineDrawn;
 
+    // Fires (price1, price2) when a zone (demand+supply pair) gets deleted (select + Delete) on
+    // THIS chart — SimulatorForm relays it to the sibling chart's RemoveMirroredZonePairAsync so
+    // deleting from either the RTH or RTH+Overnight chart removes it from both.
+    public event Action<decimal, decimal>? OnDzSzPairDeletedEvent;
+
     public async Task<bool> ToggleDzSzModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
@@ -443,24 +549,36 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
         _dzSzPendingPrices.Clear();
         _demandZones.Clear();
+        _supplyZones.Clear();
     }
 
-    // ---- Demand Zone rebote — ported from ChartPanel.EvaluateDemandZoneRebounds. Log-only (no
-    // Telegram, no EventLogStore call here — SimulatorForm's handler does that, since it's the
-    // one that knows the current symbol; see the OnDemandZoneReboundEvent subscription). ----
+    // ---- Demand/Supply Zone rebote — ported from ChartPanel.EvaluateDemandZoneRebounds/
+    // EvaluateSupplyZoneRebounds. Log-only (no Telegram, no EventLogStore call here —
+    // SimulatorForm's handler does that, since it's the one that knows the current symbol; see the
+    // OnDemandZoneReboundEvent/OnSupplyZoneReboundEvent subscriptions). ----
     private readonly List<decimal> _dzSzPendingPrices = new();
     private readonly List<DemandZoneState> _demandZones = new();
+    private readonly List<SupplyZoneState> _supplyZones = new();
 
     private sealed class DemandZoneState
     {
-        public decimal Proximal; // green line — upper boundary
+        public decimal Proximal; // green line — upper boundary (closer to price, zone is below it)
         public decimal Distal;   // red line — lower boundary
+        public bool Entered;
+        public bool Done;
+    }
+
+    private sealed class SupplyZoneState
+    {
+        public decimal Proximal; // green line — lower boundary (closer to price, zone is above it)
+        public decimal Distal;   // red line — upper boundary
         public bool Entered;
         public bool Done;
     }
 
     // Fires (caption, price, proximal, distal) once per confirmed rebote.
     public event Action<string, decimal, decimal, decimal>? OnDemandZoneReboundEvent;
+    public event Action<string, decimal, decimal, decimal>? OnSupplyZoneReboundEvent;
 
     // Same case-1/case-2 proximity idea as EvaluateCrossings' bounce detection — a candle whose
     // Low falls short of Proximal but within BounceProximityRatio of the rejection move's size
@@ -495,6 +613,37 @@ public class SimulatedChartPanel : Panel
         }
     }
 
+    // Supply Zone rebote — exact mirror, flipped (High instead of Low, broken if High > Distal,
+    // confirmed if Close ends up back BELOW Proximal). See ChartPanel's identical copy.
+    private void EvaluateSupplyZoneRebounds(CandleData justClosed)
+    {
+        foreach (var zone in _supplyZones)
+        {
+            if (zone.Done) continue;
+
+            if (!zone.Entered)
+            {
+                var touchedOrClose = justClosed.High >= zone.Proximal ||
+                    (zone.Proximal - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close);
+                if (!touchedOrClose) continue;
+                zone.Entered = true;
+            }
+
+            if (justClosed.High > zone.Distal)
+            {
+                zone.Done = true;
+                continue;
+            }
+
+            if (justClosed.Close < zone.Proximal)
+            {
+                zone.Done = true;
+                var caption = $"Rebote en Zona de Supply — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
+                OnSupplyZoneReboundEvent?.Invoke(caption, justClosed.Close, zone.Proximal, zone.Distal);
+            }
+        }
+    }
+
     // Adds a DZ/SZ line to THIS chart without arming click mode — used to mirror a line drawn on
     // another chart. fakeUtcTime is the same "ET wall-clock digits disguised as UTC" epoch value
     // ToFakeUtcEpochSeconds/chart.html candles already use, so it can be forwarded verbatim from
@@ -504,6 +653,17 @@ public class SimulatedChartPanel : Panel
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredZoneLine({fakeUtcTime}, {priceStr}, '{color}');");
+    }
+
+    // Removes a zone (demand+supply pair, matched by price) on THIS chart — called on the sibling
+    // chart when OnDzSzPairDeletedEvent fires elsewhere, so a delete on either the RTH or
+    // RTH+Overnight chart removes the zone from both.
+    public async Task RemoveMirroredZonePairAsync(decimal price1, decimal price2)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var p1Str = price1.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var p2Str = price2.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeMirroredZonePair({p1Str}, {p2Str});");
     }
 
     public async Task ClearMirroredZoneLinesAsync()
@@ -538,7 +698,17 @@ public class SimulatedChartPanel : Panel
                     _dzSzPendingPrices.Clear();
                     if (demandPrice > supplyPrice)
                         _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
+                    else if (demandPrice < supplyPrice)
+                        _supplyZones.Add(new SupplyZoneState { Proximal = demandPrice, Distal = supplyPrice });
                 }
+                return;
+            }
+
+            if (type == "dzsz_delete")
+            {
+                var price1 = root.GetProperty("price1").GetDecimal();
+                var price2 = root.GetProperty("price2").GetDecimal();
+                OnDzSzPairDeletedEvent?.Invoke(price1, price2);
                 return;
             }
 
@@ -625,11 +795,28 @@ public class SimulatedChartPanel : Panel
 
     public event Action<string>? OnVolatilityOpeningEvent;
 
+    // Informational only, log-only — see ChartPanel's identical copy for the full rationale: fires
+    // once at arm time if the bands are already widening right then, without waiting for the spot
+    // to touch a band (that's still what OnVolatilityOpeningEvent itself requires).
+    public event Action<string>? OnVolatilityAlreadyOpenEvent;
+
     public void ArmVolatilityOpeningWatch(bool bullish)
     {
         if (_volatilityOpeningFired) return;
         _volatilityOpeningArmed = true;
         _volatilityOpeningBullish = bullish;
+
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (current == null || earlier == null) return;
+
+        var currentWidth = current.Value.Upper - current.Value.Lower;
+        var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+        if (currentWidth <= earlierWidth) return;
+
+        var bandLabel = bullish ? "Superior" : "Inferior";
+        var caption = $"Bandas de Bollinger ya abiertas al armar — ancho {currentWidth:F2} (vs {earlierWidth:F2} hace {VolatilityWidthLookback} velas) — esperando que el spot toque la Banda {bandLabel}";
+        OnVolatilityAlreadyOpenEvent?.Invoke(caption);
     }
 
     private (decimal Upper, decimal Lower)? BollingerBandsAt(int endIndex)
@@ -697,6 +884,7 @@ public class SimulatedChartPanel : Panel
             _crossFinished = false;
             _tLineSignalFired = false;
             foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
+            foreach (var zone in _supplyZones) { zone.Entered = false; zone.Done = false; }
             foreach (var watch in _pisoTechoWatches) watch.Done = false;
             _volatilityOpeningArmed = false;
             _volatilityOpeningFired = false;
@@ -708,8 +896,14 @@ public class SimulatedChartPanel : Panel
             EvaluateCrossings(closedNow[i]);
             EvaluateTLineSignal(closedNow[i]);
             EvaluateDemandZoneRebounds(closedNow[i]);
+            EvaluateSupplyZoneRebounds(closedNow[i]);
             EvaluatePisoTechoWatches(closedNow[i]);
             EvaluateVolatilityOpening(closedNow[i].Close);
         }
+
+        // Every step, not just newly-closed candles — the forming (last) candle's Close already
+        // tracks the latest known price for this step, so the gap-cross can resolve mid-candle.
+        if (candles.Count > 0)
+            EvaluatePisoTechoGapLive(candles[^1]);
     }
 }

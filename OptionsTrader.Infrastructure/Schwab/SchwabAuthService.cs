@@ -12,14 +12,11 @@ public class SchwabAuthService : IBrokerAuthService
     public const int RefreshTokenLifetimeDays = 7;
 
     private readonly HttpClient _httpClient;
-    private Action<string>? _logCallback;
 
     public SchwabAuthService(HttpClient httpClient)
     {
         _httpClient = httpClient;
     }
-
-    public void SetLogCallback(Action<string> callback) => _logCallback = callback;
 
     // No-op kept for backward compat
     public void LoadFromStore(string accessToken, DateTime expiresAt) { }
@@ -52,7 +49,6 @@ public class SchwabAuthService : IBrokerAuthService
             const int maxAttempts = 5;
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                _logCallback?.Invoke($"{DateTime.Now:HH:mm:ss} [Token] Access token vencido — esta instancia no es el hub, esperando renovación ({attempt}/{maxAttempts})...");
                 await Task.Delay(2000);
 
                 if (reloadFromDisk == null) continue;

@@ -13,9 +13,20 @@ public class SimulatorForm : Form
     private readonly ComboBox _cmbSymbol = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(8, 8), Size = new Size(100, 24) };
     private readonly ComboBox _cmbDate   = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(116, 8), Size = new Size(120, 24) };
     private readonly Button _btnCargar   = new() { Text = "Cargar", Location = new Point(244, 8), Size = new Size(70, 24) };
+    private readonly Button _btnPlayPause = new() { Text = "Play", Location = new Point(324, 8), Size = new Size(70, 24), Enabled = false };
     private readonly Button _btnAtras    = new() { Text = "◀ Atrás", Location = new Point(8, 40), Size = new Size(90, 26), Enabled = false };
     private readonly Button _btnAdelante = new() { Text = "Adelante ▶", Location = new Point(102, 40), Size = new Size(90, 26), Enabled = false };
+    private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
+
+    // "Play" auto-advances through _steps at the selected cadence, same effect as clicking ▶
+    // repeatedly (each tick goes through RenderCurrentStep — PnL, Min/Max, auto-close, chart/grid
+    // refresh — nothing skipped). Manual ◀/▶/"+1 Min" are disabled while playing to avoid racing
+    // the timer; re-enabled on Pause so the user can navigate manually before resuming Play.
+    private readonly System.Windows.Forms.Timer _playTimer = new();
+    private bool _isPlaying;
+    private int _ticksPerSecond = 10;
+    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(1050, 4), Size = new Size(110, 96) };
 
     // Width matches Form1's real dgvQuotes (566) — see BuildChainColumns' per-column widths.
     private readonly DataGridView _dgvChain = new()
@@ -74,9 +85,21 @@ public class SimulatorForm : Form
     // Counts and Contracts, same options/behavior as Form1's grpCounts/grpContracts, but session-
     // only local fields (never written to CountsSettingsStore-equivalent or
     // ContractsSettingsStore) — this is a simulator, it must never touch the real app's settings.
-    private readonly GroupBox _grpCounts    = new() { Text = "Counts", Location = new Point(590, 4), Size = new Size(185, 64) };
-    private readonly GroupBox _grpContracts = new() { Text = "Contracts", Location = new Point(785, 4), Size = new Size(105, 96) };
+    private readonly GroupBox _grpCounts    = new() { Text = "Counts", Location = new Point(590, 4), Size = new Size(140, 64) };
+    private readonly GroupBox _grpContracts = new() { Text = "Contracts", Location = new Point(815, 4), Size = new Size(105, 96) };
+
+    // "No Trade" (default) = manual close only, no auto-close-at-target — mirrors Form1's real
+    // rbNoTrade/rbNoTradeTarget pair (the only 2 relevant here; the simulator has no real-broker
+    // "Trade"/"Trade-Target" options). Read at open time by DgvChain_CellClick and stored per
+    // OpenSimTrade so changing the radio later doesn't retroactively affect already-open trades.
+    private readonly GroupBox _grpTrade = new() { Text = "Trade", Location = new Point(926, 4), Size = new Size(120, 64) };
+    private readonly RadioButton _rbNoTrade = new() { Text = "No Trade", Checked = true, AutoSize = true, Location = new Point(6, 20) };
+    private readonly RadioButton _rbNoTradeTarget = new() { Text = "No Trade-Target", AutoSize = true, Location = new Point(6, 40) };
     private string _selectedCounts    = "6"; // same default as Form1's _selectedCounts
+
+    // Strikes force-shown in _dgvChain regardless of the OTM-only filter — same idea as Form1's
+    // identical field, set by clicking a trade's Strike button in _dgvTrades. Cleared on day load.
+    private readonly HashSet<(string Type, decimal Strike)> _forcedStrikes = new();
     private string _selectedContracts = "1"; // same default as Form1's rbContracts1.Checked
 
     // "Go to time" — two rows of plain buttons (no typing): pick an RTH hour, then which 15-min
@@ -98,7 +121,7 @@ public class SimulatorForm : Form
     public SimulatorForm()
     {
         Text          = "Simulador";
-        Width         = 1090;
+        Width         = 1190;
         Height        = 1000;
         StartPosition = FormStartPosition.CenterScreen;
 
@@ -120,12 +143,19 @@ public class SimulatorForm : Form
         Controls.Add(_cmbSymbol);
         Controls.Add(_cmbDate);
         Controls.Add(_btnCargar);
+        Controls.Add(_btnPlayPause);
         Controls.Add(_btnAtras);
         Controls.Add(_btnAdelante);
+        Controls.Add(_btnPlus1Min);
         Controls.Add(_lblStep);
         Controls.Add(_dgvChain);
         Controls.Add(_grpCounts);
         Controls.Add(_grpContracts);
+        Controls.Add(_grpTrade);
+        _grpTrade.Controls.Add(_rbNoTrade);
+        _grpTrade.Controls.Add(_rbNoTradeTarget);
+        Controls.Add(_grpSpeed);
+        BuildSpeedControls();
         Controls.Add(_pnlGoToTime);
         Controls.Add(_pnlSmaEvents);
         Controls.Add(_pnlDzSz);
@@ -135,8 +165,11 @@ public class SimulatorForm : Form
 
         _cmbSymbol.SelectedIndexChanged += (s, e) => RefreshAvailableDates();
         _btnCargar.Click    += (s, e) => LoadSelectedDay();
+        _btnPlayPause.Click += (s, e) => TogglePlay();
         _btnAtras.Click     += (s, e) => Step(-1);
         _btnAdelante.Click  += (s, e) => Step(1);
+        _btnPlus1Min.Click  += (s, e) => StepOneMinute();
+        _playTimer.Tick     += PlayTimer_Tick;
         _dgvChain.CellClick     += DgvChain_CellClick;
         _dgvChain.CellPainting  += DgvChain_CellPainting;
         _dgvChain.CellFormatting += DgvChain_CellFormatting;
@@ -150,6 +183,11 @@ public class SimulatorForm : Form
             var mirroredTime = _rthChartMinFakeEpoch is { } minEpoch && time < minEpoch ? minEpoch : time;
             _ = _rthChart.AddMirroredZoneLineAsync(mirroredTime, price, color);
         };
+
+        // Deleting a zone (select + Delete) on EITHER chart removes it from both — the RTH chart
+        // never arms new zones itself, but its mirrored copy is independently selectable there.
+        _fullChart.OnDzSzPairDeletedEvent += (p1, p2) => _ = _rthChart.RemoveMirroredZonePairAsync(p1, p2);
+        _rthChart.OnDzSzPairDeletedEvent  += (p1, p2) => _ = _fullChart.RemoveMirroredZonePairAsync(p1, p2);
 
         Load += (s, e) => LoadSymbols();
     }
@@ -178,12 +216,72 @@ public class SimulatorForm : Form
         _pnlDzSz.Controls.Add(btnClear);
     }
 
+    // 4 fixed speeds for "Play" (ticks/sec) — 10 is the default (fastest/most steps per real
+    // second). Changing this while playing updates _playTimer's interval immediately, no need to
+    // pause first.
+    private void BuildSpeedControls()
+    {
+        var speeds = new (string Label, int TicksPerSecond)[] { ("1 tick/seg", 1), ("3 tick/seg", 3), ("5 tick/seg", 5), ("10 tick/seg", 10) };
+        for (int i = 0; i < speeds.Length; i++)
+        {
+            var (label, ticksPerSecond) = speeds[i];
+            var rb = new RadioButton
+            {
+                Text     = label,
+                Checked  = ticksPerSecond == _ticksPerSecond,
+                AutoSize = true,
+                Location = new Point(6, 18 + i * 18)
+            };
+            rb.CheckedChanged += (s, e) =>
+            {
+                if (!rb.Checked) return;
+                _ticksPerSecond = ticksPerSecond;
+                if (_isPlaying) _playTimer.Interval = 1000 / _ticksPerSecond;
+            };
+            _grpSpeed.Controls.Add(rb);
+        }
+    }
+
+    private void TogglePlay()
+    {
+        if (_isPlaying) PausePlay();
+        else StartPlay();
+    }
+
+    private void StartPlay()
+    {
+        if (_currentIndex < 0 || _currentIndex >= _steps.Count - 1) return; // nothing left to play
+        _isPlaying = true;
+        _btnPlayPause.Text = "Pause";
+        _playTimer.Interval = 1000 / _ticksPerSecond;
+        _playTimer.Start();
+        UpdateStepButtons();
+    }
+
+    private void PausePlay()
+    {
+        if (!_isPlaying) return;
+        _isPlaying = false;
+        _btnPlayPause.Text = "Play";
+        _playTimer.Stop();
+        UpdateStepButtons();
+    }
+
+    private void PlayTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_currentIndex >= _steps.Count - 1) { PausePlay(); return; }
+        Step(1);
+        if (_currentIndex >= _steps.Count - 1) PausePlay(); // reached the last available step
+    }
+
     // Same options as Form1's grpCounts (3-10, In Range) and grpContracts (1-6, PositionSize),
     // built programmatically instead of via the designer since this form has none. Selecting one
     // just updates the local field and re-renders the current step — no settings file touched.
     private void BuildCountsAndContractsGroups()
     {
-        var counts = new[] { "3", "4", "5", "6", "In Range" };
+        // Numeric options (3/4/5/6) tight in one row — only "In Range" needs real width, so it
+        // gets its own row instead of forcing all 5 into an evenly-spaced 3-column grid.
+        var counts = new[] { "3", "4", "5", "6" };
         for (int i = 0; i < counts.Length; i++)
         {
             var rb = new RadioButton
@@ -191,7 +289,7 @@ public class SimulatorForm : Form
                 Text     = counts[i],
                 Checked  = counts[i] == _selectedCounts,
                 AutoSize = true,
-                Location = new Point(6 + (i % 3) * 58, 20 + (i / 3) * 20)
+                Location = new Point(6 + i * 32, 20)
             };
             rb.CheckedChanged += (s, e) =>
             {
@@ -199,6 +297,19 @@ public class SimulatorForm : Form
             };
             _grpCounts.Controls.Add(rb);
         }
+
+        var rbInRange = new RadioButton
+        {
+            Text     = "In Range",
+            Checked  = _selectedCounts == "In Range",
+            AutoSize = true,
+            Location = new Point(6, 40)
+        };
+        rbInRange.CheckedChanged += (s, e) =>
+        {
+            if (rbInRange.Checked) { _selectedCounts = rbInRange.Text; ApplyRadioStyle(_grpCounts); RenderCurrentStep(); }
+        };
+        _grpCounts.Controls.Add(rbInRange);
         ApplyRadioStyle(_grpCounts);
 
         var contracts = new[] { "1", "2", "3", "4", "5", "6", "PositionSize" };
@@ -300,6 +411,14 @@ public class SimulatorForm : Form
                 $"Proximal={proximal:F2};Distal={distal:F2}");
         };
 
+        // Supply Zone rebote — symmetric counterpart, same treatment (logged + persisted).
+        _fullChart.OnSupplyZoneReboundEvent += (caption, price, proximal, distal) =>
+        {
+            LogSimEvent(caption);
+            EventLogStore.Append(_symbol, "15Min", "SupplyZoneRebound", "Baja", caption, price,
+                $"Proximal={proximal:F2};Distal={distal:F2}");
+        };
+
         // Piso/Techo auto-armed Cruce/Rebote (1h chart) — log-only, no events_log.csv (unlike
         // Demand Zone above), per explicit request.
         _hourlyChart.OnPisoTechoOutcomeEvent += (caption, price, eventType, direction, reference) =>
@@ -312,9 +431,22 @@ public class SimulatorForm : Form
             _rthChart.ArmVolatilityOpeningWatch(bullish);
         };
 
+        // Piso/Techo reference line: keeps tracking the LIVE SMA through the session (not just its
+        // pre-market snapshot) — same as the live app's identical ChartPanel wiring.
+        _hourlyChart.OnPisoTechoLevelUpdatedEvent += (period, price) =>
+        {
+            var sessionStart = GetSessionStartFakeEpoch();
+            _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+            _ = _fullChart.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+        };
+
         // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a
         // Piso/Techo watch; log-only, no events_log.csv, same as Piso/Techo above.
         _rthChart.OnVolatilityOpeningEvent += msg => LogSimEvent(msg);
+
+        // "Ya abiertas al armar" — informational heads-up, doesn't wait for the spot to touch a
+        // band (see SimulatedChartPanel.OnVolatilityAlreadyOpenEvent).
+        _rthChart.OnVolatilityAlreadyOpenEvent += msg => LogSimEvent(msg);
 
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
@@ -420,6 +552,9 @@ public class SimulatorForm : Form
         if (_cmbSymbol.SelectedItem is not string symbol) return;
         if (_cmbDate.SelectedItem is not string dateStr || !DateOnly.TryParse(dateStr, out var date)) return;
 
+        PausePlay();
+        _forcedStrikes.Clear();
+
         var tickers = TickerSettingsStore.Load();
         _ticker = tickers.FirstOrDefault(t => t.Symbol == symbol);
         if (_ticker == null)
@@ -505,14 +640,86 @@ public class SimulatorForm : Form
             .OrderBy(c => c.Time)
             .ToList();
 
-        var result2040   = EvaluatePisoTechoPair(bars, 20, 40);
-        var result100200 = EvaluatePisoTechoPair(bars, 100, 200);
-        await _hourlyChart.SetPisoTechoResultsAsync(result2040, result100200);
+        var (result20, result40)   = EvaluatePisoTechoPair(bars, 20, 40);
+        var (result100, result200) = EvaluatePisoTechoPair(bars, 100, 200);
+
+        // If the replayed day's own opening price already broke a Piso (opened below it) or a
+        // Techo (opened above it) before the SMA watch could ever fire, that label is stale —
+        // drop it instead of arming a watch for something already invalidated. Mirrors
+        // ChartPanel.ValidatePisoTechoAgainstOpen for the live app.
+        var todaysFirstBar = _hourlyCandles
+            .Where(c => TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date == _simDate.ToDateTime(TimeOnly.MinValue))
+            .OrderBy(c => c.Time)
+            .FirstOrDefault();
+        if (todaysFirstBar != null)
+        {
+            var openPrice = todaysFirstBar.Open;
+            result20  = InvalidateIfBrokenByOpen(bars, 20, result20, openPrice);
+            result40  = InvalidateIfBrokenByOpen(bars, 40, result40, openPrice);
+            result100 = InvalidateIfBrokenByOpen(bars, 100, result100, openPrice);
+            result200 = InvalidateIfBrokenByOpen(bars, 200, result200, openPrice);
+        }
+
+        await _hourlyChart.SetPisoTechoResultsAsync(result20, result40, result100, result200);
+
+        // Piso/Techo reference line — mirrors each surviving SMA level onto the RTH and
+        // RTH+Overnight charts (dashed, same color as that SMA on the 1h chart), same as the live
+        // app (MultiChartForm's OnPisoTechoLevelReadyEvent forwarding). Also removes any leftover
+        // line from a previous day load whose SMA no longer has a result this time.
+        await ApplyPisoTechoRefLine(bars, 20, result20);
+        await ApplyPisoTechoRefLine(bars, 40, result40);
+        await ApplyPisoTechoRefLine(bars, 100, result100);
+        await ApplyPisoTechoRefLine(bars, 200, result200);
     }
 
-    private static string? EvaluatePisoTechoPair(List<CandleData> bars, int fastPeriod, int slowPeriod)
+    // The replayed day's 9:30 AM ET, in the same fake-epoch units the chart itself uses — the
+    // Piso/Techo reference line's anchor, computed independently of any candle data so it can't
+    // race against history loading (see markPisoTechoRefLine in chart.html for the full rationale).
+    private long GetSessionStartFakeEpoch()
     {
-        if (bars.Count < slowPeriod) return null;
+        var sessionStartEastern = _simDate.ToDateTime(new TimeOnly(9, 30));
+        var sessionStartUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionStartEastern, DateTimeKind.Unspecified), EasternZone);
+        return SimulatedChartPanel.ToFakeUtcEpochSeconds(sessionStartUtc);
+    }
+
+    private async Task ApplyPisoTechoRefLine(List<CandleData> bars, int period, string? result)
+    {
+        if (result != null && bars.Count >= period)
+        {
+            decimal sum = 0;
+            for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
+            var sma = sum / period;
+            var sessionStart = GetSessionStartFakeEpoch();
+            await _rthChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart);
+            await _fullChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart);
+        }
+        else
+        {
+            await _rthChart.RemovePisoTechoRefLineAsync(period);
+            await _fullChart.RemovePisoTechoRefLineAsync(period);
+        }
+    }
+
+    private static string? InvalidateIfBrokenByOpen(List<CandleData> bars, int period, string? result, decimal openPrice)
+    {
+        if (result == null || bars.Count < period) return result;
+
+        decimal sum = 0;
+        for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
+        var sma = sum / period;
+
+        var broken = result == "Piso" ? openPrice < sma : openPrice > sma;
+        return broken ? null : result;
+    }
+
+    // Returns (fastResult, slowResult) — each independently "Piso", "Techo", or null. Alignment
+    // comes from the pair (fast vs slow), but whether each SMA individually still counts as
+    // Piso/Techo depends on price vs THAT SMA specifically, since price can open between the two
+    // (e.g. bearish alignment with price between them: the slow SMA is still Techo, the fast one
+    // isn't — see ChartPanel.EvaluatePisoTechoPair for the full rationale).
+    private static (string? FastResult, string? SlowResult) EvaluatePisoTechoPair(List<CandleData> bars, int fastPeriod, int slowPeriod)
+    {
+        if (bars.Count < slowPeriod) return (null, null);
 
         decimal SmaOf(int period)
         {
@@ -523,11 +730,12 @@ public class SimulatorForm : Form
 
         var fast  = SmaOf(fastPeriod);
         var slow  = SmaOf(slowPeriod);
+        if (fast == slow) return (null, null);
         var price = bars[^1].Close;
+        var bearish = fast < slow;
 
-        if (fast < slow && price < fast) return "Techo";
-        if (fast > slow && price > fast) return "Piso";
-        return null;
+        string? EvalSingle(decimal sma) => bearish ? (price < sma ? "Techo" : null) : (price > sma ? "Piso" : null);
+        return (EvalSingle(fast), EvalSingle(slow));
     }
 
     private void Step(int direction)
@@ -539,10 +747,46 @@ public class SimulatorForm : Form
         RenderCurrentStep();
     }
 
+    // Advances roughly 1 real minute of steps in one click — before ~11am the poll cycle is every
+    // ~6s, so reaching a trade's outcome a few minutes out means many individual ▶ clicks;
+    // pressing this once does the same walk automatically. Every step strictly between the
+    // current one and the target gets processed through RefreshOpenSimTradesPnL (PnL, Min/Max,
+    // auto-close-at-target) exactly as if ▶ had been clicked that many times — not skipped over —
+    // so an open trade's Min/Max PnL% and any auto-close in between are captured correctly, not
+    // just the state at the final minute mark.
+    private void StepOneMinute()
+    {
+        if (_steps.Count == 0 || _currentIndex < 0) return;
+
+        var targetTime = _steps[_currentIndex].Time.AddMinutes(1);
+        var targetIndex = _currentIndex;
+        while (targetIndex + 1 < _steps.Count && _steps[targetIndex + 1].Time <= targetTime)
+            targetIndex++;
+
+        // Granularity dropped below 1/min at this point in the day (e.g. after ~11am) — the very
+        // next step is already more than a minute out. Still advance one step, same as ▶, instead
+        // of doing nothing.
+        if (targetIndex == _currentIndex)
+        {
+            if (_currentIndex + 1 >= _steps.Count) return;
+            targetIndex = _currentIndex + 1;
+        }
+
+        for (int i = _currentIndex + 1; i < targetIndex; i++)
+            RefreshOpenSimTradesPnL(_steps[i]);
+
+        _currentIndex = targetIndex;
+        RenderCurrentStep();
+    }
+
     private void UpdateStepButtons()
     {
-        _btnAtras.Enabled    = _currentIndex > 0;
-        _btnAdelante.Enabled = _currentIndex >= 0 && _currentIndex < _steps.Count - 1;
+        // Manual navigation disabled while playing — re-enabled the moment Pause is clicked (or
+        // Play auto-pauses at the end of the data) so the user can step manually before resuming.
+        _btnAtras.Enabled     = !_isPlaying && _currentIndex > 0;
+        _btnAdelante.Enabled  = !_isPlaying && _currentIndex >= 0 && _currentIndex < _steps.Count - 1;
+        _btnPlus1Min.Enabled  = _btnAdelante.Enabled;
+        _btnPlayPause.Enabled = _isPlaying || (_currentIndex >= 0 && _currentIndex < _steps.Count - 1);
     }
 
     private void RenderCurrentStep()
@@ -557,7 +801,7 @@ public class SimulatorForm : Form
         var step = _steps[_currentIndex];
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
-        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts);
+        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes);
 
         // PopulateQuotesGrid computes its own Conts column from the REAL (persisted)
         // ContractsSettingsStore — override it here with the simulator's own local Contracts
@@ -594,7 +838,7 @@ public class SimulatorForm : Form
 
     // ----- Demo trades (practice only — separate from real/demo trades in Form1) -----
 
-    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid);
+    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid, bool SuppressAutoClose);
     private readonly List<OpenSimTrade> _openSimTrades = new();
 
     // step.Time / trade.EntryTime are real UTC (same convention as CandleData.Time, needed so the
@@ -751,34 +995,48 @@ public class SimulatorForm : Form
         int.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts);
         if (contracts <= 0) contracts = 1;
 
-        // Same target% source and formula Form1.RecordEntryAsync uses — informational only here
-        // (T_Bid/PnL_Target are shown for parity with the real grid; the simulator's trades still
-        // only close via the Close button, no auto-close-at-target).
+        // Same target% source and formula Form1.RecordEntryAsync uses. Once opened, T_Bid also
+        // drives auto-close now (see RefreshOpenSimTradesPnL) — C_Bid reaching it closes the trade
+        // automatically on the next step, same as a real Trade-Target position at the broker —
+        // UNLESS "No Trade" is selected (suppressAutoClose), matching Form1's identical rule: that
+        // trade only ever closes manually, and PnL_Target is left blank instead of showing a
+        // number that isn't actually driving anything.
+        var suppressAutoClose = _rbNoTrade.Checked;
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var tBid = Math.Round(ask * (1 + targetPct / 100m), 2);
+        var pnlTargetCell = suppressAutoClose ? string.Empty : targetPct.ToString("F0");
 
         var step = _steps[_currentIndex];
         var gridRow = _dgvTrades.Rows[_dgvTrades.Rows.Add(
             EasternTime(step.Time).ToString("HH:mm:ss"), rowType, strike.ToString("F2"),
             bid.ToString("F2"), ask.ToString("F2"), contracts, ask.ToString("F2"),
-            ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", targetPct.ToString("F0"))];
+            ask.ToString("F2"), tBid.ToString("F2"), "0.00", "0.0", pnlTargetCell)];
 
         gridRow.Cells["colSimCBid"].Style.ForeColor = Color.Orange;
 
-        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid));
+        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid, suppressAutoClose));
         SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
-        // Green "Stk=xxx" line on all 3 simulated charts — same as the real app's demo/real trades.
-        _ = _hourlyChart.MarkStrikeAsync(strike);
-        _ = _rthChart.MarkStrikeAsync(strike);
+        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
         _ = _fullChart.MarkStrikeAsync(strike);
+
+        // Same log message shape as Form1.RecordEntryAsync's live log lines.
+        var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
+        LogSimEvent($"{nowStr} Trade Manual ({rowType})  SpotPrice: {step.UnderlyingPrice:F2}  StrikePrice: {strike:F2}  Ask: {ask:F2}  Contracts: {contracts}");
+        LogSimEvent($"{nowStr} EntryPrice: {ask:F2}");
+        LogSimEvent($"{nowStr} Set Target: {tBid:F2}");
     }
 
     // Recomputes PnL for every open demo trade against the current step's chain — same formula
     // Form1 uses for real/demo trades (currentBid - entryPrice) * contracts * 100 — and the same
     // Min/Max PnL% tracking (UpdatePnLMinMax below, copied from Form1's private static method).
+    // Also checks each trade's target (C_Bid >= T_Bid) and auto-closes it right here — this runs
+    // on every step/click that feeds the grid, same as the real Trade-Target auto-close reacting
+    // to every live tick, just driven by the simulator's step advance instead.
     private void RefreshOpenSimTradesPnL(SimulationStep step)
     {
+        List<OpenSimTrade>? toAutoClose = null;
+
         foreach (var trade in _openSimTrades)
         {
             var quote = step.Quotes.FirstOrDefault(q =>
@@ -797,7 +1055,52 @@ public class SimulatorForm : Form
             trade.Row.Cells["colSimPnlPct"].Style.ForeColor  = pnlPct >= 0 ? Color.LimeGreen : Color.OrangeRed;
             UpdatePnLMinMax(trade.Row, pnlPct);
             SetSimMoneyness(trade.Row, trade.OptionType, trade.StrikePrice, step.UnderlyingPrice);
+
+            if (!trade.SuppressAutoClose && quote.Bid >= trade.TBid)
+                (toAutoClose ??= new List<OpenSimTrade>()).Add(trade);
         }
+
+        // Closed AFTER the loop, not during — CloseSimTrade removes from _openSimTrades, which
+        // would otherwise mutate the collection the foreach above is iterating.
+        if (toAutoClose != null)
+            foreach (var trade in toAutoClose)
+                CloseSimTrade(trade, step, auto: true);
+    }
+
+    // Shared by the manual Close button and the auto-close-at-target check above — same PnL math,
+    // SimTradesStore.Append, and grid/log updates either way; only the log message says whether it
+    // was manual or automatic (simulating a real Trade-Target's LIMIT exit at the broker).
+    private void CloseSimTrade(OpenSimTrade trade, SimulationStep step, bool auto)
+    {
+        var quote = step.Quotes.FirstOrDefault(q =>
+            q.StrikePrice == trade.StrikePrice &&
+            q.OptionType.ToString().ToUpperInvariant() == trade.OptionType);
+        var exitPrice = quote?.Bid ?? decimal.Parse(trade.Row.Cells["colSimCBid"].Value?.ToString() ?? "0");
+
+        var pnl    = Math.Round((exitPrice - trade.EntryPrice) * trade.Contracts * 100, 2);
+        var pnlPct = trade.EntryPrice > 0 ? Math.Round((exitPrice - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
+
+        SimTradesStore.Append(_symbol, _simDate, trade.OptionType, trade.StrikePrice, trade.Contracts,
+            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct);
+
+        var row = trade.Row;
+        row.Cells["colSimExitTime"].Value = EasternTime(step.Time).ToString("HH:mm:ss");
+        UpdatePnLMinMax(row, pnlPct);
+
+        // DataGridViewButtonColumn with UseColumnTextForButtonValue=true always shows the
+        // column's own Text ("Close") regardless of the cell's Value, so gray out the row instead
+        // to signal visually that it's closed (row.ReadOnly already blocks re-clicking it).
+        foreach (DataGridViewCell cell in row.Cells) cell.Style.BackColor = Color.Gainsboro;
+        row.ReadOnly = true;
+        _openSimTrades.Remove(trade);
+
+        // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
+        var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");
+        var closeType   = auto ? "TARGET (auto)" : "MANUAL";
+        var duration    = step.Time - trade.EntryTime;
+        LogSimEvent($"{nowStr} Close {closeType} ({trade.OptionType})  SpotPrice: {step.UnderlyingPrice:F2}  Strike: {trade.StrikePrice:F2}  C_Bid: {exitPrice:F2}");
+        LogSimEvent($"{nowStr} PnL: {pnl:F2}  PnL_Percent: {pnlPct:F1}");
+        LogSimEvent($"{nowStr} Duration: {duration:hh\\:mm\\:ss}");
     }
 
     // Same rule as Form1's SetMoneyness: CALL is ITM once spot > strike, PUT once spot < strike.
@@ -836,32 +1139,36 @@ public class SimulatorForm : Form
     private void DgvTrades_CellContentClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || _currentIndex < 0) return;
-        if (_dgvTrades.Columns[e.ColumnIndex].Name != "colSimClose") return;
 
-        var row   = _dgvTrades.Rows[e.RowIndex];
+        var columnName = _dgvTrades.Columns[e.ColumnIndex].Name;
+        var row = _dgvTrades.Rows[e.RowIndex];
+
+        if (columnName == "colSimStrike")
+        {
+            ForceStrikeInChainGrid(row);
+            return;
+        }
+
+        if (columnName != "colSimClose") return;
+
         var trade = _openSimTrades.FirstOrDefault(t => t.Row == row);
         if (trade == null) return; // already closed
 
-        var step  = _steps[_currentIndex];
-        var quote = step.Quotes.FirstOrDefault(q =>
-            q.StrikePrice == trade.StrikePrice &&
-            q.OptionType.ToString().ToUpperInvariant() == trade.OptionType);
-        var exitPrice = quote?.Bid ?? decimal.Parse(row.Cells["colSimCBid"].Value?.ToString() ?? "0");
+        CloseSimTrade(trade, _steps[_currentIndex], auto: false);
+    }
 
-        var pnl    = Math.Round((exitPrice - trade.EntryPrice) * trade.Contracts * 100, 2);
-        var pnlPct = trade.EntryPrice > 0 ? Math.Round((exitPrice - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
+    // Same idea as Form1.ForceStrikeInQuotesGrid — pin a trade's (type, strike) so it keeps
+    // showing in _dgvChain even after it goes ITM, for the rest of the loaded day.
+    private void ForceStrikeInChainGrid(DataGridViewRow row)
+    {
+        var type = row.Cells["colSimType"].Value?.ToString();
+        if (string.IsNullOrEmpty(type) || !decimal.TryParse(row.Cells["colSimStrike"].Value?.ToString(), out var strike))
+            return;
 
-        SimTradesStore.Append(_symbol, _simDate, trade.OptionType, trade.StrikePrice, trade.Contracts,
-            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct);
+        _forcedStrikes.Add((type, strike));
 
-        row.Cells["colSimExitTime"].Value = EasternTime(step.Time).ToString("HH:mm:ss");
-        UpdatePnLMinMax(row, pnlPct);
-
-        // DataGridViewButtonColumn with UseColumnTextForButtonValue=true always shows the
-        // column's own Text ("Close") regardless of the cell's Value, so gray out the row instead
-        // to signal visually that it's closed (row.ReadOnly already blocks re-clicking it).
-        foreach (DataGridViewCell cell in row.Cells) cell.Style.BackColor = Color.Gainsboro;
-        row.ReadOnly = true;
-        _openSimTrades.Remove(trade);
+        if (_currentIndex >= 0)
+            Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
+                selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes);
     }
 }

@@ -515,6 +515,13 @@ public class MultiChartForm : Form
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
+
+            // Supply Zone rebote — symmetric counterpart, same self-contained pattern.
+            overnightPanel.OnSupplyZoneReboundEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
         }
 
         // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA
@@ -523,13 +530,27 @@ public class MultiChartForm : Form
         // and Rebote en Piso (bounces up off support) are both bullish/CALL (upper band). Cruce
         // en Piso (breaks down through support) and Rebote en Techo (rejected down off
         // resistance) are both bearish/PUT (lower band) — see
-        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening.
+        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening. caption already carries
+        // the "evaluando Abriendo la Volatilidad (Alza/Baja)" suffix (ChartPanel.
+        // AppendVolatilityArmSuffix) — baked in at the source instead of appended here, so it can't
+        // be silently dropped for any resolution path (close-based, live gap-cross, etc).
         if (hourlyPanel != null && rthPanel != null)
         {
-            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho) =>
+            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
             {
                 var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
                 rthPanel.ArmVolatilityOpeningWatch(bullish);
+
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
+            };
+        }
+        else if (hourlyPanel != null)
+        {
+            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
             };
         }
         if (rthPanel != null)
@@ -538,6 +559,62 @@ public class MultiChartForm : Form
             {
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+
+            // "Ya abiertas al armar" — informational heads-up, log-only, doesn't wait for the
+            // spot to actually touch a band (see ChartPanel.OnVolatilityAlreadyOpenEvent).
+            rthPanel.OnVolatilityAlreadyOpenEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+        }
+
+        // Piso/Techo reference line: mirrors each armed SMA's pre-market level onto BOTH the 15m
+        // RTH and RTH+Overnight panels (dashed, same color as that SMA on the 1h panel) — visual
+        // reference for "how far price could go and bounce" without needing the 1h panel open.
+        // Removed automatically if the market-open gap later invalidates that SMA.
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
+            {
+                var sessionStart = GetTodaySessionStartFakeEpoch();
+                if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+                if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+            };
+            hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
+            {
+                if (rthPanel != null) _ = rthPanel.RemovePisoTechoRefLineAsync(period);
+                if (overnightPanel != null) _ = overnightPanel.RemovePisoTechoRefLineAsync(period);
+            };
+        }
+
+        // Telegram push failures previously vanished silently (fire-and-forget from every call
+        // site) — mirror the failure detail into crossLog on whichever panel it happened on, so a
+        // missed push is diagnosable instead of just "the event logged but nothing arrived".
+        foreach (var panel in new[] { hourlyPanel, rthPanel, overnightPanel })
+        {
+            if (panel == null) continue;
+            panel.OnTelegramPushFailedEvent += detail =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
+            };
+        }
+
+        // Stk line delete: markStrike draws the same green line on all 3 panels at trade open —
+        // deleting it (click + Delete) on any ONE panel removes it from the other 2 as well, so
+        // the user doesn't have to repeat the same delete 3 times.
+        var allChartPanels = new[] { hourlyPanel, rthPanel, overnightPanel };
+        foreach (var panel in allChartPanels)
+        {
+            if (panel == null) continue;
+            panel.OnStrikeDeletedEvent += price =>
+            {
+                foreach (var sibling in allChartPanels)
+                {
+                    if (sibling != null && sibling != panel) _ = sibling.RemoveStrikeLineAsync(price);
+                }
             };
         }
 
@@ -565,17 +642,14 @@ public class MultiChartForm : Form
     // auto-closes at 4pm ET because it expires today.
     public Task MarkExpiredOnRthChartAsync() => _rthPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
 
-    // Green "Stk=xxx" line on all 3 panels — fired when a trade (demo or real) opens.
-    public async Task MarkStrikeOnAllChartsAsync(decimal strike)
-    {
-        var tasks = new[]
-        {
-            _hourlyPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask,
-            _rthPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask,
-            _overnightPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask
-        };
-        await Task.WhenAll(tasks);
-    }
+    // "ΔS=value" label at trade close — panel 3 (15m RTH+Overnight) only, per explicit request.
+    public Task MarkDeltaSOnOvernightChartAsync(decimal entrySpot, decimal closeSpot, decimal strike) =>
+        _overnightPanel?.MarkDeltaSAsync(entrySpot, closeSpot, strike) ?? Task.CompletedTask;
+
+    // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, per explicit request. Fired when a
+    // trade (demo or real) opens.
+    public Task MarkStrikeOnOvernightChartAsync(decimal strike) =>
+        _overnightPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask;
 
     // Forwards an already-timestamped WS connect/disconnect/reconnect line from Form1 (which owns
     // the actual Schwab streamer connection) into this window's small event log — safe to call
@@ -599,6 +673,20 @@ public class MultiChartForm : Form
         foreach (var line in lines) LogWebSocketEvent(line);
     }
 
+    // Today's 9:30 AM ET, in the same "ET wall-clock digits disguised as UTC" fake-epoch units the
+    // chart itself uses (ChartPanel.FakeUtcEpochSeconds) — the Piso/Techo reference line's anchor,
+    // computed independently of any candle data so it can't race against history loading (see
+    // markPisoTechoRefLine in chart.html for the full rationale).
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
+    private static long GetTodaySessionStartFakeEpoch()
+    {
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).Date;
+        var sessionStartEastern = todayEastern.AddHours(9).AddMinutes(30);
+        var sessionStartUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionStartEastern, DateTimeKind.Unspecified), EasternZone);
+        return ChartPanel.FakeUtcEpochSeconds(sessionStartUtc);
+    }
+
     // Pushes the combined 3-chart snapshot to Telegram for the T-Line+SMA20 breakout signal —
     // best-effort, same as every other Telegram push in this app: a failure here must never
     // affect the chart/detection logic itself.
@@ -607,26 +695,44 @@ public class MultiChartForm : Form
         try
         {
             var (botToken, chatId) = TelegramSettingsStore.Load();
-            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
 
             using var combined = await CaptureCombinedChartImageAsync();
-            if (combined == null) return;
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);
             var path = Path.Combine(folder, $"{_symbol}_TLineSignal_{DateTime.Now:yyyyMMdd_HHmmss}.png");
             combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
 
-            var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "TLineSignal", DateTime.Now));
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort — never let a Telegram failure affect the chart/detection logic.
+            // Best-effort — never let a Telegram failure affect the chart/detection logic, but no
+            // longer silent: mirrored into crossLog same as every other push failure.
+            LogTelegramPushFailure(ex.Message);
         }
+    }
+
+    private void LogTelegramPushFailure(string detail)
+    {
+        if (IsDisposed || _crossLog == null) return;
+        BeginInvoke(() => _crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
     }
 
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in

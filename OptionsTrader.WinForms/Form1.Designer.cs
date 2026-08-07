@@ -17,6 +17,8 @@ partial class Form1
     {
         statusStrip1 = new StatusStrip();
         lblStatusUser = new ToolStripStatusLabel();
+        lblEarningsDate = new ToolStripStatusLabel();
+        lblEarningsRemaining = new ToolStripStatusLabel();
         tabControl = new TabControl();
         tabQuotes = new TabPage();
         grpLogger = new GroupBox();
@@ -83,6 +85,7 @@ partial class Form1
         btnFourEtfCharts = new Button();
         btnHubHost = new Button();
         btnSimulator = new Button();
+        btnFourEtfSimulator = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
@@ -220,6 +223,7 @@ partial class Form1
         tabQuotes.Controls.Add(btnFourEtfCharts);
         tabQuotes.Controls.Add(btnHubHost);
         tabQuotes.Controls.Add(btnSimulator);
+        tabQuotes.Controls.Add(btnFourEtfSimulator);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -789,6 +793,15 @@ partial class Form1
         btnSimulator.TabIndex = 5;
         btnSimulator.Text = "Simulador";
         btnSimulator.Click += BtnSimulator_Click;
+        //
+        // btnFourEtfSimulator
+        //
+        btnFourEtfSimulator.Location = new Point(1020, 124);
+        btnFourEtfSimulator.Name = "btnFourEtfSimulator";
+        btnFourEtfSimulator.Size = new Size(90, 25);
+        btnFourEtfSimulator.TabIndex = 6;
+        btnFourEtfSimulator.Text = "Sim 4 ETF";
+        btnFourEtfSimulator.Click += BtnFourEtfSimulator_Click;
         //
         // btnStartPolling
         //
@@ -1622,7 +1635,7 @@ partial class Form1
         //
         // statusStrip1
         //
-        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser });
+        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser, lblEarningsDate, lblEarningsRemaining });
         statusStrip1.Location = new Point(0, 578);
         statusStrip1.Name = "statusStrip1";
         statusStrip1.Size = new Size(1181, 22);
@@ -1632,6 +1645,17 @@ partial class Form1
         //
         lblStatusUser.Name = "lblStatusUser";
         lblStatusUser.Size = new Size(0, 17);
+        //
+        // lblEarningsDate
+        //
+        lblEarningsDate.Name = "lblEarningsDate";
+        lblEarningsDate.Margin = new Padding(12, 3, 0, 2);
+        lblEarningsDate.Size = new Size(0, 17);
+        //
+        // lblEarningsRemaining
+        //
+        lblEarningsRemaining.Name = "lblEarningsRemaining";
+        lblEarningsRemaining.Size = new Size(0, 17);
         //
         // Form1
         //
@@ -1685,6 +1709,8 @@ partial class Form1
 
     private StatusStrip statusStrip1;
     private ToolStripStatusLabel lblStatusUser;
+    private ToolStripStatusLabel lblEarningsDate;
+    private ToolStripStatusLabel lblEarningsRemaining;
     private TabControl tabControl;
     private TabPage tabQuotes;
     private TabPage tabSettings;
@@ -1775,6 +1801,7 @@ partial class Form1
     private Button btnFourEtfCharts;
     private Button btnHubHost;
     private Button btnSimulator;
+    private Button btnFourEtfSimulator;
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;
