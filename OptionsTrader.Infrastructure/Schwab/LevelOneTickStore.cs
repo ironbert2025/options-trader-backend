@@ -8,9 +8,12 @@ namespace OptionsTrader.Infrastructure.Schwab;
 // CHART_EQUITY samples, kept side by side so the two can be compared against real (e.g.
 // ThinkorSwim) prices to decide which source drives the live chart better.
 //
-// Same single-writer guarantee as TickPriceStore: only ever called from SchwabStreamerClient on
-// the "hub" instance actually connected to Schwab.
-internal static class LevelOneTickStore
+// Same writer pattern as TickPriceStore: called from SchwabStreamerClient on the "hub" instance
+// actually connected to Schwab, AND from Form1.SetUpLiveFeedAsync on an instance reading a REMOTE
+// hub on another machine (so that machine gets its own local tick history for simulators) — but
+// never from a client of a hub on the SAME machine, which would just duplicate what the hub
+// already wrote to that machine's disk.
+public static class LevelOneTickStore
 {
     private const string OutputFolder = @"C:\OptionsData\MarketData\TicksLevelOne";
     private const string Header = "Time,Price";
