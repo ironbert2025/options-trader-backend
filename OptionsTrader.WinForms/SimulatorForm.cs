@@ -169,6 +169,11 @@ public class SimulatorForm : Form
             _ = _rthChart.AddMirroredZoneLineAsync(mirroredTime, price, color);
         };
 
+        // Deleting a zone (select + Delete) on EITHER chart removes it from both — the RTH chart
+        // never arms new zones itself, but its mirrored copy is independently selectable there.
+        _fullChart.OnDzSzPairDeletedEvent += (p1, p2) => _ = _rthChart.RemoveMirroredZonePairAsync(p1, p2);
+        _rthChart.OnDzSzPairDeletedEvent  += (p1, p2) => _ = _fullChart.RemoveMirroredZonePairAsync(p1, p2);
+
         Load += (s, e) => LoadSymbols();
     }
 

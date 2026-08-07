@@ -75,6 +75,11 @@ public class SimulatedChartPanel : Panel
             else if (_mode == ChartPanelMode.Fifteen_RTH)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+
+                // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
+                // arms DZ/SZ itself), but the mirrored copy is still independently selectable/
+                // deletable there, and that deletion needs to reach C# to relay to the sibling.
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
             }
             else if (_mode == ChartPanelMode.Fifteen_Full)
             {
@@ -524,6 +529,11 @@ public class SimulatedChartPanel : Panel
     // Fires (fakeUtcTime, price, color) every time a DZ/SZ line is drawn on THIS chart.
     public event Action<long, decimal, string>? OnDzSzLineDrawn;
 
+    // Fires (price1, price2) when a zone (demand+supply pair) gets deleted (select + Delete) on
+    // THIS chart — SimulatorForm relays it to the sibling chart's RemoveMirroredZonePairAsync so
+    // deleting from either the RTH or RTH+Overnight chart removes it from both.
+    public event Action<decimal, decimal>? OnDzSzPairDeletedEvent;
+
     public async Task<bool> ToggleDzSzModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
@@ -602,6 +612,17 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredZoneLine({fakeUtcTime}, {priceStr}, '{color}');");
     }
 
+    // Removes a zone (demand+supply pair, matched by price) on THIS chart — called on the sibling
+    // chart when OnDzSzPairDeletedEvent fires elsewhere, so a delete on either the RTH or
+    // RTH+Overnight chart removes the zone from both.
+    public async Task RemoveMirroredZonePairAsync(decimal price1, decimal price2)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var p1Str = price1.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var p2Str = price2.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeMirroredZonePair({p1Str}, {p2Str});");
+    }
+
     public async Task ClearMirroredZoneLinesAsync()
     {
         if (_webView.CoreWebView2 == null) return;
@@ -635,6 +656,14 @@ public class SimulatedChartPanel : Panel
                     if (demandPrice > supplyPrice)
                         _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
                 }
+                return;
+            }
+
+            if (type == "dzsz_delete")
+            {
+                var price1 = root.GetProperty("price1").GetDecimal();
+                var price2 = root.GetProperty("price2").GetDecimal();
+                OnDzSzPairDeletedEvent?.Invoke(price1, price2);
                 return;
             }
 

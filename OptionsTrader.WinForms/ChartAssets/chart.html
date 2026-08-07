@@ -224,6 +224,27 @@
     forceRepaint();
   }
 
+  // Removes the demand+supply pair starting at pairStart (always even — 2i/2i+1) from both
+  // _segments and the matching right-axis price-line labels. Shared by the Delete-key handler and
+  // removeMirroredZonePair below.
+  function removeZonePairAtIndex(pairStart) {
+    zoneLinesPrimitive._segments.splice(pairStart + 1, 1);
+    zoneLinesPrimitive._segments.splice(pairStart, 1);
+    const removedLabels = dzSzAxisLabels.splice(pairStart, 2);
+    removedLabels.forEach(l => candleSeries.removePriceLine(l));
+    forceRepaint();
+  }
+
+  // Simulator only: called on the SIBLING chart when a mirrored zone gets deleted on the other one
+  // (either direction — RTH+Overnight is the "source" but the mirror on RTH is independently
+  // selectable/deletable too) — matched by price since that's shared between the original and its
+  // mirror, unlike time (mirrored lines can clamp to a different anchor on the RTH-only chart).
+  function removeMirroredZonePair(price1, price2) {
+    const idx = zoneLinesPrimitive._segments.findIndex(s => s.price === price1 || s.price === price2);
+    if (idx === -1) return;
+    removeZonePairAtIndex(idx % 2 === 0 ? idx : idx - 1);
+  }
+
   // ---- Rect tool: sky-blue rectangle between 2 clicks (opposite corners, no value labels) ----
 
   class RectanglesPrimitive {
@@ -463,18 +484,20 @@
 
     // DZ/SZ: removes the WHOLE zone (both demand+supply lines of the pair the selected line
     // belongs to), not just the one line clicked — pairs are strictly consecutive (2i, 2i+1), so
-    // splicing only one would shift the pairing of every zone drawn after it. Splice the higher
-    // index first so the lower index stays valid.
+    // splicing only one would shift the pairing of every zone drawn after it.
     const dzSzIdx = zoneLinesPrimitive._segments.findIndex(s => s.selected);
     if (dzSzIdx !== -1) {
       const pairStart = dzSzIdx % 2 === 0 ? dzSzIdx : dzSzIdx - 1;
-      zoneLinesPrimitive._segments.splice(pairStart + 1, 1);
-      zoneLinesPrimitive._segments.splice(pairStart, 1);
-      // dzSzAxisLabels stays in lockstep with _segments (1 price-line handle per pushed line, same
-      // index) — remove the same 2 slots so the right-axis price labels don't linger orphaned.
-      const removedLabels = dzSzAxisLabels.splice(pairStart, 2);
-      removedLabels.forEach(l => candleSeries.removePriceLine(l));
-      forceRepaint();
+      const removedPrice1 = zoneLinesPrimitive._segments[pairStart].price;
+      const removedPrice2 = zoneLinesPrimitive._segments[pairStart + 1].price;
+      removeZonePairAtIndex(pairStart);
+      // Simulator only (SimulatorForm mirrors each DZ/SZ zone onto the sibling RTH/RTH+Overnight
+      // chart) — harmless on the live chart, nothing listens for it there. Reported by price
+      // (not time) since a mirrored pair shares the same price but not necessarily the same
+      // fake-UTC anchor time as the original.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'dzsz_delete', price1: removedPrice1, price2: removedPrice2 });
+      }
       return;
     }
 
