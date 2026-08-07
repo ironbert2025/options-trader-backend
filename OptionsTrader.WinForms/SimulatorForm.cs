@@ -13,10 +13,20 @@ public class SimulatorForm : Form
     private readonly ComboBox _cmbSymbol = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(8, 8), Size = new Size(100, 24) };
     private readonly ComboBox _cmbDate   = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(116, 8), Size = new Size(120, 24) };
     private readonly Button _btnCargar   = new() { Text = "Cargar", Location = new Point(244, 8), Size = new Size(70, 24) };
+    private readonly Button _btnPlayPause = new() { Text = "Play", Location = new Point(324, 8), Size = new Size(70, 24), Enabled = false };
     private readonly Button _btnAtras    = new() { Text = "◀ Atrás", Location = new Point(8, 40), Size = new Size(90, 26), Enabled = false };
     private readonly Button _btnAdelante = new() { Text = "Adelante ▶", Location = new Point(102, 40), Size = new Size(90, 26), Enabled = false };
     private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
+
+    // "Play" auto-advances through _steps at the selected cadence, same effect as clicking ▶
+    // repeatedly (each tick goes through RenderCurrentStep — PnL, Min/Max, auto-close, chart/grid
+    // refresh — nothing skipped). Manual ◀/▶/"+1 Min" are disabled while playing to avoid racing
+    // the timer; re-enabled on Pause so the user can navigate manually before resuming Play.
+    private readonly System.Windows.Forms.Timer _playTimer = new();
+    private bool _isPlaying;
+    private int _ticksPerSecond = 10;
+    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(1020, 4), Size = new Size(110, 96) };
 
     // Width matches Form1's real dgvQuotes (566) — see BuildChainColumns' per-column widths.
     private readonly DataGridView _dgvChain = new()
@@ -133,6 +143,7 @@ public class SimulatorForm : Form
         Controls.Add(_cmbSymbol);
         Controls.Add(_cmbDate);
         Controls.Add(_btnCargar);
+        Controls.Add(_btnPlayPause);
         Controls.Add(_btnAtras);
         Controls.Add(_btnAdelante);
         Controls.Add(_btnPlus1Min);
@@ -143,6 +154,8 @@ public class SimulatorForm : Form
         Controls.Add(_grpTrade);
         _grpTrade.Controls.Add(_rbNoTrade);
         _grpTrade.Controls.Add(_rbNoTradeTarget);
+        Controls.Add(_grpSpeed);
+        BuildSpeedControls();
         Controls.Add(_pnlGoToTime);
         Controls.Add(_pnlSmaEvents);
         Controls.Add(_pnlDzSz);
@@ -152,9 +165,11 @@ public class SimulatorForm : Form
 
         _cmbSymbol.SelectedIndexChanged += (s, e) => RefreshAvailableDates();
         _btnCargar.Click    += (s, e) => LoadSelectedDay();
+        _btnPlayPause.Click += (s, e) => TogglePlay();
         _btnAtras.Click     += (s, e) => Step(-1);
         _btnAdelante.Click  += (s, e) => Step(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
+        _playTimer.Tick     += PlayTimer_Tick;
         _dgvChain.CellClick     += DgvChain_CellClick;
         _dgvChain.CellPainting  += DgvChain_CellPainting;
         _dgvChain.CellFormatting += DgvChain_CellFormatting;
@@ -199,6 +214,64 @@ public class SimulatorForm : Form
 
         _pnlDzSz.Controls.Add(btnDzSz);
         _pnlDzSz.Controls.Add(btnClear);
+    }
+
+    // 4 fixed speeds for "Play" (ticks/sec) — 10 is the default (fastest/most steps per real
+    // second). Changing this while playing updates _playTimer's interval immediately, no need to
+    // pause first.
+    private void BuildSpeedControls()
+    {
+        var speeds = new (string Label, int TicksPerSecond)[] { ("1 tick/seg", 1), ("3 tick/seg", 3), ("5 tick/seg", 5), ("10 tick/seg", 10) };
+        for (int i = 0; i < speeds.Length; i++)
+        {
+            var (label, ticksPerSecond) = speeds[i];
+            var rb = new RadioButton
+            {
+                Text     = label,
+                Checked  = ticksPerSecond == _ticksPerSecond,
+                AutoSize = true,
+                Location = new Point(6, 18 + i * 18)
+            };
+            rb.CheckedChanged += (s, e) =>
+            {
+                if (!rb.Checked) return;
+                _ticksPerSecond = ticksPerSecond;
+                if (_isPlaying) _playTimer.Interval = 1000 / _ticksPerSecond;
+            };
+            _grpSpeed.Controls.Add(rb);
+        }
+    }
+
+    private void TogglePlay()
+    {
+        if (_isPlaying) PausePlay();
+        else StartPlay();
+    }
+
+    private void StartPlay()
+    {
+        if (_currentIndex < 0 || _currentIndex >= _steps.Count - 1) return; // nothing left to play
+        _isPlaying = true;
+        _btnPlayPause.Text = "Pause";
+        _playTimer.Interval = 1000 / _ticksPerSecond;
+        _playTimer.Start();
+        UpdateStepButtons();
+    }
+
+    private void PausePlay()
+    {
+        if (!_isPlaying) return;
+        _isPlaying = false;
+        _btnPlayPause.Text = "Play";
+        _playTimer.Stop();
+        UpdateStepButtons();
+    }
+
+    private void PlayTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_currentIndex >= _steps.Count - 1) { PausePlay(); return; }
+        Step(1);
+        if (_currentIndex >= _steps.Count - 1) PausePlay(); // reached the last available step
     }
 
     // Same options as Form1's grpCounts (3-10, In Range) and grpContracts (1-6, PositionSize),
@@ -456,6 +529,7 @@ public class SimulatorForm : Form
         if (_cmbSymbol.SelectedItem is not string symbol) return;
         if (_cmbDate.SelectedItem is not string dateStr || !DateOnly.TryParse(dateStr, out var date)) return;
 
+        PausePlay();
         _forcedStrikes.Clear();
 
         var tickers = TickerSettingsStore.Load();
@@ -684,9 +758,12 @@ public class SimulatorForm : Form
 
     private void UpdateStepButtons()
     {
-        _btnAtras.Enabled    = _currentIndex > 0;
-        _btnAdelante.Enabled = _currentIndex >= 0 && _currentIndex < _steps.Count - 1;
-        _btnPlus1Min.Enabled = _btnAdelante.Enabled;
+        // Manual navigation disabled while playing — re-enabled the moment Pause is clicked (or
+        // Play auto-pauses at the end of the data) so the user can step manually before resuming.
+        _btnAtras.Enabled     = !_isPlaying && _currentIndex > 0;
+        _btnAdelante.Enabled  = !_isPlaying && _currentIndex >= 0 && _currentIndex < _steps.Count - 1;
+        _btnPlus1Min.Enabled  = _btnAdelante.Enabled;
+        _btnPlayPause.Enabled = _isPlaying || (_currentIndex >= 0 && _currentIndex < _steps.Count - 1);
     }
 
     private void RenderCurrentStep()
