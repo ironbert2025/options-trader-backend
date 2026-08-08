@@ -42,13 +42,40 @@ public class TimeframeViewerForm : Form
 
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
+    private readonly Form1 _form1;
     private readonly List<TimeframeChartPanel> _panels = new();
     private string _symbol = string.Empty;
 
-    public TimeframeViewerForm(SchwabStreamerClient historyClient, ICandleFeed liveFeed)
+    // ---- SpotPrice reply + cross-watch (all in-memory, RTH-only — see PollTimer_Tick) ----
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+    private static readonly TimeSpan RthStart = new(9, 30, 0);
+    private static readonly TimeSpan RthEnd   = new(16, 0, 0);
+    private static readonly TimeSpan ReplyWaitWindow = TimeSpan.FromMinutes(5);
+
+    private sealed class PendingZoneAlert
+    {
+        public long MessageId;
+        public string Symbol = string.Empty;
+        public string Direction = string.Empty; // "Alza" or "Baja"
+        public TimeframeChartPanel SourcePanel = null!;
+        public List<(decimal Strike, decimal Ask)> Strikes = new();
+        public string Caption = string.Empty;
+        public DateTime SentAtUtc;
+        public decimal? TargetSpotPrice; // set once the reply arrives
+    }
+
+    private readonly List<PendingZoneAlert> _pendingAlerts = new();
+    private readonly Dictionary<TimeframeChartPanel, decimal> _lastPriceByPanel = new();
+    private long _telegramUpdateOffset;
+    private readonly System.Windows.Forms.Timer _pollTimer = new() { Interval = 5000 };
+
+    // form1: needed to read the 5 nearest OTM strikes on a confirmed rebote — only works if this
+    // viewer's loaded symbol matches form1's OWN ticker (one options chain per app instance).
+    public TimeframeViewerForm(SchwabStreamerClient historyClient, ICandleFeed liveFeed, Form1 form1)
     {
         _historyClient = historyClient;
         _liveFeed      = liveFeed;
+        _form1         = form1;
 
         Text          = "Multi-Timeframe Viewer";
         Width         = 1323;
@@ -77,6 +104,10 @@ public class TimeframeViewerForm : Form
             _btnDzSz.BackColor = on ? Color.LightGreen : SystemColors.Control;
         };
 
+        _pollTimer.Tick += PollTimer_Tick;
+        _pollTimer.Start();
+        FormClosed += (s, e) => _pollTimer.Stop();
+
         Load += (s, e) => LoadSymbols();
     }
 
@@ -104,6 +135,8 @@ public class TimeframeViewerForm : Form
         foreach (var panel in _panels) panel.Dispose();
         _panels.Clear();
         _btnDzSz.BackColor = SystemColors.Control; // new panels always start unarmed
+        _pendingAlerts.Clear(); // old panels are gone — any pending SpotPrice watch is meaningless now
+        _lastPriceByPanel.Clear();
 
         for (int i = 0; i < Timeframes.Length; i++)
         {
@@ -114,25 +147,36 @@ public class TimeframeViewerForm : Form
                 Dock   = DockStyle.Fill,
                 Margin = new Padding(6, 2, 6, 6)
             };
-            panel.OnZoneReboundEvent += (caption, direction, price) => OnZoneRebound(symbol, caption, direction, price);
+            panel.OnZoneReboundEvent += (sourcePanel, caption, direction, price) => OnZoneRebound(sourcePanel, symbol, caption, direction, price);
+            panel.OnLiveTick += price => OnPanelLiveTick(panel, price);
             _panels.Add(panel);
             _chartsHost.Controls.Add(panel, i % 2, i / 2);
         }
     }
 
-    private void OnZoneRebound(string symbol, string caption, string direction, decimal price)
+    private void OnZoneRebound(TimeframeChartPanel sourcePanel, string symbol, string caption, string direction, decimal price)
     {
         if (IsDisposed) return;
         BeginInvoke(() => _txtEventLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
-        _ = SendZoneReboundTelegramPushAsync(symbol, caption);
+        _ = SendZoneReboundTelegramPushAsync(sourcePanel, symbol, caption, direction);
     }
 
     // Pushes the combined 4-chart snapshot to Telegram — best-effort, same as every other Telegram
-    // push in the app: a failure here must never affect chart rendering/detection.
-    private async Task SendZoneReboundTelegramPushAsync(string symbol, string caption)
+    // push in the app: a failure here must never affect chart rendering/detection. Before building
+    // the message/screenshot, draws the 5 nearest OTM strikes (Calls on Alza, Puts on Baja) on the
+    // panel that fired the rebote — only if this viewer's symbol matches form1's own ticker (see
+    // Form1.GetNearestOtmStrikes); if not, just skips the strikes and proceeds with the push.
+    private async Task SendZoneReboundTelegramPushAsync(TimeframeChartPanel sourcePanel, string symbol, string caption, string direction)
     {
         try
         {
+            var strikes = _form1.GetNearestOtmStrikes(symbol, calls: direction == "Alza");
+            if (strikes != null)
+            {
+                foreach (var (strike, ask) in strikes)
+                    await sourcePanel.MarkStrikeWithAskAsync(strike, ask);
+            }
+
             var (botToken, chatId) = TelegramSettingsStore.Load();
             if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
             {
@@ -154,7 +198,26 @@ public class TimeframeViewerForm : Form
 
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{symbol} — {caption}");
             if (ok && messageId.HasValue)
+            {
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "TimeframeZoneRebound", DateTime.Now));
+
+                // Start listening for a SpotPrice reply (only if we actually have strikes to
+                // re-quote later — if the symbol didn't match form1's ticker, there's nothing
+                // useful a second push could show, so skip the whole watch).
+                if (strikes != null)
+                {
+                    _pendingAlerts.Add(new PendingZoneAlert
+                    {
+                        MessageId    = messageId.Value,
+                        Symbol       = symbol,
+                        Direction    = direction,
+                        SourcePanel  = sourcePanel,
+                        Strikes      = strikes,
+                        Caption      = caption,
+                        SentAtUtc    = DateTime.UtcNow
+                    });
+                }
+            }
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(symbol, caption, path);
             else
@@ -164,6 +227,139 @@ public class TimeframeViewerForm : Form
         {
             LogTelegramPushFailure(ex.Message);
         }
+    }
+
+    // Runs every 5s while the window is open:
+    //   1. Drops any pending alert once the clock leaves RTH (9:30-16:00 ET) — both the reply-wait
+    //      and the cross-watch phases are only meaningful during the trading session.
+    //   2. Drops any pending alert still waiting for a reply after 5 minutes.
+    //   3. If any pending alerts are still waiting for a reply, polls Telegram once (shared call,
+    //      not one per alert) and matches replies by reply_to_message.message_id.
+    private async void PollTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_pendingAlerts.Count == 0) return;
+
+        var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).TimeOfDay;
+        if (nowEastern < RthStart || nowEastern > RthEnd)
+        {
+            if (_pendingAlerts.Count > 0)
+            {
+                LogInfo("Fuera de sesión RTH — se descartan los pendientes de SpotPrice.");
+                _pendingAlerts.Clear();
+            }
+            return;
+        }
+
+        var expired = _pendingAlerts.Where(p => p.TargetSpotPrice == null && DateTime.UtcNow - p.SentAtUtc > ReplyWaitWindow).ToList();
+        foreach (var p in expired)
+        {
+            LogInfo($"{p.Symbol} — sin respuesta con SpotPrice en 5 min, se descarta: {p.Caption}");
+            _pendingAlerts.Remove(p);
+        }
+
+        if (!_pendingAlerts.Any(p => p.TargetSpotPrice == null)) return;
+
+        var (botToken, _) = TelegramSettingsStore.Load();
+        if (string.IsNullOrWhiteSpace(botToken)) return;
+
+        var (ok, _, updates) = await TelegramNotifier.GetUpdatesAsync(botToken, _telegramUpdateOffset);
+        if (!ok || updates.Count == 0) return;
+
+        _telegramUpdateOffset = updates.Max(u => u.UpdateId) + 1;
+
+        foreach (var update in updates)
+        {
+            if (update.ReplyToMessageId == null) continue;
+            var pending = _pendingAlerts.FirstOrDefault(p => p.MessageId == update.ReplyToMessageId && p.TargetSpotPrice == null);
+            if (pending == null) continue;
+
+            var match = System.Text.RegularExpressions.Regex.Match(update.Text, @"\d+(\.\d+)?");
+            if (!match.Success || !decimal.TryParse(match.Value, System.Globalization.CultureInfo.InvariantCulture, out var spotPrice))
+                continue; // reply didn't contain a usable number — stays pending, maybe they retry
+
+            pending.TargetSpotPrice = spotPrice;
+            LogInfo($"{pending.Symbol} — SpotPrice recibido: {spotPrice:F2} (esperando cruce hacia {pending.Direction})");
+        }
+    }
+
+    // Fires on every live tick from any of the 4 panels — checks whether the price just crossed
+    // any pending alert's TargetSpotPrice in the expected direction (Alza: was below, now at/above;
+    // Baja: was above, now at/below). Needs the PREVIOUS tick to detect a genuine cross, not just
+    // "is currently past it" (which would also fire on every subsequent tick).
+    private void OnPanelLiveTick(TimeframeChartPanel panel, decimal price)
+    {
+        var previous = _lastPriceByPanel.TryGetValue(panel, out var p) ? p : (decimal?)null;
+        _lastPriceByPanel[panel] = price;
+        if (previous == null || _pendingAlerts.Count == 0) return;
+
+        var crossed = _pendingAlerts
+            .Where(a => a.SourcePanel == panel && a.TargetSpotPrice != null)
+            .Where(a => a.Direction == "Alza"
+                ? previous.Value < a.TargetSpotPrice!.Value && price >= a.TargetSpotPrice!.Value
+                : previous.Value > a.TargetSpotPrice!.Value && price <= a.TargetSpotPrice!.Value)
+            .ToList();
+
+        foreach (var alert in crossed)
+        {
+            _pendingAlerts.Remove(alert);
+            _ = SendCrossConfirmedPushAsync(alert);
+        }
+    }
+
+    // Second push once the SpotPrice cross confirms — appends "   Bid=xxx" to each of the SAME 5
+    // Stk lines drawn at rebote time (doesn't remove/redraw them), then sends the combined
+    // snapshot again with a note that the cross confirmed.
+    private async Task SendCrossConfirmedPushAsync(PendingZoneAlert alert)
+    {
+        try
+        {
+            var bids = _form1.GetBidForStrikes(alert.Symbol, calls: alert.Direction == "Alza", alert.Strikes.Select(s => s.Strike));
+            if (bids != null)
+            {
+                foreach (var (strike, bid) in bids)
+                    await alert.SourcePanel.AppendStrikeLabelAsync(strike, $"   Bid={bid.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            }
+
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 4 charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{alert.Symbol}_TimeframeZoneReboundCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var caption = $"{alert.Caption} — SpotPrice {alert.TargetSpotPrice:F2} cruzado";
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{alert.Symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, alert.Symbol, "TimeframeZoneReboundCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(alert.Symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+
+            LogInfo(caption);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    private void LogInfo(string message)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() => _txtEventLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
     }
 
     private void LogTelegramPushFailure(string detail)

@@ -1557,11 +1557,13 @@
 
   // Anchors at the LAST candle currently loaded (i.e. "now", the moment the trade opened) instead
   // of the left edge — same "current candle to the right edge" convention as the H-Line tool.
-  function markStrike(price) {
+  // label is optional — defaults to "Stk={price}"; TimeframeViewerForm's "5 OTM strikes on
+  // rebote" feature passes a custom "Stk={price}   Ask={ask}" label instead.
+  function markStrike(price, label) {
     if (!strikeLinesAttached) { candleSeries.attachPrimitive(strikeLinesPrimitive); strikeLinesAttached = true; }
     if (allCandles.length === 0) return;
     const anchorTime = allCandles[allCandles.length - 1].time;
-    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: `Stk=${price}`, selected: false });
+    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: label || `Stk=${price}`, selected: false });
     forceRepaint();
   }
 
@@ -1570,6 +1572,14 @@
   // postMessage sent back out from here, so the 3 panels don't ping-pong the same delete forever.
   function removeStrikeLine(price) {
     strikeLinesPrimitive._lines = strikeLinesPrimitive._lines.filter(l => l.price !== price);
+    forceRepaint();
+  }
+
+  // Appends text to an existing Stk line's label in place (doesn't remove/redraw the line) — used
+  // by TimeframeViewerForm to add "   Bid=xxx" to the "Stk=xxx   Ask=xxx" label once the SpotPrice
+  // cross confirms, keeping the original line exactly where it was.
+  function appendStrikeLineLabel(price, extraText) {
+    strikeLinesPrimitive._lines.forEach(l => { if (l.price === price) l.label += extraText; });
     forceRepaint();
   }
 

@@ -63,7 +63,13 @@ public class TimeframeChartPanel : Panel
 
     // Fires (caption, direction, price) when a Demand/Supply Zone rebote confirms — only for
     // panels with enableZoneRebounds. TimeframeViewerForm listens to build+send the Telegram push.
-    public event Action<string, string, decimal>? OnZoneReboundEvent;
+    // Includes the panel itself (always `this`) so the form knows exactly which of the 4 charts
+    // to draw the 5 OTM strike lines on, without needing a separate lookup.
+    public event Action<TimeframeChartPanel, string, string, decimal>? OnZoneReboundEvent;
+
+    // Fires the raw live price on EVERY tick (not just closed candles) — used by
+    // TimeframeViewerForm to detect the SpotPrice cross for the second push.
+    public event Action<decimal>? OnLiveTick;
 
     public TimeframeChartPanel(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, int intervalMinutes, string label, bool enableZoneRebounds = false)
     {
@@ -174,6 +180,29 @@ public class TimeframeChartPanel : Panel
         return result == "true";
     }
 
+    // Green Stk line + "Stk=xxx   Ask=xxx" label — used by TimeframeViewerForm to draw the 5
+    // nearest OTM strikes on this panel right before it captures the combined Telegram snapshot,
+    // once a Demand/Supply zone rebote confirms. Same primitive/rendering as ChartPanel's
+    // markStrike (green line, selectable, deletable with Delete), just with a custom label.
+    public async Task MarkStrikeWithAskAsync(decimal strike, decimal ask)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var strikeStr = strike.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var askStr    = ask.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var label     = JsonSerializer.Serialize($"Stk={strikeStr}   Ask={askStr}");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markStrike({strikeStr}, {label});");
+    }
+
+    // Appends "   Bid=xxx" to an existing Stk line's label in place — used once the SpotPrice
+    // cross confirms (see TimeframeViewerForm), doesn't touch the line's position/selection.
+    public async Task AppendStrikeLabelAsync(decimal strike, string extraText)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var strikeStr = strike.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var extraJson = JsonSerializer.Serialize(extraText);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"appendStrikeLineLabel({strikeStr}, {extraJson});");
+    }
+
     private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
@@ -231,7 +260,7 @@ public class TimeframeChartPanel : Panel
                 var caption = $"Rebote en Zona de Demanda ({_timeframeLabel}) — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
                 EventLogStore.Append(_symbol, _timeframeLabel, "DemandZoneRebound", "Alza", caption, justClosed.Close,
                     $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
-                OnZoneReboundEvent?.Invoke(caption, "Alza", justClosed.Close);
+                OnZoneReboundEvent?.Invoke(this, caption, "Alza", justClosed.Close);
             }
         }
     }
@@ -263,7 +292,7 @@ public class TimeframeChartPanel : Panel
                 var caption = $"Rebote en Zona de Supply ({_timeframeLabel}) — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
                 EventLogStore.Append(_symbol, _timeframeLabel, "SupplyZoneRebound", "Baja", caption, justClosed.Close,
                     $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
-                OnZoneReboundEvent?.Invoke(caption, "Baja", justClosed.Close);
+                OnZoneReboundEvent?.Invoke(this, caption, "Baja", justClosed.Close);
             }
         }
     }
@@ -272,6 +301,8 @@ public class TimeframeChartPanel : Panel
     {
         if (symbol != _symbol) return; // one shared connection carries all tickers — ignore others
         if (_closing || !IsHandleCreated) return;
+
+        OnLiveTick?.Invoke(candle.Close);
 
         if (_liveBucket == null)
         {

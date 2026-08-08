@@ -1172,6 +1172,45 @@ public partial class Form1 : Form
     }
 
     // Filters the chain to OTM strikes within the ticker's Ask range and (re)builds the given grid.
+    // Used by TimeframeViewerForm's "5 OTM strikes on rebote" feature — returns the N nearest OTM
+    // strikes (Strike, Ask) for the CURRENT chain fetch, closest-to-spot first. Independent of
+    // whatever Counts/Range/Call-Put filter the main dgvQuotes grid happens to be showing right
+    // now (those are display settings, not what "nearest OTM" means) — ranks _lastAllQuotes fresh
+    // each call, same ranking rule PopulateQuotesGrid uses internally ("Level lookup").
+    // Returns null if `symbol` isn't this instance's own ticker — this app runs one instance per
+    // ticker, so any OTHER symbol simply has no options-chain data loaded here at all.
+    public List<(decimal Strike, decimal Ask)>? GetNearestOtmStrikes(string symbol, bool calls, int count = 5)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol || _lastAllQuotes.Count == 0)
+            return null;
+
+        var optionType = calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
+        var ordered = calls
+            ? _lastAllQuotes.Where(q => q.OptionType == optionType && !q.InTheMoney).OrderBy(q => q.StrikePrice)   // ascending = closest first
+            : _lastAllQuotes.Where(q => q.OptionType == optionType && !q.InTheMoney).OrderByDescending(q => q.StrikePrice); // descending = closest first
+
+        return ordered.Take(count).Select(q => (q.StrikePrice, q.Ask)).ToList();
+    }
+
+    // Used by TimeframeViewerForm's second push (once the SpotPrice cross confirms) — current Bid
+    // for the SAME strikes picked at rebote time (not a fresh "nearest OTM" re-selection, since
+    // price has moved by definition). Same one-instance-per-ticker restriction as above.
+    public List<(decimal Strike, decimal Bid)>? GetBidForStrikes(string symbol, bool calls, IEnumerable<decimal> strikes)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol || _lastAllQuotes.Count == 0)
+            return null;
+
+        var optionType = calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
+        var byStrike = _lastAllQuotes
+            .Where(q => q.OptionType == optionType)
+            .GroupBy(q => q.StrikePrice)
+            .ToDictionary(g => g.Key, g => g.First().Bid);
+
+        return strikes
+            .Select(s => (Strike: s, Bid: byStrike.TryGetValue(s, out var bid) ? bid : 0m))
+            .ToList();
+    }
+
     // Returns the in-range OTM call/put lists so the caller can build trade-PnL maps if needed.
     // Static (no Form1 instance state) so it's reusable from SimulatorForm's own grid too —
     // selectedCounts/callOnly/putOnly used to live on Form1's fields/checkboxes, now explicit
@@ -1825,7 +1864,7 @@ public partial class Form1 : Form
             return;
         }
 
-        var form = new TimeframeViewerForm(_historyClient!, _liveFeed!);
+        var form = new TimeframeViewerForm(_historyClient!, _liveFeed!, this);
         form.FormClosed += (s, e2) => _timeframeViewerForm = null;
         _timeframeViewerForm = form;
         form.Show();
