@@ -111,6 +111,15 @@ public class TimeframeChartPanel : Panel
         }
     }
 
+    // Toggles DZ/SZ (Demand/Supply Zone) drawing mode on/off — purely visual here (no rebound
+    // detection/Telegram, this viewer has none of that). Same JS tool ChartPanel uses.
+    public async Task<bool> ToggleDzSzModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
+        return result == "true";
+    }
+
     private void Streamer_OnNewCandle(string symbol, CandleData candle)
     {
         if (symbol != _symbol) return; // one shared connection carries all tickers — ignore others

@@ -17,6 +17,7 @@ public class TimeframeViewerForm : Form
 
     private readonly ComboBox _cmbSymbol = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(8, 8), Size = new Size(120, 24) };
     private readonly Button _btnCargar   = new() { Text = "Cargar", Location = new Point(136, 8), Size = new Size(70, 24) };
+    private readonly Button _btnDzSz     = new() { Text = "DZ/SZ", Location = new Point(216, 8), Size = new Size(80, 26) };
 
     private readonly TableLayoutPanel _chartsHost = new()
     {
@@ -45,9 +46,19 @@ public class TimeframeViewerForm : Form
 
         Controls.Add(_cmbSymbol);
         Controls.Add(_btnCargar);
+        Controls.Add(_btnDzSz);
         Controls.Add(_chartsHost);
 
         _btnCargar.Click += (s, e) => LoadSelectedSymbol();
+
+        // Single shared toggle — arms/disarms DZ/SZ drawing on all 4 charts at once; a zone can be
+        // drawn on any one of them. Purely visual here, no rebound detection/Telegram.
+        _btnDzSz.Click += async (s, e) =>
+        {
+            bool on = false;
+            foreach (var panel in _panels) on = await panel.ToggleDzSzModeAsync();
+            _btnDzSz.BackColor = on ? Color.LightGreen : SystemColors.Control;
+        };
 
         Load += (s, e) => LoadSymbols();
     }
@@ -74,6 +85,7 @@ public class TimeframeViewerForm : Form
         _chartsHost.Controls.Clear();
         foreach (var panel in _panels) panel.Dispose();
         _panels.Clear();
+        _btnDzSz.BackColor = SystemColors.Control; // new panels always start unarmed
 
         for (int i = 0; i < Timeframes.Length; i++)
         {
