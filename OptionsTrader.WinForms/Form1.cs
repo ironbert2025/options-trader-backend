@@ -68,6 +68,7 @@ public partial class Form1 : Form
     private ICandleFeed? _liveFeed;
     private readonly Dictionary<string, MultiChartForm> _liveChartForms = new();
     private FourEtfChartsForm? _fourEtfChartsForm;
+    private TimeframeViewerForm? _timeframeViewerForm;
 
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
@@ -1791,6 +1792,42 @@ public partial class Form1 : Form
         var form = new FourEtfChartsForm(_historyClient!, _liveFeed!);
         form.FormClosed += (s, e2) => _fourEtfChartsForm = null;
         _fourEtfChartsForm = form;
+        form.Show();
+    }
+
+    // Opens the "Multi-Timeframe Viewer" window — one symbol, 4 charts (5m/15m/1h/4h
+    // RTH+Overnight), read-only (no drawing tools/auto-detection). Same shared-streamer setup as
+    // BtnLiveChart_Click/BtnFourEtfCharts_Click.
+    private async void BtnTimeframeViewer_Click(object? sender, EventArgs e)
+    {
+        if (_timeframeViewerForm is { IsDisposed: false })
+        {
+            _timeframeViewerForm.Activate();
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var form = new TimeframeViewerForm(_historyClient!, _liveFeed!);
+        form.FormClosed += (s, e2) => _timeframeViewerForm = null;
+        _timeframeViewerForm = form;
         form.Show();
     }
 

@@ -86,6 +86,7 @@ partial class Form1
         btnHubHost = new Button();
         btnSimulator = new Button();
         btnFourEtfSimulator = new Button();
+        btnTimeframeViewer = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
@@ -224,6 +225,7 @@ partial class Form1
         tabQuotes.Controls.Add(btnHubHost);
         tabQuotes.Controls.Add(btnSimulator);
         tabQuotes.Controls.Add(btnFourEtfSimulator);
+        tabQuotes.Controls.Add(btnTimeframeViewer);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -802,6 +804,15 @@ partial class Form1
         btnFourEtfSimulator.TabIndex = 6;
         btnFourEtfSimulator.Text = "Sim 4 ETF";
         btnFourEtfSimulator.Click += BtnFourEtfSimulator_Click;
+        //
+        // btnTimeframeViewer
+        //
+        btnTimeframeViewer.Location = new Point(1020, 154);
+        btnTimeframeViewer.Name = "btnTimeframeViewer";
+        btnTimeframeViewer.Size = new Size(120, 25);
+        btnTimeframeViewer.TabIndex = 7;
+        btnTimeframeViewer.Text = "Timeframes";
+        btnTimeframeViewer.Click += BtnTimeframeViewer_Click;
         //
         // btnStartPolling
         //
@@ -1802,6 +1813,7 @@ partial class Form1
     private Button btnHubHost;
     private Button btnSimulator;
     private Button btnFourEtfSimulator;
+    private Button btnTimeframeViewer;
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;
