@@ -20,7 +20,7 @@ public class TimeframeViewerForm : Form
 
     private readonly TableLayoutPanel _chartsHost = new()
     {
-        Location = new Point(8, 40), Size = new Size(1000, 700),
+        Location = new Point(8, 40), Size = new Size(1296, 907), // 90% of 1440x1008
         ColumnCount = 2, RowCount = 2
     };
 
@@ -34,8 +34,8 @@ public class TimeframeViewerForm : Form
         _liveFeed      = liveFeed;
 
         Text          = "Multi-Timeframe Viewer";
-        Width         = 1030;
-        Height        = 790;
+        Width         = 1323;
+        Height        = 990;
         StartPosition = FormStartPosition.CenterScreen;
 
         _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
