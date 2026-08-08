@@ -9,19 +9,23 @@ namespace OptionsTrader.WinForms;
 
 // Plain read-only candlestick viewer for ONE (symbol, interval) pair — used by
 // TimeframeViewerForm to show the same symbol at several timeframes side by side. Deliberately a
-// separate, much smaller class from ChartPanel: no drawing tools, no SMA/Bollinger/Piso-Techo/
-// DZ-SZ detection, no Telegram pushes — just candles + live updates + the gray overnight shading,
-// so opening this viewer never triggers any of ChartPanel's auto-detection/push side effects.
+// separate, much smaller class from ChartPanel: no drawing tools beyond DZ/SZ, no SMA/Bollinger/
+// Piso-Techo detection, no Telegram pushes of its own — just candles + live updates + the gray
+// overnight shading. The one exception is Demand/Supply Zone REBOTE detection (enableZoneRebounds),
+// which mirrors ChartPanel's exact logic but only fires OnZoneReboundEvent — the actual Telegram
+// push (combined 4-chart snapshot) is built by TimeframeViewerForm, which owns all 4 panels.
 //
 // Always RTH+Overnight (regular session + pre/after-hours, whatever Schwab returns) per explicit
 // request, regardless of intervalMinutes — same session window as ChartPanel's Fifteen_Full mode.
 public class TimeframeChartPanel : Panel
 {
     private readonly string _symbol;
+    private readonly string _timeframeLabel;
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
     private readonly int _intervalMinutes;
     private readonly int _requestDays;
+    private readonly bool _enableZoneRebounds;
     private readonly Label _header;
     private WebView2 _webView = null!;
     private bool _closing;
@@ -32,12 +36,43 @@ public class TimeframeChartPanel : Panel
 
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
-    public TimeframeChartPanel(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, int intervalMinutes, string label)
+    // ---- Demand/Supply Zone rebote — same convention/logic as ChartPanel (see there for the full
+    // rationale): 1st click of a pair is always green/Proximal, 2nd is always red/Distal; which
+    // one ends up numerically higher tells demand from supply apart. Only tracked/evaluated when
+    // _enableZoneRebounds is true (5m/15m panels — see TimeframeViewerForm). ----
+    private readonly List<decimal> _dzSzPendingPrices = new();
+    private readonly List<DemandZoneState> _demandZones = new();
+    private readonly List<SupplyZoneState> _supplyZones = new();
+    private const decimal BounceProximityRatio = 0.30m;
+
+    private sealed class DemandZoneState
     {
-        _symbol          = symbol;
-        _historyClient   = historyClient;
-        _liveFeed        = liveFeed;
-        _intervalMinutes = intervalMinutes;
+        public decimal Proximal;
+        public decimal Distal;
+        public bool Entered;
+        public bool Done;
+    }
+
+    private sealed class SupplyZoneState
+    {
+        public decimal Proximal;
+        public decimal Distal;
+        public bool Entered;
+        public bool Done;
+    }
+
+    // Fires (caption, direction, price) when a Demand/Supply Zone rebote confirms — only for
+    // panels with enableZoneRebounds. TimeframeViewerForm listens to build+send the Telegram push.
+    public event Action<string, string, decimal>? OnZoneReboundEvent;
+
+    public TimeframeChartPanel(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, int intervalMinutes, string label, bool enableZoneRebounds = false)
+    {
+        _symbol             = symbol;
+        _timeframeLabel     = label;
+        _historyClient      = historyClient;
+        _liveFeed           = liveFeed;
+        _intervalMinutes    = intervalMinutes;
+        _enableZoneRebounds = enableZoneRebounds;
         // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day — 10 gives
         // the most context for the coarser timeframes (1h/4h), 3 is plenty for 5m/15m (a 10-day
         // fetch at 1-minute resolution would just be more data than a 5-15m chart needs to show).
@@ -64,7 +99,19 @@ public class TimeframeChartPanel : Panel
         {
             _closing = true;
             _liveFeed.OnNewCandle -= Streamer_OnNewCandle;
+            if (_webView.CoreWebView2 != null)
+                _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
         };
+    }
+
+    // Renders this panel's actual chart content via the WebView2 engine itself (not a screen
+    // capture) — used by TimeframeViewerForm to build the combined 4-chart Telegram snapshot.
+    public async Task<Bitmap> CaptureImageAsync()
+    {
+        using var stream = new MemoryStream();
+        await _webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
+        stream.Position = 0;
+        return new Bitmap(stream);
     }
 
     private async Task LoadHistoryAsync()
@@ -89,6 +136,12 @@ public class TimeframeChartPanel : Panel
             await _webView.CoreWebView2.ExecuteScriptAsync("configureOvernightBands();");
             await _webView.CoreWebView2.ExecuteScriptAsync("configureVisibleDays(3);");
 
+            // Only listens for the "dzsz" message (zone-pair classification) — needed to track
+            // zones for rebote detection. Panels without enableZoneRebounds never wire this, so
+            // drawing zones there stays purely visual with zero C# involvement.
+            if (_enableZoneRebounds)
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+
             var history = await _historyClient.GetHistoricalCandlesAsync(_symbol, _requestDays);
             if (history.Count == 0) return;
 
@@ -111,13 +164,108 @@ public class TimeframeChartPanel : Panel
         }
     }
 
-    // Toggles DZ/SZ (Demand/Supply Zone) drawing mode on/off — purely visual here (no rebound
-    // detection/Telegram, this viewer has none of that). Same JS tool ChartPanel uses.
+    // Toggles DZ/SZ (Demand/Supply Zone) drawing mode on/off. Purely visual when
+    // enableZoneRebounds is false; on the 5m/15m panels the drawn zones also get tracked for
+    // rebote detection (see EvaluateDemandZoneRebounds/EvaluateSupplyZoneRebounds below).
     public async Task<bool> ToggleDzSzModeAsync()
     {
         if (_webView.CoreWebView2 == null) return false;
         var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
         return result == "true";
+    }
+
+    private void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("type", out var typeEl) && typeEl.GetString() == "dzsz")
+            {
+                var dzPrice = root.GetProperty("price").GetDecimal();
+                _dzSzPendingPrices.Add(dzPrice);
+                if (_dzSzPendingPrices.Count == 2)
+                {
+                    var (demandPrice, supplyPrice) = (_dzSzPendingPrices[0], _dzSzPendingPrices[1]);
+                    _dzSzPendingPrices.Clear();
+                    if (demandPrice > supplyPrice) // 1st line (green) above 2nd (red) -> Demand Zone
+                        _demandZones.Add(new DemandZoneState { Proximal = demandPrice, Distal = supplyPrice });
+                    else if (demandPrice < supplyPrice) // 1st line (green) below 2nd (red) -> Supply Zone
+                        _supplyZones.Add(new SupplyZoneState { Proximal = demandPrice, Distal = supplyPrice });
+                }
+            }
+        }
+        catch
+        {
+            // Malformed/unexpected message from the page — ignore, not fatal.
+        }
+    }
+
+    // Exact mirror of ChartPanel.EvaluateDemandZoneRebounds — see there for the full case-1/case-2
+    // Entrada/Rota/Rebote-confirmado rationale. Only the push mechanism differs: this fires
+    // OnZoneReboundEvent instead of sending its own screenshot, since TimeframeViewerForm needs to
+    // build the combined 4-chart image (this panel alone can't).
+    private void EvaluateDemandZoneRebounds(CandleData justClosed)
+    {
+        foreach (var zone in _demandZones)
+        {
+            if (zone.Done) continue;
+
+            if (!zone.Entered)
+            {
+                var touchedOrClose = justClosed.Low <= zone.Proximal ||
+                    (justClosed.Low - zone.Proximal) < BounceProximityRatio * (justClosed.Close - justClosed.Low);
+                if (!touchedOrClose) continue;
+                zone.Entered = true;
+            }
+
+            if (justClosed.Low < zone.Distal)
+            {
+                zone.Done = true; // broken
+                continue;
+            }
+
+            if (justClosed.Close > zone.Proximal)
+            {
+                zone.Done = true;
+                var caption = $"Rebote en Zona de Demanda ({_timeframeLabel}) — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
+                EventLogStore.Append(_symbol, _timeframeLabel, "DemandZoneRebound", "Alza", caption, justClosed.Close,
+                    $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
+                OnZoneReboundEvent?.Invoke(caption, "Alza", justClosed.Close);
+            }
+        }
+    }
+
+    // Symmetric counterpart — exact mirror of ChartPanel.EvaluateSupplyZoneRebounds.
+    private void EvaluateSupplyZoneRebounds(CandleData justClosed)
+    {
+        foreach (var zone in _supplyZones)
+        {
+            if (zone.Done) continue;
+
+            if (!zone.Entered)
+            {
+                var touchedOrClose = justClosed.High >= zone.Proximal ||
+                    (zone.Proximal - justClosed.High) < BounceProximityRatio * (justClosed.High - justClosed.Close);
+                if (!touchedOrClose) continue;
+                zone.Entered = true;
+            }
+
+            if (justClosed.High > zone.Distal)
+            {
+                zone.Done = true; // broken
+                continue;
+            }
+
+            if (justClosed.Close < zone.Proximal)
+            {
+                zone.Done = true;
+                var caption = $"Rebote en Zona de Supply ({_timeframeLabel}) — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
+                EventLogStore.Append(_symbol, _timeframeLabel, "SupplyZoneRebound", "Baja", caption, justClosed.Close,
+                    $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
+                OnZoneReboundEvent?.Invoke(caption, "Baja", justClosed.Close);
+            }
+        }
     }
 
     private void Streamer_OnNewCandle(string symbol, CandleData candle)
@@ -136,6 +284,12 @@ public class TimeframeChartPanel : Panel
             var index = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
             if (index != _liveBucketIndex)
             {
+                if (_enableZoneRebounds)
+                {
+                    EvaluateDemandZoneRebounds(_liveBucket);
+                    EvaluateSupplyZoneRebounds(_liveBucket);
+                }
+
                 _liveBucketIndex = index;
                 _liveBucket = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
             }
