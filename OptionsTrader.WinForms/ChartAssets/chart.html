@@ -14,6 +14,10 @@
   <div id="hintTLine"></div>
   <div id="hintDailyBounce"></div>
 </div>
+<!-- Premarket Bollinger-exposure banner (15m RTH panel only) — see showExposureBanner/
+     hideExposureBanner below. Plain overlay text, not a canvas primitive: no time/price anchor,
+     no selection, just a static top-of-chart notice. -->
+<div id="exposureBanner" style="position:absolute; left:0; right:0; top:4px; text-align:center; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b; display:none;"></div>
 <script>
   const container = document.getElementById('chart');
 
@@ -475,10 +479,17 @@
       return;
     }
 
+    // H-Line: removed here AND reported to C# (ChartPanel.CoreWebView2_WebMessageReceived), which
+    // relays it (by price) to the other 2 panels' removeHLine — covers both manually-drawn H-Lines
+    // and the auto-drawn prev-day High/Low (markPrevDayHiLo draws the same price on all 3 panels).
     const hLineIdx = hLinePrimitive._segments.findIndex(s => s.selected);
     if (hLineIdx !== -1) {
+      const removed = hLinePrimitive._segments[hLineIdx];
       hLinePrimitive._segments.splice(hLineIdx, 1);
       forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'hline_delete', price: removed.price });
+      }
       return;
     }
 
@@ -571,8 +582,6 @@
     arrowPending = null;
 
     textLabelsPrimitive._labels = [];
-    pisoArmed = false;
-    techoArmed = false;
 
     verticalArrowPrimitive._arrows = [];
     greenArrowArmed = false;
@@ -831,15 +840,6 @@
       forceRepaint();
     }
 
-    if (pisoArmed) {
-      textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Piso' });
-      forceRepaint();
-    }
-    if (techoArmed) {
-      textLabelsPrimitive._labels.push({ time: clickTime, price, text: 'Techo' });
-      forceRepaint();
-    }
-
     if (greenArrowArmed) {
       const arrow = { time: clickTime, price, up: true, selected: false };
       verticalArrowPrimitive._arrows.push(arrow);
@@ -1029,6 +1029,28 @@
     if (!hLineAttached) { candleSeries.attachPrimitive(hLinePrimitive); hLineAttached = true; }
     hLineArmed = !hLineArmed;
     return hLineArmed;
+  }
+
+  // Called by C# to remove an H-Line at the given price as the ECHO of a deletion that happened
+  // on a SIBLING panel (see the 'hline_delete' postMessage above) — no postMessage sent back out
+  // from here, so the 3 panels don't ping-pong the same delete forever. Removes every matching
+  // line at that price (there's normally at most one, but this stays correct even if two happen
+  // to coincide, e.g. a manual H-Line drawn at the same price as the auto prev-day high/low).
+  function removeHLine(price) {
+    hLinePrimitive._segments = hLinePrimitive._segments.filter(s => s.price !== price);
+    forceRepaint();
+  }
+
+  // Auto-drawn previous-day High/Low — same red H-Line primitive as the manual tool above (same
+  // color, same "anchor to right edge" rendering, same click-select + Delete behavior), just
+  // pushed programmatically by C# instead of via a user click. Either argument can be null (the
+  // reference price already broke through that side, e.g. a gap-open above yesterday's high), in
+  // which case that line is simply not added.
+  function markPrevDayHiLo(highTime, highPrice, lowTime, lowPrice) {
+    if (!hLineAttached) { candleSeries.attachPrimitive(hLinePrimitive); hLineAttached = true; }
+    if (highTime != null && highPrice != null) hLinePrimitive._segments.push({ time: highTime, price: highPrice, selected: false });
+    if (lowTime != null && lowPrice != null) hLinePrimitive._segments.push({ time: lowTime, price: lowPrice, selected: false });
+    forceRepaint();
   }
 
   // ---- Pre-market line (1h and 15m RTH panels): blue line from the LAST candle currently
@@ -1375,15 +1397,12 @@
 
   const textLabelsPrimitive = new TextLabelsPrimitive();
   let textLabelsAttached = false;
-  let pisoArmed = false;
-  let techoArmed = false;
 
-  // ---- Piso/Techo AUTO label (1h panel only): unlike the click-driven Piso/Techo above, this
-  // one is programmatic (markPisoTecho, called once by C# from the pre-market SMA pair analysis
-  // — independently for the 20/40 pair and the 100/200 pair) and tracks the CURRENT last point of
-  // each SMA line on every repaint — via smaLastPoint, updated by recalculateSmas() — so each
-  // label moves right alongside its SMA all session long instead of staying pinned to where it
-  // was first drawn. ----
+  // ---- Piso/Techo AUTO label (1h panel only): programmatic (markPisoTecho, called once by C#
+  // from the pre-market SMA pair analysis — independently for the 20/40 pair and the 100/200
+  // pair) and tracks the CURRENT last point of each SMA line on every repaint — via smaLastPoint,
+  // updated by recalculateSmas() — so each label moves right alongside its SMA all session long
+  // instead of staying pinned to where it was first drawn. ----
 
   class PisoTechoAutoLabelPrimitive {
     constructor() { this._entries = []; this._chart = null; } // [{ period, text }, ...]
@@ -1427,6 +1446,19 @@
   function setTLineHint(text) { document.getElementById('hintTLine').textContent = text || ''; }
   function setDailyBounceHint(text) { document.getElementById('hintDailyBounce').textContent = text || ''; }
 
+  // Premarket Bollinger-exposure banner — shown when C# (MultiChartForm) determines the premarket
+  // price broke the SAME side of the Bollinger band (upper or lower) on Daily, 1h, AND 15m RTH
+  // simultaneously. Re-evaluated on every premarket tick, so hideExposureBanner is called just as
+  // often once the condition stops holding.
+  function showExposureBanner(text) {
+    const el = document.getElementById('exposureBanner');
+    el.textContent = text;
+    el.style.display = 'block';
+  }
+  function hideExposureBanner() {
+    document.getElementById('exposureBanner').style.display = 'none';
+  }
+
   // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
   // analysis) — periodA/periodB identify which pair (20+40 or 100+200). textA/textB are each
   // independently 'Piso', 'Techo', or null (no signal for THAT specific SMA — e.g. price opened
@@ -1447,18 +1479,6 @@
   function removePisoTechoLabel(period) {
     pisoTechoAutoLabelPrimitive._entries = pisoTechoAutoLabelPrimitive._entries.filter(e => e.period !== period);
     forceRepaint();
-  }
-
-  function toggleFloorLabel() {
-    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
-    pisoArmed = !pisoArmed;
-    return pisoArmed;
-  }
-
-  function toggleCeilingLabel() {
-    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
-    techoArmed = !techoArmed;
-    return techoArmed;
   }
 
   // Programmatic (not click-driven) red "Expired!!!" marker — fixed at the top-center of the

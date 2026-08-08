@@ -1,3 +1,4 @@
+using OptionsTrader.Application.DTOs.Streaming;
 using OptionsTrader.Application.Interfaces;
 using OptionsTrader.Infrastructure.Schwab;
 using System.Linq;
@@ -93,73 +94,13 @@ public class MultiChartForm : Form
         _rthPanel       = rthPanel;
         _overnightPanel = overnightPanel;
 
-        // Cross-SMA monitors: one toggle per period (20/40/100/200) in the toolbar column above
-        // the 1h panel (column 0) — the direction (UP or DOWN) is picked automatically from where
-        // price currently sits relative to that SMA when the button is armed, instead of having
-        // separate UP/DOWN buttons. While armed, it pushes the 1h chart to Telegram the moment a
-        // candle closes with a genuine crossover in that direction.
+        // T-Line / H-Line drawing tools for the 1h panel (column 0). T-Line and H-Line share the
+        // top row (side by side); Clear/Rect sit below, arrows + Daily on the third row.
         var crossHost = new Panel { Dock = DockStyle.Fill };
-        var periods = new[] { 20, 40, 100, 200 };
-        var smaButtons = new List<Button>();
-        for (int col = 0; col < periods.Length; col++)
-        {
-            var period = periods[col];
-
-            var btnSma = new Button
-            {
-                Text     = $"{period}",
-                Location = new Point(col * 42, 2),
-                Size     = new Size(40, 24)
-            };
-            btnSma.Click += (s, e) =>
-            {
-                if (hourlyPanel == null) return;
-                var (armed, up) = hourlyPanel.ToggleCrossMonitor(period);
-                if (armed)
-                {
-                    btnSma.Text = up ? $"↑{period}" : $"↓{period}";
-                    btnSma.BackColor = up ? Color.LightGreen : Color.LightSalmon;
-                }
-                else
-                {
-                    btnSma.Text = $"{period}";
-                    btnSma.BackColor = SystemColors.Control;
-                }
-            };
-
-            smaButtons.Add(btnSma);
-            crossHost.Controls.Add(btnSma);
-        }
-
-        // Once the cross/bounce sequence resolves its last armed period, it stops responding for
-        // the rest of the session — reset all 4 buttons back to neutral so the UI doesn't keep
-        // showing them as armed when they no longer do anything.
-        if (hourlyPanel != null)
-        {
-            hourlyPanel.OnCrossSequenceFinished += () =>
-            {
-                // Streamer_OnNewCandle (where this fires from) runs on whatever thread the live
-                // feed raises its event on, not necessarily the UI thread.
-                if (IsDisposed) return;
-                BeginInvoke(() =>
-                {
-                    foreach (var (btn, period) in smaButtons.Zip(periods))
-                    {
-                        btn.Text = $"{period}";
-                        btn.BackColor = SystemColors.Control;
-                    }
-                });
-            };
-        }
-
-        // T-Line / H-Line drawing tools, also on the 1h panel — placed to the right of the 8
-        // Cross-SMA toggles. T-Line and H-Line share the top row (side by side); Clear sits
-        // directly below T-Line on the second row.
-        var toolsStartX = periods.Length * 42 + 6;
         var btnTLine = new Button
         {
             Text     = "T-Line",
-            Location = new Point(toolsStartX, 2),
+            Location = new Point(0, 2),
             Size     = new Size(60, 24)
         };
         btnTLine.Click += async (s, e) =>
@@ -172,7 +113,7 @@ public class MultiChartForm : Form
         var btnHLine = new Button
         {
             Text     = "H-Line",
-            Location = new Point(toolsStartX + 66, 2),
+            Location = new Point(66, 2),
             Size     = new Size(60, 24)
         };
         btnHLine.Click += async (s, e) =>
@@ -204,45 +145,18 @@ public class MultiChartForm : Form
             btnRectGris.BackColor = on ? Color.LightGray : SystemColors.Control;
         };
 
-        // Writes orange "Piso"/"Techo" text at the clicked point — one click per label, both
-        // independently toggleable (same pattern as the other drawing tools).
-        var btnPiso = new Button
-        {
-            Text     = "Piso",
-            Location = new Point(toolsStartX, 30),
-            Size     = new Size(60, 24)
-        };
-        var btnTecho = new Button
-        {
-            Text     = "Techo",
-            Location = new Point(toolsStartX + 66, 30),
-            Size     = new Size(60, 24)
-        };
-        btnPiso.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.TogglePisoModeAsync();
-            btnPiso.BackColor = on ? Color.Orange : SystemColors.Control;
-        };
-        btnTecho.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleTechoModeAsync();
-            btnTecho.BackColor = on ? Color.Orange : SystemColors.Control;
-        };
-
         // Single-click vertical arrows: green points up, red points down, tip at the click point.
         // Click the shaft to select (yellow dashed overlay), Delete removes it.
         var btnFlechaVerde = new Button
         {
             Text     = "↑ Verde",
-            Location = new Point(toolsStartX, 56),
+            Location = new Point(0, 56),
             Size     = new Size(60, 24)
         };
         var btnFlechaRoja = new Button
         {
             Text     = "↓ Roja",
-            Location = new Point(toolsStartX + 66, 56),
+            Location = new Point(66, 56),
             Size     = new Size(60, 24)
         };
         btnFlechaVerde.Click += async (s, e) =>
@@ -265,19 +179,16 @@ public class MultiChartForm : Form
             btnTLine.BackColor = SystemColors.Control;
             btnHLine.BackColor = SystemColors.Control;
             btnRectGris.BackColor = SystemColors.Control;
-            btnPiso.BackColor = SystemColors.Control;
-            btnTecho.BackColor = SystemColors.Control;
             btnFlechaVerde.BackColor = SystemColors.Control;
             btnFlechaRoja.BackColor = SystemColors.Control;
         };
 
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
-        // days of persisted hourly history) and plain Hourly candles. Sits in the space below the
-        // Cross-SMA grid (which only uses the first 2 rows in this column).
+        // days of persisted hourly history) and plain Hourly candles.
         var btnDaily = new Button
         {
             Text     = "Daily",
-            Location = new Point(0, 56),
+            Location = new Point(132, 56),
             Size     = new Size(70, 24)
         };
         btnDaily.Click += async (s, e) =>
@@ -293,8 +204,6 @@ public class MultiChartForm : Form
         crossHost.Controls.Add(btnRectGris);
         crossHost.Controls.Add(btnFlechaVerde);
         crossHost.Controls.Add(btnFlechaRoja);
-        crossHost.Controls.Add(btnPiso);
-        crossHost.Controls.Add(btnTecho);
         crossHost.Controls.Add(btnDaily);
         toolbar.Controls.Add(crossHost, 0, 0);
 
@@ -402,6 +311,16 @@ public class MultiChartForm : Form
             Size     = new Size(70, 24)
         };
 
+        // Stops the auto-push-on-every-closed-candle Telegram loop that starts automatically once
+        // a Demand/Supply zone rebote confirms (see ChartPanel.OnAutoZonePushTickEvent) — this is
+        // the ONLY way to stop it; a future rebote (a different zone) re-arms it again.
+        var btnStopPush = new Button
+        {
+            Text     = "Stop Push",
+            Location = new Point(152, 30),
+            Size     = new Size(80, 24)
+        };
+
         // Live "time — price" readout, updated on every raw tick this panel receives via the
         // WebSocket — not tied to candle formation, so it updates even mid-bucket.
         var lblLiveTick = new Label
@@ -455,12 +374,14 @@ public class MultiChartForm : Form
             var on = await overnightPanel.ToggleArrowModeAsync();
             btnArrow.BackColor = on ? Color.LightYellow : SystemColors.Control;
         };
+        btnStopPush.Click += (s, e) => overnightPanel?.StopAutoZonePush();
 
         toolsHost.Controls.Add(btnDzSz);
         toolsHost.Controls.Add(btnRect);
         toolsHost.Controls.Add(btnClear);
         toolsHost.Controls.Add(btn5Min);
         toolsHost.Controls.Add(btnArrow);
+        toolsHost.Controls.Add(btnStopPush);
         toolsHost.Controls.Add(lblLiveTick);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
@@ -481,14 +402,7 @@ public class MultiChartForm : Form
         };
         if (hourlyPanel != null)
         {
-            hourlyPanel.OnCrossSequenceEvent += message =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
-            };
-
-            // T-Line + SMA20 breakout — unlike Cross-SMA (which only pushes this panel's own
-            // screenshot), the user wants the combined 3-chart image, same as a trade close.
+            // T-Line + SMA20 breakout — pushes the combined 3-chart image, same as a trade close.
             hourlyPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
@@ -522,6 +436,11 @@ public class MultiChartForm : Form
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
+
+            // Auto-push loop armed by either rebote above — fires on EVERY closed 15m candle from
+            // then on, pushing the combined 3-chart snapshot each time, until "Stop Push" is
+            // clicked (see btnStopPush) or a fresh rebote later re-arms it.
+            overnightPanel.OnAutoZonePushTickEvent += candle => _ = SendAutoZonePushAsync(candle);
         }
 
         // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA
@@ -570,6 +489,24 @@ public class MultiChartForm : Form
             };
         }
 
+        // "Expuesto en 3 charts" — premarket-only: on every premarket tick (fired from the 1h
+        // panel, see ChartPanel.OnPreMarketPriceUpdated), check whether that price broke the SAME
+        // side (upper or lower) of the Bollinger(20,2) band on Daily, 1h AND 15m RTH all at once.
+        // Shown as a yellow banner at the top of the 15m RTH panel — hidden again the moment any
+        // one of the 3 stops agreeing (re-evaluated fresh on every tick, nothing latched).
+        if (hourlyPanel != null && rthPanel != null)
+        {
+            hourlyPanel.OnPreMarketPriceUpdated += price =>
+            {
+                var dailyDir  = ChartPanel.GetDailyBollingerDirection(_symbol, price);
+                var hourlyDir = hourlyPanel.GetBollingerDirection(price);
+                var rthDir    = rthPanel.GetBollingerDirection(price);
+
+                var exposed = dailyDir != BollingerDirection.None && dailyDir == hourlyDir && dailyDir == rthDir;
+                _ = exposed ? rthPanel.ShowExposureBannerAsync("Expuesto en 3 charts") : rthPanel.HideExposureBannerAsync();
+            };
+        }
+
         // Piso/Techo reference line: mirrors each armed SMA's pre-market level onto BOTH the 15m
         // RTH and RTH+Overnight panels (dashed, same color as that SMA on the 1h panel) — visual
         // reference for "how far price could go and bounce" without needing the 1h panel open.
@@ -614,6 +551,21 @@ public class MultiChartForm : Form
                 foreach (var sibling in allChartPanels)
                 {
                     if (sibling != null && sibling != panel) _ = sibling.RemoveStrikeLineAsync(price);
+                }
+            };
+        }
+
+        // H-Line delete: same idea as the Stk line above — manually-drawn H-Lines and the
+        // auto-drawn prev-day High/Low both get mirrored (by price) onto the other 2 panels when
+        // deleted (click + Delete) from any one of them.
+        foreach (var panel in allChartPanels)
+        {
+            if (panel == null) continue;
+            panel.OnHLineDeletedEvent += price =>
+            {
+                foreach (var sibling in allChartPanels)
+                {
+                    if (sibling != null && sibling != panel) _ = sibling.RemoveHLineAsync(price);
                 }
             };
         }
@@ -725,6 +677,48 @@ public class MultiChartForm : Form
         {
             // Best-effort — never let a Telegram failure affect the chart/detection logic, but no
             // longer silent: mirrored into crossLog same as every other push failure.
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined 3-chart snapshot on every closed 15m candle while the auto-push loop is
+    // armed (see ChartPanel.OnAutoZonePushTickEvent) — a Demand/Supply zone rebote confirmed and
+    // "Stop Push" hasn't been clicked since. Same best-effort pattern as every other Telegram push.
+    private async Task SendAutoZonePushAsync(CandleData candle)
+    {
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
+
+            var caption = $"Auto-push Rebote — Close {candle.Close:F2}";
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_AutoZonePush_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "AutoZonePush", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
             LogTelegramPushFailure(ex.Message);
         }
     }

@@ -22,8 +22,8 @@ La app en vivo recibe 2 tipos de mensajes de Schwab por streaming WebSocket (det
 Ambos pasan por `UpdateLivePriceFromExternalSource` / `Streamer_OnNewCandle` en `ChartPanel.cs` —
 esos son también los 2 puntos donde se evalúan las señales que necesitan precio en vivo tick-a-tick
 (hoy, solo "Abriendo la Volatilidad" — ver `SENALES_Y_ESTRATEGIAS.md` §5). El resto de las señales
-(Cross-SMA, Piso/Techo, Demand Zone, T-Line) solo necesitan el cierre de vela, así que se evalúan
-únicamente en `Streamer_OnNewCandle`.
+(Piso/Techo, Demand Zone, T-Line) solo necesitan el cierre de vela, así que se evalúan únicamente en
+`Streamer_OnNewCandle`. (Cross-SMA ya no corre en la app en vivo — solo en el Simulador, ver §2.)
 
 ## 2. El Simulador — práctica offline, sin streaming
 
@@ -50,7 +50,7 @@ detecta porque la lista de cerradas encogió, y ahí se resetea todo el estado d
 
 | Señal | Portada al Simulador | Diferencia clave |
 |---|---|---|
-| Cross-SMA (Cruce/Rebote manual) | Sí | Igual |
+| Cross-SMA (Cruce/Rebote manual) | Solo acá | Ya no existe en el Live Chart en vivo (removido) — el Simulador es la única implementación restante |
 | Piso/Techo | Sí | Se recalcula **una vez por día simulado cargado** (`SetPisoTechoResultsAsync`), no una vez por proceso — un día simulado es el equivalente más cercano a "una nueva sesión pre-market" |
 | Demand Zone rebote | Sí | Igual |
 | T-Line + SMA20 breakout | Sí | Solo 1 T-Line, en memoria (no hay `TLineStore` — nada de una T-Line de práctica debe sobrevivir a cerrar el Simulador) |
@@ -75,8 +75,9 @@ lo originó — trade, señal, etc.):
 | Tipo de push | Disparador | Imagen adjunta | Dónde vive el código |
 |---|---|---|---|
 | Cierre de trade | `Form1.CloseTradeRowAsync` (todo cierre, demo o real, manual o automático) | El snapshot "_Close" de los 3 charts ya capturado al cerrar | `Form1.SendTradeCloseTelegramPushAsync` |
-| Señal de un panel individual | Cross-SMA, Demand Zone, Piso/Techo, Abriendo la Volatilidad — 1 solo panel | Captura del panel que disparó (`CoreWebView2.CapturePreviewAsync`) | `ChartPanel.SendChartToTelegramAsync` (único punto de convergencia de estos 4) |
+| Señal de un panel individual | Demand Zone, Piso/Techo, Abriendo la Volatilidad — 1 solo panel (Cross-SMA ya no aplica en vivo, ver §2) | Captura del panel que disparó (`CoreWebView2.CapturePreviewAsync`) | `ChartPanel.SendChartToTelegramAsync` (único punto de convergencia de estos 3) |
 | T-Line + SMA20 breakout | 1 panel (1h o 15m RTH), pero push con los 3 charts | Combinado de los 3 paneles lado a lado | `MultiChartForm.SendTLineSignalTelegramPushAsync` |
+| Auto-push tras rebote DZ/SZ | Armado tras confirmar un rebote de Zona de Demanda/Oferta en el panel 15m RTH+Overnight (`ChartPanel.OnAutoZonePushTickEvent`) | Snapshot combinado de los 3 charts, reenviado en cada vela de 15m cerrada hasta pulsar "Stop Push" | `MultiChartForm.SendAutoZonePushAsync` |
 
 **Credenciales:** `TelegramSettingsStore` (`%AppData%\OptionsTrader\telegram.json`) — bot token +
 chat ID, configurables desde la UI.
@@ -116,7 +117,8 @@ vivo (`ChartPanel.SendChartToTelegramAsync` y `MultiChartForm.SendTLineSignalTel
 
 ## Archivos involucrados
 
-- **`OptionsTrader.WinForms/SimulatorForm.cs`** / **`SimulatedChartPanel.cs`** — Simulador completo.
+- **`OptionsTrader.WinForms/SimulatorForm.cs`** / **`SimulatedChartPanel.cs`** — Simulador individual completo.
+- **`OptionsTrader.WinForms/FourEtfSimulatorForm.cs`** — "Sim 4 ETF", segunda ventana de simulador (SPY/QQQ/IWM/DIA en grid 2x2, repetición offline desde disco, ver `LIVE_CHART_STREAMING.md` §10).
 - **`OptionsTrader.WinForms/SimulationDataLoader.cs`** — carga de velas históricas para el Simulador.
 - **`OptionsTrader.WinForms/TelegramNotifier.cs`** / **`TelegramSettingsStore.cs`** / **`TelegramPushStore.cs`** — integración con Telegram.
 - **`OptionsTrader.WinForms/EventLogStore.cs`** — CSV acumulativo de eventos.
