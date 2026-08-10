@@ -8,8 +8,8 @@ namespace OptionsTrader.WinForms;
 // streamer as the per-ticker Live Chart windows. No drawing tools beyond DZ/SZ, no SMA/Bollinger/
 // Piso-Techo — just candles, for quickly comparing how price looks across timeframes. The one
 // exception: Demand/Supply Zone rebote detection runs on the 5m and 15m charts (see
-// TimeframeChartPanel's enableZoneRebounds) — a confirmed rebote pushes the combined 4-chart
-// snapshot to Telegram and logs it below the charts.
+// TimeframeChartPanel's enableZoneRebounds) — a confirmed rebote pushes a snapshot of just THAT
+// chart (the one the zone is drawn on) to Telegram and logs it below the charts.
 public class TimeframeViewerForm : Form
 {
     // Order matches grid position (row-major: top-left, top-right, bottom-left, bottom-right).
@@ -116,7 +116,11 @@ public class TimeframeViewerForm : Form
         foreach (var s in symbols) _cmbSymbol.Items.Add(s);
         if (_cmbSymbol.Items.Count > 0)
         {
-            _cmbSymbol.SelectedIndex = 0;
+            // Defaults to form1's OWN ticker (so the strikes/trade-demo features work out of the
+            // box without the user having to manually match the dropdown) — falls back to the
+            // first symbol in the list if form1 has none selected or it isn't in this list.
+            var ownSymbolIndex = _form1.SelectedTickerSymbol is { } ownSymbol ? symbols.IndexOf(ownSymbol) : -1;
+            _cmbSymbol.SelectedIndex = ownSymbolIndex >= 0 ? ownSymbolIndex : 0;
             LoadSelectedSymbol();
         }
     }
@@ -232,9 +236,10 @@ public class TimeframeViewerForm : Form
         _ = SendZoneReboundTelegramPushAsync(sourcePanel, symbol, caption, direction);
     }
 
-    // Pushes the combined 4-chart snapshot to Telegram — best-effort, same as every other Telegram
-    // push in the app: a failure here must never affect chart rendering/detection. Before building
-    // the message/screenshot, draws the 8 nearest OTM strikes (Calls on Alza, Puts on Baja) on the
+    // Pushes a snapshot of just the panel that fired the rebote (not the other 3 charts) to
+    // Telegram — best-effort, same as every other Telegram push in the app: a failure here must
+    // never affect chart rendering/detection. Before building the message/screenshot, draws the
+    // 8 nearest OTM strikes (Calls on Alza, Puts on Baja) on the
     // panel that fired the rebote — only if this viewer's symbol matches form1's own ticker (see
     // Form1.GetNearestOtmStrikes); if not, just skips the strikes and proceeds with the push.
     private async Task SendZoneReboundTelegramPushAsync(TimeframeChartPanel sourcePanel, string symbol, string caption, string direction)
@@ -255,12 +260,7 @@ public class TimeframeViewerForm : Form
                 return;
             }
 
-            using var combined = await CaptureCombinedChartImageAsync();
-            if (combined == null)
-            {
-                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 4 charts.");
-                return;
-            }
+            using var combined = await sourcePanel.CaptureImageAsync();
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);
@@ -445,8 +445,9 @@ public class TimeframeViewerForm : Form
         await SendTradeClosedPushAsync(alert, "Cruce de SpotPrice");
     }
 
-    // Pushes the combined snapshot + result once a demo trade closes (either reason). Shared by
-    // the spot-cross close above and the 300%-target close detected in PollTimer_Tick.
+    // Pushes a snapshot of just the panel that opened the trade + the PnL result once a demo trade
+    // closes (either reason). Shared by the spot-cross close above and the 300%-target close
+    // detected in PollTimer_Tick.
     private async Task SendTradeClosedPushAsync(PendingZoneAlert alert, string closeReason)
     {
         try
@@ -466,12 +467,7 @@ public class TimeframeViewerForm : Form
                 return;
             }
 
-            using var combined = await CaptureCombinedChartImageAsync();
-            if (combined == null)
-            {
-                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 4 charts.");
-                return;
-            }
+            using var combined = await alert.SourcePanel.CaptureImageAsync();
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);
@@ -515,12 +511,7 @@ public class TimeframeViewerForm : Form
                 return;
             }
 
-            using var combined = await CaptureCombinedChartImageAsync();
-            if (combined == null)
-            {
-                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 4 charts.");
-                return;
-            }
+            using var combined = await alert.SourcePanel.CaptureImageAsync();
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);
@@ -556,52 +547,4 @@ public class TimeframeViewerForm : Form
         BeginInvoke(() => _txtEventLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
     }
 
-    // Renders the 4 charts (via WebView2, not a screen capture) and stitches them in the same 2x2
-    // layout shown on screen (top-left/top-right/bottom-left/bottom-right = _panels order), with a
-    // yellow timeframe label centered at the top of each — same visual pattern as
-    // MultiChartForm.CaptureCombinedChartImageAsync. Returns null if any panel isn't ready.
-    private const int PanelGap = 6;
-    private static readonly Color PanelGapColor = Color.FromArgb(58, 58, 58);
-    private static readonly Color PanelLabelColor = Color.FromArgb(245, 216, 0);
-
-    private async Task<Bitmap?> CaptureCombinedChartImageAsync()
-    {
-        if (_panels.Count != Timeframes.Length) return null;
-
-        var images = new Bitmap[_panels.Count];
-        try
-        {
-            for (int i = 0; i < _panels.Count; i++)
-                images[i] = await _panels[i].CaptureImageAsync();
-
-            var colWidth  = images.Max(img => img.Width);
-            var rowHeight = images.Max(img => img.Height);
-            var width  = colWidth * 2 + PanelGap;
-            var height = rowHeight * 2 + PanelGap;
-            var combined = new Bitmap(width, height);
-            using (var g = Graphics.FromImage(combined))
-            using (var labelFont = new Font("Segoe UI", 11f, FontStyle.Bold))
-            using (var labelBrush = new SolidBrush(PanelLabelColor))
-            {
-                g.Clear(PanelGapColor);
-                for (int i = 0; i < images.Length; i++)
-                {
-                    var img = images[i];
-                    var x = (i % 2) * (colWidth + PanelGap);
-                    var y = (i / 2) * (rowHeight + PanelGap);
-                    g.DrawImage(img, x, y);
-
-                    var label = Timeframes[i].Label;
-                    var labelSize = g.MeasureString(label, labelFont);
-                    var labelX = x + (img.Width - labelSize.Width) / 2f;
-                    g.DrawString(label, labelFont, labelBrush, labelX, y + 8f);
-                }
-            }
-            return combined;
-        }
-        finally
-        {
-            foreach (var img in images) img?.Dispose();
-        }
-    }
 }

@@ -52,6 +52,10 @@ public partial class Form1 : Form
 
     private TickerEntry? _selectedTicker;
 
+    // Read-only peek at this instance's own ticker — used by TimeframeViewerForm to auto-select
+    // the matching symbol when it opens, instead of defaulting to the first one in the list.
+    public string? SelectedTickerSymbol => _selectedTicker?.Symbol;
+
     // Live-chart streaming: Schwab allows only ONE streaming connection per account, but running
     // one app instance per ticker means several PROCESSES need candle data at once. The first
     // instance to bind LiveHubPort becomes the "hub" — it owns the real SchwabStreamerClient
