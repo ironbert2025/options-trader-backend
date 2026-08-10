@@ -24,7 +24,6 @@ public class TimeframeViewerForm : Form
 
     private readonly ComboBox _cmbSymbol = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(8, 8), Size = new Size(120, 24) };
     private readonly Button _btnCargar   = new() { Text = "Cargar", Location = new Point(136, 8), Size = new Size(70, 24) };
-    private readonly Button _btnDzSz     = new() { Text = "DZ/SZ", Location = new Point(216, 8), Size = new Size(80, 26) };
 
     private readonly TableLayoutPanel _chartsHost = new()
     {
@@ -98,20 +97,10 @@ public class TimeframeViewerForm : Form
 
         Controls.Add(_cmbSymbol);
         Controls.Add(_btnCargar);
-        Controls.Add(_btnDzSz);
         Controls.Add(_chartsHost);
         Controls.Add(_txtEventLog);
 
         _btnCargar.Click += (s, e) => LoadSelectedSymbol();
-
-        // Single shared toggle — arms/disarms DZ/SZ drawing on all 4 charts at once; a zone can be
-        // drawn on any one of them. Only 5m/15m actually evaluate rebotes on what gets drawn.
-        _btnDzSz.Click += async (s, e) =>
-        {
-            bool on = false;
-            foreach (var panel in _panels) on = await panel.ToggleDzSzModeAsync();
-            _btnDzSz.BackColor = on ? Color.LightGreen : SystemColors.Control;
-        };
 
         _pollTimer.Tick += PollTimer_Tick;
         _pollTimer.Start();
@@ -139,14 +128,15 @@ public class TimeframeViewerForm : Form
     {
         if (_cmbSymbol.SelectedItem is not string symbol) return;
         _symbol = symbol;
+        Text = $"{symbol} — Multi-Timeframe Viewer";
 
         _chartsHost.Controls.Clear();
         foreach (var panel in _panels) panel.Dispose();
         _panels.Clear();
-        _btnDzSz.BackColor = SystemColors.Control; // new panels always start unarmed
         _pendingAlerts.Clear(); // old panels are gone — any pending SpotPrice watch is meaningless now
         _lastPriceByPanel.Clear();
 
+        var panelsByLabel = new Dictionary<string, TimeframeChartPanel>();
         for (int i = 0; i < Timeframes.Length; i++)
         {
             var (label, minutes) = Timeframes[i];
@@ -159,7 +149,79 @@ public class TimeframeViewerForm : Form
             panel.OnZoneReboundEvent += (sourcePanel, caption, direction, price) => OnZoneRebound(sourcePanel, symbol, caption, direction, price);
             panel.OnLiveTick += price => OnPanelLiveTick(panel, price);
             _panels.Add(panel);
-            _chartsHost.Controls.Add(panel, i % 2, i / 2);
+            panelsByLabel[label] = panel;
+
+            if (label == "5m")
+                _chartsHost.Controls.Add(BuildFiveMinuteCell(panel), i % 2, i / 2);
+            else
+                _chartsHost.Controls.Add(panel, i % 2, i / 2);
+        }
+
+        // Wired here (after all 4 panels exist) since the toolbar needs the 15m panel too, which
+        // isn't built yet at the point the 5m cell itself is constructed above.
+        WireFiveMinuteToolbar(panelsByLabel["5m"], panelsByLabel["15m"]);
+    }
+
+    // All the drawing-tool controls live above the 5m chart specifically, per explicit request —
+    // DZ/SZ still arms all 4 panels (unchanged scope), but Arrow/Rect only apply to 5m/15m (see
+    // ZoneReboundTimeframes — same 2 timeframes that evaluate rebotes).
+    private readonly Button _btnDzSz  = new() { Text = "DZ/SZ", Location = new Point(0, 2),   Size = new Size(64, 24) };
+    private readonly Button _btnArrow = new() { Text = "Arrow", Location = new Point(70, 2),  Size = new Size(64, 24) };
+    private readonly Button _btnRect  = new() { Text = "Rect",  Location = new Point(140, 2), Size = new Size(64, 24) };
+
+    private Panel BuildFiveMinuteCell(TimeframeChartPanel fiveMinPanel)
+    {
+        var toolbar = new Panel { Dock = DockStyle.Top, Height = 30 };
+        toolbar.Controls.Add(_btnDzSz);
+        toolbar.Controls.Add(_btnArrow);
+        toolbar.Controls.Add(_btnRect);
+
+        var cell = new Panel { Dock = DockStyle.Fill, Margin = new Padding(6, 2, 6, 6) };
+        fiveMinPanel.Margin = new Padding(0);
+        cell.Controls.Add(fiveMinPanel);
+        cell.Controls.Add(toolbar);
+        return cell;
+    }
+
+    // Re-wires the toolbar buttons' click handlers against the CURRENT day's 5m/15m panel
+    // instances — called after every symbol switch, since the panels themselves get torn down and
+    // rebuilt each time (see LoadSelectedSymbol).
+    private void WireFiveMinuteToolbar(TimeframeChartPanel fiveMin, TimeframeChartPanel fifteenMin)
+    {
+        _btnDzSz.BackColor = _btnArrow.BackColor = _btnRect.BackColor = SystemColors.Control;
+
+        _btnDzSz.Click -= BtnDzSz_Click;
+        _btnArrow.Click -= BtnArrow_Click;
+        _btnRect.Click -= BtnRect_Click;
+
+        // Single shared toggle — arms/disarms DZ/SZ drawing on all 4 charts at once; a zone can be
+        // drawn on any one of them. Only 5m/15m actually evaluate rebotes on what gets drawn.
+        _btnDzSz.Click += BtnDzSz_Click;
+        _btnArrow.Click += BtnArrow_Click;
+        _btnRect.Click += BtnRect_Click;
+        return;
+
+        async void BtnDzSz_Click(object? s, EventArgs e)
+        {
+            bool on = false;
+            foreach (var panel in _panels) on = await panel.ToggleDzSzModeAsync();
+            _btnDzSz.BackColor = on ? Color.LightGreen : SystemColors.Control;
+        }
+
+        // Diagonal line + arrowhead between 2 clicks — red if 1st click is above the 2nd, green
+        // otherwise (not the fixed vertical up/down arrow).
+        async void BtnArrow_Click(object? s, EventArgs e)
+        {
+            var on1 = await fiveMin.ToggleArrowModeAsync();
+            var on2 = await fifteenMin.ToggleArrowModeAsync();
+            _btnArrow.BackColor = on1 || on2 ? Color.LightYellow : SystemColors.Control;
+        }
+
+        async void BtnRect_Click(object? s, EventArgs e)
+        {
+            var on1 = await fiveMin.ToggleRectModeAsync();
+            var on2 = await fifteenMin.ToggleRectModeAsync();
+            _btnRect.BackColor = on1 || on2 ? Color.LightSkyBlue : SystemColors.Control;
         }
     }
 

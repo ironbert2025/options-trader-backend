@@ -180,6 +180,24 @@ public class TimeframeChartPanel : Panel
         return result == "true";
     }
 
+    // Same drawing tools as the Live Chart's panel 3 (15m RTH+Overnight) — purely visual here too,
+    // same as DZ/SZ above. TimeframeViewerForm only wires these buttons for the 5m/15m panels.
+    // Diagonal line + arrowhead between 2 clicks — red if the 1st click is above the 2nd, green
+    // otherwise (NOT the fixed vertical up/down arrow tool — this one can be drawn at an angle).
+    public async Task<bool> ToggleArrowModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleArrow();");
+        return result == "true";
+    }
+
+    public async Task<bool> ToggleRectModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
+        return result == "true";
+    }
+
     // Green Stk line + "Stk=xxx   Ask=xxx" label — used by TimeframeViewerForm to draw the 5
     // nearest OTM strikes on this panel right before it captures the combined Telegram snapshot,
     // once a Demand/Supply zone rebote confirms. Same primitive/rendering as ChartPanel's
