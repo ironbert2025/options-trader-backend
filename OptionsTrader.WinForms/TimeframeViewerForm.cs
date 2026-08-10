@@ -78,7 +78,7 @@ public class TimeframeViewerForm : Form
     private long _telegramUpdateOffset;
     private readonly System.Windows.Forms.Timer _pollTimer = new() { Interval = 5000 };
 
-    // form1: needed to read the 5 nearest OTM strikes on a confirmed rebote — only works if this
+    // form1: needed to read the 8 nearest OTM strikes on a confirmed rebote — only works if this
     // viewer's loaded symbol matches form1's OWN ticker (one options chain per app instance).
     public TimeframeViewerForm(SchwabStreamerClient historyClient, ICandleFeed liveFeed, Form1 form1)
     {
@@ -172,14 +172,14 @@ public class TimeframeViewerForm : Form
 
     // Pushes the combined 4-chart snapshot to Telegram — best-effort, same as every other Telegram
     // push in the app: a failure here must never affect chart rendering/detection. Before building
-    // the message/screenshot, draws the 5 nearest OTM strikes (Calls on Alza, Puts on Baja) on the
+    // the message/screenshot, draws the 8 nearest OTM strikes (Calls on Alza, Puts on Baja) on the
     // panel that fired the rebote — only if this viewer's symbol matches form1's own ticker (see
     // Form1.GetNearestOtmStrikes); if not, just skips the strikes and proceeds with the push.
     private async Task SendZoneReboundTelegramPushAsync(TimeframeChartPanel sourcePanel, string symbol, string caption, string direction)
     {
         try
         {
-            var strikes = _form1.GetNearestOtmStrikes(symbol, calls: direction == "Alza");
+            var strikes = _form1.GetNearestOtmStrikes(symbol, calls: direction == "Alza", count: 8);
             if (strikes != null)
             {
                 foreach (var (strike, ask) in strikes)

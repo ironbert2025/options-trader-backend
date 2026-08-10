@@ -64,7 +64,7 @@ public class TimeframeChartPanel : Panel
     // Fires (caption, direction, price) when a Demand/Supply Zone rebote confirms — only for
     // panels with enableZoneRebounds. TimeframeViewerForm listens to build+send the Telegram push.
     // Includes the panel itself (always `this`) so the form knows exactly which of the 4 charts
-    // to draw the 5 OTM strike lines on, without needing a separate lookup.
+    // to draw the 8 OTM strike lines on, without needing a separate lookup.
     public event Action<TimeframeChartPanel, string, string, decimal>? OnZoneReboundEvent;
 
     // Fires the raw live price on EVERY tick (not just closed candles) — used by

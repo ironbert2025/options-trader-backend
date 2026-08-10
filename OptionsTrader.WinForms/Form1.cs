@@ -1172,7 +1172,7 @@ public partial class Form1 : Form
     }
 
     // Filters the chain to OTM strikes within the ticker's Ask range and (re)builds the given grid.
-    // Used by TimeframeViewerForm's "5 OTM strikes on rebote" feature — returns the N nearest OTM
+    // Used by TimeframeViewerForm's "8 OTM strikes on rebote" feature — returns the N nearest OTM
     // strikes (Strike, Ask) for the CURRENT chain fetch, closest-to-spot first. Independent of
     // whatever Counts/Range/Call-Put filter the main dgvQuotes grid happens to be showing right
     // now (those are display settings, not what "nearest OTM" means) — ranks _lastAllQuotes fresh
