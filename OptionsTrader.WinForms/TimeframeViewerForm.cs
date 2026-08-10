@@ -61,7 +61,16 @@ public class TimeframeViewerForm : Form
         public List<(decimal Strike, decimal Ask)> Strikes = new();
         public string Caption = string.Empty;
         public DateTime SentAtUtc;
-        public decimal? TargetSpotPrice; // set once the reply arrives
+        public decimal? TargetSpotPrice; // set once a reply with exactly 1 number arrives
+
+        // Set once a reply with 2 numbers arrives ("strike, spotDeCierre") instead of 1 — opens an
+        // automatic demo trade in Form1's own Trades grid at TradeStrike, closed either by Form1's
+        // own 300%-target auto-close (see Form1.OpenAutomaticDemoTrade) or by TargetSpotPrice
+        // crossing, whichever happens first (see PollTimer_Tick/OnPanelLiveTick). When this is set,
+        // TargetSpotPrice above is repurposed as the trade's close-spot instead of the plain
+        // "append Bid to the 5 lines" behavior.
+        public decimal? TradeStrike;
+        public DataGridViewRow? TradeRow;
     }
 
     private readonly List<PendingZoneAlert> _pendingAlerts = new();
@@ -257,6 +266,17 @@ public class TimeframeViewerForm : Form
             _pendingAlerts.Remove(p);
         }
 
+        // Any open demo trade may have already hit its 300% target via Form1's OWN polling
+        // (UpdateTradesPnL auto-closes it there, independent of us) — check every tick so the
+        // "whichever happens first" push goes out promptly instead of waiting for the next
+        // SpotPrice-cross tick that might never come if the target already closed it.
+        var targetClosed = _pendingAlerts.Where(p => p.TradeRow != null && Form1.IsTradeRowClosed(p.TradeRow)).ToList();
+        foreach (var p in targetClosed)
+        {
+            _pendingAlerts.Remove(p);
+            _ = SendTradeClosedPushAsync(p, "Target 300%");
+        }
+
         if (!_pendingAlerts.Any(p => p.TargetSpotPrice == null)) return;
 
         var (botToken, _) = TelegramSettingsStore.Load();
@@ -273,13 +293,52 @@ public class TimeframeViewerForm : Form
             var pending = _pendingAlerts.FirstOrDefault(p => p.MessageId == update.ReplyToMessageId && p.TargetSpotPrice == null);
             if (pending == null) continue;
 
-            var match = System.Text.RegularExpressions.Regex.Match(update.Text, @"\d+(\.\d+)?");
-            if (!match.Success || !decimal.TryParse(match.Value, System.Globalization.CultureInfo.InvariantCulture, out var spotPrice))
-                continue; // reply didn't contain a usable number — stays pending, maybe they retry
+            // Reply can be ONE number (plain SpotPrice-only flow, existing behavior) or TWO
+            // numbers separated by comma/space ("strike, spotDeCierre" — opens a demo trade).
+            var numbers = System.Text.RegularExpressions.Regex.Matches(update.Text, @"\d+(\.\d+)?")
+                .Select(m => decimal.TryParse(m.Value, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : (decimal?)null)
+                .Where(v => v.HasValue)
+                .Select(v => v!.Value)
+                .ToList();
+            if (numbers.Count == 0) continue; // reply didn't contain a usable number — stays pending, maybe they retry
 
-            pending.TargetSpotPrice = spotPrice;
-            LogInfo($"{pending.Symbol} — SpotPrice recibido: {spotPrice:F2} (esperando cruce hacia {pending.Direction})");
+            if (numbers.Count >= 2)
+            {
+                pending.TradeStrike = numbers[0];
+                pending.TargetSpotPrice = numbers[1]; // repurposed as the trade's close-spot
+                _ = OpenDemoTradeAsync(pending);
+            }
+            else
+            {
+                pending.TargetSpotPrice = numbers[0];
+                LogInfo($"{pending.Symbol} — SpotPrice recibido: {numbers[0]:F2} (esperando cruce hacia {pending.Direction})");
+            }
         }
+    }
+
+    // Opens the automatic demo trade in Form1's OWN Trades grid at pending.TradeStrike (CALL on
+    // Alza, PUT on Baja) — only works if this viewer's symbol still matches form1's ticker. Sends
+    // a text-only Telegram push confirming the open (no image, per explicit request).
+    private async Task OpenDemoTradeAsync(PendingZoneAlert pending)
+    {
+        var row = await _form1.OpenAutomaticDemoTrade(pending.Symbol, calls: pending.Direction == "Alza", pending.TradeStrike!.Value);
+        if (row == null)
+        {
+            LogInfo($"{pending.Symbol} — no se pudo abrir el trade demo en Strike={pending.TradeStrike:F2} (símbolo no coincide con el ticker de Form1, o sin cotización).");
+            _pendingAlerts.Remove(pending);
+            return;
+        }
+
+        pending.TradeRow = row;
+        var entryAsk = row.Cells["colTradeEntryPrice"].Value?.ToString() ?? "?";
+        var type = pending.Direction == "Alza" ? "CALL" : "PUT";
+        LogInfo($"{pending.Symbol} — Trade demo abierto: {type} Strike={pending.TradeStrike:F2} Entry(Ask)={entryAsk} — cierra a 300% o al cruzar {pending.TargetSpotPrice:F2}");
+
+        var (botToken, chatId) = TelegramSettingsStore.Load();
+        if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+        var text = $"{pending.Symbol} — Trade demo abierto: {type} Strike={pending.TradeStrike:F2} Entry(Ask)={entryAsk}";
+        var (ok, detail, _) = await TelegramNotifier.SendAsync(botToken, chatId, text, pending.Symbol);
+        if (!ok) LogTelegramPushFailure(detail);
     }
 
     // Fires on every live tick from any of the 4 panels — checks whether the price just crossed
@@ -302,7 +361,74 @@ public class TimeframeViewerForm : Form
         foreach (var alert in crossed)
         {
             _pendingAlerts.Remove(alert);
-            _ = SendCrossConfirmedPushAsync(alert);
+            if (alert.TradeRow != null)
+                _ = CloseDemoTradeBySpotAsync(alert);
+            else
+                _ = SendCrossConfirmedPushAsync(alert);
+        }
+    }
+
+    // Closes the demo trade by SpotPrice cross — only if the 300% target hasn't already closed it
+    // (Form1's own polling can beat us to it between poll ticks; see PollTimer_Tick's target check).
+    private async Task CloseDemoTradeBySpotAsync(PendingZoneAlert alert)
+    {
+        if (alert.TradeRow == null) return;
+        if (Form1.IsTradeRowClosed(alert.TradeRow))
+        {
+            LogInfo($"{alert.Symbol} — el trade demo ya había cerrado por Target 300% antes del cruce de SpotPrice.");
+            return;
+        }
+
+        await _form1.CloseAutomaticDemoTradeAsync(alert.TradeRow);
+        await SendTradeClosedPushAsync(alert, "Cruce de SpotPrice");
+    }
+
+    // Pushes the combined snapshot + result once a demo trade closes (either reason). Shared by
+    // the spot-cross close above and the 300%-target close detected in PollTimer_Tick.
+    private async Task SendTradeClosedPushAsync(PendingZoneAlert alert, string closeReason)
+    {
+        try
+        {
+            var row = alert.TradeRow!;
+            var entry = row.Cells["colTradeEntryPrice"].Value?.ToString() ?? "?";
+            var exit  = row.Cells["colTradeCBid"].Value?.ToString() ?? "?";
+            var pnl   = row.Cells["colTradePnL"].Value?.ToString() ?? "?";
+            var pnlPct = row.Cells["colTradePnLPercent"].Value?.ToString() ?? "?";
+            var type = alert.Direction == "Alza" ? "CALL" : "PUT";
+            var caption = $"Trade demo CERRADO ({closeReason}) — {type} Strike={alert.TradeStrike:F2} Entry={entry} Exit={exit} PnL={pnl} ({pnlPct}%)";
+
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 4 charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{alert.Symbol}_TimeframeDemoTradeClosed_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{alert.Symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, alert.Symbol, "TimeframeDemoTradeClosed", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(alert.Symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+
+            LogInfo(caption);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
         }
     }
 

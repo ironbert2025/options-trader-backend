@@ -1211,6 +1211,60 @@ public partial class Form1 : Form
             .ToList();
     }
 
+    // Used by TimeframeViewerForm's "strike, spot" reply flow — current Bid/Ask for ONE specific
+    // strike (may not be one of the 5 auto-picked OTM strikes). Same one-instance-per-ticker
+    // restriction as above.
+    public (decimal Bid, decimal Ask)? GetQuoteForStrike(string symbol, bool calls, decimal strike)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol || _lastAllQuotes.Count == 0)
+            return null;
+
+        var optionType = calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
+        var quote = _lastAllQuotes.FirstOrDefault(q => q.OptionType == optionType && q.StrikePrice == strike);
+        return quote == null ? null : (quote.Bid, quote.Ask);
+    }
+
+    // Distinct background so an automatic (bot-driven) demo trade is visually different from a
+    // manually-clicked one in the SAME grid — per explicit request ("solo mostrar que el trade es
+    // automático"), nothing more elaborate than a color.
+    private static readonly Color AutomaticTradeRowColor = Color.Lavender;
+
+    // Opens a demo trade in THIS Form1 instance's own Trades grid (dgvTrades) — used by
+    // TimeframeViewerForm's "strike, spot" reply flow. Reuses the exact same RecordEntryAsync path
+    // real/manual demo trades go through, so it gets live PnL updates from the normal polling loop
+    // (UpdateTradesPnL) for free — including the existing target-based auto-close, just with a
+    // 300% target instead of the user's global TargetSettingsStore percentage (see
+    // overrideTargetPct). suppressAutoClose stays FALSE on purpose so that auto-close fires.
+    // Returns null if the symbol doesn't match this instance's own ticker, or the strike has no
+    // live quote right now.
+    public async Task<DataGridViewRow?> OpenAutomaticDemoTrade(string symbol, bool calls, decimal strike)
+    {
+        var quote = GetQuoteForStrike(symbol, calls, strike);
+        if (quote == null || quote.Value.Ask <= 0) return null;
+
+        var rowType = calls ? "CALL" : "PUT";
+        var (_, row) = await RecordEntryAsync(symbol, rowType, strike.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            level: string.Empty, quote.Value.Bid, quote.Value.Ask, contracts: "1", entryLabel: "Auto TF Rebote",
+            isDemo: true, suppressAutoClose: false, overrideTargetPct: 300m);
+
+        row.DefaultCellStyle.BackColor = AutomaticTradeRowColor;
+        return row;
+    }
+
+    // Closes an automatic demo trade opened above — used when TimeframeViewerForm's SpotPrice
+    // cross fires BEFORE the 300% target does (the target close, if it happens first, is already
+    // handled automatically by UpdateTradesPnL — see OpenAutomaticDemoTrade). closeType "SPOT" is
+    // deliberately neither "MANUAL" (would try to place a real broker order) nor "TARGET" (would
+    // price the exit at T_Bid instead of the live Bid) — CloseTradeRowAsync falls back to the
+    // current on-screen Bid for any other closeType, which is exactly what a spot-cross close
+    // should use.
+    public async Task CloseAutomaticDemoTradeAsync(DataGridViewRow row) => await CloseTradeRowAsync(row, "SPOT");
+
+    // True once the row shows an exit time — used by TimeframeViewerForm to tell whether the 300%
+    // target already auto-closed the trade before its own SpotPrice-cross check got to it.
+    public static bool IsTradeRowClosed(DataGridViewRow row) =>
+        !string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString());
+
     // Returns the in-range OTM call/put lists so the caller can build trade-PnL maps if needed.
     // Static (no Form1 instance state) so it's reusable from SimulatorForm's own grid too —
     // selectedCounts/callOnly/putOnly used to live on Form1's fields/checkboxes, now explicit
@@ -1567,9 +1621,11 @@ public partial class Form1 : Form
     // Shared by simulated trades and real (broker) trades. Returns the API trade id and the new grid row.
     private async Task<(int TradeId, DataGridViewRow Row)> RecordEntryAsync(string symbol, string rowType, string strike, string level,
         decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool suppressAutoClose = false,
-        string? accountHash = null, string? occSymbol = null, int quantity = 0)
+        string? accountHash = null, string? occSymbol = null, int quantity = 0, decimal? overrideTargetPct = null)
     {
-        decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
+        decimal targetPct;
+        if (overrideTargetPct.HasValue) targetPct = overrideTargetPct.Value;
+        else decimal.TryParse(TargetSettingsStore.Load(), out targetPct);
         var tBid      = Math.Round(ask * (1 + targetPct / 100m), 2);
         var entryStr  = ask.ToString("F2");
         var entryTime = DateTime.Now;
