@@ -21,6 +21,7 @@ public class TimeframeChartPanel : Panel
 {
     private readonly string _symbol;
     private readonly string _timeframeLabel;
+    public string TimeframeLabel => _timeframeLabel;
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
     private readonly int _intervalMinutes;

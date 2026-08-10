@@ -394,7 +394,11 @@ public class TimeframeViewerForm : Form
         pending.TradeRow = row;
         var entryAsk = row.Cells["colTradeEntryPrice"].Value?.ToString() ?? "?";
         var type = pending.Direction == "Alza" ? "CALL" : "PUT";
-        LogInfo($"{pending.Symbol} — Trade demo abierto: {type} Strike={pending.TradeStrike:F2} Entry(Ask)={entryAsk} — cierra a 300% o al cruzar {pending.TargetSpotPrice:F2}");
+        var openCaption = $"Trade demo abierto: {type} Strike={pending.TradeStrike:F2} Entry(Ask)={entryAsk} — cierra a 300% o al cruzar {pending.TargetSpotPrice:F2}";
+        LogInfo($"{pending.Symbol} — {openCaption}");
+        decimal.TryParse(entryAsk, out var entryAskPrice);
+        EventLogStore.Append(pending.Symbol, pending.SourcePanel.TimeframeLabel, "DemoTradeOpened", pending.Direction,
+            openCaption, entryAskPrice, $"Strike={pending.TradeStrike:F2};CloseSpot={pending.TargetSpotPrice:F2}");
 
         var (botToken, chatId) = TelegramSettingsStore.Load();
         if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
@@ -459,6 +463,9 @@ public class TimeframeViewerForm : Form
             var pnlPct = row.Cells["colTradePnLPercent"].Value?.ToString() ?? "?";
             var type = alert.Direction == "Alza" ? "CALL" : "PUT";
             var caption = $"Trade demo CERRADO ({closeReason}) — {type} Strike={alert.TradeStrike:F2} Entry={entry} Exit={exit} PnL={pnl} ({pnlPct}%)";
+            decimal.TryParse(exit, out var exitPrice);
+            EventLogStore.Append(alert.Symbol, alert.SourcePanel.TimeframeLabel, "DemoTradeClosed", alert.Direction,
+                caption, exitPrice, $"Reason={closeReason};Strike={alert.TradeStrike:F2};Entry={entry};PnL={pnl}");
 
             var (botToken, chatId) = TelegramSettingsStore.Load();
             if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
@@ -519,6 +526,9 @@ public class TimeframeViewerForm : Form
             combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
 
             var caption = $"{alert.Caption} — SpotPrice {alert.TargetSpotPrice:F2} cruzado";
+            EventLogStore.Append(alert.Symbol, alert.SourcePanel.TimeframeLabel, "ZoneReboundCross", alert.Direction,
+                caption, alert.TargetSpotPrice ?? 0m, alert.Caption);
+
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{alert.Symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, alert.Symbol, "TimeframeZoneReboundCross", DateTime.Now));
