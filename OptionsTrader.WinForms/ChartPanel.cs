@@ -1042,13 +1042,18 @@ public class ChartPanel : Panel
     private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
 
     // ==================================================================================
-    // "Abriendo la Volatilidad" (15m RTH panel only) — armed externally (ArmVolatilityOpeningWatch)
-    // by MultiChartForm when the 1h panel resolves a Cruce en Techo. From then on, evaluated on
-    // every LIVE tick (not candle close — see UpdateLivePriceFromExternalSource) against the
-    // Bollinger Bands computed from this panel's own closed 15m candles: fires once the live spot
-    // reaches the Upper Band AND that band's current width is wider than it was a few candles ago
-    // (confirming genuine expansion, not a touch against a flat/contracting band). Bollinger is
-    // computed here in C# purely for this detection — chart.html's own copy (for drawing) is
+    // "Abriendo la Volatilidad" (15m RTH panel only) — armed BOTH ways by default the moment RTH
+    // starts (first tick >= 9:30 AM ET, see ArmVolatilityOpeningWatchDefault), so it's evaluated
+    // from market open even with no prior signal. Can also be armed (one side at a time, additively)
+    // externally via ArmVolatilityOpeningWatch by MultiChartForm when the 1h panel resolves a
+    // Cruce/Rebote — harmless if the default watch already armed both sides. From then on, evaluated
+    // on every LIVE tick (not candle close — see UpdateLivePriceFromExternalSource) against the
+    // Bollinger Bands computed from this panel's own closed 15m candles: fires once the band width
+    // is wider than it was a few candles ago (confirming genuine expansion, not a flat/contracting
+    // band) AND the SMA20 (the Bollinger middle band) is tilted in an armed direction — NOT once
+    // price physically touches a band, which was too late/restrictive. Whichever side (Superior via
+    // SMA20 rising / Inferior via SMA20 falling) confirms first wins, one-shot per session. Bollinger
+    // is computed here in C# purely for this detection — chart.html's own copy (for drawing) is
     // separate and untouched.
     // ==================================================================================
 
@@ -1056,9 +1061,10 @@ public class ChartPanel : Panel
     private const decimal VolatilityBollingerMult = 2m;
     private const int VolatilityWidthLookback = 3; // candles back to compare band width against
 
-    private bool _volatilityOpeningArmed;
+    private bool _volatilityOpeningArmedUpper;
+    private bool _volatilityOpeningArmedLower;
     private bool _volatilityOpeningFired;
-    private bool _volatilityOpeningBullish; // true = Techo/CALL watch (upper band), false = Piso/PUT watch (lower band)
+    private bool _volatilityOpeningDefaultArmed; // guards the automatic 9:30 AM arm-both-bands — once per session
 
     // Fires with a human-readable caption once "Abriendo la Volatilidad" is confirmed.
     public event Action<string>? OnVolatilityOpeningEvent;
@@ -1074,8 +1080,7 @@ public class ChartPanel : Panel
     public void ArmVolatilityOpeningWatch(bool bullish)
     {
         if (_volatilityOpeningFired) return; // already fired once this session — don't rearm
-        _volatilityOpeningArmed = true;
-        _volatilityOpeningBullish = bullish;
+        if (bullish) _volatilityOpeningArmedUpper = true; else _volatilityOpeningArmedLower = true;
 
         var current = BollingerBandsAt(_closedCandles.Count - 1);
         var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
@@ -1088,6 +1093,20 @@ public class ChartPanel : Panel
         var bandLabel = bullish ? "Superior" : "Inferior";
         var caption = $"Bandas de Bollinger ya abiertas al armar — ancho {currentWidth:F2} (vs {earlierWidth:F2} hace {VolatilityWidthLookback} velas) — esperando que el spot toque la Banda {bandLabel}";
         OnVolatilityAlreadyOpenEvent?.Invoke(caption);
+    }
+
+    // Called once per session, on the first RTH tick (>= 9:30 AM ET) on the 15m RTH panel — arms
+    // BOTH bands by default so "Abriendo la Volatilidad" is evaluated from market open even with no
+    // prior Cruce/Rebote signal. Whichever band's condition (widening + price touch) confirms first
+    // fires and the other side is dropped (_volatilityOpeningFired blocks further evaluation). A
+    // real Cruce/Rebote via ArmVolatilityOpeningWatch can still arrive before either side fires —
+    // harmless, since both directions are already armed at that point.
+    private void ArmVolatilityOpeningWatchDefault()
+    {
+        if (_volatilityOpeningDefaultArmed || _volatilityOpeningFired) return;
+        _volatilityOpeningDefaultArmed = true;
+        _volatilityOpeningArmedUpper = true;
+        _volatilityOpeningArmedLower = true;
     }
 
     // Shared by every Piso/Techo resolution path (close-based Cruce/Rebote, live gap-cross) — the
@@ -1176,7 +1195,7 @@ public class ChartPanel : Panel
 
     private void EvaluateVolatilityOpening(decimal livePrice)
     {
-        if (!_volatilityOpeningArmed || _volatilityOpeningFired) return;
+        if ((!_volatilityOpeningArmedUpper && !_volatilityOpeningArmedLower) || _volatilityOpeningFired) return;
 
         var current = BollingerBandsAt(_closedCandles.Count - 1);
         var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
@@ -1186,20 +1205,22 @@ public class ChartPanel : Panel
         var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
         if (currentWidth <= earlierWidth) return; // bands aren't actually widening yet
 
-        if (_volatilityOpeningBullish)
-        {
-            if (livePrice < current.Value.Upper) return; // hasn't reached the upper band yet
-        }
-        else
-        {
-            if (livePrice > current.Value.Lower) return; // hasn't reached the lower band yet
-        }
+        // Direction is dictated by the SMA20 (Bollinger's own middle band) tilting, not by price
+        // physically touching a band — waiting for a touch was too late/restrictive. Same lookback
+        // as the width comparison above, so this stays in sync with "widening" being confirmed over
+        // that same window.
+        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
+        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (smaNow == null || smaEarlier == null || smaNow == smaEarlier) return; // no clear tilt yet
+
+        bool bullish = smaNow > smaEarlier;
+        if (bullish && !_volatilityOpeningArmedUpper) return;
+        if (!bullish && !_volatilityOpeningArmedLower) return;
 
         _volatilityOpeningFired = true;
-        var bandLabel = _volatilityOpeningBullish ? "Superior" : "Inferior";
-        var bandValue = _volatilityOpeningBullish ? current.Value.Upper : current.Value.Lower;
-        var direction = _volatilityOpeningBullish ? "Alza" : "Baja";
-        var caption = $"Abriendo la Volatilidad — spot {livePrice:F2} toca Banda {bandLabel} {bandValue:F2}";
+        var bandLabel = bullish ? "Superior" : "Inferior";
+        var direction = bullish ? "Alza" : "Baja";
+        var caption = $"Abriendo la Volatilidad — SMA20 girando a la {direction} ({smaEarlier.Value:F2} → {smaNow.Value:F2}), ancho bandas {currentWidth:F2} (vs {earlierWidth:F2} hace {VolatilityWidthLookback} velas) — spot {livePrice:F2}, Banda {bandLabel}";
         OnVolatilityOpeningEvent?.Invoke(caption);
         _ = SendChartToTelegramAsync(caption);
         EventLogStore.Append(_symbol, "15Min", "VolatilityOpening", direction, caption, livePrice,
@@ -1489,6 +1510,8 @@ public class ChartPanel : Panel
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
         OnLiveTick?.Invoke(eastern, candle.Close);
+        if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
+            ArmVolatilityOpeningWatchDefault();
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
         {
             // Pre-market tick on the 1h/15m RTH panels — doesn't form a candle, but feeds the blue
@@ -1663,6 +1686,8 @@ public class ChartPanel : Panel
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
         OnLiveTick?.Invoke(eastern, price); // fires regardless of session/bucket state, same as Streamer_OnNewCandle
+        if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
+            ArmVolatilityOpeningWatchDefault();
 
         if (_liveBucket == null) return; // no bucket open yet — CHART_EQUITY seeds the first one
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
