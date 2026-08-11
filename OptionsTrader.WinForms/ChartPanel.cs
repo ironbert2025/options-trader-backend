@@ -334,6 +334,16 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync("markExpired();");
     }
 
+    // Toggles the dashed vertical day-divider lines on/off — only meaningful on the 1h panel
+    // (Hourly15), separates the last 5 days' worth of hourly candles with a line at the start of
+    // each of the last 4 (today's candles sit to the right of the most recent one, unbounded).
+    public async Task<bool> ToggleDayDividersAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleDayDividers();");
+        return result == "true";
+    }
+
     // Full-width green line + "Stk=xxx" label at the given price — fired when a trade (demo or
     // real) opens, on all 3 panels. Accumulates across trades, never auto-removed.
     public async Task MarkStrikeAsync(decimal strike)
@@ -1312,6 +1322,8 @@ public class ChartPanel : Panel
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+                // Day dividers on by default (matches MultiChartForm's "Día" checkbox starting checked).
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableDayDividers();");
 
                 // T-Line + vertical-arrow persistence (per symbol) — reload whatever was drawn in
                 // a previous session so it reappears at the same point, and listen for new/

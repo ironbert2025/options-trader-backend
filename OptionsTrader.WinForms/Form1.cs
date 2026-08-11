@@ -1031,6 +1031,14 @@ public partial class Form1 : Form
 
         try
         {
+            // Settles the hub-vs-client election (_isWebSocketHub) BEFORE creating the market-data
+            // service below — without this, a user who goes straight to Fetch/Start Polling
+            // without ever opening a Live Chart first never sets _isWebSocketHub, so
+            // IsTokenAuthority() comes back false and an expired token can never renew itself
+            // ("El hub no ha renovado el access token todavía..."). Cheap after the first call —
+            // EnsureLiveFeedReadyAsync memoizes its own task.
+            await EnsureLiveFeedReadyAsync();
+
             var service = CreateMarketDataService(chkSaveDumps.Checked);
 
             var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);

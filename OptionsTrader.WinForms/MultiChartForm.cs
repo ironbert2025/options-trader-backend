@@ -198,6 +198,15 @@ public class MultiChartForm : Form
             btnDaily.BackColor = on ? Color.LightBlue : SystemColors.Control;
         };
 
+        // Dashed vertical lines separating the 7 hourly candles of each trading day (last 4 lines
+        // = last 5 days; today's candles sit unbounded to the right of the most recent one).
+        var chkDayDividers = new CheckBox { Text = "Día", Location = new Point(208, 60), AutoSize = true, Checked = true };
+        chkDayDividers.CheckedChanged += async (s, e) =>
+        {
+            if (hourlyPanel == null) return;
+            await hourlyPanel.ToggleDayDividersAsync();
+        };
+
         crossHost.Controls.Add(btnTLine);
         crossHost.Controls.Add(btnHLine);
         crossHost.Controls.Add(btnHourlyClear);
@@ -205,6 +214,7 @@ public class MultiChartForm : Form
         crossHost.Controls.Add(btnFlechaVerde);
         crossHost.Controls.Add(btnFlechaRoja);
         crossHost.Controls.Add(btnDaily);
+        crossHost.Controls.Add(chkDayDividers);
         toolbar.Controls.Add(crossHost, 0, 0);
 
         // T-Line drawing tool for the 15m RTH panel (column 1) — no persistence like the 1h

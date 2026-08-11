@@ -1367,7 +1367,7 @@
                   // the last candle's price happens to be.
                   if (l.fixedTop) {
                     ctx.textAlign = 'center';
-                    ctx.fillText(l.text, scope.bitmapSize.width / 2, 18 * scope.verticalPixelRatio);
+                    ctx.fillText(l.text, scope.bitmapSize.width / 2, 70 * scope.verticalPixelRatio);
                     ctx.textAlign = 'left';
                     return;
                   }
@@ -1959,6 +1959,87 @@
 
   const overnightPrimitive = new OvernightBandsPrimitive();
 
+  // ---- Day dividers (1h panel only — see ChartPanel.ToggleDayDividersAsync) ----
+  // Dashed vertical line at the start of each of the last 4 days present in allCandles, so the 7
+  // hourly candles (9:30-10:00 slot + 6 clock-hour slots) belonging to one trading day are
+  // visually separated from the next. Deliberately only the last 4 — that separates the last 5
+  // days without drawing a line for "today" itself, so today's candles just sit to the right of
+  // the most recent line with nothing bounding them on the right (still mid-session).
+  let dayDividersEnabled = false;
+
+  class DayDividerPrimitive {
+    constructor() { this._times = []; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                ctx.strokeStyle = '#787b86';
+                ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                ctx.setLineDash([4 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                self._times.forEach(t => {
+                  const x = ts.timeToCoordinate(t);
+                  if (x == null) return;
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, 0);
+                  ctx.lineTo(x * scope.horizontalPixelRatio, scope.bitmapSize.height);
+                  ctx.stroke();
+                });
+                ctx.setLineDash([]);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const dayDividerPrimitive = new DayDividerPrimitive();
+
+  function toggleDayDividers() {
+    dayDividersEnabled = !dayDividersEnabled;
+    if (dayDividersEnabled) {
+      candleSeries.attachPrimitive(dayDividerPrimitive);
+      recalculateDayDividers();
+    } else {
+      dayDividerPrimitive._times = [];
+      forceRepaint();
+    }
+    return dayDividersEnabled;
+  }
+
+  // Unconditional "turn on" (unlike toggleDayDividers, which flips) — called once at chart load
+  // so the day dividers are on by default, matching the "Día" checkbox's default checked state.
+  function enableDayDividers() {
+    if (dayDividersEnabled) return;
+    toggleDayDividers();
+  }
+
+  function recalculateDayDividers() {
+    if (!dayDividersEnabled || allCandles.length === 0) { dayDividerPrimitive._times = []; return; }
+
+    // First candle's time per distinct day, in order — dayStartOf's own value works fine as the
+    // divider's x-position too (every day's first candle lands at/after its own dayStartOf).
+    const dayStarts = [];
+    let lastDay = null;
+    for (const c of allCandles) {
+      const day = dayStartOf(c.time);
+      if (day !== lastDay) { dayStarts.push(c.time); lastDay = day; }
+    }
+
+    // Last 4 boundaries = separates the last 5 days; drop the very first one of those 5 (that's
+    // the START of the oldest of the 5 days, not a divider BETWEEN two of them).
+    dayDividerPrimitive._times = dayStarts.slice(-5).slice(1);
+    forceRepaint();
+  }
+
   function configureOvernightBands() {
     overnightBandsEnabled = true;
     candleSeries.attachPrimitive(overnightPrimitive);
@@ -2090,6 +2171,7 @@
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
+    recalculateDayDividers();
   }
 
   // Updates the still-forming candle (same Time as the last one) without redrawing everything.
@@ -2102,6 +2184,7 @@
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
+    recalculateDayDividers();
     // series.update()/setData() can auto-scroll the time scale to keep following the latest bar,
     // which eats into the right-edge margin set at load time — reapply it on every live tick so
     // it sticks, but only while the user is actually following the live edge (see
@@ -2118,6 +2201,7 @@
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
+    recalculateDayDividers();
     reapplyVisibleRangeIfLive();
   }
 
@@ -2134,6 +2218,7 @@
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
+    recalculateDayDividers();
     reapplyVisibleRangeIfLive();
   }
 </script>
