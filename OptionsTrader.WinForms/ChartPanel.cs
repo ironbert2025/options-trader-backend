@@ -935,6 +935,22 @@ public class ChartPanel : Panel
         OnPisoTechoLevelRemovedEvent?.Invoke(period);
     }
 
+    // Continuous premarket counterpart to ValidatePisoTechoAgainstOpen — that one only checks ONCE,
+    // against the actual 9:30 RTH open. This runs on every premarket tick instead (same tick that
+    // feeds the blue premarket line), so a Techo the live price already trades above (or a Piso it
+    // already trades below) gets invalidated the moment that happens, instead of waiting for the
+    // open. Safe to call repeatedly — InvalidateIfBrokenByOpen is a no-op per period once its
+    // result is already null, and by the time the real 9:30 open candle arrives
+    // ValidatePisoTechoAgainstOpen just finds nothing left to invalidate for whichever periods
+    // already got caught here.
+    private void ValidatePisoTechoAgainstLivePrice(decimal livePrice)
+    {
+        InvalidateIfBrokenByOpen(20, ref s_pisoTechoResult20, livePrice);
+        InvalidateIfBrokenByOpen(40, ref s_pisoTechoResult40, livePrice);
+        InvalidateIfBrokenByOpen(100, ref s_pisoTechoResult100, livePrice);
+        InvalidateIfBrokenByOpen(200, ref s_pisoTechoResult200, livePrice);
+    }
+
     // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed
     // PisoTechoWatch — same case-1/case-2 cross-or-bounce formula used elsewhere
     // (BounceProximityRatio), against that watch's own SMA period. Resolves once per period, then
@@ -1528,6 +1544,11 @@ public class ChartPanel : Panel
             if ((_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15) && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
             {
                 var price = candle.Close;
+
+                // Blue premarket line as an extra live validation of Piso/Techo, ahead of the
+                // 9:30 open check — see ValidatePisoTechoAgainstLivePrice.
+                if (_mode == ChartPanelMode.Hourly15) ValidatePisoTechoAgainstLivePrice(price);
+
                 BeginInvoke(async () =>
                 {
                     if (_webView.CoreWebView2 == null) return;
