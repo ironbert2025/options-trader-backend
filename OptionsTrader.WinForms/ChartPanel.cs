@@ -84,6 +84,11 @@ public class ChartPanel : Panel
     // first pre-market tick (Hourly15/Fifteen_RTH before 9:30). This guards against firing twice.
     private bool _drewPrevDayHiLo;
 
+    // Temporary diagnostic — fires every time DrawPrevDayHiLoAsync actually runs its computation,
+    // regardless of whether it ends up drawing anything, so a "why isn't this panel showing the
+    // line" report can be answered from crossLog instead of guessing.
+    public event Action<string>? OnPrevDayHiLoDebugEvent;
+
     // The bucket currently being built from live 1-min ticks, and which bucket index it belongs
     // to (so we know when a new tick starts a new bucket vs. extends the current one).
     private CandleData? _liveBucket;
@@ -1300,6 +1305,8 @@ public class ChartPanel : Panel
         var drawHigh = referencePrice < highBar.High;
         var drawLow  = referencePrice > lowBar.Low;
         _drewPrevDayHiLo = true;
+        OnPrevDayHiLoDebugEvent?.Invoke(
+            $"{ModeLabel(_mode)}: prevDate={prevDate} high={highBar.High:F2} low={lowBar.Low:F2} ref={referencePrice:F2} drawHigh={drawHigh} drawLow={drawLow}");
         if (!drawHigh && !drawLow) return;
 
         static string TimeArg(CandleData c) =>
@@ -1540,6 +1547,16 @@ public class ChartPanel : Panel
                 if (_mode == ChartPanelMode.Hourly15) OnPreMarketPriceUpdated?.Invoke(price);
             }
             return; // outside this panel's session — ignore the tick entirely
+        }
+
+        // Fallback for the deferred draw above: if this panel was opened before 9:30 but the first
+        // live tick it actually received already landed at/after 9:30 (connection/subscription race
+        // — premarket window missed entirely), DrawPrevDayHiLoAsync above never fired. Catch it here
+        // on the first RTH tick instead — still a no-op if it already fired (see _drewPrevDayHiLo).
+        if ((_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15) && !_drewPrevDayHiLo)
+        {
+            var price = candle.Close;
+            BeginInvoke(async () => await DrawPrevDayHiLoAsync(_rawHistory, price));
         }
 
         var isHourly = _mode == ChartPanelMode.Hourly15;

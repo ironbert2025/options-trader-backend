@@ -547,6 +547,19 @@ public class MultiChartForm : Form
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
             };
+            panel.OnPrevDayHiLoDebugEvent += detail =>
+            {
+                // Diagnostic-only — written to disk instead of crossLog so it doesn't clutter the
+                // visible UI now that the underlying "H-Lines only on one panel" bug is confirmed
+                // fixed; kept on disk for later review instead of being thrown away outright.
+                try
+                {
+                    Directory.CreateDirectory(@"C:\OptionsData\EventLog");
+                    File.AppendAllText(@"C:\OptionsData\EventLog\prevday_hilo_debug.log",
+                        $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {detail}{Environment.NewLine}");
+                }
+                catch { /* best-effort diagnostic logging */ }
+            };
         }
 
         // Stk line delete: markStrike draws the same green line on all 3 panels at trade open —
