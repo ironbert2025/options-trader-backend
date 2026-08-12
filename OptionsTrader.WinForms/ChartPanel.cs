@@ -1353,8 +1353,13 @@ public class ChartPanel : Panel
             $"{ModeLabel(_mode)}: prevDate={prevDate} high={highBar.High:F2} low={lowBar.Low:F2} ref={referencePrice:F2} drawHigh={drawHigh} drawLow={drawLow}");
         if (!drawHigh && !drawLow) return;
 
-        static string TimeArg(CandleData c) =>
-            new DateTimeOffset(DateTime.SpecifyKind(c.Time, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString();
+        // Must use the same "ET wall-clock digits disguised as UTC" epoch ToChartJson uses for
+        // every candle sent to this chart (see FakeUtcEpochSeconds) — using the real UTC epoch
+        // here, as this used to, put the H-Line's anchor time hours away from where that candle
+        // actually sits in the chart's own (disguised) timeline, so timeToCoordinate found nothing
+        // there and the line silently failed to render (intermittently "worked" only when the
+        // mismatch happened to land near another real bar).
+        static string TimeArg(CandleData c) => FakeUtcEpochSeconds(c.Time).ToString();
         static string PriceArg(decimal p) => p.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         var highTimeJs  = drawHigh ? TimeArg(highBar) : "null";
