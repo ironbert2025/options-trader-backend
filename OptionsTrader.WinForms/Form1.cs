@@ -1817,11 +1817,18 @@ public partial class Form1 : Form
             PnlTarget:      targetPct.ToString("F0"),
             EntrySpotPrice: _lastSpotPrice));
 
-        _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
-
-        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow through here.
+        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
+        // through here. Awaited (with a repaint delay) BEFORE the entry snapshot below, same
+        // pattern as the close flow's ΔS marker — otherwise the snapshot capture/upload can win the
+        // race against WebView2's JS round-trip and get uploaded to S3 (and from there into the
+        // Obsidian daily note) without the line ever having been drawn on it.
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
-            _ = chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
+        {
+            await chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
+
+        _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
 
         OnTradesUpdatedEvent?.Invoke(symbol);
         return (tradeId, newRow);
