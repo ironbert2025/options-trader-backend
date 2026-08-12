@@ -1276,6 +1276,33 @@ public class ChartPanel : Panel
             $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
     }
 
+    // ==================================================================================
+    // "PM" (Punto Medio) — SMA20 slope indicator, 1h and 15m RTH panels only. Continuous (unlike
+    // the one-shot "Abriendo la Volatilidad"): re-evaluated on every live tick, premarket and RTH
+    // alike, and just redraws — no armed/fired state to track. Green when SMA20 is tilting up
+    // (current > a few candles ago), red when tilting down. Same lookback convention as the
+    // SMA-direction check in EvaluateVolatilityOpening, kept independent since this isn't tied to
+    // Bollinger widening at all.
+    // ==================================================================================
+
+    private void EvaluatePuntoMedioSlope()
+    {
+        if (_mode != ChartPanelMode.Hourly15 && _mode != ChartPanelMode.Fifteen_RTH) return;
+
+        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
+        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (smaNow == null || smaEarlier == null || smaNow == smaEarlier) return; // no clear tilt yet
+
+        var bullish = smaNow > smaEarlier;
+        BeginInvoke(async () => await MarkPuntoMedioAsync(bullish));
+    }
+
+    private async Task MarkPuntoMedioAsync(bool bullish)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updatePuntoMedio({(bullish ? "true" : "false")});");
+    }
+
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
     // a trend line is meant to keep projecting forward. Falls back to p1 if the 2 points share
     // the same time (shouldn't happen — chart.html requires 2 distinct clicks).
@@ -1566,6 +1593,7 @@ public class ChartPanel : Panel
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
         OnLiveTick?.Invoke(eastern, candle.Close);
+        EvaluatePuntoMedioSlope(); // premarket + RTH alike, see method comment
         if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
             ArmVolatilityOpeningWatchDefault();
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
@@ -1768,6 +1796,7 @@ public class ChartPanel : Panel
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
         OnLiveTick?.Invoke(eastern, price); // fires regardless of session/bucket state, same as Streamer_OnNewCandle
+        EvaluatePuntoMedioSlope(); // premarket + RTH alike, see method comment
         if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
             ArmVolatilityOpeningWatchDefault();
 

@@ -1372,6 +1372,16 @@
                     return;
                   }
 
+                  // Same idea as fixedTop, but anchored near the bottom-center instead — used for
+                  // the "PM" (Punto Medio / SMA20 slope) live indicator, which needs to stay put
+                  // and readable regardless of price/pan/zoom, same as Expired!!! does up top.
+                  if (l.fixedBottom) {
+                    ctx.textAlign = 'center';
+                    ctx.fillText(l.text, scope.bitmapSize.width / 2, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
+                    ctx.textAlign = 'left';
+                    return;
+                  }
+
                   const x = ts.timeToCoordinate(l.time);
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (x == null || y == null) return;
@@ -1491,6 +1501,19 @@
     textLabelsPrimitive._labels.push({ text: 'Expired!!!', color: '#ff0000', bold: true, fixedTop: true });
     forceRepaint();
     return true;
+  }
+
+  // "PM" (Punto Medio / SMA20 slope) live indicator — 1h and 15m RTH panels only, updated on every
+  // live tick from C# (EvaluatePuntoMedioSlope). Green when the SMA20 is tilting up, red when
+  // tilting down. Unlike markExpired's one-shot label, this REPLACES its own previous entry each
+  // call instead of accumulating — only ever one "PM" label showing at a time.
+  function updatePuntoMedio(bullish) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'pm');
+    textLabelsPrimitive._labels.push({
+      id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottom: true
+    });
+    forceRepaint();
   }
 
   // ---- Strike marker: full-width green line + "Stk=xxx" label, drawn programmatically when a
