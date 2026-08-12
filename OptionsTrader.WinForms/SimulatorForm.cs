@@ -894,6 +894,18 @@ public class SimulatorForm : Form
         _dgvTrades.CellContentClick += DgvTrades_CellContentClick;
     }
 
+    // Same rule as Form1's private static IsRowTradeBlocked: bid == 0, OR spread >= 5 (FormatSprd's
+    // stripped-decimal-point encoding, so 5 == a real $0.05 spread), OR 0 contracts.
+    private static bool IsChainRowTradeBlocked(DataGridViewRow row, string? rowType)
+    {
+        var bidCol  = rowType == "PUT" ? "colPutBid"  : "colCallBid";
+        var sprdCol = rowType == "PUT" ? "colPutSprd" : "colCallSprd";
+        if (!decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid) || bid == 0m) return true;
+        if (decimal.TryParse(row.Cells[sprdCol].Value?.ToString(), out var sprd) && sprd >= 5) return true;
+        if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
+        return false;
+    }
+
     // Same rendering as Form1.DgvQuotes_CellPainting — a colored button (green CALL / red PUT /
     // gray if illiquid) instead of plain text, since the Strike cell is clickable here too
     // (DgvChain_CellClick below).
@@ -945,8 +957,7 @@ public class SimulatorForm : Form
         var val      = e.Value?.ToString();
         var row      = _dgvChain.Rows[e.RowIndex];
         var rowType  = row.Tag?.ToString();
-        var bidCol   = rowType == "PUT" ? "colPutBid" : "colCallBid";
-        var disabled = !decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid) || bid == 0m;
+        var disabled = IsChainRowTradeBlocked(row, rowType);
 
         e.PaintBackground(e.ClipBounds, true);
 
@@ -984,11 +995,12 @@ public class SimulatorForm : Form
         var strikeOk = decimal.TryParse(row.Cells["colStrikePrice"].Value?.ToString(), out var strike);
         if (!strikeOk) return;
 
+        if (IsChainRowTradeBlocked(row, rowType)) return; // same guard as the real grid
+
         var bidCol = rowType == "CALL" ? "colCallBid" : "colPutBid";
         var askCol = rowType == "CALL" ? "colCallAsk" : "colPutAsk";
         decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid);
         decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask);
-        if (ask <= 0) return; // same guard as the real grid — never open on an illiquid quote
 
         int.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts);
         if (contracts <= 0) contracts = 1;

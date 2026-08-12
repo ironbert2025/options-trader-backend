@@ -683,25 +683,33 @@ public class MultiChartForm : Form
             }
         };
 
-        // Strike button: dark green for Call rows, red for Put rows — identical to
-        // DgvQuotes_CellPainting's colStrikePrice button on Form1's own grid.
+        // Strike button: dark green for Call rows, red for Put rows, light gray when blocked —
+        // identical to DgvQuotes_CellPainting's colStrikePrice button on Form1's own grid (same
+        // IsRowTradeBlocked rule: bid == 0, OR spread >= 5, OR 0 contracts).
         _dgvOptions.CellPainting += (s, e) =>
         {
             if (e.RowIndex < 0 || e.ColumnIndex != _dgvOptions.Columns["colStrikeLive"]!.Index) return;
 
             var val     = e.Value?.ToString();
-            var rowType = _dgvOptions.Rows[e.RowIndex].Tag?.ToString();
+            var row     = _dgvOptions.Rows[e.RowIndex];
+            var rowType = row.Tag?.ToString();
             e.PaintBackground(e.ClipBounds, true);
             if (string.IsNullOrEmpty(val)) { e.Handled = true; return; }
 
-            var btnColor = rowType == "PUT" ? Color.Red : Color.DarkGreen;
-            var btnRect  = Rectangle.Inflate(e.CellBounds, -3, -3);
+            var disabled =
+                !decimal.TryParse(row.Cells["colBidLive"].Value?.ToString(), out var bid) || bid == 0m
+                || (decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd >= 5)
+                || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0;
+
+            var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
+            var textColor = disabled ? Color.Gray : Color.White;
+            var btnRect   = Rectangle.Inflate(e.CellBounds, -3, -3);
             using var fillBrush = new SolidBrush(btnColor);
             using var borderPen = new Pen(ControlPaint.Dark(btnColor, 0.2f));
             using var textFont  = new Font(_dgvOptions.Font, FontStyle.Bold);
             e.Graphics!.FillRectangle(fillBrush, btnRect);
             e.Graphics.DrawRectangle(borderPen, btnRect);
-            TextRenderer.DrawText(e.Graphics, val, textFont, btnRect, Color.White,
+            TextRenderer.DrawText(e.Graphics, val, textFont, btnRect, textColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
             e.Handled = true;
         };
