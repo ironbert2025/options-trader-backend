@@ -71,7 +71,7 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 1395; // +345 for the live options grid on the right
-        Height        = 710; // +180 for the mirrored trades grid below the charts
+        Height        = 620; // +90 for the mirrored trades grid below the charts (2 rows tall)
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -648,9 +648,10 @@ public class MultiChartForm : Form
         {
             if (e.RowIndex < 0) return;
             var row = _dgvOptions.Rows[e.RowIndex];
-            var sprdCol = _dgvOptions.Columns["colSprdLive"]!.Index;
-            var bidCol  = _dgvOptions.Columns["colBidLive"]!.Index;
-            var askCol  = _dgvOptions.Columns["colAskLive"]!.Index;
+            var sprdCol  = _dgvOptions.Columns["colSprdLive"]!.Index;
+            var bidCol   = _dgvOptions.Columns["colBidLive"]!.Index;
+            var askCol   = _dgvOptions.Columns["colAskLive"]!.Index;
+            var rangeCol = _dgvOptions.Columns["colRangeLive"]!.Index;
 
             if (e.ColumnIndex == sprdCol)
             {
@@ -667,6 +668,18 @@ public class MultiChartForm : Form
                 e.CellStyle.BackColor = decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd <= 2
                     ? Color.LightGreen
                     : _dgvOptions.DefaultCellStyle.BackColor;
+            }
+            else if (e.ColumnIndex == rangeCol)
+            {
+                // Same rule as Form1's dgvQuotes colRange (DgvQuotes_CellFormatting): green when
+                // this row's own Ask actually falls within "Low - High".
+                var rangeText = row.Cells["colRangeLive"].Value?.ToString();
+                var parts = rangeText?.Split(" - ", StringSplitOptions.TrimEntries);
+                var inRange = parts?.Length == 2
+                    && decimal.TryParse(parts[0], out var low) && decimal.TryParse(parts[1], out var high)
+                    && decimal.TryParse(row.Cells["colAskLive"].Value?.ToString(), out var ask)
+                    && ask >= low && ask <= high;
+                e.CellStyle.BackColor = inRange ? Color.LightGreen : _dgvOptions.DefaultCellStyle.BackColor;
             }
         };
 
@@ -764,7 +777,7 @@ public class MultiChartForm : Form
             _form1.TriggerTradeCloseClick(_symbol, e.RowIndex);
         };
 
-        var tradesGridHost = new Panel { Dock = DockStyle.Bottom, Height = 180, Padding = new Padding(6, 0, 6, 6) };
+        var tradesGridHost = new Panel { Dock = DockStyle.Bottom, Height = 90, Padding = new Padding(6, 0, 6, 6) };
         tradesGridHost.Controls.Add(_dgvTrades);
 
         // Full rebuild every refresh (values + per-cell colors copied straight from Form1's own
