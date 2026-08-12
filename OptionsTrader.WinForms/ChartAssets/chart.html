@@ -1360,7 +1360,8 @@
                 ctx.textBaseline = 'middle';
                 self._labels.forEach(l => {
                   ctx.fillStyle = l.color || '#ff9800'; // orange default (Piso/Techo)
-                  ctx.font = l.bold ? `bold ${14 * scope.verticalPixelRatio}px sans-serif` : `${12 * scope.verticalPixelRatio}px sans-serif`;
+                  const size = l.fontSize || (l.bold ? 14 : 12);
+                  ctx.font = l.bold ? `bold ${size * scope.verticalPixelRatio}px sans-serif` : `${size * scope.verticalPixelRatio}px sans-serif`;
 
                   // Fixed at the top-center of the chart pane, ignoring pan/zoom/price entirely —
                   // used for markExpired, which needs to stay put and readable regardless of where
@@ -1507,11 +1508,14 @@
   // live tick from C# (EvaluatePuntoMedioSlope). Green when the SMA20 is tilting up, red when
   // tilting down. Unlike markExpired's one-shot label, this REPLACES its own previous entry each
   // call instead of accumulating — only ever one "PM" label showing at a time.
-  function updatePuntoMedio(bullish) {
+  // `large` (set by MultiChartForm when BOTH panels' PM currently agree) bumps the font size —
+  // otherwise same normal size as any other bold fixed label.
+  function updatePuntoMedio(bullish, large) {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'pm');
     textLabelsPrimitive._labels.push({
-      id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottom: true
+      id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottom: true,
+      fontSize: large ? 20 : 14
     });
     forceRepaint();
   }

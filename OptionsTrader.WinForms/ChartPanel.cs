@@ -1283,7 +1283,15 @@ public class ChartPanel : Panel
     // (current > a few candles ago), red when tilting down. Same lookback convention as the
     // SMA-direction check in EvaluateVolatilityOpening, kept independent since this isn't tied to
     // Bollinger widening at all.
+    //
+    // Direction is fired as an event instead of drawn directly here — MultiChartForm listens to
+    // BOTH panels' events, decides whether they currently agree (same color on both), and drives
+    // the actual draw (MarkPuntoMedioAsync) on both with a shared "large" flag: bigger text when
+    // both panels agree, normal size when they don't — a cross-panel decision this panel alone
+    // can't make.
     // ==================================================================================
+
+    public event Action<bool>? OnPuntoMedioLevelEvent;
 
     private void EvaluatePuntoMedioSlope()
     {
@@ -1294,13 +1302,13 @@ public class ChartPanel : Panel
         if (smaNow == null || smaEarlier == null || smaNow == smaEarlier) return; // no clear tilt yet
 
         var bullish = smaNow > smaEarlier;
-        BeginInvoke(async () => await MarkPuntoMedioAsync(bullish));
+        BeginInvoke(() => OnPuntoMedioLevelEvent?.Invoke(bullish));
     }
 
-    private async Task MarkPuntoMedioAsync(bool bullish)
+    public async Task MarkPuntoMedioAsync(bool bullish, bool large)
     {
         if (_webView.CoreWebView2 == null) return;
-        await _webView.CoreWebView2.ExecuteScriptAsync($"updatePuntoMedio({(bullish ? "true" : "false")});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updatePuntoMedio({(bullish ? "true" : "false")}, {(large ? "true" : "false")});");
     }
 
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —

@@ -575,6 +575,27 @@ public class MultiChartForm : Form
             hourlyPanel.ReplayPisoTechoLevels();
         }
 
+        // "PM" (Punto Medio) size coordination: each panel only knows its OWN SMA20 slope — whether
+        // the 1h and 15m RTH panels currently agree (both bullish or both bearish) is a cross-panel
+        // decision that has to live here. Track the latest direction from each and redraw BOTH with
+        // a shared "large" flag once both are known — bigger text when they agree, normal otherwise.
+        if (hourlyPanel != null && rthPanel != null)
+        {
+            bool? hourlyPmBullish = null;
+            bool? rthPmBullish = null;
+
+            void RedrawPuntoMedio()
+            {
+                if (hourlyPmBullish == null || rthPmBullish == null) return;
+                var large = hourlyPmBullish == rthPmBullish;
+                _ = hourlyPanel.MarkPuntoMedioAsync(hourlyPmBullish.Value, large);
+                _ = rthPanel.MarkPuntoMedioAsync(rthPmBullish.Value, large);
+            }
+
+            hourlyPanel.OnPuntoMedioLevelEvent += bullish => { hourlyPmBullish = bullish; RedrawPuntoMedio(); };
+            rthPanel.OnPuntoMedioLevelEvent += bullish => { rthPmBullish = bullish; RedrawPuntoMedio(); };
+        }
+
         // Telegram push failures previously vanished silently (fire-and-forget from every call
         // site) — mirror the failure detail into crossLog on whichever panel it happened on, so a
         // missed push is diagnosable instead of just "the event logged but nothing arrived".
