@@ -748,6 +748,12 @@ public class MultiChartForm : Form
         foreach (DataGridViewColumn col in _dgvTrades.Columns)
             col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
+        // Read-only mirror — never show the blue "selected row" highlight, which would otherwise
+        // mask the per-cell colors copied from Form1 (see RefreshTradesGrid) the moment a row gets
+        // auto-selected (Rows.Add() always leaves the newest row selected/current).
+        _dgvTrades.DefaultCellStyle.SelectionBackColor = _dgvTrades.DefaultCellStyle.BackColor;
+        _dgvTrades.DefaultCellStyle.SelectionForeColor = _dgvTrades.DefaultCellStyle.ForeColor;
+
         // Close click: forwards into Form1's own DgvTrades_CellClick (real trades place an actual
         // SELL_TO_CLOSE order; demo trades just close in the log) — identical to clicking Close on
         // Form1's own grid for the same row.
@@ -791,6 +797,12 @@ public class MultiChartForm : Form
                 }
                 if (scrollRowToRestore >= 0 && _dgvTrades.Rows.Count > 0)
                     _dgvTrades.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, _dgvTrades.Rows.Count - 1);
+
+                // Rows.Add() leaves the first row selected/current by default, which paints it
+                // with the grid's SelectionBackColor (blue) — masking the per-cell colors just
+                // copied above. This is a read-only mirror, nothing should ever look "selected".
+                _dgvTrades.ClearSelection();
+                _dgvTrades.CurrentCell = null;
             });
         }
 
