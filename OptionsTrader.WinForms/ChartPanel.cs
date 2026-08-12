@@ -979,6 +979,36 @@ public class ChartPanel : Panel
         InvalidateIfBrokenByOpen(200, ref s_pisoTechoResult200, livePrice);
     }
 
+    // The LAST hourly RTH bucket (15:00-16:00) never gets the normal "next bucket started" trigger
+    // that closes and evaluates every other candle (see the sameDay branch in Streamer_OnNewCandle)
+    // — RTH ends exactly when this bucket would close, so no further tick ever arrives today to
+    // notice it's done. Previously this candle only got evaluated retroactively the NEXT time the
+    // chart opens (LoadHistoryAsync's "yesterday's last bar" branch) — too late to act on same-day.
+    // Fires once, right before close (15:59), treating the still-forming bucket as if it had just
+    // closed: adds it to _closedCandles (for real this time — nothing else will) and runs the exact
+    // same EvaluatePisoTechoWatches used for every other hourly candle, so a genuine Cruce/Rebote in
+    // this last hour still gets logged/notified today instead of silently never firing.
+    private bool _lastHourCandleEvaluated;
+
+    private void EvaluateLastHourCandleBeforeCloseIfNeeded(DateTime eastern)
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _lastHourCandleEvaluated || _liveBucket == null) return;
+        if (eastern.TimeOfDay < new TimeSpan(15, 59, 0) || eastern.TimeOfDay >= new TimeSpan(16, 0, 0)) return;
+
+        _lastHourCandleEvaluated = true;
+
+        // A snapshot copy, not the live reference — _liveBucket keeps mutating (High/Low/Close)
+        // with further ticks until the session actually ends at 16:00, and _closedCandles must
+        // hold an immutable historical bar from here on, same as every other entry in it.
+        var snapshot = new CandleData
+        {
+            Time = _liveBucket.Time, Open = _liveBucket.Open,
+            High = _liveBucket.High, Low = _liveBucket.Low, Close = _liveBucket.Close
+        };
+        _closedCandles.Add(snapshot);
+        EvaluatePisoTechoWatches(snapshot);
+    }
+
     // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed
     // PisoTechoWatch — same case-1/case-2 cross-or-bounce formula used elsewhere
     // (BounceProximityRatio), against that watch's own SMA period. Resolves once per period, then
@@ -1604,6 +1634,7 @@ public class ChartPanel : Panel
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
         OnLiveTick?.Invoke(eastern, candle.Close);
         EvaluatePuntoMedioSlope(); // premarket + RTH alike, see method comment
+        EvaluateLastHourCandleBeforeCloseIfNeeded(eastern);
         if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
             ArmVolatilityOpeningWatchDefault();
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
@@ -1807,6 +1838,7 @@ public class ChartPanel : Panel
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
         OnLiveTick?.Invoke(eastern, price); // fires regardless of session/bucket state, same as Streamer_OnNewCandle
         EvaluatePuntoMedioSlope(); // premarket + RTH alike, see method comment
+        EvaluateLastHourCandleBeforeCloseIfNeeded(eastern);
         if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
             ArmVolatilityOpeningWatchDefault();
 
