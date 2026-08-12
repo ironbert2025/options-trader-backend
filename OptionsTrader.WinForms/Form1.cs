@@ -2105,7 +2105,7 @@ public partial class Form1 : Form
     // everything else in this form without any interaction between them.
     private void BtnSimulator_Click(object? sender, EventArgs e)
     {
-        var simulatorForm = new SimulatorForm();
+        var simulatorForm = new SimulatorForm(_selectedTicker?.Symbol);
         simulatorForm.Show();
     }
 

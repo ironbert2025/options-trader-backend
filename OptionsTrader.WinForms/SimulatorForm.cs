@@ -117,9 +117,11 @@ public class SimulatorForm : Form
     private string _symbol = string.Empty;
     private DateOnly _simDate;
     private TickerEntry? _ticker;
+    private readonly string? _ownSymbol;
 
-    public SimulatorForm()
+    public SimulatorForm(string? ownSymbol = null)
     {
+        _ownSymbol = ownSymbol;
         Text          = "Simulador";
         Width         = 1190;
         Height        = 1000;
@@ -525,7 +527,12 @@ public class SimulatorForm : Form
         var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
         _cmbSymbol.Items.Clear();
         foreach (var s in symbols) _cmbSymbol.Items.Add(s);
-        if (_cmbSymbol.Items.Count > 0) _cmbSymbol.SelectedIndex = 0;
+        if (_cmbSymbol.Items.Count == 0) return;
+
+        // Defaults to Form1's OWN ticker when available — same idea as TimeframeViewerForm.LoadSymbols
+        // — falls back to the first symbol in the list otherwise.
+        var ownSymbolIndex = _ownSymbol is { } ownSymbol ? symbols.IndexOf(ownSymbol) : -1;
+        _cmbSymbol.SelectedIndex = ownSymbolIndex >= 0 ? ownSymbolIndex : 0;
     }
 
     private void RefreshAvailableDates()
