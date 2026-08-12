@@ -1615,6 +1615,14 @@ public class ChartPanel : Panel
 
         var isHourly = _mode == ChartPanelMode.Hourly15;
 
+        // Set true below when this tick starts the FIRST hourly bucket of a new day (today's
+        // market open) — that new bucket's Time is hours away from the seeded bucket's (yesterday's
+        // last hourly bar), and candleSeries.update()'s incremental path doesn't handle that gap
+        // correctly (visually "stretches" the bar) — same issue Fifteen_RTH's resetToNewDayCandle
+        // was added for. Routes the send below to that same full-rerender path instead of the
+        // normal incremental updateLastCandle.
+        var isHourlyNewDayFirstBucket = false;
+
         if (_liveBucket == null)
         {
             if (isHourly)
@@ -1694,6 +1702,7 @@ public class ChartPanel : Panel
                         // This transition IS today's market open (the outgoing bucket was
                         // yesterday's) — candle.Open below is the actual RTH opening price.
                         ValidatePisoTechoAgainstOpen(candle.Open);
+                        isHourlyNewDayFirstBucket = true;
                     }
                 }
                 else if (_mode == ChartPanelMode.Fifteen_Full)
@@ -1724,7 +1733,8 @@ public class ChartPanel : Panel
         }
 
         var toSend = _liveBucket;
-        BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
+        var jsFunction = isHourlyNewDayFirstBucket ? "resetToNewDayCandle" : "updateLastCandle";
+        BeginInvoke(async () => await RunScriptAsync(jsFunction, toSend));
 
         if (_mode == ChartPanelMode.Fifteen_RTH)
             EvaluateVolatilityOpening(candle.Close);
