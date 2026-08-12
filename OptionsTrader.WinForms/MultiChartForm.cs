@@ -32,7 +32,8 @@ public class MultiChartForm : Form
     private TextBox? _crossLog;
 
     // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
-    // GetQuoteSnapshot) — read-only, no trade/click action in this first phase.
+    // GetQuoteSnapshot) — clicking Strike forwards into Form1.TriggerQuoteStrikeClick, which runs
+    // the exact same click handler Form1's own grid would (same currently-selected trade mode).
     private readonly DataGridView _dgvOptions = new()
     {
         Dock = DockStyle.Fill,
@@ -40,6 +41,21 @@ public class MultiChartForm : Form
         AllowUserToDeleteRows = false,
         RowHeadersVisible = false,
         ReadOnly = true,
+        Font = new Font("Segoe UI", 8F),
+        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+        ColumnHeadersHeight = 24,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect
+    };
+
+    // Trades grid mirrored from Form1's own dgvTrades (see Form1.OnTradesUpdatedEvent /
+    // GetTradesGrid) — full read-only copy of values + per-cell colors every refresh; Close button
+    // forwards into Form1.TriggerTradeCloseClick, same handler Form1's own grid uses.
+    private readonly DataGridView _dgvTrades = new()
+    {
+        Dock = DockStyle.Fill,
+        AllowUserToAddRows = false,
+        AllowUserToDeleteRows = false,
+        RowHeadersVisible = false,
         Font = new Font("Segoe UI", 8F),
         ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
         ColumnHeadersHeight = 24,
@@ -55,7 +71,7 @@ public class MultiChartForm : Form
 
         Text          = $"Live Charts — {symbol}";
         Width         = 1395; // +345 for the live options grid on the right
-        Height        = 530;
+        Height        = 710; // +180 for the mirrored trades grid below the charts
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
@@ -689,6 +705,19 @@ public class MultiChartForm : Form
                 _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker));
         }
 
+        // Strike click: forwards into Form1's own click handler — opens a trade using whatever
+        // radio mode (No Trade / No Trade-Target / Trade / Trade-Target) is currently selected on
+        // Form1, identical behavior to clicking Strike there directly.
+        _dgvOptions.CellClick += (s, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex != _dgvOptions.Columns["colStrikeLive"]!.Index) return;
+            var row = _dgvOptions.Rows[e.RowIndex];
+            var rowType = row.Tag?.ToString();
+            var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
+            if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
+            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText);
+        };
+
         _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
         void OnForm1QuotesUpdated(string updatedSymbol)
         {
@@ -697,8 +726,85 @@ public class MultiChartForm : Form
         FormClosed += (s, e) => _form1.OnQuotesUpdatedEvent -= OnForm1QuotesUpdated;
         Load += (s, e) => RefreshOptionsGrid();
 
+        // Trades grid — exact same 17 columns as Form1's dgvTrades, mirrored below the charts.
+        _dgvTrades.Columns.AddRange(
+            new DataGridViewTextBoxColumn { Name = "colTradeTimeLive",       HeaderText = "Time",        Width = 60, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeTypeLive",       HeaderText = "Type",        Width = 45, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeStrikeLive",     HeaderText = "StrikePrice", Width = 65, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeBidLive",       HeaderText = "Bid",          Width = 45, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeAskLive",       HeaderText = "Ask",          Width = 45, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeContractsLive", HeaderText = "Contracts",    Width = 60, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeEntryPriceLive",HeaderText = "EntryPrice",   Width = 65, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeCBidLive",      HeaderText = "C_Bid",        Width = 50, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeTBidLive",      HeaderText = "T_Bid",        Width = 50, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradePnLLive",       HeaderText = "PnL",          Width = 55, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradePnLPercentLive",HeaderText = "PnL_Percent",  Width = 70, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradePnLTargetLive", HeaderText = "PnL_Target",   Width = 65, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeExitTimeLive",  HeaderText = "ExitTime",     Width = 60, ReadOnly = true },
+            new DataGridViewButtonColumn  { Name = "colTradeCloseLive",     HeaderText = "Close",        Width = 55, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
+            new DataGridViewTextBoxColumn { Name = "colTradePnLMinLive",    HeaderText = "Min PnL%",     Width = 60, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradePnLMaxLive",    HeaderText = "Max PnL%",     Width = 60, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeMoneynessLive", HeaderText = "OTM/ITM",      Width = 55, ReadOnly = true });
+        foreach (DataGridViewColumn col in _dgvTrades.Columns)
+            col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+
+        // Close click: forwards into Form1's own DgvTrades_CellClick (real trades place an actual
+        // SELL_TO_CLOSE order; demo trades just close in the log) — identical to clicking Close on
+        // Form1's own grid for the same row.
+        _dgvTrades.CellClick += (s, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex != _dgvTrades.Columns["colTradeCloseLive"]!.Index) return;
+            if (!string.IsNullOrEmpty(_dgvTrades.Rows[e.RowIndex].Cells["colTradeExitTimeLive"].Value?.ToString())) return;
+            _form1.TriggerTradeCloseClick(_symbol, e.RowIndex);
+        };
+
+        var tradesGridHost = new Panel { Dock = DockStyle.Bottom, Height = 180, Padding = new Padding(6, 0, 6, 6) };
+        tradesGridHost.Controls.Add(_dgvTrades);
+
+        // Full rebuild every refresh (values + per-cell colors copied straight from Form1's own
+        // dgvTrades) — simplest way to stay pixel-identical to whatever coloring Form1 applies
+        // (lavender automatic-trade rows, gray-on-close, PnL colors, etc.) without re-deriving
+        // those rules here. Source column order matches this grid's column order 1:1.
+        void RefreshTradesGrid()
+        {
+            var sourceGrid = _form1.GetTradesGrid(_symbol);
+            if (sourceGrid == null) return;
+            if (_dgvTrades.IsDisposed || !_dgvTrades.IsHandleCreated) return;
+            _dgvTrades.BeginInvoke(() =>
+            {
+                var scrollRowToRestore = _dgvTrades.Rows.Count > 0 ? _dgvTrades.FirstDisplayedScrollingRowIndex : -1;
+                _dgvTrades.Rows.Clear();
+                foreach (DataGridViewRow sourceRow in sourceGrid.Rows)
+                {
+                    var values = sourceRow.Cells.Cast<DataGridViewCell>().Select(c => c.Value).ToArray();
+                    _dgvTrades.Rows.Add(values);
+                    var mirrorRow = _dgvTrades.Rows[_dgvTrades.Rows.Count - 1];
+                    mirrorRow.DefaultCellStyle.BackColor = sourceRow.DefaultCellStyle.BackColor;
+                    mirrorRow.DefaultCellStyle.ForeColor = sourceRow.DefaultCellStyle.ForeColor;
+                    for (int i = 0; i < sourceRow.Cells.Count && i < mirrorRow.Cells.Count; i++)
+                    {
+                        mirrorRow.Cells[i].Style.ForeColor = sourceRow.Cells[i].Style.ForeColor;
+                        mirrorRow.Cells[i].Style.BackColor = sourceRow.Cells[i].Style.BackColor;
+                        if (sourceRow.Cells[i].Style.Font != null)
+                            mirrorRow.Cells[i].Style.Font = sourceRow.Cells[i].Style.Font;
+                    }
+                }
+                if (scrollRowToRestore >= 0 && _dgvTrades.Rows.Count > 0)
+                    _dgvTrades.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, _dgvTrades.Rows.Count - 1);
+            });
+        }
+
+        _form1.OnTradesUpdatedEvent += OnForm1TradesUpdated;
+        void OnForm1TradesUpdated(string updatedSymbol)
+        {
+            if (updatedSymbol == _symbol) RefreshTradesGrid();
+        }
+        FormClosed += (s, e) => _form1.OnTradesUpdatedEvent -= OnForm1TradesUpdated;
+        Load += (s, e) => RefreshTradesGrid();
+
         Controls.Add(layout);
         Controls.Add(toolbar);
+        Controls.Add(tradesGridHost);
         Controls.Add(crossLog);
         Controls.Add(optionsGridHost);
         _crossLog = crossLog;

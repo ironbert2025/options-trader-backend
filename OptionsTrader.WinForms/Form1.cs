@@ -1096,6 +1096,7 @@ public partial class Form1 : Form
                 .GroupBy(q => q.StrikePrice)
                 .ToDictionary(g => ("PUT", g.Key), g => g.First());
             UpdateTradesPnL(callMapForTrades, putMapForTrades);
+            OnTradesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
 
             // Next chain (next ExpDate, e.g. tomorrow for daily) — skipped entirely while
             // "Hide Next ExpDate" is checked (no grid refresh, no CSV write).
@@ -1259,6 +1260,47 @@ public partial class Form1 : Form
     {
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return null;
         return (_lastAllQuotes, _lastOtmCalls, _lastOtmPuts, _selectedTicker);
+    }
+
+    // Forwards a Strike-button click from MultiChartForm's mirrored options grid into the EXACT
+    // same handler a click on Form1's own dgvQuotes Strike button would run (DgvQuotes_CellClick —
+    // blocked-row check, then whichever radio mode is currently selected: No Trade / No
+    // Trade-Target / Trade / Trade-Target). Finds the matching row by (type, strike text) since
+    // MultiChartForm doesn't have its own row indices into this grid. Same one-instance-per-ticker
+    // restriction as the methods above.
+    internal void TriggerQuoteStrikeClick(string symbol, string rowType, string strikeText)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
+        for (int i = 0; i < dgvQuotes.Rows.Count; i++)
+        {
+            var row = dgvQuotes.Rows[i];
+            if (row.Tag?.ToString() != rowType) continue;
+            if (row.Cells["colStrikePrice"].Value?.ToString() != strikeText) continue;
+            DgvQuotes_CellClick(this, new DataGridViewCellEventArgs(dgvQuotes.Columns["colStrikePrice"].Index, i));
+            return;
+        }
+    }
+
+    // Fires (symbol) every time dgvTrades changes — a trade opens, closes, or its PnL is refreshed
+    // on the regular poll cycle — so MultiChartForm's mirrored trades grid can stay in sync.
+    public event Action<string>? OnTradesUpdatedEvent;
+
+    // Read-only access to dgvTrades for MultiChartForm's mirror grid to copy values/colors from.
+    // Same one-instance-per-ticker restriction as the methods above.
+    internal DataGridView? GetTradesGrid(string symbol) =>
+        _selectedTicker != null && _selectedTicker.Symbol == symbol ? dgvTrades : null;
+
+    // Forwards a Close-button click from MultiChartForm's mirrored trades grid into the EXACT same
+    // handler a click on Form1's own dgvTrades Close button would run (DgvTrades_CellClick) — real
+    // trades still place a real SELL_TO_CLOSE order, demo trades just close in the log, identical
+    // either way to clicking Close on Form1 itself. rowIndex is positional — valid as long as the
+    // mirror grid was last rebuilt in the same row order as dgvTrades (always true; see
+    // MultiChartForm's RefreshTradesGrid, which fully rebuilds every time).
+    internal void TriggerTradeCloseClick(string symbol, int rowIndex)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
+        if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return;
+        DgvTrades_CellClick(this, new DataGridViewCellEventArgs(dgvTrades.Columns["colTradeClose"].Index, rowIndex));
     }
 
     // Distinct background so an automatic (bot-driven) demo trade is visually different from a
@@ -1781,6 +1823,7 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
             _ = chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
 
+        OnTradesUpdatedEvent?.Invoke(symbol);
         return (tradeId, newRow);
     }
 
@@ -2508,6 +2551,7 @@ public partial class Form1 : Form
         row.Cells["colTradeExitTime"].Value   = nowStr;
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
+        OnTradesUpdatedEvent?.Invoke(symbol);
 
         var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
 
