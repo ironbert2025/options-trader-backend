@@ -81,6 +81,12 @@ public partial class Form1 : Form
     private string _selectedCounts = "6"; // session-only, always defaults to 6 on launch
     private List<OptionQuoteDto> _lastAllQuotes = new(); // current-expiration chain from the last fetch, for instant re-filtering
 
+    // The exact OTM/range/Counts-filtered lists dgvQuotes itself is currently showing (return value
+    // of the PopulateQuotesGrid call below) — kept so MultiChartForm's live options grid can mirror
+    // the SAME rows/values, not re-derive its own filter and risk showing different strikes.
+    private List<OptionQuoteDto> _lastOtmCalls = new();
+    private List<OptionQuoteDto> _lastOtmPuts = new();
+
     // Strikes force-shown in dgvQuotes regardless of the OTM-only filter — set by clicking a
     // trade's Strike cell in dgvTrades (DgvTrades_CellClick), so a trade that's gone ITM (and
     // would otherwise vanish from the grid) stays visible from then on. Cleared on ticker switch.
@@ -495,9 +501,10 @@ public partial class Form1 : Form
     private void CallPutFilter_CheckedChanged(object? sender, EventArgs e)
     {
         if (_selectedTicker == null || _lastAllQuotes.Count == 0) return;
-        PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
+        (_lastOtmCalls, _lastOtmPuts) = PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
             selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
             forcedStrikes: _forcedStrikes);
+        OnQuotesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
     }
 
     private static void ApplyRadioStyle(GroupBox group)
@@ -1074,7 +1081,7 @@ public partial class Form1 : Form
                 TryAppendIvHistorialSnapshot();
             }
 
-            PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true,
+            (_lastOtmCalls, _lastOtmPuts) = PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true,
                 selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
                 forcedStrikes: _forcedStrikes);
 
@@ -1244,13 +1251,14 @@ public partial class Form1 : Form
     // live options grid subscribes to this instead of polling on its own.
     public event Action<string>? OnQuotesUpdatedEvent;
 
-    // Used by MultiChartForm's live options grid — the FULL current-expiration chain plus the
-    // ticker's own Range settings, for it to filter/render on its own (same OTM+range rules as
-    // PopulateQuotesGrid). Same one-instance-per-ticker restriction as the methods above.
-    internal (List<OptionQuoteDto> Quotes, TickerEntry Ticker)? GetQuoteSnapshot(string symbol)
+    // Used by MultiChartForm's live options grid — the SAME already-filtered Call/Put lists
+    // dgvQuotes itself is currently showing (whatever Counts/Range/Call-Put filter is selected),
+    // so the two grids always show identical strikes/values, never a separately-derived filter.
+    // Same one-instance-per-ticker restriction as the methods above.
+    internal (List<OptionQuoteDto> AllQuotes, List<OptionQuoteDto> OtmCalls, List<OptionQuoteDto> OtmPuts, TickerEntry Ticker)? GetQuoteSnapshot(string symbol)
     {
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return null;
-        return (_lastAllQuotes, _selectedTicker);
+        return (_lastAllQuotes, _lastOtmCalls, _lastOtmPuts, _selectedTicker);
     }
 
     // Distinct background so an automatic (bot-driven) demo trade is visually different from a
@@ -1440,13 +1448,15 @@ public partial class Form1 : Form
     // Single-column-set variant of PopulateQuotesGrid, used by MultiChartForm's live options grid
     // on the Live Chart window — Calls and Puts share the same Strike/Bid/Ask/Sprd/Conts/Level/Range
     // columns (one row per option, not one call+put column set per row), sorted by strike
-    // descending so calls (above spot) sit above puts (below spot) in one continuous list. Same
-    // OTM + Ask-range filter as PopulateQuotesGrid's default (non-Counts) mode — no Counts/Call-Put
-    // filter of its own in this first phase.
-    internal static void PopulateSingleSideOptionsGrid(DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker)
+    // descending so calls (above spot) sit above puts (below spot) in one continuous list.
+    // otmCalls/otmPuts are the EXACT already-filtered lists dgvQuotes is currently showing (see
+    // GetQuoteSnapshot) — same Counts/Range/Call-Put filter Form1 has selected, not a separately
+    // derived one, so both grids always show identical strikes/values. allQuotes (the FULL,
+    // unfiltered chain) is only used for Level's ranking, same as PopulateQuotesGrid's own
+    // "rank among ALL OTM strikes before range/count filter" rule.
+    internal static void PopulateSingleSideOptionsGrid(
+        DataGridView grid, List<OptionQuoteDto> allQuotes, List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, TickerEntry ticker)
     {
-        decimal.TryParse(ticker.Low,  out var rangeLow);
-        decimal.TryParse(ticker.High, out var rangeHigh);
         var rangeText = $"{ticker.Low} - {ticker.High}";
 
         var allOtmCallStrikes = allQuotes
@@ -1458,13 +1468,6 @@ public partial class Form1 : Form
             .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && !q.InTheMoney)
             .OrderByDescending(q => q.StrikePrice)
             .Select(q => q.StrikePrice)
-            .ToList();
-
-        var otmCalls = allQuotes
-            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && !q.InTheMoney && q.Ask >= rangeLow && q.Ask <= rangeHigh)
-            .ToList();
-        var otmPuts = allQuotes
-            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && !q.InTheMoney && q.Ask >= rangeLow && q.Ask <= rangeHigh)
             .ToList();
 
         var scrollRowToRestore = grid.Rows.Count > 0 ? grid.FirstDisplayedScrollingRowIndex : -1;
@@ -2403,7 +2406,7 @@ public partial class Form1 : Form
         _forcedStrikes.Add((type, strike));
 
         if (_selectedTicker != null && _lastAllQuotes.Count > 0)
-            PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
+            (_lastOtmCalls, _lastOtmPuts) = PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
                 selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
                 forcedStrikes: _forcedStrikes);
     }

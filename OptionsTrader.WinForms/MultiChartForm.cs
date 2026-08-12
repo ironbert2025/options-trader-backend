@@ -54,7 +54,7 @@ public class MultiChartForm : Form
         _form1         = form1;
 
         Text          = $"Live Charts — {symbol}";
-        Width         = 1290; // +240 for the live options grid on the right
+        Width         = 1395; // +345 for the live options grid on the right
         Height        = 530;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
@@ -616,31 +616,68 @@ public class MultiChartForm : Form
         // (Form1's own grid keeps Range/Sprd/Bid/Ask BEFORE the Strike button — different order,
         // per explicit request for this one).
         _dgvOptions.Columns.AddRange(
-            new DataGridViewButtonColumn { Name = "colStrikeLive", HeaderText = "Strike", Width = 55, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
-            new DataGridViewTextBoxColumn { Name = "colBidLive",   HeaderText = "Bid",   Width = 40, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colAskLive",   HeaderText = "Ask",   Width = 40, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colSprdLive",  HeaderText = "Sprd",  Width = 36, ReadOnly = true },
+            new DataGridViewButtonColumn { Name = "colStrikeLive", HeaderText = "Strike", Width = 46, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
+            new DataGridViewTextBoxColumn { Name = "colBidLive",   HeaderText = "Bid",   Width = 38, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colAskLive",   HeaderText = "Ask",   Width = 38, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colSprdLive",  HeaderText = "Sprd",  Width = 34, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colContsLive", HeaderText = "Conts", Width = 40, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colLevelLive", HeaderText = "Level", Width = 40, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colRangeLive", HeaderText = "Range", Width = 55, ReadOnly = true });
+            new DataGridViewTextBoxColumn { Name = "colLevelLive", HeaderText = "Level", Width = 38, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colRangeLive", HeaderText = "Range", Width = 70, ReadOnly = true });
         foreach (DataGridViewColumn col in _dgvOptions.Columns)
             col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
-        // Row background: green for Call rows, light red for Put rows — same directional
-        // convention as the ↑Verde/↓Roja arrows on the 1h panel toolbar.
+        // Same per-cell styling as Form1's own dgvQuotes (DgvQuotes_CellFormatting): Sprd bold red,
+        // Ask bold dark green, Bid background green when that row's Sprd <= 2.
         _dgvOptions.CellFormatting += (s, e) =>
         {
             if (e.RowIndex < 0) return;
-            var tag = _dgvOptions.Rows[e.RowIndex].Tag?.ToString();
-            e.CellStyle.BackColor = tag switch
+            var row = _dgvOptions.Rows[e.RowIndex];
+            var sprdCol = _dgvOptions.Columns["colSprdLive"]!.Index;
+            var bidCol  = _dgvOptions.Columns["colBidLive"]!.Index;
+            var askCol  = _dgvOptions.Columns["colAskLive"]!.Index;
+
+            if (e.ColumnIndex == sprdCol)
             {
-                "CALL" => Color.Honeydew,
-                "PUT"  => Color.MistyRose,
-                _      => _dgvOptions.DefaultCellStyle.BackColor
-            };
+                e.CellStyle.ForeColor = Color.Red;
+                e.CellStyle.Font = new Font(_dgvOptions.Font, FontStyle.Bold);
+            }
+            else if (e.ColumnIndex == askCol)
+            {
+                e.CellStyle.ForeColor = Color.DarkGreen;
+                e.CellStyle.Font = new Font(_dgvOptions.Font, FontStyle.Bold);
+            }
+            else if (e.ColumnIndex == bidCol)
+            {
+                e.CellStyle.BackColor = decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd <= 2
+                    ? Color.LightGreen
+                    : _dgvOptions.DefaultCellStyle.BackColor;
+            }
         };
 
-        var optionsGridHost = new Panel { Dock = DockStyle.Right, Width = 240, Padding = new Padding(6, 0, 6, 6) };
+        // Strike button: dark green for Call rows, red for Put rows — identical to
+        // DgvQuotes_CellPainting's colStrikePrice button on Form1's own grid.
+        _dgvOptions.CellPainting += (s, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex != _dgvOptions.Columns["colStrikeLive"]!.Index) return;
+
+            var val     = e.Value?.ToString();
+            var rowType = _dgvOptions.Rows[e.RowIndex].Tag?.ToString();
+            e.PaintBackground(e.ClipBounds, true);
+            if (string.IsNullOrEmpty(val)) { e.Handled = true; return; }
+
+            var btnColor = rowType == "PUT" ? Color.Red : Color.DarkGreen;
+            var btnRect  = Rectangle.Inflate(e.CellBounds, -3, -3);
+            using var fillBrush = new SolidBrush(btnColor);
+            using var borderPen = new Pen(ControlPaint.Dark(btnColor, 0.2f));
+            using var textFont  = new Font(_dgvOptions.Font, FontStyle.Bold);
+            e.Graphics!.FillRectangle(fillBrush, btnRect);
+            e.Graphics.DrawRectangle(borderPen, btnRect);
+            TextRenderer.DrawText(e.Graphics, val, textFont, btnRect, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            e.Handled = true;
+        };
+
+        var optionsGridHost = new Panel { Dock = DockStyle.Right, Width = 345, Padding = new Padding(6, 0, 6, 6) };
         optionsGridHost.Controls.Add(_dgvOptions);
 
         void RefreshOptionsGrid()
@@ -648,7 +685,8 @@ public class MultiChartForm : Form
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
             if (snapshot == null) return;
             if (_dgvOptions.IsDisposed || !_dgvOptions.IsHandleCreated) return;
-            _dgvOptions.BeginInvoke(() => Form1.PopulateSingleSideOptionsGrid(_dgvOptions, snapshot.Value.Quotes, snapshot.Value.Ticker));
+            _dgvOptions.BeginInvoke(() => Form1.PopulateSingleSideOptionsGrid(
+                _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker));
         }
 
         _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
