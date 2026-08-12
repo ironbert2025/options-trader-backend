@@ -505,6 +505,7 @@ public class MultiChartForm : Form
 
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
+                _ = SendPisoTechoTelegramPushAsync(caption);
             };
         }
         else if (hourlyPanel != null)
@@ -513,6 +514,7 @@ public class MultiChartForm : Form
             {
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
+                _ = SendPisoTechoTelegramPushAsync(caption);
             };
         }
         if (rthPanel != null)
@@ -971,6 +973,46 @@ public class MultiChartForm : Form
         {
             // Best-effort — never let a Telegram failure affect the chart/detection logic, but no
             // longer silent: mirrored into crossLog same as every other push failure.
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined 3-chart snapshot for a Piso/Techo Cruce/Rebote resolution — additional to
+    // ChartPanel's own single-panel push (SendChartToTelegramAsync, fired from the 1h panel itself
+    // for the SAME event), per explicit request. Same best-effort pattern as every other push here.
+    private async Task SendPisoTechoTelegramPushAsync(string caption)
+    {
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_PisoTecho_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "PisoTechoCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
             LogTelegramPushFailure(ex.Message);
         }
     }
