@@ -85,9 +85,15 @@
   let userHasInteracted = false;
   let lastAppliedRange = null;
 
-  chart.timeScale().subscribeVisibleTimeRangeChange(range => {
+  // Logical (bar-index) range instead of a time range — setVisibleRange's exact "to" time, once
+  // padded past the last real candle for the right-edge margin, gets silently clamped/rounded by
+  // Lightweight Charts when it reports the range back through this same event, which made EVERY
+  // reapply look like a user pan/zoom and permanently disable the margin the very first time it
+  // was ever applied. Logical indices don't have that problem — "to" can cleanly point past the
+  // last bar with no clamping.
+  chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
     if (userHasInteracted || !lastAppliedRange || !range) return;
-    const matches = Math.abs(range.from - lastAppliedRange.from) < 1 && Math.abs(range.to - lastAppliedRange.to) < 1;
+    const matches = Math.abs(range.from - lastAppliedRange.from) < 0.5;
     if (!matches) userHasInteracted = true;
   });
 
@@ -97,21 +103,15 @@
     const days = [...new Set(series.map(c => dayStartOf(c.time)))].sort((a, b) => a - b);
     if (days.length === 0) return;
     const cutoffIdx = Math.max(0, days.length - visibleDays);
+    const cutoffTime = days[cutoffIdx];
+    const fromIdx = series.findIndex(c => c.time >= cutoffTime);
 
-    // setVisibleRange is an EXACT range — it overrides timeScale.rightOffset's usual empty-space
-    // margin, so the last candle would sit flush against the edge. Pad "to" by ~8 bars' worth of
-    // time ourselves (bar spacing taken from the last two candles of whichever series is
-    // currently displayed — hourly or daily) to leave that same margin (same value as rightOffset
-    // above, so this matches whether or not visibleDays ends up applying).
-    const barDuration = series.length > 1
-      ? series[series.length - 1].time - series[series.length - 2].time
-      : 900;
     const range = {
-      from: days[cutoffIdx],
-      to: series[series.length - 1].time + barDuration * 8,
+      from: fromIdx >= 0 ? fromIdx : 0,
+      to: series.length - 1 + 8, // ~8-bar empty margin on the right for today's candles to form into
     };
     lastAppliedRange = range;
-    chart.timeScale().setVisibleRange(range);
+    chart.timeScale().setVisibleLogicalRange(range);
   }
 
   // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
