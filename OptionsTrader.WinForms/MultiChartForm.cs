@@ -567,6 +567,12 @@ public class MultiChartForm : Form
                 if (rthPanel != null) _ = rthPanel.RemovePisoTechoRefLineAsync(period);
                 if (overnightPanel != null) _ = overnightPanel.RemovePisoTechoRefLineAsync(period);
             };
+
+            // Race fix: hourlyPanel's HandleCreated (added to the layout earlier in this
+            // constructor) can fire EvaluatePisoTechoOnce — and this very event — before the
+            // subscription above ever runs, especially when its history loads fast (e.g. plenty of
+            // HourlyCandleStore data already cached locally). Catch up immediately in that case.
+            hourlyPanel.ReplayPisoTechoLevels();
         }
 
         // Telegram push failures previously vanished silently (fire-and-forget from every call

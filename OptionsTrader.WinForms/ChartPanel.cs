@@ -918,6 +918,20 @@ public class ChartPanel : Panel
         OnPisoTechoLevelReadyEvent?.Invoke(period, sma.Value);
     }
 
+    // Re-fires OnPisoTechoLevelReadyEvent for whichever periods already resolved Piso/Techo —
+    // covers the race where EvaluatePisoTechoOnce (triggered by HandleCreated, right when this
+    // panel is added to its parent form) finishes and fires the event BEFORE MultiChartForm gets a
+    // chance to subscribe to it (subscription happens later in its constructor, after all 3 panels
+    // are already added/handle-created). MultiChartForm calls this immediately after subscribing —
+    // a safe no-op via FirePisoTechoLevelReady's own null-result guard if nothing resolved yet.
+    public void ReplayPisoTechoLevels()
+    {
+        FirePisoTechoLevelReady(20, s_pisoTechoResult20);
+        FirePisoTechoLevelReady(40, s_pisoTechoResult40);
+        FirePisoTechoLevelReady(100, s_pisoTechoResult100);
+        FirePisoTechoLevelReady(200, s_pisoTechoResult200);
+    }
+
     // Runs once at market open (see Streamer_OnNewCandle) — a Piso already broken by a gap-down
     // open (price below it) or a Techo already broken by a gap-up open (price above it) no longer
     // means anything, so its label is removed and its watch unarmed. Checked independently for
