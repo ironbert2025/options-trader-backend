@@ -36,7 +36,7 @@
       timeVisible: true,
       secondsVisible: false,
       borderColor: '#2a2e39',
-      rightOffset: 3, // leaves room for ~3 empty candles to the right, so the latest one isn't jammed against the edge
+      rightOffset: 8, // leaves room for ~8 empty candles to the right, so today's candles have visible room to form
     },
     rightPriceScale: {
       borderColor: '#2a2e39',
@@ -99,15 +99,16 @@
     const cutoffIdx = Math.max(0, days.length - visibleDays);
 
     // setVisibleRange is an EXACT range — it overrides timeScale.rightOffset's usual empty-space
-    // margin, so the last candle would sit flush against the edge. Pad "to" by ~3 bars' worth of
+    // margin, so the last candle would sit flush against the edge. Pad "to" by ~8 bars' worth of
     // time ourselves (bar spacing taken from the last two candles of whichever series is
-    // currently displayed — hourly or daily) to leave that same margin.
+    // currently displayed — hourly or daily) to leave that same margin (same value as rightOffset
+    // above, so this matches whether or not visibleDays ends up applying).
     const barDuration = series.length > 1
       ? series[series.length - 1].time - series[series.length - 2].time
       : 900;
     const range = {
       from: days[cutoffIdx],
-      to: series[series.length - 1].time + barDuration * 3,
+      to: series[series.length - 1].time + barDuration * 8,
     };
     lastAppliedRange = range;
     chart.timeScale().setVisibleRange(range);
