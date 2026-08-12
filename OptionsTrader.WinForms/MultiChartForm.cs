@@ -19,6 +19,7 @@ public class MultiChartForm : Form
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
     private readonly string _symbol;
+    private readonly Form1 _form1;
 
     // Kept for CaptureCombinedChartImageAsync (trade snapshot) — same 3 instances the
     // constructor's local variables of the same names point to, just also reachable afterward.
@@ -30,14 +31,30 @@ public class MultiChartForm : Form
     // since the hub's Schwab connection isn't owned by this window).
     private TextBox? _crossLog;
 
-    public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed)
+    // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
+    // GetQuoteSnapshot) — read-only, no trade/click action in this first phase.
+    private readonly DataGridView _dgvOptions = new()
+    {
+        Dock = DockStyle.Fill,
+        AllowUserToAddRows = false,
+        AllowUserToDeleteRows = false,
+        RowHeadersVisible = false,
+        ReadOnly = true,
+        Font = new Font("Segoe UI", 8F),
+        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+        ColumnHeadersHeight = 24,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect
+    };
+
+    public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, Form1 form1)
     {
         _symbol        = symbol;
         _historyClient = historyClient;
         _liveFeed      = liveFeed;
+        _form1         = form1;
 
         Text          = $"Live Charts — {symbol}";
-        Width         = 1050; // +150 so the 1h/15m RTH columns keep their size while RTH+Overnight gets 50% wider
+        Width         = 1290; // +240 for the live options grid on the right
         Height        = 530;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
@@ -593,9 +610,59 @@ public class MultiChartForm : Form
             };
         }
 
+        // Live options grid — same 7 fields as Form1's dgvQuotes but ONE column set shared by
+        // both Calls and Puts (one row per option) instead of a call-side/put-side pair, and
+        // Bid/Ask/Sprd/Conts/Level moved to the right of Strike with Range pushed to the end
+        // (Form1's own grid keeps Range/Sprd/Bid/Ask BEFORE the Strike button — different order,
+        // per explicit request for this one).
+        _dgvOptions.Columns.AddRange(
+            new DataGridViewButtonColumn { Name = "colStrikeLive", HeaderText = "Strike", Width = 55, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
+            new DataGridViewTextBoxColumn { Name = "colBidLive",   HeaderText = "Bid",   Width = 40, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colAskLive",   HeaderText = "Ask",   Width = 40, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colSprdLive",  HeaderText = "Sprd",  Width = 36, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colContsLive", HeaderText = "Conts", Width = 40, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colLevelLive", HeaderText = "Level", Width = 40, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colRangeLive", HeaderText = "Range", Width = 55, ReadOnly = true });
+        foreach (DataGridViewColumn col in _dgvOptions.Columns)
+            col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+
+        // Row background: green for Call rows, light red for Put rows — same directional
+        // convention as the ↑Verde/↓Roja arrows on the 1h panel toolbar.
+        _dgvOptions.CellFormatting += (s, e) =>
+        {
+            if (e.RowIndex < 0) return;
+            var tag = _dgvOptions.Rows[e.RowIndex].Tag?.ToString();
+            e.CellStyle.BackColor = tag switch
+            {
+                "CALL" => Color.Honeydew,
+                "PUT"  => Color.MistyRose,
+                _      => _dgvOptions.DefaultCellStyle.BackColor
+            };
+        };
+
+        var optionsGridHost = new Panel { Dock = DockStyle.Right, Width = 240, Padding = new Padding(6, 0, 6, 6) };
+        optionsGridHost.Controls.Add(_dgvOptions);
+
+        void RefreshOptionsGrid()
+        {
+            var snapshot = _form1.GetQuoteSnapshot(_symbol);
+            if (snapshot == null) return;
+            if (_dgvOptions.IsDisposed || !_dgvOptions.IsHandleCreated) return;
+            _dgvOptions.BeginInvoke(() => Form1.PopulateSingleSideOptionsGrid(_dgvOptions, snapshot.Value.Quotes, snapshot.Value.Ticker));
+        }
+
+        _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
+        void OnForm1QuotesUpdated(string updatedSymbol)
+        {
+            if (updatedSymbol == _symbol) RefreshOptionsGrid();
+        }
+        FormClosed += (s, e) => _form1.OnQuotesUpdatedEvent -= OnForm1QuotesUpdated;
+        Load += (s, e) => RefreshOptionsGrid();
+
         Controls.Add(layout);
         Controls.Add(toolbar);
         Controls.Add(crossLog);
+        Controls.Add(optionsGridHost);
         _crossLog = crossLog;
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,

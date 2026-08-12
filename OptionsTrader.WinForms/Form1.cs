@@ -1054,6 +1054,10 @@ public partial class Form1 : Form
             _lastAllQuotes = allQuotes;
             _lastSpotPrice = fullChain.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 
+            // Live options grid mirrored on the Live Chart window (MultiChartForm) — fires every
+            // poll cycle so that grid stays in sync with this one without polling on its own.
+            OnQuotesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
+
             // While LEVEL_ONE_EQUITIES stays disabled (see SchwabStreamerClient), feed this
             // polling cycle's spot price into the live chart's forming candle instead, if one
             // happens to be open for this symbol — every ~6s instead of waiting a full minute for
@@ -1234,6 +1238,19 @@ public partial class Form1 : Form
         var optionType = calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
         var quote = _lastAllQuotes.FirstOrDefault(q => q.OptionType == optionType && q.StrikePrice == strike);
         return quote == null ? null : (quote.Bid, quote.Ask);
+    }
+
+    // Fires (symbol) every poll cycle right after _lastAllQuotes is refreshed — MultiChartForm's
+    // live options grid subscribes to this instead of polling on its own.
+    public event Action<string>? OnQuotesUpdatedEvent;
+
+    // Used by MultiChartForm's live options grid — the FULL current-expiration chain plus the
+    // ticker's own Range settings, for it to filter/render on its own (same OTM+range rules as
+    // PopulateQuotesGrid). Same one-instance-per-ticker restriction as the methods above.
+    internal (List<OptionQuoteDto> Quotes, TickerEntry Ticker)? GetQuoteSnapshot(string symbol)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return null;
+        return (_lastAllQuotes, _selectedTicker);
     }
 
     // Distinct background so an automatic (bot-driven) demo trade is visually different from a
@@ -1418,6 +1435,62 @@ public partial class Form1 : Form
             grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, grid.Rows.Count - 1);
 
         return (otmCalls, otmPuts);
+    }
+
+    // Single-column-set variant of PopulateQuotesGrid, used by MultiChartForm's live options grid
+    // on the Live Chart window — Calls and Puts share the same Strike/Bid/Ask/Sprd/Conts/Level/Range
+    // columns (one row per option, not one call+put column set per row), sorted by strike
+    // descending so calls (above spot) sit above puts (below spot) in one continuous list. Same
+    // OTM + Ask-range filter as PopulateQuotesGrid's default (non-Counts) mode — no Counts/Call-Put
+    // filter of its own in this first phase.
+    internal static void PopulateSingleSideOptionsGrid(DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker)
+    {
+        decimal.TryParse(ticker.Low,  out var rangeLow);
+        decimal.TryParse(ticker.High, out var rangeHigh);
+        var rangeText = $"{ticker.Low} - {ticker.High}";
+
+        var allOtmCallStrikes = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && !q.InTheMoney)
+            .OrderBy(q => q.StrikePrice)
+            .Select(q => q.StrikePrice)
+            .ToList();
+        var allOtmPutStrikes = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && !q.InTheMoney)
+            .OrderByDescending(q => q.StrikePrice)
+            .Select(q => q.StrikePrice)
+            .ToList();
+
+        var otmCalls = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && !q.InTheMoney && q.Ask >= rangeLow && q.Ask <= rangeHigh)
+            .ToList();
+        var otmPuts = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && !q.InTheMoney && q.Ask >= rangeLow && q.Ask <= rangeHigh)
+            .ToList();
+
+        var scrollRowToRestore = grid.Rows.Count > 0 ? grid.FirstDisplayedScrollingRowIndex : -1;
+        grid.Rows.Clear();
+
+        var combined = otmCalls.Select(q => (Quote: q, IsCall: true))
+            .Concat(otmPuts.Select(q => (Quote: q, IsCall: false)))
+            .OrderByDescending(x => x.Quote.StrikePrice)
+            .ToList();
+
+        foreach (var (quote, isCall) in combined)
+        {
+            var sprd      = FormatSprd(quote.Ask - quote.Bid);
+            var contracts = GetContractsValue(quote.Ask);
+            var levelIdx  = isCall ? allOtmCallStrikes.IndexOf(quote.StrikePrice) : allOtmPutStrikes.IndexOf(quote.StrikePrice);
+            var level     = (levelIdx + 1).ToString();
+            grid.Rows.Add(
+                FormatStrike(quote.StrikePrice),
+                quote.Bid.ToString("F2"), quote.Ask.ToString("F2"), sprd,
+                contracts, level, rangeText);
+            grid.Rows[grid.Rows.Count - 1].Tag = isCall ? "CALL" : "PUT";
+        }
+
+        PadWithBlankRows(grid, 8);
+        if (scrollRowToRestore >= 0 && grid.Rows.Count > 0)
+            grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, grid.Rows.Count - 1);
     }
 
     // Fills the grid with empty rows up to targetTotal so it still looks like a full table
@@ -1860,7 +1933,7 @@ public partial class Form1 : Form
         // One window, 3 chart panels side by side (1h / 15m RTH / 15m RTH+Overnight), all fed by
         // _historyClient (REST) + _liveFeed (hub or relay) set up in EnsureLiveFeedReadyAsync.
         var symbol = _selectedTicker.Symbol;
-        var multiChartForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!);
+        var multiChartForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!, this);
         multiChartForm.FormClosed += (s, e2) => _liveChartForms.Remove(symbol);
         _liveChartForms[symbol] = multiChartForm;
         lock (_wsEventLogLock) multiChartForm.ReplayWebSocketEvents(_wsEventLog);
