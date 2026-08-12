@@ -1383,6 +1383,14 @@
                     return;
                   }
 
+                  // Same idea, bottom-RIGHT instead — used for "1er Rebote: 90%".
+                  if (l.fixedBottomRight) {
+                    ctx.textAlign = 'right';
+                    ctx.fillText(l.text, scope.bitmapSize.width - 10 * scope.horizontalPixelRatio, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
+                    ctx.textAlign = 'left';
+                    return;
+                  }
+
                   const x = ts.timeToCoordinate(l.time);
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (x == null || y == null) return;
@@ -1517,6 +1525,20 @@
       id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottom: true,
       fontSize: large ? 20 : 14
     });
+    forceRepaint();
+  }
+
+  // "1er Rebote: 90%" — 1h panel only, bottom-right, yellow. Shown while SMA20 and SMA40 are both
+  // Techo and SMA20 hasn't been touched/resolved yet (see ChartPanel.EvaluateFirstReboundLabel).
+  // Same replace-not-accumulate pattern as updatePuntoMedio.
+  function updateFirstRebound(show) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'firstRebound');
+    if (show) {
+      textLabelsPrimitive._labels.push({
+        id: 'firstRebound', text: '1er Rebote: 90%', color: '#ffeb3b', bold: true, fixedBottomRight: true
+      });
+    }
     forceRepaint();
   }
 

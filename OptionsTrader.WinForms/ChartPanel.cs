@@ -65,6 +65,12 @@ public class ChartPanel : Panel
     }
     private static readonly List<PisoTechoWatch> s_pisoTechoWatches = new();
 
+    // "1er Rebote: 90%" label (1h panel only) — true once ANY closed candle's High has reached the
+    // SMA20 Techo level since it was armed, regardless of whether that touch actually resolved into
+    // a full Cruce/Rebote. Reset whenever the SMA20 Techo watch gets (re)armed. Static for the same
+    // reason as the rest of this feature — survives closing/reopening the Live Chart same-session.
+    private static bool s_sma20TechoTouched;
+
     private readonly string _symbol;
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
@@ -875,6 +881,8 @@ public class ChartPanel : Panel
                 FirePisoTechoLevelReady(40, s_pisoTechoResult40);
                 FirePisoTechoLevelReady(100, s_pisoTechoResult100);
                 FirePisoTechoLevelReady(200, s_pisoTechoResult200);
+
+                EvaluateFirstReboundLabel();
             }
         }
 
@@ -906,6 +914,7 @@ public class ChartPanel : Panel
     {
         if (result == null) return;
         s_pisoTechoWatches.Add(new PisoTechoWatch { Period = period, WatchingUp = result == "Techo" });
+        if (period == 20 && result == "Techo") s_sma20TechoTouched = false;
     }
 
     // No-op if that period didn't come back Piso/Techo — otherwise fires OnPisoTechoLevelReadyEvent
@@ -961,6 +970,7 @@ public class ChartPanel : Panel
         s_pisoTechoWatches.RemoveAll(w => w.Period == period);
         _ = _webView.CoreWebView2?.ExecuteScriptAsync($"removePisoTechoLabel({period});");
         OnPisoTechoLevelRemovedEvent?.Invoke(period);
+        if (period == 20 || period == 40) EvaluateFirstReboundLabel();
     }
 
     // Continuous premarket counterpart to ValidatePisoTechoAgainstOpen — that one only checks ONCE,
@@ -1025,6 +1035,12 @@ public class ChartPanel : Panel
             var previousSma = Sma(watch.Period, _closedCandles.Count - 2);
             if (currentSma == null) continue;
 
+            // "1er Rebote" label tracking — a touch counts even if it doesn't go on to resolve as a
+            // full Cruce/Rebote below (see crossed/bounced), so this has to be checked unconditionally
+            // here, before any of the early-outs further down.
+            if (watch.Period == 20 && watch.WatchingUp && justClosed.High >= currentSma)
+                s_sma20TechoTouched = true;
+
             var isGreen = justClosed.Close > justClosed.Open;
             var isRed   = justClosed.Close < justClosed.Open;
 
@@ -1071,6 +1087,24 @@ public class ChartPanel : Panel
             EventLogStore.Append(_symbol, "Hora", $"PisoTecho{evento}", pisoTecho, caption, justClosed.Close, $"SMA{watch.Period}={currentSma.Value:F2}");
             OnPisoTechoResolvedEvent?.Invoke(evento, pisoTecho, AppendVolatilityArmSuffix(evento, pisoTecho, caption));
         }
+
+        EvaluateFirstReboundLabel();
+    }
+
+    // "1er Rebote: 90%" yellow label, bottom-right of the 1h panel — shown while SMA20 AND SMA40
+    // are BOTH currently Techo, the SMA20 watch hasn't resolved yet (no Cruce/Rebote), and no candle
+    // has touched SMA20 since it was armed (s_sma20TechoTouched). Re-evaluated after every closed
+    // candle (see EvaluatePisoTechoWatches) and right when the pair first arms at premarket.
+    private void EvaluateFirstReboundLabel()
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _webView.CoreWebView2 == null) return;
+
+        var watch20 = s_pisoTechoWatches.FirstOrDefault(w => w.Period == 20);
+        var show = s_pisoTechoResult20 == "Techo" && s_pisoTechoResult40 == "Techo"
+            && watch20 is { Done: false } && !s_sma20TechoTouched;
+
+        BeginInvoke(async () =>
+            await _webView.CoreWebView2.ExecuteScriptAsync($"updateFirstRebound({(show ? "true" : "false")});"));
     }
 
     // Live-tick counterpart to EvaluatePisoTechoWatches' crossedByGapOpen — that one only fires
