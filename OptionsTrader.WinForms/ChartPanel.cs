@@ -89,6 +89,20 @@ public class ChartPanel : Panel
     // line" report can be answered from crossLog instead of guessing.
     public event Action<string>? OnPrevDayHiLoDebugEvent;
 
+    // Temporary diagnostic — best-effort, never throws into a live-tick handler. Used to chase the
+    // "last 15m RTH candle of yesterday visually stretches into today's open" report; safe to
+    // remove once that's confirmed fixed.
+    private static void DebugLog(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(@"C:\OptionsData\EventLog");
+            File.AppendAllText(@"C:\OptionsData\EventLog\dayreset_debug.log",
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {message}{Environment.NewLine}");
+        }
+        catch { /* best-effort diagnostic logging */ }
+    }
+
     // The bucket currently being built from live 1-min ticks, and which bucket index it belongs
     // to (so we know when a new tick starts a new bucket vs. extends the current one).
     private CandleData? _liveBucket;
@@ -1611,6 +1625,7 @@ public class ChartPanel : Panel
             if (_mode == ChartPanelMode.Fifteen_RTH && _liveBucket != null)
             {
                 var liveBucketDate = TimeZoneInfo.ConvertTimeFromUtc(_liveBucket.Time, EasternZone).Date;
+                DebugLog($"day-reset check: symbol={_symbol} tickTime={eastern:yyyy-MM-dd HH:mm:ss} liveBucketTime={liveBucketDate:yyyy-MM-dd} willReset={eastern.Date != liveBucketDate}");
                 if (eastern.Date != liveBucketDate)
                 {
                     _liveAnchor      = eastern.Date.AddHours(9).AddMinutes(30);
