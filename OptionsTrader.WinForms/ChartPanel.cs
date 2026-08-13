@@ -71,6 +71,14 @@ public class ChartPanel : Panel
     // reason as the rest of this feature — survives closing/reopening the Live Chart same-session.
     private static bool s_sma20TechoTouched;
 
+    // Blue premarket-price line + "Expuesto" text, keyed by "{symbol}_{mode}" — remembers the
+    // frozen price/Bollinger-exposure it had right at market open so it can be redrawn exactly as
+    // it was if the user closes and reopens the Live Chart mid-RTH-session (LoadHistoryAsync only
+    // calls startPreMarketLine() itself when opened BEFORE 9:30, so without this a reopen after the
+    // open would otherwise lose the line entirely). Static/in-memory only — same-session lifetime,
+    // like s_sma20TechoTouched above; cleared implicitly by the Date check once a new day starts.
+    private static readonly Dictionary<string, (DateOnly Date, decimal Price, BollingerDirection Exposed)> s_preMarketLineState = new();
+
     private readonly string _symbol;
     private readonly SchwabStreamerClient _historyClient;
     private readonly ICandleFeed _liveFeed;
@@ -1636,7 +1644,24 @@ public class ChartPanel : Panel
             {
                 var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
                 if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0))
+                {
                     await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+                }
+                else if (s_preMarketLineState.TryGetValue($"{_symbol}_{_mode}", out var savedLine)
+                         && savedLine.Date == DateOnly.FromDateTime(nowEastern))
+                {
+                    // Reopened mid-RTH-session: redraw the line/text exactly as frozen at market
+                    // open instead of losing them (see s_preMarketLineState's comment).
+                    var savedExposedArg = savedLine.Exposed switch
+                    {
+                        BollingerDirection.Above => "'above'",
+                        BollingerDirection.Below => "'below'",
+                        _ => "null"
+                    };
+                    await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+                    await _webView.CoreWebView2.ExecuteScriptAsync(
+                        $"updatePreMarketLine({savedLine.Price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {savedExposedArg});");
+                }
             }
 
             // Gray shading for overnight/weekend gaps — only on the 15m RTH+Overnight panel.
@@ -1791,6 +1816,7 @@ public class ChartPanel : Panel
                     BollingerDirection.Below => "'below'",
                     _ => "null"
                 };
+                s_preMarketLineState[$"{_symbol}_{_mode}"] = (DateOnly.FromDateTime(eastern), price, exposedDir);
 
                 BeginInvoke(async () =>
                 {
