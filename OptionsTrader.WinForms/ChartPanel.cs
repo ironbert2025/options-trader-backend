@@ -1374,16 +1374,17 @@ public class ChartPanel : Panel
             $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
     }
 
-    // "BB" label — 15m RTH panel only, next to "PM". Purely visual, continuous (re-evaluated on
-    // every live tick, redraws/clears each time — no armed/fired state): shows while the Bollinger
-    // Bands are CURRENTLY widening (same width comparison EvaluateVolatilityOpening itself uses),
-    // regardless of whether a Cruce/Rebote watch happens to be armed — this is just "are the bands
-    // opening right now", not the full Abriendo la Volatilidad signal. Colored to match THIS
-    // panel's own PM (SMA20 tilt), so "PM verde + BB verde" reads as directional momentum AND
-    // volatility both agreeing.
+    // "BB" label — 1h and 15m RTH panels, next to "PM". Purely visual, continuous (re-evaluated on
+    // every live tick, redraws/clears each time — no armed/fired state): shows while THIS panel's
+    // own Bollinger Bands (each has its own copy — configureBollinger(20,2) is set up on both) are
+    // CURRENTLY widening (same width comparison EvaluateVolatilityOpening itself uses on the 15m
+    // RTH panel), regardless of whether a Cruce/Rebote watch happens to be armed — this is just
+    // "are the bands opening right now", not the full Abriendo la Volatilidad signal (which stays
+    // 15m-RTH-only). Colored to match THIS panel's own PM (SMA20 tilt), so "PM verde + BB verde"
+    // reads as directional momentum AND volatility both agreeing.
     private void EvaluateBollingerWideningLabel()
     {
-        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Hourly15) return;
 
         var current = BollingerBandsAt(_closedCandles.Count - 1);
         var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
@@ -1918,7 +1919,10 @@ public class ChartPanel : Panel
             EvaluateBollingerWideningLabel();
         }
         else if (_mode == ChartPanelMode.Hourly15)
+        {
             EvaluatePisoTechoGapLive(candle.Close);
+            EvaluateBollingerWideningLabel();
+        }
     }
 
     // Real-time last-price update (LEVEL_ONE_EQUITIES, much higher frequency than CHART_EQUITY's
@@ -1990,7 +1994,10 @@ public class ChartPanel : Panel
             EvaluateBollingerWideningLabel();
         }
         else if (_mode == ChartPanelMode.Hourly15)
+        {
             EvaluatePisoTechoGapLive(price);
+            EvaluateBollingerWideningLabel();
+        }
     }
 
     // Whether the header currently shows the "disconnected" message — cleared the moment real
