@@ -3,7 +3,8 @@ using OptionsTrader.Application.DTOs.Streaming;
 
 namespace OptionsTrader.WinForms;
 
-// Standalone window showing the last ~50 Daily candles for a symbol, with SMA20/40/100/200 — so
+// Standalone window showing up to the last 250 Daily candles for a symbol (enough for SMA100/200
+// to actually have data, not just SMA20/40), with SMA20/40/100/200 and Bollinger Bands(20,2) — so
 // the "PM" (Punto Medio / SMA20 slope) indicator on the 1h panel can be related back to the
 // actual daily candles. A brand-new WebView2/page load, deliberately NOT a toggle on the live 1h
 // panel's own chart: toggling Daily in-place there hit an unresolved rendering bug (correct data,
@@ -50,6 +51,7 @@ public class DailyChartForm : Form
         await navDone.Task;
 
         await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
+        await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
         // Each daily bar IS one "day" by construction, so "50 days" of visible window is exactly
         // the 50 bars passed in — same configureVisibleDays/applyVisibleRange machinery the live

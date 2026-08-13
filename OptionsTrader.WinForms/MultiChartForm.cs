@@ -230,7 +230,7 @@ public class MultiChartForm : Form
         // invisible until a manual scroll).
         btnDaily.Click += (s, e) =>
         {
-            var dailyCandles = ChartPanel.GetLastDailyCandles(_symbol, 50);
+            var dailyCandles = ChartPanel.GetLastDailyCandles(_symbol, 250); // enough for SMA100/200 to have data
             new DailyChartForm(_symbol, dailyCandles).Show();
         };
 
