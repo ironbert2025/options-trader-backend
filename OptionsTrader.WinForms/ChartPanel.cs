@@ -477,6 +477,7 @@ public class ChartPanel : Panel
         {
             TLineStore.Clear(_symbol);
             VerticalArrowStore.Clear(_symbol);
+            RectGrisStore.Clear(_symbol);
             _tLineSignalFired = false;
             _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
         }
@@ -546,6 +547,19 @@ public class ChartPanel : Panel
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
                         OnTLineRemovedEvent?.Invoke(t1, p1, t2, p2);
                     }
+                    break;
+                }
+                case "rect_add":
+                case "rect_delete":
+                {
+                    var rt1 = root.GetProperty("t1").GetInt64();
+                    var rp1 = root.GetProperty("p1").GetDecimal();
+                    var rt2 = root.GetProperty("t2").GetInt64();
+                    var rp2 = root.GetProperty("p2").GetDecimal();
+                    if (type == "rect_add")
+                        RectGrisStore.Append(_symbol, rt1, rp1, rt2, rp2);
+                    else
+                        RectGrisStore.Remove(_symbol, rt1, rp1, rt2, rp2);
                     break;
                 }
                 case "arrow_add":
@@ -1595,6 +1609,13 @@ public class ChartPanel : Panel
                 {
                     var arrowsJson = JsonSerializer.Serialize(savedArrows.Select(a => new { time = a.Time, price = a.Price, up = a.Up }));
                     await _webView.CoreWebView2.ExecuteScriptAsync($"loadArrows({arrowsJson});");
+                }
+
+                var savedRects = RectGrisStore.Load(_symbol);
+                if (savedRects.Count > 0)
+                {
+                    var rectsJson = JsonSerializer.Serialize(savedRects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"loadRectGris({rectsJson});");
                 }
             }
 

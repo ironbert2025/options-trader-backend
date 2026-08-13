@@ -504,8 +504,12 @@
 
     const rectIdx = grayRectPrimitive._rects.findIndex(r => r.selected);
     if (rectIdx !== -1) {
+      const removedRect = grayRectPrimitive._rects[rectIdx];
       grayRectPrimitive._rects.splice(rectIdx, 1);
       forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'rect_delete', t1: removedRect.t1, p1: removedRect.p1, t2: removedRect.t2, p2: removedRect.p2 });
+      }
       return;
     }
 
@@ -863,10 +867,16 @@
       if (!grayRectPending) {
         grayRectPending = { time: clickTime, price };
       } else {
-        grayRectPrimitive._rects.push({ t1: grayRectPending.time, p1: grayRectPending.price, t2: clickTime, p2: price, selected: false });
+        const rect = { t1: grayRectPending.time, p1: grayRectPending.price, t2: clickTime, p2: price, selected: false };
+        grayRectPrimitive._rects.push(rect);
         grayRectPrimitive._preview = null;
         grayRectPending = null;
         forceRepaint();
+        // Persisted per-symbol by C# (RectGrisStore) so it reappears at the same point after
+        // closing and reopening the app — see ChartPanel.CoreWebView2_WebMessageReceived.
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'rect_add', t1: rect.t1, p1: rect.p1, t2: rect.t2, p2: rect.p2 });
+        }
       }
     }
 
@@ -2303,6 +2313,13 @@
   }
 
   // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
+
+  // Seeds gray-rect drawings persisted from a previous session (1h panel only — see RectGrisStore.cs).
+  function loadRectGris(rects) {
+    if (!grayRectAttached) { candleSeries.attachPrimitive(grayRectPrimitive); grayRectAttached = true; }
+    grayRectPrimitive._rects = (rects || []).map(r => ({ t1: r.t1, p1: r.p1, t2: r.t2, p2: r.p2, selected: false }));
+    forceRepaint();
+  }
 
   // Seeds T-Line drawings persisted from a previous session (1h panel only — see TLineStore.cs).
   function loadTLines(lines) {
