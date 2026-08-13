@@ -1421,13 +1421,19 @@
                     return;
                   }
 
-                  // Same idea as fixedTop, but anchored near the bottom-center instead — used for
-                  // the "PM" (Punto Medio / SMA20 slope) live indicator, which needs to stay put
-                  // and readable regardless of price/pan/zoom, same as Expired!!! does up top.
+                  // Same idea as fixedTop, but anchored near the bottom-center instead.
                   if (l.fixedBottom) {
                     ctx.textAlign = 'center';
                     ctx.fillText(l.text, scope.bitmapSize.width / 2, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
                     ctx.textAlign = 'left';
+                    return;
+                  }
+
+                  // Same idea, bottom-LEFT — used for "PM" (Punto Medio / SMA20 slope), moved out
+                  // here so it doesn't sit on top of "1er Rebote: 90%" (fixedBottomRight below).
+                  if (l.fixedBottomLeft) {
+                    ctx.textAlign = 'left';
+                    ctx.fillText(l.text, 10 * scope.horizontalPixelRatio, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
                     return;
                   }
 
@@ -1570,7 +1576,7 @@
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'pm');
     textLabelsPrimitive._labels.push({
-      id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottom: true,
+      id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
       fontSize: large ? 20 : 14
     });
     forceRepaint();
