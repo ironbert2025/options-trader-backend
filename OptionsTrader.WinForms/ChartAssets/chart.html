@@ -1123,7 +1123,7 @@
   // startPreMarketLine() call replaces it entirely. ----
 
   class PreMarketLinePrimitive {
-    constructor() { this._armed = false; this._price = null; this._chart = null; }
+    constructor() { this._armed = false; this._price = null; this._exposed = null; this._chart = null; } // _exposed: null | 'above' | 'below'
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1146,6 +1146,16 @@
                 ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
                 ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
                 ctx.stroke();
+
+                if (self._exposed === 'above' || self._exposed === 'below') {
+                  ctx.font = `bold ${13 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.fillStyle = '#2196f3';
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = self._exposed === 'above' ? 'bottom' : 'top';
+                  const labelX = scope.bitmapSize.width / 2;
+                  const labelY = (y * scope.verticalPixelRatio) + (self._exposed === 'above' ? -6 * scope.verticalPixelRatio : 6 * scope.verticalPixelRatio);
+                  ctx.fillText('Expuesto', labelX, labelY);
+                }
               });
             }
           };
@@ -1167,9 +1177,10 @@
 
   // Called on every pre-market tick until 9:30 AM ET; C# stops calling this once the market
   // opens, which is what makes the line freeze in place with no extra logic needed here.
-  function updatePreMarketLine(price) {
+  function updatePreMarketLine(price, exposed) {
     if (!preMarketLinePrimitive._armed) return; // startPreMarketLine wasn't called this session
     preMarketLinePrimitive._price = price;
+    preMarketLinePrimitive._exposed = exposed || null;
     forceRepaint();
   }
 

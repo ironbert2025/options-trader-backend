@@ -1780,11 +1780,23 @@ public class ChartPanel : Panel
                 // 9:30 open check — see ValidatePisoTechoAgainstLivePrice.
                 if (_mode == ChartPanelMode.Hourly15) ValidatePisoTechoAgainstLivePrice(price);
 
+                // "Expuesto" text next to the blue premarket line itself — this panel's OWN
+                // Bollinger(20,2) band (not the 3-chart combo check MultiChartForm does elsewhere):
+                // above the line if price already broke the upper band, below it if it broke the
+                // lower one, hidden otherwise.
+                var exposedDir = GetBollingerDirection(price);
+                var exposedArg = exposedDir switch
+                {
+                    BollingerDirection.Above => "'above'",
+                    BollingerDirection.Below => "'below'",
+                    _ => "null"
+                };
+
                 BeginInvoke(async () =>
                 {
                     if (_webView.CoreWebView2 == null) return;
                     await _webView.CoreWebView2.ExecuteScriptAsync(
-                        $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)});");
+                        $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {exposedArg});");
 
                     // First pre-market tick this session (and only the first — DrawPrevDayHiLoAsync
                     // is itself once-only) is also this panel's first real "current price", so
