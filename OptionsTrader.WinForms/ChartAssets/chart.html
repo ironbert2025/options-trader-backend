@@ -1431,9 +1431,11 @@
 
                   // Same idea, bottom-LEFT — used for "PM" (Punto Medio / SMA20 slope), moved out
                   // here so it doesn't sit on top of "1er Rebote: 90%" (fixedBottomRight below).
+                  // Optional offsetX (in un-scaled px) lets a second label — "BB" — sit right next
+                  // to "PM" instead of on top of it.
                   if (l.fixedBottomLeft) {
                     ctx.textAlign = 'left';
-                    ctx.fillText(l.text, 10 * scope.horizontalPixelRatio, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
+                    ctx.fillText(l.text, (10 + (l.offsetX || 0)) * scope.horizontalPixelRatio, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
                     return;
                   }
 
@@ -1579,6 +1581,22 @@
       id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
       fontSize: large ? 20 : 14
     });
+    forceRepaint();
+  }
+
+  // "BB" — 15m RTH panel only, sits right next to "PM" (bottom-left, offset over). Shown while the
+  // Bollinger Bands are CURRENTLY widening (see ChartPanel.EvaluateBollingerWideningLabel) —
+  // purely visual, not tied to whether a Cruce/Rebote watch is armed. Colored to match this
+  // panel's own PM. show=false removes it instead of pushing an empty label.
+  function updateBollingerWidening(show, bullish) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'bb');
+    if (show) {
+      textLabelsPrimitive._labels.push({
+        id: 'bb', text: 'BB', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
+        offsetX: 28 // clears "PM" at the default 14px font size
+      });
+    }
     forceRepaint();
   }
 

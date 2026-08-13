@@ -1374,6 +1374,47 @@ public class ChartPanel : Panel
             $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
     }
 
+    // "BB" label — 15m RTH panel only, next to "PM". Purely visual, continuous (re-evaluated on
+    // every live tick, redraws/clears each time — no armed/fired state): shows while the Bollinger
+    // Bands are CURRENTLY widening (same width comparison EvaluateVolatilityOpening itself uses),
+    // regardless of whether a Cruce/Rebote watch happens to be armed — this is just "are the bands
+    // opening right now", not the full Abriendo la Volatilidad signal. Colored to match THIS
+    // panel's own PM (SMA20 tilt), so "PM verde + BB verde" reads as directional momentum AND
+    // volatility both agreeing.
+    private void EvaluateBollingerWideningLabel()
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        bool show = false;
+        if (current != null && earlier != null)
+        {
+            var currentWidth = current.Value.Upper - current.Value.Lower;
+            var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+            show = currentWidth > earlierWidth;
+        }
+
+        if (!show)
+        {
+            BeginInvoke(async () => await MarkBollingerWideningAsync(false, false));
+            return;
+        }
+
+        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
+        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (smaNow == null || smaEarlier == null) return; // no PM color available yet — leave as-is
+
+        var bullish = smaNow > smaEarlier;
+        BeginInvoke(async () => await MarkBollingerWideningAsync(true, bullish));
+    }
+
+    private async Task MarkBollingerWideningAsync(bool show, bool bullish)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateBollingerWidening({(show ? "true" : "false")}, {(bullish ? "true" : "false")});");
+    }
+
     // ==================================================================================
     // "PM" (Punto Medio) — SMA20 slope indicator, 1h and 15m RTH panels only. Continuous (unlike
     // the one-shot "Abriendo la Volatilidad"): re-evaluated on every live tick, premarket and RTH
@@ -1872,7 +1913,10 @@ public class ChartPanel : Panel
         BeginInvoke(async () => await RunScriptAsync(jsFunction, toSend));
 
         if (_mode == ChartPanelMode.Fifteen_RTH)
+        {
             EvaluateVolatilityOpening(candle.Close);
+            EvaluateBollingerWideningLabel();
+        }
         else if (_mode == ChartPanelMode.Hourly15)
             EvaluatePisoTechoGapLive(candle.Close);
     }
@@ -1920,7 +1964,10 @@ public class ChartPanel : Panel
         BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
 
         if (_mode == ChartPanelMode.Fifteen_RTH)
+        {
             EvaluateVolatilityOpening(price);
+            EvaluateBollingerWideningLabel();
+        }
         else if (_mode == ChartPanelMode.Hourly15)
             EvaluatePisoTechoGapLive(price);
     }
