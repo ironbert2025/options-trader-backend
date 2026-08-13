@@ -1956,6 +1956,27 @@ public class ChartPanel : Panel
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
             return; // outside this panel's session — ignore the tick entirely
 
+        // Same day-reset guard Streamer_OnNewCandle has — this method (Form1's ~6s polling feed,
+        // via FeedPollingPrice) had NONE, and could reach here first if a polling tick lands right
+        // at 9:30 before the WebSocket's own first RTH tick gets a chance to reset _liveBucket:
+        // yesterday's real closed bucket (still sitting in _liveBucket, Open correct) would get its
+        // High/Close silently overwritten with TODAY's opening price — confirmed via real tick
+        // data (yesterday's real 15:59 close ~302.71 vs the corrupted bucket's Close ~304.11,
+        // which almost exactly matched today's 9:30 open ~304.07).
+        if (_mode == ChartPanelMode.Fifteen_RTH)
+        {
+            var liveBucketDate = TimeZoneInfo.ConvertTimeFromUtc(_liveBucket.Time, EasternZone).Date;
+            if (eastern.Date != liveBucketDate)
+            {
+                _liveAnchor      = eastern.Date.AddHours(9).AddMinutes(30);
+                _liveBucketIndex = CandleAggregation.BucketIndex(utcTime, _liveAnchor, _intervalMinutes);
+                _liveBucket      = new CandleData { Time = utcTime, Open = price, High = price, Low = price, Close = price };
+                var freshBucket  = _liveBucket;
+                BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
+                return;
+            }
+        }
+
         _liveBucket.High  = Math.Max(_liveBucket.High, price);
         _liveBucket.Low   = Math.Min(_liveBucket.Low, price);
         _liveBucket.Close = price;
