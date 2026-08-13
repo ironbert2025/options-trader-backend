@@ -563,14 +563,25 @@ public class MultiChartForm : Form
         {
             hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
             {
-                var sessionStart = GetTodaySessionStartFakeEpoch();
-                if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
-                if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+                // BeginInvoke — this event can fire from Streamer_OnNewCandle's background
+                // (WebSocket) thread, and a direct ExecuteScriptAsync call from that thread
+                // silently fails (same threading bug the PM indicator had).
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    var sessionStart = GetTodaySessionStartFakeEpoch();
+                    if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+                    if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+                });
             };
             hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
             {
-                if (rthPanel != null) _ = rthPanel.RemovePisoTechoRefLineAsync(period);
-                if (overnightPanel != null) _ = overnightPanel.RemovePisoTechoRefLineAsync(period);
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    if (rthPanel != null) _ = rthPanel.RemovePisoTechoRefLineAsync(period);
+                    if (overnightPanel != null) _ = overnightPanel.RemovePisoTechoRefLineAsync(period);
+                });
             };
 
             // Race fix: hourlyPanel's HandleCreated (added to the layout earlier in this

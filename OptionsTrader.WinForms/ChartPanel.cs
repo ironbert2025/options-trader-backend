@@ -955,7 +955,13 @@ public class ChartPanel : Panel
 
         result = null;
         s_pisoTechoWatches.RemoveAll(w => w.Period == period);
-        _ = _webView.CoreWebView2?.ExecuteScriptAsync($"removePisoTechoLabel({period});");
+        // BeginInvoke — this can run from Streamer_OnNewCandle's background (WebSocket) thread
+        // (via ValidatePisoTechoAgainstLivePrice, the continuous premarket check), and a direct
+        // ExecuteScriptAsync call from that thread silently fails, same threading bug the PM
+        // indicator had — the label never actually disappeared even once C# correctly detected the
+        // invalidation.
+        if (IsHandleCreated)
+            BeginInvoke(async () => await (_webView.CoreWebView2?.ExecuteScriptAsync($"removePisoTechoLabel({period});") ?? Task.CompletedTask));
         OnPisoTechoLevelRemovedEvent?.Invoke(period);
         if (period == 20 || period == 40) EvaluateFirstReboundLabel();
     }
