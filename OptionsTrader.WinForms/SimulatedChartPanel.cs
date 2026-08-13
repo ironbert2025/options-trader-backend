@@ -251,6 +251,13 @@ public class SimulatedChartPanel : Panel
     // (mirrors ChartPanel.EvaluatePisoTechoPair, computed there against _hourlyCandles before
     // _simDate) — each of the 4 SMAs is independent now (price opening between a pair's fast and
     // slow SMA means only the slow one still counts; see ChartPanel for the full rationale).
+    // Remembered for EvaluateFirstReboundLabel ("1er Rebote"), same as ChartPanel's own
+    // s_pisoTechoResult20/40 statics — here just per-instance since a fresh simulated day is this
+    // panel's equivalent of a fresh app session.
+    private string? _pisoTechoResult20;
+    private string? _pisoTechoResult40;
+    private bool _sma20TechoTouched;
+
     public async Task SetPisoTechoResultsAsync(string? result20, string? result40, string? result100, string? result200)
     {
         if (_readyTcs != null) await _readyTcs.Task;
@@ -261,9 +268,28 @@ public class SimulatedChartPanel : Panel
         ArmPisoTechoWatch(100, result100);
         ArmPisoTechoWatch(200, result200);
 
+        _pisoTechoResult20 = result20;
+        _pisoTechoResult40 = result40;
+        _sma20TechoTouched = false;
+
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(20, {ToJsStringOrNull(result20)}, 40, {ToJsStringOrNull(result40)});");
         await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTecho(100, {ToJsStringOrNull(result100)}, 200, {ToJsStringOrNull(result200)});");
+        EvaluateFirstReboundLabel();
+    }
+
+    // "1er Rebote: 90%" yellow label, bottom-right of the 1h panel — ported from ChartPanel's
+    // identical copy. Shown while SMA20 AND SMA40 are both currently Techo, the SMA20 watch hasn't
+    // resolved yet (no Cruce/Rebote), and no candle has touched SMA20 since it was armed.
+    private void EvaluateFirstReboundLabel()
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _webView.CoreWebView2 == null) return;
+
+        var watch20 = _pisoTechoWatches.FirstOrDefault(w => w.Period == 20);
+        var show = _pisoTechoResult20 == "Techo" && _pisoTechoResult40 == "Techo"
+            && watch20 is { Done: false } && !_sma20TechoTouched;
+
+        _ = _webView.CoreWebView2.ExecuteScriptAsync($"updateFirstRebound({(show ? "true" : "false")});");
     }
 
     private void ArmPisoTechoWatch(int period, string? result)
@@ -289,6 +315,12 @@ public class SimulatedChartPanel : Panel
             var currentSma  = Sma(watch.Period, _closedCandles.Count - 1);
             var previousSma = Sma(watch.Period, _closedCandles.Count - 2);
             if (currentSma == null) continue;
+
+            // "1er Rebote" label tracking — a touch counts even if it doesn't go on to resolve as a
+            // full Cruce/Rebote below, so this has to be checked unconditionally, before any of the
+            // early-outs further down. Ported from ChartPanel's identical copy.
+            if (watch.Period == 20 && watch.WatchingUp && justClosed.High >= currentSma)
+                _sma20TechoTouched = true;
 
             var isGreen = justClosed.Close > justClosed.Open;
             var isRed   = justClosed.Close < justClosed.Open;
@@ -338,6 +370,8 @@ public class SimulatedChartPanel : Panel
             var sma = Sma(period, _closedCandles.Count - 1);
             if (sma != null) OnPisoTechoLevelUpdatedEvent?.Invoke(period, sma.Value);
         }
+
+        EvaluateFirstReboundLabel();
     }
 
     // Live-tick counterpart to EvaluatePisoTechoWatches' crossedByGapOpen — ported from ChartPanel.
@@ -863,6 +897,92 @@ public class SimulatedChartPanel : Panel
     }
 
     // ==================================================================================
+    // "PM" (Punto Medio / SMA20 slope) — ported from ChartPanel.EvaluatePuntoMedioSlope. Green
+    // when SMA20 is tilting up (current > a few candles ago), red when tilting down. Fired as an
+    // event, same as the live version, so SimulatorForm can coordinate both panels (bigger text
+    // when 1h and 15m RTH PM agree) the same way MultiChartForm does for the live charts.
+    // ==================================================================================
+
+    public event Action<bool>? OnPuntoMedioLevelEvent;
+
+    private void EvaluatePuntoMedioSlope()
+    {
+        if (_mode != ChartPanelMode.Hourly15 && _mode != ChartPanelMode.Fifteen_RTH) return;
+
+        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
+        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (smaNow == null || smaEarlier == null || smaNow == smaEarlier) return; // no clear tilt yet
+
+        var bullish = smaNow > smaEarlier;
+        OnPuntoMedioLevelEvent?.Invoke(bullish);
+    }
+
+    public async Task MarkPuntoMedioAsync(bool bullish, bool large)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updatePuntoMedio({(bullish ? "true" : "false")}, {(large ? "true" : "false")});");
+    }
+
+    // ==================================================================================
+    // "BB" (bands currently widening) + "Δ" (distance to nearest band) — ported from ChartPanel.
+    // EvaluateBollingerWideningLabel. Purely visual, continuous, independent of the armed/fired
+    // Abriendo la Volatilidad watch above — just reflects "are the bands opening right now" and,
+    // while price is still between them, how far it is from whichever one is closer.
+    // ==================================================================================
+
+    private void EvaluateBollingerWideningLabel(decimal livePrice)
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Hourly15) return;
+
+        var current = BollingerBandsAt(_closedCandles.Count - 1);
+        var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        bool show = false;
+        if (current != null && earlier != null)
+        {
+            var currentWidth = current.Value.Upper - current.Value.Lower;
+            var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
+            show = currentWidth > earlierWidth;
+        }
+
+        if (!show)
+        {
+            _ = MarkBollingerWideningAsync(false, false);
+            _ = MarkBollingerDeltaAsync(false, 0);
+            return;
+        }
+
+        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
+        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (smaNow == null || smaEarlier == null) return; // no PM color available yet — leave as-is
+
+        var bullish = smaNow > smaEarlier;
+        _ = MarkBollingerWideningAsync(true, bullish);
+
+        if (current != null && livePrice > current.Value.Lower && livePrice < current.Value.Upper)
+        {
+            var delta = Math.Min(current.Value.Upper - livePrice, livePrice - current.Value.Lower);
+            _ = MarkBollingerDeltaAsync(true, delta, bullish);
+        }
+        else
+        {
+            _ = MarkBollingerDeltaAsync(false, 0);
+        }
+    }
+
+    private async Task MarkBollingerWideningAsync(bool show, bool bullish)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateBollingerWidening({(show ? "true" : "false")}, {(bullish ? "true" : "false")});");
+    }
+
+    private async Task MarkBollingerDeltaAsync(bool show, decimal delta, bool bullish = false)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync(
+            $"updateBollingerDelta({(show ? "true" : "false")}, {delta.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {(bullish ? "true" : "false")});");
+    }
+
+    // ==================================================================================
     // Bridges the simulator's "resend the whole candle list every step" model into the live
     // chart's "evaluate once when a candle closes" model — a candle is treated as closed once a
     // NEWER one appears after it in the list (the last candle in the list is always assumed
@@ -888,6 +1008,7 @@ public class SimulatedChartPanel : Panel
             foreach (var watch in _pisoTechoWatches) watch.Done = false;
             _volatilityOpeningArmed = false;
             _volatilityOpeningFired = false;
+            _sma20TechoTouched = false;
         }
 
         for (int i = _closedCandles.Count; i < closedNow.Count; i++)
@@ -903,7 +1024,13 @@ public class SimulatedChartPanel : Panel
 
         // Every step, not just newly-closed candles — the forming (last) candle's Close already
         // tracks the latest known price for this step, so the gap-cross can resolve mid-candle.
+        // Same for PM/BB/Δ — all 3 are purely-visual continuous indicators, meant to track
+        // whatever price is currently showing, same as the live chart re-evaluates them on every tick.
         if (candles.Count > 0)
+        {
             EvaluatePisoTechoGapLive(candles[^1]);
+            EvaluatePuntoMedioSlope();
+            EvaluateBollingerWideningLabel(candles[^1].Close);
+        }
     }
 }

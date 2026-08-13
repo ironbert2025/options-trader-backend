@@ -441,6 +441,23 @@ public class SimulatorForm : Form
         // band (see SimulatedChartPanel.OnVolatilityAlreadyOpenEvent).
         _rthChart.OnVolatilityAlreadyOpenEvent += msg => LogSimEvent(msg);
 
+        // "PM" (Punto Medio) cross-panel coordination — same pattern as MultiChartForm's
+        // RedrawPuntoMedio for the live app: bigger text when both the 1h and 15m RTH panels'
+        // SMA20 tilt currently agree, normal size otherwise.
+        bool? hourlyPmBullish = null;
+        bool? rthPmBullish = null;
+
+        void RedrawPuntoMedio()
+        {
+            if (hourlyPmBullish == null || rthPmBullish == null) return;
+            var large = hourlyPmBullish == rthPmBullish;
+            _ = _hourlyChart.MarkPuntoMedioAsync(hourlyPmBullish.Value, large);
+            _ = _rthChart.MarkPuntoMedioAsync(rthPmBullish.Value, large);
+        }
+
+        _hourlyChart.OnPuntoMedioLevelEvent += bullish => { hourlyPmBullish = bullish; RedrawPuntoMedio(); };
+        _rthChart.OnPuntoMedioLevelEvent += bullish => { rthPmBullish = bullish; RedrawPuntoMedio(); };
+
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
             if (IsDisposed) return;
