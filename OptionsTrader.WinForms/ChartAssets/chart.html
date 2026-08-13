@@ -570,10 +570,14 @@
     // Stk line: removed here AND reported to C# (ChartPanel.CoreWebView2_WebMessageReceived),
     // which relays it to the other 2 panels' removeStrikeLine so deleting from any one chart
     // removes it from all 3 — markStrike draws the same line on all 3 panels at trade open.
+    // Its matching "ΔS=" label (markDeltaS keys it by the SAME strike price) is removed right
+    // along with it — per explicit request, deleting the Stk line takes the delta label with it
+    // instead of leaving it orphaned on screen.
     const strikeIdx = strikeLinesPrimitive._lines.findIndex(l => l.selected);
     if (strikeIdx !== -1) {
       const removed = strikeLinesPrimitive._lines[strikeIdx];
       strikeLinesPrimitive._lines.splice(strikeIdx, 1);
+      deltaSPrimitive._labels = deltaSPrimitive._labels.filter(l => l.price !== removed.price);
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'strike_delete', price: removed.price });
@@ -1693,6 +1697,9 @@
   // postMessage sent back out from here, so the 3 panels don't ping-pong the same delete forever.
   function removeStrikeLine(price) {
     strikeLinesPrimitive._lines = strikeLinesPrimitive._lines.filter(l => l.price !== price);
+    // Same cross-removal as the local Delete-key path — matters on this panel if it's the one
+    // (15m RTH+Overnight) that actually has a ΔS label for this strike; a no-op elsewhere.
+    deltaSPrimitive._labels = deltaSPrimitive._labels.filter(l => l.price !== price);
     forceRepaint();
   }
 
