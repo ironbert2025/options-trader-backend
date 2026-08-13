@@ -330,6 +330,18 @@ public class MultiChartForm : Form
             Location = new Point(76, 4),
             Size     = new Size(70, 24)
         };
+        var btnOvernightTLine = new Button
+        {
+            Text     = "T-Line",
+            Location = new Point(152, 4),
+            Size     = new Size(70, 24)
+        };
+        btnOvernightTLine.Click += async (s, e) =>
+        {
+            if (overnightPanel == null) return;
+            var on = await overnightPanel.ToggleTLineModeAsync();
+            btnOvernightTLine.BackColor = on ? Color.Orange : SystemColors.Control;
+        };
         var btnClear = new Button
         {
             Text   = "Clear",
@@ -407,6 +419,7 @@ public class MultiChartForm : Form
             btnDzSz.BackColor = SystemColors.Control;
             btnRect.BackColor = SystemColors.Control;
             btnArrow.BackColor = SystemColors.Control;
+            btnOvernightTLine.BackColor = SystemColors.Control;
         };
         btn5Min.Click += async (s, e) =>
         {
@@ -424,6 +437,7 @@ public class MultiChartForm : Form
 
         toolsHost.Controls.Add(btnDzSz);
         toolsHost.Controls.Add(btnRect);
+        toolsHost.Controls.Add(btnOvernightTLine);
         toolsHost.Controls.Add(btnClear);
         toolsHost.Controls.Add(btn5Min);
         toolsHost.Controls.Add(btnArrow);
@@ -665,6 +679,27 @@ public class MultiChartForm : Form
                 foreach (var sibling in allChartPanels)
                 {
                     if (sibling != null && sibling != panel) _ = sibling.RemoveHLineAsync(price);
+                }
+            };
+        }
+
+        // T-Line draw/delete: drawing (or deleting) one on ANY of the 3 panels mirrors it onto the
+        // other 2 — same idea as the Stk line/H-Line mirroring above, per explicit request.
+        foreach (var panel in allChartPanels)
+        {
+            if (panel == null) continue;
+            panel.OnTLineDrawnEvent += (t1, p1, t2, p2) =>
+            {
+                foreach (var sibling in allChartPanels)
+                {
+                    if (sibling != null && sibling != panel) _ = sibling.AddMirroredTLineAsync(t1, p1, t2, p2);
+                }
+            };
+            panel.OnTLineRemovedEvent += (t1, p1, t2, p2) =>
+            {
+                foreach (var sibling in allChartPanels)
+                {
+                    if (sibling != null && sibling != panel) _ = sibling.RemoveMirroredTLineAsync(t1, p1, t2, p2);
                 }
             };
         }

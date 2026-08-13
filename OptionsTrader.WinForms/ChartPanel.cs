@@ -332,6 +332,31 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Fired when a T-Line gets drawn/deleted on THIS panel (any of the 3, not just the 1h one —
+    // see CoreWebView2_WebMessageReceived's "tline"/"tline_delete" case) — MultiChartForm mirrors
+    // it onto the other 2 panels, same pattern as OnStrikeDeletedEvent/OnHLineDeletedEvent.
+    public event Action<long, decimal, long, decimal>? OnTLineDrawnEvent;
+    public event Action<long, decimal, long, decimal>? OnTLineRemovedEvent;
+
+    // Draws/removes a T-Line MIRRORED from another panel — additive (addMirroredTLine), doesn't go
+    // through this panel's own "only 1 T-Line at a time" limit or TLineStore at all, since the
+    // line already exists for real on the originating panel.
+    public async Task AddMirroredTLineAsync(long t1, decimal p1, long t2, decimal p2)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var p1Str = p1.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var p2Str = p2.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
+    }
+
+    public async Task RemoveMirroredTLineAsync(long t1, decimal p1, long t2, decimal p2)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var p1Str = p1.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var p2Str = p2.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
+    }
+
     // Toggles H-Line drawing mode on/off. While on, every click draws a new red horizontal line
     // from the click point to the right edge of the chart. Same toggle pattern as DZ/SZ.
     public async Task<bool> ToggleHLineModeAsync()
@@ -512,12 +537,14 @@ public class ChartPanel : Panel
                         TLineStore.Append(_symbol, t1, p1, t2, p2);
                         _tLineSignalFired = false;
                         UpdateTLineHint(p1, p2);
+                        OnTLineDrawnEvent?.Invoke(t1, p1, t2, p2);
                     }
                     else
                     {
                         TLineStore.Remove(_symbol, t1, p1, t2, p2);
                         _tLineSignalFired = false;
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
+                        OnTLineRemovedEvent?.Invoke(t1, p1, t2, p2);
                     }
                     break;
                 }

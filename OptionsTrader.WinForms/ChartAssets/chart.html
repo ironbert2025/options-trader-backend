@@ -2286,6 +2286,23 @@
     forceRepaint();
   }
 
+  // Mirrors a T-Line drawn on ANOTHER panel onto this one — additive (unlike loadTLines, which
+  // replaces the whole set), and skips this panel's own "only 1 T-Line at a time" limit entirely
+  // (that check lives in C#'s WebMessageReceived handler, only for a line drawn BY CLICKING on
+  // this panel — a mirrored one arrives already-drawn, not through that flow).
+  function addMirroredTLine(t1, p1, t2, p2) {
+    if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }
+    tLinePrimitive._lines.push({ t1, p1, t2, p2 });
+    forceRepaint();
+  }
+
+  // Removes a mirrored T-Line by its exact coordinates (a delete on the ORIGINATING panel fires
+  // this on the other 2) — same idea as removeStrikeLine/removeHLine's mirror-delete pattern.
+  function removeMirroredTLine(t1, p1, t2, p2) {
+    tLinePrimitive._lines = tLinePrimitive._lines.filter(l => !(l.t1 === t1 && l.p1 === p1 && l.t2 === t2 && l.p2 === p2));
+    forceRepaint();
+  }
+
   // Seeds vertical arrows persisted from a previous session (1h panel only — see VerticalArrowStore.cs).
   function loadArrows(arrows) {
     if (!verticalArrowAttached) { candleSeries.attachPrimitive(verticalArrowPrimitive); verticalArrowAttached = true; }
