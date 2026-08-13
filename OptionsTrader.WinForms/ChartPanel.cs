@@ -606,19 +606,6 @@ public class ChartPanel : Panel
         return _intervalMinutes == 5;
     }
 
-    // Toggles the 1h panel between Daily and Hourly candles. All the aggregation (grouping the
-    // already-loaded hourly history into one bar per day) and SMA recomputation happens entirely
-    // in JS (chart.html's toggleDaily) off the same data already on the chart — no new fetch or
-    // re-seed needed here, unlike ToggleIntervalAsync above. Drawings (T-Line, arrows, etc.) are
-    // untouched since they're anchored to real timestamps valid in either view. Returns true if
-    // now showing Daily candles.
-    public async Task<bool> ToggleDailyModeAsync()
-    {
-        if (_webView.CoreWebView2 == null) return false;
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleDaily();");
-        return result == "true";
-    }
-
     // Captures this panel's chart as a PNG (via WebView2's native preview capture — pixel-exact,
     // doesn't depend on the window being visible/on top, unlike a screen-coordinate capture) and
     // pushes it to the configured Telegram channel.
@@ -1291,6 +1278,18 @@ public class ChartPanel : Panel
         return BollingerDirection.None;
     }
 
+    // Last `count` daily bars, aggregated from HourlyCandleStore's persisted history (same source
+    // GetDailyBollingerDirection uses) — for DailyChartForm, a separate window with its own fresh
+    // WebView2 (see MultiChartForm's Daily button). Toggling Daily in-place on the live 1h panel's
+    // own WebView2 hit an unresolved rendering bug (candles stayed invisible until a manual
+    // scroll); a brand-new page load doesn't carry over whatever state that bug depended on.
+    public static List<CandleData> GetLastDailyCandles(string symbol, int count)
+    {
+        var hourly = HourlyCandleStore.Load(symbol);
+        var daily = CandleAggregation.AggregateToDaily(hourly);
+        return daily.Select(d => d.Candle).TakeLast(count).ToList();
+    }
+
     // Fires on every premarket tick (Hourly15 panel only — see Streamer_OnNewCandle) with the
     // live price, so MultiChartForm can re-evaluate the "Expuesto en 3 charts" Bollinger check.
     public event Action<decimal>? OnPreMarketPriceUpdated;
@@ -1935,6 +1934,10 @@ public class ChartPanel : Panel
     // NOT convert to the browser's local timezone. So instead of sending the true UTC instant, we
     // convert to US Eastern wall-clock time first, then lie and mark THAT as UTC — the digits the
     // chart displays then read as New York time, regardless of what timezone the PC is set to.
+    // Public alias — DailyChartForm needs the exact same "ET wall-clock digits disguised as UTC"
+    // candle encoding for its own, separate loadHistory call, without duplicating it.
+    public static string ToChartJsonPublic(object payload) => ToChartJson(payload);
+
     private static string ToChartJson(object payload)
     {
         static object Map(CandleData c)

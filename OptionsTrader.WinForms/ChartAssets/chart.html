@@ -46,26 +46,55 @@
     },
   });
 
-  const candleSeries = chart.addCandlestickSeries({
+  // Keeps the current price roughly centered vertically: instead of Lightweight Charts' default
+  // autoscale (which just fits min/max of the visible candles), force a price range symmetric
+  // around the LAST close — same margin above and below it, sized to whichever side needs more
+  // room to fit the visible data.
+  //
+  // Computed directly from displaySeries() sliced to lastAppliedRange (the window WE last told the
+  // chart to show — see applyVisibleRange), not from original()'s own priceRange — relying on
+  // Lightweight Charts to have already re-scoped its autoscale to only the visible bars turned out
+  // to be unreliable (e.g. right after toggling Daily mode, an old outlier bar far outside the
+  // visible window was still leaking into the price range, blowing the chart out to a near-empty
+  // box).
+  // displaySeries(), so whichever one is actually visible reports the correct range regardless.
+  function sharedAutoscaleInfoProvider(original) {
+    const series = displaySeries();
+    if (series.length === 0) return original();
+
+    let visible = series;
+    if (lastAppliedRange) {
+      const from = Math.max(0, Math.floor(lastAppliedRange.from));
+      const to = Math.min(series.length - 1, Math.ceil(lastAppliedRange.to));
+      if (to >= from) visible = series.slice(from, to + 1);
+    }
+    if (visible.length === 0) return original();
+
+    // Genuinely the most-recent bar's close, by time — not just series[series.length - 1], which
+    // assumes the array is already correctly ordered (see aggregateToDaily's own note on why that
+    // assumption isn't trusted anymore).
+    const lastClose = series.reduce((a, b) => (b.time > a.time ? b : a)).close;
+    let minValue = Infinity, maxValue = -Infinity;
+    for (const c of visible) {
+      if (c.low < minValue) minValue = c.low;
+      if (c.high > maxValue) maxValue = c.high;
+    }
+    if (!(maxValue > minValue)) return original();
+
+    const halfRange = Math.max(maxValue - lastClose, lastClose - minValue);
+    if (!(halfRange > 0)) return original();
+    return { priceRange: { minValue: lastClose - halfRange, maxValue: lastClose + halfRange } };
+  }
+
+  const candleSeriesOpts = {
     upColor: '#26a69a',
     downColor: '#ef5350',
     borderVisible: false,
     wickUpColor: '#26a69a',
     wickDownColor: '#ef5350',
-    // Keeps the current price roughly centered vertically: instead of Lightweight Charts'
-    // default autoscale (which just fits min/max of the visible candles), force a price range
-    // symmetric around the LAST close — same margin above and below it, sized to whichever side
-    // needs more room to fit the visible data.
-    autoscaleInfoProvider: original => {
-      const res = original();
-      if (!res || !res.priceRange || allCandles.length === 0) return res;
-      const lastClose = allCandles[allCandles.length - 1].close;
-      const { minValue, maxValue } = res.priceRange;
-      const halfRange = Math.max(maxValue - lastClose, lastClose - minValue);
-      if (!(halfRange > 0)) return res;
-      return { priceRange: { minValue: lastClose - halfRange, maxValue: lastClose + halfRange } };
-    },
-  });
+    autoscaleInfoProvider: sharedAutoscaleInfoProvider,
+  };
+  const candleSeries = chart.addCandlestickSeries(candleSeriesOpts);
 
   window.addEventListener('resize', () => {
     chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
@@ -97,19 +126,37 @@
     if (!matches) userHasInteracted = true;
   });
 
-  function applyVisibleRange() {
+  // Split out from applyVisibleRange so toggleDaily can update lastAppliedRange to the NEW
+  // (dailyMode-aware) indices BEFORE calling renderCandles() — candleSeries.setData() triggers
+  // Lightweight Charts' own autoscale/price-range computation immediately, synchronously, which
+  // calls autoscaleInfoProvider using WHATEVER lastAppliedRange currently holds. Applying the range
+  // only afterward (the old order) meant that first autoscale pass ran against the previous mode's
+  // stale indices — logical positions that meant something for the ~1500-bar hourly array but not
+  // for the much shorter daily one — and that bad price range stuck visually, since nothing forces
+  // a second autoscale pass afterward.
+  function computeVisibleRange() {
     const series = displaySeries();
-    if (!visibleDays || series.length === 0) return;
+    if (!visibleDays || series.length === 0) return null;
     const days = [...new Set(series.map(c => dayStartOf(c.time)))].sort((a, b) => a - b);
-    if (days.length === 0) return;
+    if (days.length === 0) return null;
     const cutoffIdx = Math.max(0, days.length - visibleDays);
     const cutoffTime = days[cutoffIdx];
     const fromIdx = series.findIndex(c => c.time >= cutoffTime);
-
-    const range = {
+    // The right-edge margin (8 bars past the real last index) is skipped in Daily mode as a test —
+    // suspected of breaking something internally when combined with a small array (~50 bars) and
+    // from=0 (the whole array visible, no hidden portion to the left) — a combination that never
+    // came up in Hourly mode (from is deep inside a ~1500-bar array there), where the padding is
+    // confirmed working fine.
+    const rightPad = dailyMode ? 0 : 8;
+    return {
       from: fromIdx >= 0 ? fromIdx : 0,
-      to: series.length - 1 + 8, // ~8-bar empty margin on the right for today's candles to form into
+      to: series.length - 1 + rightPad,
     };
+  }
+
+  function applyVisibleRange() {
+    const range = computeVisibleRange();
+    if (!range) return;
     lastAppliedRange = range;
     chart.timeScale().setVisibleLogicalRange(range);
   }
@@ -1844,6 +1891,11 @@
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false, // no dot on the SMA line when hovering
+          // Never contribute to the shared price scale's autoscale — its own data (recalculateSmas)
+          // spans the FULL history, not just the visible window, so its default autoscale
+          // contribution could pull the price range toward months-old values, overriding
+          // candleSeries' custom autoscaleInfoProvider (the one actually meant to drive this).
+          autoscaleInfoProvider: () => null,
         });
       }
     });
@@ -1852,7 +1904,10 @@
   }
 
   function recalculateSmas() {
-    const source = displaySeries();
+    // Full daily history (not the ~50-bar displaySeries()) so long lookbacks like SMA200 stay
+    // accurate — only the portion of the resulting line that falls within the visible time range
+    // actually gets drawn, so this doesn't show anything beyond what displaySeries() shows.
+    const source = dailyMode ? dailySeriesFull() : allCandles;
     smaPeriods.forEach(p => {
       if (source.length < p) { smaSeries[p].setData([]); smaLastPoint[p] = null; return; }
       const data = [];
@@ -1881,9 +1936,17 @@
 
   function aggregateToDaily(candles) {
     if (candles.length === 0) return [];
+    // Explicitly sorted first — the caller's own order isn't trusted here (this turned out to
+    // matter: whatever order `candles` arrived in, the LAST day bucket must genuinely be the most
+    // recent one, since renderCandles/setData and the price-centering logic both key off the
+    // final element being "today"). Also filters out any day-bucket whose time didn't come out as
+    // a finite number, cheap insurance against a single malformed row silently becoming the
+    // sorted-last entry and dragging the whole chart's scale toward some months-old price.
+    const sorted = candles.slice().sort((a, b) => a.time - b.time);
     const byDay = new Map(); // dayStart -> aggregated bar
-    for (const c of candles) {
+    for (const c of sorted) {
       const day = dayStartOf(c.time);
+      if (!Number.isFinite(day)) continue;
       const bucket = byDay.get(day);
       if (!bucket) {
         byDay.set(day, { time: day, open: c.open, high: c.high, low: c.low, close: c.close });
@@ -1896,25 +1959,58 @@
     return Array.from(byDay.values()).sort((a, b) => a.time - b.time);
   }
 
+  // Daily candles rendered are capped to the last ~50 — SMAs still need the FULL daily history for
+  // an accurate lookback (see recalculateSmas, which uses dailySeriesFull() instead), but the
+  // candlestick series itself only ever needs to actually show a reasonable recent window. This
+  // also sidesteps a real repaint bug: swapping candleSeries between a small hourly array (~45
+  // bars) and the FULL ~200+ day daily array, then narrowing the visible range back down via
+  // setVisibleLogicalRange, left the candles invisible until a manual scroll/zoom forced a real
+  // repaint — fitContent/forceRepaint/resize/a synthetic wheel event none reliably fixed it.
+  // Feeding candleSeries an already right-sized ~50-bar array outright avoids the whole situation.
+  const DailyCandlesShown = 50;
+
+  function dailySeriesFull() {
+    return aggregateToDaily(allCandles);
+  }
+
   function displaySeries() {
-    return dailyMode ? aggregateToDaily(allCandles) : allCandles;
+    return dailyMode ? dailySeriesFull().slice(-DailyCandlesShown) : allCandles;
   }
 
   function renderCandles() {
     candleSeries.setData(displaySeries());
   }
 
-  // Toggle: Daily shows one bar per day (last 20 by default) built from up to ~200 trading days
-  // of persisted hourly history; H1 goes back to plain hourly bars (last 7 days by default).
-  // Drawings (T-Line, arrows, etc.) aren't touched — they're anchored to real timestamps, which
-  // stay valid regardless of which series is currently rendered.
+  // Toggle: Daily shows the last ~50 daily bars (see DailyCandlesShown/displaySeries) built from
+  // up to ~200 trading days of persisted hourly history — SMAs still use the full history for an
+  // accurate lookback (see recalculateSmas). H1 goes back to plain hourly bars (last 7 days by
+  // default). Drawings (T-Line, arrows, etc.) aren't touched — they're anchored to real
+  // timestamps, which stay valid regardless of which series is currently rendered.
   function toggleDaily() {
     dailyMode = !dailyMode;
-    visibleDays = dailyMode ? 20 : 7;
+    visibleDays = dailyMode ? DailyCandlesShown : 7; // daily: show the whole (already ~50-bar) displaySeries()
     userHasInteracted = false; // each mode gets its own fresh default view, not the other's manual pan/zoom
+
+    // Update lastAppliedRange to the NEW mode's indices BEFORE renderCandles() — see
+    // computeVisibleRange's comment for why (setData's own synchronous autoscale pass would
+    // otherwise run against the previous mode's stale range first).
+    const range = computeVisibleRange();
+    if (range) lastAppliedRange = range;
+
     renderCandles();
+    chart.timeScale().fitContent();
     applyVisibleRange();
     recalculateSmas();
+
+    // Nothing programmatic through Lightweight Charts' own API (fitContent, forceRepaint, resize,
+    // a synthetic wheel event) has reliably forced a repaint here — only an actual manual
+    // scroll/zoom does. Forcing a real DOM/CSS reflow instead, independent of the charting library
+    // entirely: toggling display off and back on forces the browser engine to discard and rebuild
+    // layout for the whole container, which drags the canvas repaint along with it.
+    container.style.display = 'none';
+    void container.offsetHeight; // reading a layout property forces the reflow to happen NOW, synchronously
+    container.style.display = '';
+
     return dailyMode;
   }
 
@@ -1926,7 +2022,8 @@
   function configureBollinger(period, deviations) {
     bollingerConfig = { period: period, mult: deviations };
     if (!bollingerSeries) {
-      const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+      // Same reasoning as smaSeries — never contribute to the shared price scale's autoscale.
+      const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
       bollingerSeries = {
         upper:  chart.addLineSeries({ ...opts, color: '#787b86' }),
         middle: chart.addLineSeries({ ...opts, color: '#787b86', lineStyle: LightweightCharts.LineStyle.Dashed }),

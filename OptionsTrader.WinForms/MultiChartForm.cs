@@ -224,11 +224,14 @@ public class MultiChartForm : Form
             Location = new Point(132, 56),
             Size     = new Size(70, 24)
         };
-        btnDaily.Click += async (s, e) =>
+        // Opens a separate window with its own fresh WebView2 instead of toggling in place on
+        // this panel's own chart — see DailyChartForm's own comment for why (an unresolved
+        // rendering bug in the in-place toggle: correct data/axis range, but candles stayed
+        // invisible until a manual scroll).
+        btnDaily.Click += (s, e) =>
         {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleDailyModeAsync();
-            btnDaily.BackColor = on ? Color.LightBlue : SystemColors.Control;
+            var dailyCandles = ChartPanel.GetLastDailyCandles(_symbol, 50);
+            new DailyChartForm(_symbol, dailyCandles).Show();
         };
 
         // Dashed vertical lines separating the 7 hourly candles of each trading day (last 4 lines
