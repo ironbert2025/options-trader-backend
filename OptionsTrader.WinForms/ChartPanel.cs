@@ -1404,7 +1404,7 @@ public class ChartPanel : Panel
     // "are the bands opening right now", not the full Abriendo la Volatilidad signal (which stays
     // 15m-RTH-only). Colored to match THIS panel's own PM (SMA20 tilt), so "PM verde + BB verde"
     // reads as directional momentum AND volatility both agreeing.
-    private void EvaluateBollingerWideningLabel()
+    private void EvaluateBollingerWideningLabel(decimal livePrice)
     {
         if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Hourly15) return;
 
@@ -1421,6 +1421,7 @@ public class ChartPanel : Panel
         if (!show)
         {
             BeginInvoke(async () => await MarkBollingerWideningAsync(false, false));
+            BeginInvoke(async () => await MarkBollingerDeltaAsync(false, 0));
             return;
         }
 
@@ -1430,12 +1431,33 @@ public class ChartPanel : Panel
 
         var bullish = smaNow > smaEarlier;
         BeginInvoke(async () => await MarkBollingerWideningAsync(true, bullish));
+
+        // "Δ" — distance from the live price to whichever band is closer, next to "BB". Only while
+        // the price is still actually BETWEEN the two bands (bands widening but not broken out yet)
+        // — once price crosses a band, "distance to the nearest one" stops being meaningful, so hide
+        // it instead. Re-evaluated on every live tick alongside "BB" itself, same call sites.
+        if (current != null && livePrice > current.Value.Lower && livePrice < current.Value.Upper)
+        {
+            var delta = Math.Min(current.Value.Upper - livePrice, livePrice - current.Value.Lower);
+            BeginInvoke(async () => await MarkBollingerDeltaAsync(true, delta, bullish));
+        }
+        else
+        {
+            BeginInvoke(async () => await MarkBollingerDeltaAsync(false, 0));
+        }
     }
 
     private async Task MarkBollingerWideningAsync(bool show, bool bullish)
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync($"updateBollingerWidening({(show ? "true" : "false")}, {(bullish ? "true" : "false")});");
+    }
+
+    private async Task MarkBollingerDeltaAsync(bool show, decimal delta, bool bullish = false)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync(
+            $"updateBollingerDelta({(show ? "true" : "false")}, {delta.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {(bullish ? "true" : "false")});");
     }
 
     // ==================================================================================
@@ -1975,12 +1997,12 @@ public class ChartPanel : Panel
         if (_mode == ChartPanelMode.Fifteen_RTH)
         {
             EvaluateVolatilityOpening(candle.Close);
-            EvaluateBollingerWideningLabel();
+            EvaluateBollingerWideningLabel(candle.Close);
         }
         else if (_mode == ChartPanelMode.Hourly15)
         {
             EvaluatePisoTechoGapLive(candle.Close);
-            EvaluateBollingerWideningLabel();
+            EvaluateBollingerWideningLabel(candle.Close);
         }
     }
 
@@ -2050,12 +2072,12 @@ public class ChartPanel : Panel
         if (_mode == ChartPanelMode.Fifteen_RTH)
         {
             EvaluateVolatilityOpening(price);
-            EvaluateBollingerWideningLabel();
+            EvaluateBollingerWideningLabel(price);
         }
         else if (_mode == ChartPanelMode.Hourly15)
         {
             EvaluatePisoTechoGapLive(price);
-            EvaluateBollingerWideningLabel();
+            EvaluateBollingerWideningLabel(price);
         }
     }
 

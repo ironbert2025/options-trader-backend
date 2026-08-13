@@ -1625,6 +1625,22 @@
     forceRepaint();
   }
 
+  // "Δ0.42" — sits right next to "BB" (bottom-left, offset further over). Shown while price is
+  // still between the widening Bollinger Bands (see ChartPanel.EvaluateBollingerWideningLabel) —
+  // the live distance to whichever band is closer. Hidden the moment BB itself hides, or price
+  // actually breaks a band. Same replace-not-accumulate pattern as PM/BB.
+  function updateBollingerDelta(show, delta, bullish) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'bbdelta');
+    if (show) {
+      textLabelsPrimitive._labels.push({
+        id: 'bbdelta', text: `Δ${delta.toFixed(2)}`, color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
+        offsetX: 56 // clears "PM" + "BB"
+      });
+    }
+    forceRepaint();
+  }
+
   // "1er Rebote: 90%" — 1h panel only, bottom-right, yellow. Shown while SMA20 and SMA40 are both
   // Techo and SMA20 hasn't been touched/resolved yet (see ChartPanel.EvaluateFirstReboundLabel).
   // Same replace-not-accumulate pattern as updatePuntoMedio.
