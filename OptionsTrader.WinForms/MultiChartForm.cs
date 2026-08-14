@@ -616,6 +616,34 @@ public class MultiChartForm : Form
 
             hourlyPanel.OnPuntoMedioLevelEvent += bullish => { hourlyPmBullish = bullish; RedrawPuntoMedio(); };
             rthPanel.OnPuntoMedioLevelEvent += bullish => { rthPmBullish = bullish; RedrawPuntoMedio(); };
+
+            // Backtesting aid: log the exact moment PM AND BB both agree in color (verde/rojo)
+            // across the 1h and 15m RTH panels — i.e. both panels' SMA20 tilting the same direction
+            // AND both panels' Bollinger Bands currently widening in that same direction. Logged
+            // once per alignment episode (only on the false→true transition), not every tick while
+            // it holds, so it doesn't spam the log.
+            bool? hourlyBbBullish = null; // null = BB not currently shown on that panel
+            bool? rthBbBullish = null;
+            var pmBbAligned = false;
+
+            void CheckPmBbAlignment()
+            {
+                var aligned = hourlyPmBullish != null && hourlyPmBullish == rthPmBullish
+                    && hourlyBbBullish != null && hourlyBbBullish == rthBbBullish
+                    && hourlyPmBullish == hourlyBbBullish;
+
+                if (aligned && !pmBbAligned)
+                {
+                    var direction = hourlyPmBullish!.Value ? "Alza (verde)" : "Baja (rojo)";
+                    crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  PM + BB alineados en {direction} (1h y 15m RTH){Environment.NewLine}");
+                }
+                pmBbAligned = aligned;
+            }
+
+            hourlyPanel.OnPuntoMedioLevelEvent += _ => CheckPmBbAlignment();
+            rthPanel.OnPuntoMedioLevelEvent += _ => CheckPmBbAlignment();
+            hourlyPanel.OnBollingerWideningLevelEvent += (show, bullish) => { hourlyBbBullish = show ? bullish : null; CheckPmBbAlignment(); };
+            rthPanel.OnBollingerWideningLevelEvent += (show, bullish) => { rthBbBullish = show ? bullish : null; CheckPmBbAlignment(); };
         }
 
         // Telegram push failures previously vanished silently (fire-and-forget from every call

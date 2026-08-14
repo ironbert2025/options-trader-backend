@@ -1446,6 +1446,7 @@ public class ChartPanel : Panel
         {
             BeginInvoke(async () => await MarkBollingerWideningAsync(false, false));
             BeginInvoke(async () => await MarkBollingerDeltaAsync(false, 0));
+            BeginInvoke(() => OnBollingerWideningLevelEvent?.Invoke(false, false));
             return;
         }
 
@@ -1455,6 +1456,7 @@ public class ChartPanel : Panel
 
         var bullish = smaNow > smaEarlier;
         BeginInvoke(async () => await MarkBollingerWideningAsync(true, bullish));
+        BeginInvoke(() => OnBollingerWideningLevelEvent?.Invoke(true, bullish));
 
         // "Δ" — distance from the live price to whichever band is closer, next to "BB". Only while
         // the price is still actually BETWEEN the two bands (bands widening but not broken out yet)
@@ -1500,6 +1502,12 @@ public class ChartPanel : Panel
     // ==================================================================================
 
     public event Action<bool>? OnPuntoMedioLevelEvent;
+
+    // Fires (show, bullish) every time EvaluateBollingerWideningLabel re-evaluates — MultiChartForm
+    // listens to both panels' events the same way it does for PM, to detect when PM AND BB both
+    // agree in color across the 1h and 15m RTH panels (see BuildSmaEventControls' alignment check),
+    // for backtesting: logs the exact time that alignment happens.
+    public event Action<bool, bool>? OnBollingerWideningLevelEvent;
 
     private void EvaluatePuntoMedioSlope()
     {
