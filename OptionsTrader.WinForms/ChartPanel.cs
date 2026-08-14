@@ -1851,6 +1851,11 @@ public class ChartPanel : Panel
                 // 9:30 open check — see ValidatePisoTechoAgainstLivePrice.
                 if (_mode == ChartPanelMode.Hourly15) ValidatePisoTechoAgainstLivePrice(price);
 
+                // "BB" next to "PM" — also live during premarket now (previously only evaluated
+                // once RTH ticks started forming today's bucket), so a trader watching premarket
+                // already sees whether the bands are opening before the open, not just after.
+                EvaluateBollingerWideningLabel(price);
+
                 // "Expuesto" text next to the blue premarket line itself — this panel's OWN
                 // Bollinger(20,2) band (not the 3-chart combo check MultiChartForm does elsewhere):
                 // above the line if price already broke the upper band, below it if it broke the
@@ -2060,6 +2065,7 @@ public class ChartPanel : Panel
         EvaluateLastHourCandleBeforeCloseIfNeeded(eastern);
         if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
             ArmVolatilityOpeningWatchDefault();
+        if (eastern.TimeOfDay < new TimeSpan(9, 30, 0)) EvaluateBollingerWideningLabel(price); // "BB" live during premarket too
 
         if (_liveBucket == null) return; // no bucket open yet — CHART_EQUITY seeds the first one
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
