@@ -3113,6 +3113,7 @@ public partial class Form1 : Form
             // Color PnL
             row.Cells["colTradePnL"].Style.ForeColor        = pnl >= 0 ? Color.Green : Color.Red;
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
+            row.Cells["colTradePnLPercent"].Style.Font      = new Font(dgvTrades.Font, FontStyle.Bold);
 
             UpdatePnLMinMax(row, pnlPct);
             SetMoneyness(row, type, strike, _lastSpotPrice);
