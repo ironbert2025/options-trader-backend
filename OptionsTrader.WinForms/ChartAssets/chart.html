@@ -1619,14 +1619,16 @@
   // live tick from C# (EvaluatePuntoMedioSlope). Green when the SMA20 is tilting up, red when
   // tilting down. Unlike markExpired's one-shot label, this REPLACES its own previous entry each
   // call instead of accumulating — only ever one "PM" label showing at a time.
-  // `large` (set by MultiChartForm when BOTH panels' PM currently agree) bumps the font size —
-  // otherwise same normal size as any other bold fixed label.
+  // `large` (set by MultiChartForm when BOTH panels' PM currently agree) is still passed but no
+  // longer changes the font size — PM/BB/Δ must always render at the SAME fixed size (14px) so
+  // their spacing (offsetX 0/28/56) and character size stay visually consistent whether or not
+  // they happen to agree, instead of PM jumping to 20px and throwing the row out of alignment.
   function updatePuntoMedio(bullish, large) {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'pm');
     textLabelsPrimitive._labels.push({
       id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
-      fontSize: large ? 20 : 14
+      fontSize: 14
     });
     forceRepaint();
   }
@@ -1641,7 +1643,7 @@
     if (show) {
       textLabelsPrimitive._labels.push({
         id: 'bb', text: 'BB', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
-        offsetX: 28 // clears "PM" at the default 14px font size
+        fontSize: 14, offsetX: 28 // clears "PM" at the same fixed 14px font size
       });
     }
     forceRepaint();
@@ -1657,7 +1659,7 @@
     if (show) {
       textLabelsPrimitive._labels.push({
         id: 'bbdelta', text: `Δ${delta.toFixed(2)}`, color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
-        offsetX: 56 // clears "PM" + "BB"
+        fontSize: 14, offsetX: 56 // clears "PM" + "BB" at the same fixed 14px font size
       });
     }
     forceRepaint();
