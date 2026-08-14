@@ -830,12 +830,14 @@ partial class Form1
         // lblLastUpdate
         // 
         lblLastUpdate.AutoSize = true;
+        lblLastUpdate.Cursor = Cursors.Hand;
         lblLastUpdate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblLastUpdate.ForeColor = Color.DarkGoldenrod;
         lblLastUpdate.Location = new Point(435, 39);
         lblLastUpdate.Name = "lblLastUpdate";
         lblLastUpdate.Size = new Size(0, 13);
         lblLastUpdate.TabIndex = 5;
+        lblLastUpdate.Click += LblLastUpdate_Click;
         //
         // grpBalance
         // 

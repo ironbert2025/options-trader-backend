@@ -2739,6 +2739,25 @@ public partial class Form1 : Form
         return filePath;
     }
 
+    // Manual "save the whole window" snapshot, triggered by clicking the clock label next to
+    // Start Polling/Fetch Quotes. DrawToBitmap (not CopyFromScreen) so it still works if the
+    // window is minimized/occluded — same technique CaptureTradeLogScreenshot above already uses.
+    private void LblLastUpdate_Click(object? sender, EventArgs e)
+    {
+        var symbol = _selectedTicker.Symbol;
+        var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
+        Directory.CreateDirectory(folder);
+
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var filePath  = Path.Combine(folder, $"{symbol}_{timestamp}_WholeUI.png");
+
+        using var bmp = new Bitmap(Width, Height);
+        DrawToBitmap(bmp, new Rectangle(Point.Empty, Size));
+        bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+
+        LogLine($"{DateTime.Now:HH:mm:ss} [Screenshot] Whole UI saved: {filePath}", Color.Cyan);
+    }
+
     // (Re)builds one row (button + 2 coord textboxes) per symbol currently in the Tickers table,
     // preloading whatever coordinates were already saved for that symbol. Called at startup and
     // whenever the Tickers table is saved, so adding/removing a ticker keeps this in sync.
