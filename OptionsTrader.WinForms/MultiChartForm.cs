@@ -143,19 +143,6 @@ public class MultiChartForm : Form
             btnTLine.BackColor = on ? Color.Orange : SystemColors.Control;
         };
 
-        var btnHLine = new Button
-        {
-            Text     = "H-Line",
-            Location = new Point(66, 2),
-            Size     = new Size(60, 24)
-        };
-        btnHLine.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleHLineModeAsync();
-            btnHLine.BackColor = on ? Color.LightSalmon : SystemColors.Control;
-        };
-
         var btnHourlyClear = new Button
         {
             Text     = "Clear",
@@ -210,7 +197,6 @@ public class MultiChartForm : Form
             if (hourlyPanel == null) return;
             await hourlyPanel.ClearDrawingsAsync();
             btnTLine.BackColor = SystemColors.Control;
-            btnHLine.BackColor = SystemColors.Control;
             btnRectGris.BackColor = SystemColors.Control;
             btnFlechaVerde.BackColor = SystemColors.Control;
             btnFlechaRoja.BackColor = SystemColors.Control;
@@ -244,7 +230,6 @@ public class MultiChartForm : Form
         };
 
         crossHost.Controls.Add(btnTLine);
-        crossHost.Controls.Add(btnHLine);
         crossHost.Controls.Add(btnHourlyClear);
         crossHost.Controls.Add(btnRectGris);
         crossHost.Controls.Add(btnFlechaVerde);
@@ -280,10 +265,15 @@ public class MultiChartForm : Form
             var on = await rthPanel.ToggleTLineModeAsync();
             btnRthTLine.BackColor = on ? Color.Orange : SystemColors.Control;
         };
+        // Single H-Line button (above the 15m RTH panel) arms drawing on ALL 3 panels at once —
+        // the user can then click on whichever one they want and it mirrors onto the other 2 (see
+        // the OnHLineDrawnEvent wiring below), instead of needing a separate toggle per panel.
         btnRthHLine.Click += async (s, e) =>
         {
-            if (rthPanel == null) return;
-            var on = await rthPanel.ToggleHLineModeAsync();
+            bool on = false;
+            if (hourlyPanel != null) on = await hourlyPanel.ToggleHLineModeAsync();
+            if (rthPanel != null) on = await rthPanel.ToggleHLineModeAsync();
+            if (overnightPanel != null) on = await overnightPanel.ToggleHLineModeAsync();
             btnRthHLine.BackColor = on ? Color.LightSalmon : SystemColors.Control;
         };
         btnRthClear.Click += async (s, e) =>
@@ -420,6 +410,7 @@ public class MultiChartForm : Form
             btnRect.BackColor = SystemColors.Control;
             btnArrow.BackColor = SystemColors.Control;
             btnOvernightTLine.BackColor = SystemColors.Control;
+            btnRthHLine.BackColor = SystemColors.Control;
         };
         btn5Min.Click += async (s, e) =>
         {
@@ -680,6 +671,20 @@ public class MultiChartForm : Form
                 foreach (var sibling in allChartPanels)
                 {
                     if (sibling != null && sibling != panel) _ = sibling.RemoveHLineAsync(price);
+                }
+            };
+        }
+
+        // H-Line draw: drawing one on ANY of the 3 panels (the single shared H-Line button arms
+        // all 3 at once — see btnRthHLine above) mirrors it onto the other 2, same idea as T-Line.
+        foreach (var panel in allChartPanels)
+        {
+            if (panel == null) continue;
+            panel.OnHLineDrawnEvent += (time, price) =>
+            {
+                foreach (var sibling in allChartPanels)
+                {
+                    if (sibling != null && sibling != panel) _ = sibling.AddMirroredHLineAsync(time, price);
                 }
             };
         }

@@ -224,6 +224,11 @@ public class ChartPanel : Panel
     // the other 2 panels too. See CoreWebView2_WebMessageReceived's "hline_delete" case.
     public event Action<decimal>? OnHLineDeletedEvent;
 
+    // Fires (time, price) when a NEW H-Line gets drawn (2 clicks) on THIS panel — MultiChartForm
+    // uses this to mirror it onto the other 2 panels. See CoreWebView2_WebMessageReceived's
+    // "hline_add" case and addMirroredHLine in chart.html.
+    public event Action<long, decimal>? OnHLineDrawnEvent;
+
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
     public ChartPanel(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, ChartPanelMode mode)
@@ -429,6 +434,16 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"removeHLine({priceStr});");
     }
 
+    // Adds an H-Line to THIS panel without arming click mode — called on the 2 SIBLING panels when
+    // OnHLineDrawnEvent fires from wherever the user actually drew it. Same idea as
+    // AddMirroredTLineAsync.
+    public async Task AddMirroredHLineAsync(long time, decimal price)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredHLine({time}, {priceStr});");
+    }
+
     // "ΔS=value" label at trade close — anchored at the trade's strike (same price as its green
     // "Stk=xxx" line), drawn just below it. See markDeltaS in chart.html for the exact rationale.
     public async Task MarkDeltaSAsync(decimal entrySpot, decimal closeSpot, decimal strike)
@@ -620,6 +635,15 @@ public class ChartPanel : Panel
                     // the matching line (by price) from the other 2 panels too.
                     var hLinePrice = root.GetProperty("price").GetDecimal();
                     OnHLineDeletedEvent?.Invoke(hLinePrice);
+                    break;
+                }
+                case "hline_add":
+                {
+                    // Drawn on THIS panel already — fire the event so MultiChartForm can mirror it
+                    // onto the other 2 panels (see AddMirroredHLineAsync).
+                    var hAddTime  = root.GetProperty("time").GetInt64();
+                    var hAddPrice = root.GetProperty("price").GetDecimal();
+                    OnHLineDrawnEvent?.Invoke(hAddTime, hAddPrice);
                     break;
                 }
             }

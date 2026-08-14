@@ -899,6 +899,11 @@
 
     if (hLineArmed) {
       hLinePrimitive._segments.push({ time: clickTime, price, selected: false });
+      // Reported to C# (ChartPanel.CoreWebView2_WebMessageReceived) so it can mirror this H-Line
+      // onto the other 2 panels — see addMirroredHLine below.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'hline_add', time: clickTime, price });
+      }
       forceRepaint();
     }
 
@@ -1100,6 +1105,15 @@
   // to coincide, e.g. a manual H-Line drawn at the same price as the auto prev-day high/low).
   function removeHLine(price) {
     hLinePrimitive._segments = hLinePrimitive._segments.filter(s => s.price !== price);
+    forceRepaint();
+  }
+
+  // Mirrors an H-Line drawn on ANOTHER panel onto this one — additive, no postMessage sent back
+  // out (unlike the click-driven push above), so the 3 panels don't ping-pong the same draw
+  // forever. Same idea as addMirroredTLine.
+  function addMirroredHLine(time, price) {
+    if (!hLineAttached) { candleSeries.attachPrimitive(hLinePrimitive); hLineAttached = true; }
+    hLinePrimitive._segments.push({ time, price, selected: false });
     forceRepaint();
   }
 
