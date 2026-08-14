@@ -584,8 +584,9 @@ public class MultiChartForm : Form
                 BeginInvoke(() =>
                 {
                     var sessionStart = GetTodaySessionStartFakeEpoch();
-                    if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
-                    if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+                    var sessionEnd   = GetTodaySessionEndFakeEpoch();
+                    if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
+                    if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
                 });
             };
             hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
@@ -982,6 +983,16 @@ public class MultiChartForm : Form
         var sessionStartEastern = todayEastern.AddHours(9).AddMinutes(30);
         var sessionStartUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionStartEastern, DateTimeKind.Unspecified), EasternZone);
         return ChartPanel.FakeUtcEpochSeconds(sessionStartUtc);
+    }
+
+    // RTH session close (16:00 ET, today) — so the Piso/Techo reference line stops there instead
+    // of running off to the chart's own right edge.
+    private static long GetTodaySessionEndFakeEpoch()
+    {
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).Date;
+        var sessionEndEastern = todayEastern.AddHours(16);
+        var sessionEndUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionEndEastern, DateTimeKind.Unspecified), EasternZone);
+        return ChartPanel.FakeUtcEpochSeconds(sessionEndUtc);
     }
 
     // Pushes the combined 3-chart snapshot to Telegram for the T-Line+SMA20 breakout signal —

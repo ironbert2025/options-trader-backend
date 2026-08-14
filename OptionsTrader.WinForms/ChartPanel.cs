@@ -443,11 +443,11 @@ public class ChartPanel : Panel
     // Dashed Piso/Techo reference line (15m RTH / RTH+Overnight panels) — called by MultiChartForm
     // when the 1h panel's OnPisoTechoLevelReadyEvent/OnPisoTechoLevelRemovedEvent fire. See
     // markPisoTechoRefLine/removePisoTechoRefLine in chart.html for the rendering.
-    public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch)
+    public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch, long sessionEndFakeEpoch)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch}, {sessionEndFakeEpoch});");
     }
 
     public async Task RemovePisoTechoRefLineAsync(int period)

@@ -153,11 +153,11 @@ public class SimulatedChartPanel : Panel
     // Dashed Piso/Techo reference line (15m RTH / RTH+Overnight charts) — ported from ChartPanel,
     // called by SimulatorForm.EvaluatePisoTecho for each SMA that survived the market-open-gap
     // check. See markPisoTechoRefLine/removePisoTechoRefLine in chart.html.
-    public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch)
+    public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch, long sessionEndFakeEpoch)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch}, {sessionEndFakeEpoch});");
     }
 
     public async Task RemovePisoTechoRefLineAsync(int period)

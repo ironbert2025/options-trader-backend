@@ -1857,7 +1857,7 @@
   // price action from whenever it was drawn (pre-market) onward. ----
 
   class PisoTechoRefLinePrimitive {
-    constructor() { this._lines = []; this._chart = null; } // [{ period, time, price, color, selected }, ...]
+    constructor() { this._lines = []; this._chart = null; } // [{ period, time, timeEnd, price, color, selected }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1873,6 +1873,11 @@
                 self._lines.forEach(l => {
                   const xRaw = ts.timeToCoordinate(l.time);
                   const x = xRaw == null ? 0 : xRaw; // falls back to left edge until session-start time is in range
+                  // Right edge stops at today's RTH session close (16:00 ET) instead of running off
+                  // to the chart's own right edge — falls back to the right edge only if the session
+                  // end itself isn't in the visible range yet (e.g. still mid-session, panned left).
+                  const x2Raw = ts.timeToCoordinate(l.timeEnd);
+                  const x2 = x2Raw == null ? scope.bitmapSize.width : x2Raw;
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (y == null) return;
 
@@ -1881,7 +1886,7 @@
                   ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
                   ctx.beginPath();
                   ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
-                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.lineTo(x2 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
                   ctx.stroke();
 
                   if (l.selected) {
@@ -1891,7 +1896,7 @@
                     ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
                     ctx.beginPath();
                     ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
-                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.lineTo(x2 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
                     ctx.stroke();
                     ctx.restore();
                   }
@@ -1908,16 +1913,16 @@
   const pisoTechoRefLinePrimitive = new PisoTechoRefLinePrimitive();
   let pisoTechoRefLineAttached = false;
 
-  // sessionStartTime is the RTH session's own 9:30 ET anchor, computed in C# (ChartPanel/
-  // SimulatedChartPanel.ToFakeUtcEpochSeconds) — NOT derived from allCandles (unlike markStrike),
-  // since this gets called right after a day/history load, before allCandles is necessarily
-  // populated yet (SimulatorForm calls EvaluatePisoTecho before RenderCurrentStep, and both are
-  // fire-and-forget into the WebView, so the order isn't guaranteed). A fixed, independently
-  // computed timestamp sidesteps that race entirely.
-  function markPisoTechoRefLine(period, price, sessionStartTime) {
+  // sessionStartTime/sessionEndTime are the RTH session's own 9:30/16:00 ET anchors, computed in
+  // C# (ChartPanel/SimulatedChartPanel.ToFakeUtcEpochSeconds) — NOT derived from allCandles (unlike
+  // markStrike), since this gets called right after a day/history load, before allCandles is
+  // necessarily populated yet (SimulatorForm calls EvaluatePisoTecho before RenderCurrentStep, and
+  // both are fire-and-forget into the WebView, so the order isn't guaranteed). Fixed, independently
+  // computed timestamps sidestep that race entirely.
+  function markPisoTechoRefLine(period, price, sessionStartTime, sessionEndTime) {
     if (!pisoTechoRefLineAttached) { candleSeries.attachPrimitive(pisoTechoRefLinePrimitive); pisoTechoRefLineAttached = true; }
     pisoTechoRefLinePrimitive._lines = pisoTechoRefLinePrimitive._lines.filter(l => l.period !== period);
-    pisoTechoRefLinePrimitive._lines.push({ period, time: sessionStartTime, price, color: smaColors[period] || '#888888', selected: false });
+    pisoTechoRefLinePrimitive._lines.push({ period, time: sessionStartTime, timeEnd: sessionEndTime, price, color: smaColors[period] || '#888888', selected: false });
     forceRepaint();
   }
 

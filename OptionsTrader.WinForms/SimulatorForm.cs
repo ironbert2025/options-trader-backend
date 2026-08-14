@@ -429,8 +429,9 @@ public class SimulatorForm : Form
         _hourlyChart.OnPisoTechoLevelUpdatedEvent += (period, price) =>
         {
             var sessionStart = GetSessionStartFakeEpoch();
-            _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart);
-            _ = _fullChart.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+            var sessionEnd   = GetSessionEndFakeEpoch();
+            _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
+            _ = _fullChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
         };
 
         // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a
@@ -697,6 +698,15 @@ public class SimulatorForm : Form
         return SimulatedChartPanel.ToFakeUtcEpochSeconds(sessionStartUtc);
     }
 
+    // The replayed day's 16:00 ET close — so the Piso/Techo reference line stops there instead of
+    // running off to the chart's own right edge.
+    private long GetSessionEndFakeEpoch()
+    {
+        var sessionEndEastern = _simDate.ToDateTime(new TimeOnly(16, 0));
+        var sessionEndUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionEndEastern, DateTimeKind.Unspecified), EasternZone);
+        return SimulatedChartPanel.ToFakeUtcEpochSeconds(sessionEndUtc);
+    }
+
     private async Task ApplyPisoTechoRefLine(List<CandleData> bars, int period, string? result)
     {
         if (result != null && bars.Count >= period)
@@ -705,8 +715,9 @@ public class SimulatorForm : Form
             for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
             var sma = sum / period;
             var sessionStart = GetSessionStartFakeEpoch();
-            await _rthChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart);
-            await _fullChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart);
+            var sessionEnd   = GetSessionEndFakeEpoch();
+            await _rthChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart, sessionEnd);
+            await _fullChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart, sessionEnd);
         }
         else
         {
