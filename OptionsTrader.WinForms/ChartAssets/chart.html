@@ -1152,7 +1152,15 @@
                   ctx.fillStyle = '#2196f3';
                   ctx.textAlign = 'center';
                   ctx.textBaseline = self._exposed === 'above' ? 'bottom' : 'top';
-                  const labelX = scope.bitmapSize.width / 2;
+                  // Follows the line's own anchor (x, recomputed every frame from the last-loaded
+                  // candle's time coordinate) instead of a fixed screen-pixel position — otherwise
+                  // the text stays visually pinned to the canvas center while panning/zooming moves
+                  // the line itself. Clamped so it stays on-screen if that anchor pans off-canvas.
+                  const labelMargin = 40 * scope.horizontalPixelRatio;
+                  const labelX = Math.min(
+                    Math.max(x * scope.horizontalPixelRatio + labelMargin, labelMargin),
+                    scope.bitmapSize.width - labelMargin
+                  );
                   const labelY = (y * scope.verticalPixelRatio) + (self._exposed === 'above' ? -6 * scope.verticalPixelRatio : 6 * scope.verticalPixelRatio);
                   ctx.fillText('Expuesto', labelX, labelY);
                 }
