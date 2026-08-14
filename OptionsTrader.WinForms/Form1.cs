@@ -1520,8 +1520,21 @@ public partial class Form1 : Form
             .OrderByDescending(x => x.Quote.StrikePrice)
             .ToList();
 
+        bool? previousWasCall = null;
         foreach (var (quote, isCall) in combined)
         {
+            // Blank separator row right where the list crosses from Calls into Puts (combined is
+            // sorted strike-descending, so OTM calls — above spot — always come first) — quarter
+            // height of a normal row, just a visual gap, no data/click behavior of its own.
+            if (previousWasCall == true && !isCall)
+            {
+                grid.Rows.Add();
+                var separatorRow = grid.Rows[grid.Rows.Count - 1];
+                separatorRow.Tag = "SEPARATOR";
+                separatorRow.Height = Math.Max(1, grid.RowTemplate.Height / 4);
+            }
+            previousWasCall = isCall;
+
             var sprd      = FormatSprd(quote.Ask - quote.Bid);
             var contracts = GetContractsValue(quote.Ask);
             var levelIdx  = isCall ? allOtmCallStrikes.IndexOf(quote.StrikePrice) : allOtmPutStrikes.IndexOf(quote.StrikePrice);
