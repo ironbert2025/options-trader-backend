@@ -139,6 +139,32 @@ public class SimulatedChartPanel : Panel
 
         if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full || _mode == ChartPanelMode.Fifteen_RTH)
             EvaluateNewlyClosedCandles(candles);
+
+        await DrawPrevDayCloseAsync(candles);
+    }
+
+    // Dashed red reference line at the previous day's close — ported from ChartPanel's identical
+    // copy. "Today" here is the most recent date present in `candles` (the simulated day at the
+    // current step), not the real wall-clock date — so this stays correct no matter which
+    // historical day is being replayed. Safe to call every step (markPrevDayClose in chart.html
+    // replaces the previous line instead of accumulating).
+    private async Task DrawPrevDayCloseAsync(List<CandleData> candles)
+    {
+        if (candles.Count == 0 || _webView.CoreWebView2 == null) return;
+
+        var byDate = candles
+            .Select(c => (Candle: c, Date: DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))))
+            .ToList();
+        var simDay = byDate.Max(x => x.Date);
+        var prior = byDate.Where(x => x.Date < simDay).ToList();
+        if (prior.Count == 0) return;
+
+        var prevDate = prior.Max(x => x.Date);
+        var lastBar = prior.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
+
+        var timeArg  = ToFakeUtcEpochSeconds(lastBar.Time);
+        var priceStr = lastBar.Close.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPrevDayClose({timeArg}, {priceStr});");
     }
 
     // Same green "Stk=xxx" line as the live ChartPanel.MarkStrikeAsync — fired when a demo trade

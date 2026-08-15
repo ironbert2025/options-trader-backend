@@ -1151,6 +1151,56 @@
     athPriceLine.applyOptions({ color: show ? '#00e676' : '#ffd700' });
   }
 
+  // Previous day's close — dashed red line, no label, anchored at the time of the previous day's
+  // closing candle and running rightward to the edge (same "anchor at a specific candle, extend
+  // right" convention as the premarket blue line), instead of a full-width axis line — so it
+  // visually "starts" where that candle sits rather than spanning the whole chart. A custom
+  // primitive (not createPriceLine) is needed for that partial-width behavior. Persists through
+  // the whole RTH session — nothing ever removes it once drawn, same as the premarket line.
+  class PrevDayCloseLinePrimitive {
+    constructor() { this._time = null; this._price = null; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || self._time == null || self._price == null) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const xRaw = ts.timeToCoordinate(self._time);
+                const x = xRaw == null ? 0 : xRaw;
+                const y = candleSeries.priceToCoordinate(self._price);
+                if (y == null) return;
+                ctx.strokeStyle = '#ef5350';
+                ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                ctx.beginPath();
+                ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                ctx.stroke();
+                ctx.setLineDash([]);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const prevDayCloseLinePrimitive = new PrevDayCloseLinePrimitive();
+  let prevDayCloseLineAttached = false;
+
+  function markPrevDayClose(time, price) {
+    if (!prevDayCloseLineAttached) { candleSeries.attachPrimitive(prevDayCloseLinePrimitive); prevDayCloseLineAttached = true; }
+    prevDayCloseLinePrimitive._time = time;
+    prevDayCloseLinePrimitive._price = price;
+    forceRepaint();
+  }
+
   // ---- Pre-market line (1h and 15m RTH panels): blue line from the LAST candle currently
   // loaded (yesterday's close, since the market hasn't opened today yet) to the right edge,
   // following the live price tick by tick until the market opens at 9:30 — after that C# simply

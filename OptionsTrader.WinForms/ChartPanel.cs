@@ -1691,6 +1691,29 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markPrevDayHiLo({highTimeJs}, {highPriceJs}, {lowTimeJs}, {lowPriceJs});");
     }
 
+    // Dashed red reference line at the previous day's close — all 3 panels. Unlike the Hi/Lo
+    // H-Lines above, this is a plain always-shown reference (no "already broken" check, no
+    // premarket-timing deferral) — a built-in price line (see markPrevDayClose in chart.html), so
+    // it's safe to call once per chart open with no extra state to track.
+    private async Task DrawPrevDayCloseAsync(List<CandleData> candles)
+    {
+        if (candles.Count == 0 || _webView.CoreWebView2 == null) return;
+
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        var byDate = candles
+            .Select(c => (Candle: c, Date: DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))))
+            .Where(x => x.Date < today)
+            .ToList();
+        if (byDate.Count == 0) return;
+
+        var prevDate = byDate.Max(x => x.Date);
+        var lastBar = byDate.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
+
+        var timeArg  = FakeUtcEpochSeconds(lastBar.Time);
+        var priceStr = lastBar.Close.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markPrevDayClose({timeArg}, {priceStr});");
+    }
+
     // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is
     // MultiChartForm's job (once for all 3 panels), not each panel's.
     private async Task LoadHistoryAsync()
@@ -1894,6 +1917,7 @@ public class ChartPanel : Panel
                     }
 
                     await EvaluatePrevDayHiLoAsync(aggregated);
+                    await DrawPrevDayCloseAsync(aggregated);
                 }
             }
         }
