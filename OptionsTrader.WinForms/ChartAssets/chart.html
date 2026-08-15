@@ -2248,6 +2248,59 @@
   let bollingerConfig = null; // { period, mult }
   let bollingerSeries = null; // { upper, middle, lower }
 
+  // Simulator only (panel 2, 15m RTH): white markers over the CURRENT Bollinger upper/lower band
+  // values, bounded to just the forming (last) candle's width — a quick visual of exactly where
+  // the bands sit right now, updated every step alongside recalculateBollinger itself. Never
+  // enabled on the live chart (enableBollingerEdgeMarkers is only ever called from
+  // SimulatedChartPanel), even though this panel's chart.html instance is otherwise identical.
+  let bollingerEdgeMarkersEnabled = false;
+  function enableBollingerEdgeMarkers() { bollingerEdgeMarkersEnabled = true; }
+
+  // Each band's marker is a 2-point segment (previous candle -> forming candle), NOT a fixed-width
+  // horizontal mark — so its slope visually shows the band opening outward, moving sideways, or
+  // closing inward between those two candles, which a horizontal-only mark couldn't show.
+  class BollingerEdgeMarkerPrimitive {
+    constructor() { this._upper = null; this._lower = null; this._chart = null; } // { prev:{time,price}, curr:{time,price} } | null
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const drawOne = (segment) => {
+                  if (!segment) return;
+                  const x1Raw = ts.timeToCoordinate(segment.prev.time);
+                  const x2Raw = ts.timeToCoordinate(segment.curr.time);
+                  if (x1Raw == null || x2Raw == null) return;
+                  const y1 = candleSeries.priceToCoordinate(segment.prev.price);
+                  const y2 = candleSeries.priceToCoordinate(segment.curr.price);
+                  if (y1 == null || y2 == null) return;
+                  ctx.strokeStyle = '#ffffff';
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x1Raw * scope.horizontalPixelRatio, y1 * scope.verticalPixelRatio);
+                  ctx.lineTo(x2Raw * scope.horizontalPixelRatio, y2 * scope.verticalPixelRatio);
+                  ctx.stroke();
+                };
+                drawOne(self._upper);
+                drawOne(self._lower);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const bollingerEdgeMarkerPrimitive = new BollingerEdgeMarkerPrimitive();
+  let bollingerEdgeMarkerAttached = false;
+
   function configureBollinger(period, deviations) {
     bollingerConfig = { period: period, mult: deviations };
     if (!bollingerSeries) {
@@ -2269,6 +2322,10 @@
       bollingerSeries.upper.setData([]);
       bollingerSeries.middle.setData([]);
       bollingerSeries.lower.setData([]);
+      if (bollingerEdgeMarkersEnabled) {
+        bollingerEdgeMarkerPrimitive._upper = null;
+        bollingerEdgeMarkerPrimitive._lower = null;
+      }
       return;
     }
     const upperData = [], midData = [], lowerData = [];
@@ -2287,6 +2344,22 @@
     bollingerSeries.upper.setData(upperData);
     bollingerSeries.middle.setData(midData);
     bollingerSeries.lower.setData(lowerData);
+
+    // Simulator-only white edge markers (see enableBollingerEdgeMarkers) — a 2-point segment from
+    // the PREVIOUS candle's band value to the forming candle's, re-set every recalculation, so its
+    // slope shows the band opening/closing/going sideways between those two candles.
+    if (bollingerEdgeMarkersEnabled && upperData.length >= 2) {
+      if (!bollingerEdgeMarkerAttached) { candleSeries.attachPrimitive(bollingerEdgeMarkerPrimitive); bollingerEdgeMarkerAttached = true; }
+      const prevUpper = upperData[upperData.length - 2], currUpper = upperData[upperData.length - 1];
+      const prevLower = lowerData[lowerData.length - 2], currLower = lowerData[lowerData.length - 1];
+      bollingerEdgeMarkerPrimitive._upper = {
+        prev: { time: prevUpper.time, price: prevUpper.value }, curr: { time: currUpper.time, price: currUpper.value }
+      };
+      bollingerEdgeMarkerPrimitive._lower = {
+        prev: { time: prevLower.time, price: prevLower.value }, curr: { time: currLower.time, price: currLower.value }
+      };
+      forceRepaint();
+    }
   }
 
   // ---- Overnight shading (optional — only enabled on panels that call configureOvernightBands) ----

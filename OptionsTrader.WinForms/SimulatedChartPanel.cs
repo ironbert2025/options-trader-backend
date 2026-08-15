@@ -76,6 +76,11 @@ public class SimulatedChartPanel : Panel
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
+                // White markers over the current upper/lower Bollinger band values, bounded to the
+                // forming candle's width — simulator-only, never enabled on the live chart even
+                // though it shares this same chart.html.
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerEdgeMarkers();");
+
                 // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
                 // arms DZ/SZ itself), but the mirrored copy is still independently selectable/
                 // deletable there, and that deletion needs to reach C# to relay to the sibling.
