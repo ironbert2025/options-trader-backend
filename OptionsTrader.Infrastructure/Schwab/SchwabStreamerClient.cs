@@ -40,6 +40,17 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     private int _requestId;
     private volatile bool _stopRequested;
 
+    // Watchdog: Schwab sends SOMETHING (a candle, or a heartbeat/notify frame — see HandleMessage's
+    // catch-all) on a healthy connection well within a minute, even overnight. A dead-but-not-closed
+    // socket (NAT/firewall/AV silently dropping the mapping without a TCP RST/FIN) never throws from
+    // ReceiveAsync, so nothing in the normal receive loop would ever notice — this is what forces a
+    // reconnect in that case instead of waiting forever for an exception that never comes.
+    private DateTime _lastMessageReceivedUtc = DateTime.UtcNow;
+    private CancellationTokenSource? _watchdogCts;
+    private bool _watchdogStarted;
+    private static readonly TimeSpan WatchdogCheckInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan WatchdogStaleThreshold = TimeSpan.FromSeconds(60);
+
     // Completed by HandleMessage when the LOGIN response arrives, so ConnectAsync can wait for
     // an actual server-side ack instead of just firing the LOGIN request and returning immediately
     // — sending ADD before LOGIN is acknowledged gets rejected with "STREAM CONNECTION NOT FOUND".
@@ -140,8 +151,19 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
         _socket = new ClientWebSocket();
         await _socket.ConnectAsync(new Uri(_streamerSocketUrl), ct);
 
+        _lastMessageReceivedUtc = DateTime.UtcNow;
         _receiveLoopCts = new CancellationTokenSource();
         _receiveLoopTask = Task.Run(() => ReceiveLoopAsync(_receiveLoopCts.Token));
+
+        // Started once for the lifetime of this client (not per-connection/reconnect) — it just
+        // watches _lastMessageReceivedUtc and forces a reconnect via _socket.Abort() if it goes
+        // stale, regardless of which underlying socket instance is currently live.
+        if (!_watchdogStarted)
+        {
+            _watchdogStarted = true;
+            _watchdogCts = new CancellationTokenSource();
+            _ = Task.Run(() => WatchdogLoopAsync(_watchdogCts.Token));
+        }
 
         _loginTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await LoginAsync(ct);
@@ -370,6 +392,7 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
 
                 if (result.MessageType == WebSocketMessageType.Close) break;
 
+                _lastMessageReceivedUtc = DateTime.UtcNow;
                 var json = Encoding.UTF8.GetString(messageStream.ToArray());
                 LogRawMessage(json);
                 HandleMessage(json);
@@ -512,6 +535,30 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     private static readonly int[] ReconnectDelaysMs = { 2000, 5000, 10000, 20000, 30000 };
     private int _reconnectAttempt;
 
+    // Forces a reconnect when the socket is still technically open but has gone quiet for too
+    // long — a half-dead connection (NAT/firewall/AV silently dropping the mapping without a
+    // proper TCP close) never makes ReceiveAsync throw on its own, so ReceiveLoopAsync's normal
+    // catch/reconnect path never triggers. Aborting the socket here makes ReceiveAsync fail,
+    // which routes through the exact same ReconnectWithBackoffAsync used for a real disconnect.
+    private async Task WatchdogLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && !_stopRequested)
+        {
+            try { await Task.Delay(WatchdogCheckInterval, ct); }
+            catch (OperationCanceledException) { return; }
+
+            if (_stopRequested) return;
+            if (DateTime.UtcNow - _lastMessageReceivedUtc <= WatchdogStaleThreshold) continue;
+
+            OnWsStatusEvent?.Invoke("Streamer watchdog: no data received in over a minute — forcing reconnect...");
+            // Reset immediately — ReconnectWithBackoffAsync's own delay (up to 30s) can easily
+            // outlast this loop's 15s check interval, and without this the watchdog would keep
+            // re-aborting (and re-logging) every tick while the reconnect is already in flight.
+            _lastMessageReceivedUtc = DateTime.UtcNow;
+            try { _socket?.Abort(); } catch { /* best effort — ReceiveLoopAsync's catch handles the rest */ }
+        }
+    }
+
     private async Task ReconnectWithBackoffAsync()
     {
         OnDisconnected?.Invoke("Streamer disconnected — reconnecting...");
@@ -544,6 +591,7 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     {
         _stopRequested = true;
         _receiveLoopCts?.Cancel();
+        _watchdogCts?.Cancel();
 
         if (_socket is { State: WebSocketState.Open })
         {

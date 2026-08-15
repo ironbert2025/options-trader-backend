@@ -40,7 +40,25 @@ public sealed class CandleHubServer : IDisposable
 
         _cts = new CancellationTokenSource();
         _ = AcceptLoopAsync(_cts.Token);
+        _ = HeartbeatLoopAsync(_cts.Token);
         return true;
+    }
+
+    // Sent independent of whether any candles are actually flowing (overnight, weekends, or just
+    // a quiet moment intraday) — gives clients something to see even when there's nothing to
+    // broadcast, so CandleHubClient's own watchdog can tell "hub alive but quiet" apart from
+    // "hub/relay actually dead" instead of only having candle/l1 traffic to judge by.
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(20);
+
+    private async Task HeartbeatLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(HeartbeatInterval, ct); }
+            catch (OperationCanceledException) { return; }
+
+            BroadcastLine(JsonSerializer.Serialize(new { type = "heartbeat" }));
+        }
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -149,6 +167,17 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
     private int _port;
     private string _host = "127.0.0.1";
 
+    // Watchdog: a plain TcpClient has no keep-alive by default, so a half-dead connection (the
+    // hub process stalled, or the loopback/LAN path silently broke) never makes ReadLineAsync
+    // throw or return null on its own — it just blocks forever. The hub now sends a heartbeat
+    // line every 20s (CandleHubServer.HeartbeatLoopAsync) even when no candles are flowing, so
+    // any healthy connection should never go this long without SOME line arriving.
+    private DateTime _lastLineReceivedUtc = DateTime.UtcNow;
+    private CancellationTokenSource? _watchdogCts;
+    private bool _watchdogStarted;
+    private static readonly TimeSpan WatchdogCheckInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan WatchdogStaleThreshold = TimeSpan.FromSeconds(45);
+
     public event Action<string, CandleData>? OnNewCandle;
     public event Action<string, decimal, DateTime>? OnLevelOneTick;
     public event Action<string>? OnDisconnected;
@@ -163,8 +192,40 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
         _client = new TcpClient();
         await _client.ConnectAsync(_host, port, ct);
 
+        _lastLineReceivedUtc = DateTime.UtcNow;
         _cts = new CancellationTokenSource();
         _receiveTask = Task.Run(() => ReceiveLoopAsync(_cts.Token));
+
+        // Started once for the lifetime of this client, not per-connection — it just watches
+        // _lastLineReceivedUtc and forces a reconnect (via _client.Dispose()) if it goes stale,
+        // regardless of which underlying TcpClient instance is currently live.
+        if (!_watchdogStarted)
+        {
+            _watchdogStarted = true;
+            _watchdogCts = new CancellationTokenSource();
+            _ = Task.Run(() => WatchdogLoopAsync(_watchdogCts.Token));
+        }
+    }
+
+    // Forces the same reconnect path a real disconnect already takes (ReceiveLoopAsync's catch
+    // falls through to ReconnectLoopAsync) — Dispose() makes the blocked ReadLineAsync throw.
+    private async Task WatchdogLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && !_stopRequested)
+        {
+            try { await Task.Delay(WatchdogCheckInterval, ct); }
+            catch (OperationCanceledException) { return; }
+
+            if (_stopRequested) return;
+            if (DateTime.UtcNow - _lastLineReceivedUtc <= WatchdogStaleThreshold) continue;
+
+            OnWsStatusEvent?.Invoke("Local candle hub watchdog: no data received in too long — forcing reconnect...");
+            // Same reasoning as SchwabStreamerClient's watchdog — reset immediately so this loop
+            // doesn't keep re-triggering every 15s while ReconnectLoopAsync's own 5s delay is
+            // already in flight.
+            _lastLineReceivedUtc = DateTime.UtcNow;
+            try { _client?.Dispose(); } catch { /* best effort — ReceiveLoopAsync's catch handles the rest */ }
+        }
     }
 
     private async Task ReceiveLoopAsync(CancellationToken ct)
@@ -176,6 +237,7 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
             {
                 var line = await reader.ReadLineAsync(ct);
                 if (line == null) break; // hub instance closed
+                _lastLineReceivedUtc = DateTime.UtcNow;
                 HandleLine(line);
             }
         }
@@ -210,6 +272,7 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
                 _client?.Dispose();
                 _client = new TcpClient();
                 await _client.ConnectAsync(_host, _port);
+                _lastLineReceivedUtc = DateTime.UtcNow;
                 _cts = new CancellationTokenSource();
                 _receiveTask = Task.Run(() => ReceiveLoopAsync(_cts.Token));
                 return;
@@ -231,6 +294,11 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
             // "type" is absent on messages from hub instances built before this field existed —
             // treat that as "candle" too, so an old hub / new client pairing still works.
             var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : "candle";
+
+            // heartbeat carries nothing but proof the hub/relay is still alive — _lastLineReceivedUtc
+            // was already updated by ReceiveLoopAsync before calling here, so there's nothing else
+            // to do with it.
+            if (type == "heartbeat") return;
 
             // wsevent carries no symbol/time — a connection status line, not a price update.
             if (type == "wsevent")
@@ -270,6 +338,7 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
     {
         _stopRequested = true;
         _cts?.Cancel();
+        _watchdogCts?.Cancel();
         try { _client?.Close(); } catch { /* best effort */ }
 
         if (_receiveTask != null)
