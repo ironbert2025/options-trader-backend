@@ -1135,6 +1135,9 @@ public class SimulatorForm : Form
         row.ReadOnly = true;
         _openSimTrades.Remove(trade);
 
+        // White spot-price line at the moment of close — same marker as the entry one.
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
+
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");
         var closeType   = auto ? "TARGET (auto)" : "MANUAL";
