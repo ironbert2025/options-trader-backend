@@ -98,6 +98,18 @@ public class ChartPanel : Panel
     // first pre-market tick (Hourly15/Fifteen_RTH before 9:30). This guards against firing twice.
     private bool _drewPrevDayHiLo;
 
+    // All-Time High reference line (all 3 panels) — see AllTimeHighStore. Null until loaded (or if
+    // no file exists yet for this symbol). _athTodaysHigh only tracked on the 1h panel (avoids
+    // 3 redundant file writes at the close) — running max of every live price seen today, compared
+    // against _athValue at 16:00 ET to decide whether to persist a new one (EvaluateAllTimeHighAtClose).
+    private decimal? _athValue;
+    private decimal? _athTodaysHigh;
+    private bool _athEvaluatedAtClose;
+
+    // Fires (newValue) once the 1h panel persists a new All-Time High at the RTH close —
+    // MultiChartForm mirrors it onto the other 2 panels (see MarkAllTimeHighAsync).
+    public event Action<decimal>? OnAllTimeHighUpdatedEvent;
+
     // Temporary diagnostic — fires every time DrawPrevDayHiLoAsync actually runs its computation,
     // regardless of whether it ends up drawing anything, so a "why isn't this panel showing the
     // line" report can be answered from crossLog instead of guessing.
@@ -442,6 +454,26 @@ public class ChartPanel : Panel
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredHLine({time}, {priceStr});");
+    }
+
+    // Draws/updates this panel's All-Time High reference line — called on chart open (loaded from
+    // AllTimeHighStore) and again on the other 2 panels when the 1h panel persists a new one at the
+    // close (see OnAllTimeHighUpdatedEvent).
+    public async Task MarkAllTimeHighAsync(decimal price)
+    {
+        _athValue = price;
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markAllTimeHigh({priceStr});");
+    }
+
+    // Re-evaluated on every live tick (all 3 panels) — purely visual, flips the ATH line green
+    // while the live price is currently trading above it, gold otherwise. Independent of whether
+    // today's high actually gets persisted as a new ATH (that only happens once, at the close).
+    private async Task MarkAllTimeHighBrokenAsync(bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateAllTimeHighBroken({(show ? "true" : "false")});");
     }
 
     // "ΔS=value" label at trade close — anchored at the trade's strike (same price as its green
@@ -1085,6 +1117,44 @@ public class ChartPanel : Panel
         EvaluatePisoTechoWatches(snapshot);
     }
 
+    // All-Time High: recolors the reference line while the live price is trading above the stored
+    // value (all 3 panels, premarket + RTH alike, purely visual), tracks today's running high
+    // (1h panel only), and triggers the once-per-day persist check at the 16:00 close.
+    private void EvaluateAllTimeHighLive(decimal livePrice, DateTime eastern)
+    {
+        if (_athValue != null)
+            BeginInvoke(async () => await MarkAllTimeHighBrokenAsync(livePrice > _athValue.Value));
+
+        if (_mode != ChartPanelMode.Hourly15) return;
+
+        _athTodaysHigh = _athTodaysHigh == null ? livePrice : Math.Max(_athTodaysHigh.Value, livePrice);
+        EvaluateAllTimeHighAtClose(eastern);
+    }
+
+    // Fires once, right before close (15:59-16:00 ET) — same window
+    // EvaluateLastHourCandleBeforeCloseIfNeeded uses, and for the same reason: CHART_EQUITY
+    // typically stops ticking exactly at 16:00:00, so waiting for a tick AT OR AFTER 16:00 could
+    // mean this never fires at all. Persists a new All-Time High only if today's running high
+    // actually beat the stored one (or none was stored yet for this symbol), then mirrors the new
+    // value onto the other 2 panels via OnAllTimeHighUpdatedEvent (MultiChartForm relays it, same
+    // pattern as T-Line/H-Line draws).
+    private void EvaluateAllTimeHighAtClose(DateTime eastern)
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _athEvaluatedAtClose || _athTodaysHigh == null) return;
+        if (eastern.TimeOfDay < new TimeSpan(15, 59, 0)) return;
+
+        _athEvaluatedAtClose = true;
+
+        if (_athValue != null && _athTodaysHigh.Value <= _athValue.Value) return;
+
+        var newValue = _athTodaysHigh.Value;
+        var today = DateOnly.FromDateTime(eastern);
+        AllTimeHighStore.Save(_symbol, newValue, today);
+        _athValue = newValue;
+        BeginInvoke(async () => await MarkAllTimeHighAsync(newValue));
+        BeginInvoke(() => OnAllTimeHighUpdatedEvent?.Invoke(newValue));
+    }
+
     // Evaluated on every closed 1h candle (see Streamer_OnNewCandle) against each still-armed
     // PisoTechoWatch — same case-1/case-2 cross-or-bounce formula used elsewhere
     // (BounceProximityRatio), against that watch's own SMA period. Resolves once per period, then
@@ -1718,6 +1788,16 @@ public class ChartPanel : Panel
                 }
             }
 
+            // All-Time High reference line — all 3 panels, loaded from disk if this symbol has one
+            // saved yet (see AllTimeHighStore).
+            var savedAth = AllTimeHighStore.Load(_symbol);
+            if (savedAth != null)
+            {
+                _athValue = savedAth.Value.Value;
+                await _webView.CoreWebView2.ExecuteScriptAsync(
+                    $"markAllTimeHigh({savedAth.Value.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)});");
+            }
+
             // Gray shading for overnight/weekend gaps — only on the 15m RTH+Overnight panel.
             // Also listens for "dzsz" messages (Demand Zone rebote detection, see
             // EvaluateDemandZoneRebounds) — this panel is the only one with DZ/SZ enabled.
@@ -1843,6 +1923,7 @@ public class ChartPanel : Panel
         OnLiveTick?.Invoke(eastern, candle.Close);
         EvaluatePuntoMedioSlope(); // premarket + RTH alike, see method comment
         EvaluateLastHourCandleBeforeCloseIfNeeded(eastern);
+        EvaluateAllTimeHighLive(candle.Close, eastern); // all 3 panels, premarket + RTH alike
         if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
             ArmVolatilityOpeningWatchDefault();
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))
@@ -2071,6 +2152,7 @@ public class ChartPanel : Panel
         OnLiveTick?.Invoke(eastern, price); // fires regardless of session/bucket state, same as Streamer_OnNewCandle
         EvaluatePuntoMedioSlope(); // premarket + RTH alike, see method comment
         EvaluateLastHourCandleBeforeCloseIfNeeded(eastern);
+        EvaluateAllTimeHighLive(price, eastern); // all 3 panels, premarket + RTH alike
         if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
             ArmVolatilityOpeningWatchDefault();
         if (eastern.TimeOfDay < new TimeSpan(9, 30, 0)) EvaluateBollingerWideningLabel(price); // "BB" live during premarket too

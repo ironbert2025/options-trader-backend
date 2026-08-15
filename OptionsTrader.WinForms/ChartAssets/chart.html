@@ -1129,6 +1129,28 @@
     forceRepaint();
   }
 
+  // All-Time High reference line — solid, full-width (a built-in price line, not a custom
+  // primitive like the other H-Lines, since this one never needs click-select/Delete/mirroring —
+  // it's a single read-only reference per panel, sourced from AllTimeHighStore). Called once on
+  // chart open with the persisted value, and again whenever C# updates it (a new ATH saved at the
+  // 4pm close). Gold normally; recolored green (see updateAllTimeHighBroken) while the live price
+  // is trading above it, so an intraday break is visible before the file itself gets updated.
+  let athPriceLine = null;
+  function markAllTimeHigh(price) {
+    if (athPriceLine) candleSeries.removePriceLine(athPriceLine);
+    athPriceLine = candleSeries.createPriceLine({
+      price, color: '#ffd700', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true, title: 'ATH'
+    });
+  }
+
+  // show=true while the live price is currently above the ATH line — purely visual, re-evaluated
+  // on every tick, no state kept here (C# tracks the actual "did today's high beat it" decision).
+  function updateAllTimeHighBroken(show) {
+    if (!athPriceLine) return;
+    athPriceLine.applyOptions({ color: show ? '#00e676' : '#ffd700' });
+  }
+
   // ---- Pre-market line (1h and 15m RTH panels): blue line from the LAST candle currently
   // loaded (yesterday's close, since the market hasn't opened today yet) to the right edge,
   // following the live price tick by tick until the market opens at 9:30 — after that C# simply

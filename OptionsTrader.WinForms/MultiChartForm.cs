@@ -688,6 +688,19 @@ public class MultiChartForm : Form
             };
         }
 
+        // All-Time High: the 1h panel is the only one that persists a new value (at the RTH close,
+        // see ChartPanel.EvaluateAllTimeHighAtClose) — mirror it onto the other 2 panels' reference
+        // lines so all 3 stay in sync for the rest of the day (and on the next chart open, each
+        // panel loads it fresh from AllTimeHighStore on its own anyway).
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnAllTimeHighUpdatedEvent += newValue =>
+            {
+                if (rthPanel != null) _ = rthPanel.MarkAllTimeHighAsync(newValue);
+                if (overnightPanel != null) _ = overnightPanel.MarkAllTimeHighAsync(newValue);
+            };
+        }
+
         // H-Line delete: same idea as the Stk line above — manually-drawn H-Lines and the
         // auto-drawn prev-day High/Low both get mirrored (by price) onto the other 2 panels when
         // deleted (click + Delete) from any one of them.
