@@ -1201,6 +1201,66 @@
     forceRepaint();
   }
 
+  // Simulator only (panel 3, RTH+Overnight): white line marking the underlying spot price at the
+  // exact moment a demo trade was opened, bounded to just that one candle's own width — computed
+  // from the candle's center x (timeToCoordinate) +/- half the chart's current bar spacing, NOT a
+  // 2nd timeToCoordinate call for a "next candle" time (that time doesn't necessarily match an
+  // actual data point exactly, and a non-matching time silently falls back to the chart edge,
+  // which is what previously made the line stretch across most of the visible chart instead of
+  // sitting over just the one candle). Accumulates, one segment per trade opened — never removed.
+  class EntrySpotLinePrimitive {
+    constructor() { this._lines = []; this._chart = null; } // [{ time, price }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const barSpacing = ts.options().barSpacing; // CSS px per bar, current zoom level
+                self._lines.forEach(l => {
+                  const centerXRaw = ts.timeToCoordinate(l.time);
+                  if (centerXRaw == null) return; // candle scrolled out of the loaded range
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (y == null) return;
+                  // 3 bar-widths total, centered on the entry candle: the previous candle, the
+                  // entry candle itself, and the space where the next (future) one will form.
+                  const x1 = (centerXRaw - barSpacing * 1.5) * scope.horizontalPixelRatio;
+                  const x2 = (centerXRaw + barSpacing * 1.5) * scope.horizontalPixelRatio;
+                  ctx.strokeStyle = '#ffffff';
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x1, y * scope.verticalPixelRatio);
+                  ctx.lineTo(x2, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const entrySpotLinePrimitive = new EntrySpotLinePrimitive();
+  let entrySpotLineAttached = false;
+
+  // No time argument — anchors to whichever candle is CURRENTLY last in the series (the one
+  // actually forming right when the trade is opened), same "anchor at the last loaded candle"
+  // convention markStrike/the premarket line already use. Snapshotted into the stored line entry
+  // at push time, so it stays put even as later candles get added.
+  function markEntrySpot(price) {
+    if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
+    if (allCandles.length === 0) return;
+    entrySpotLinePrimitive._lines.push({ time: allCandles[allCandles.length - 1].time, price });
+    forceRepaint();
+  }
+
   // ---- Pre-market line (1h and 15m RTH panels): blue line from the LAST candle currently
   // loaded (yesterday's close, since the market hasn't opened today yet) to the right edge,
   // following the live price tick by tick until the market opens at 9:30 — after that C# simply

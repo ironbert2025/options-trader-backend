@@ -1058,6 +1058,9 @@ public class SimulatorForm : Form
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
         _ = _fullChart.MarkStrikeAsync(strike);
 
+        // White spot-price line at the moment of entry — panel 3 only, bounded to that one candle.
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
+
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
         var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
         LogSimEvent($"{nowStr} Trade Manual ({rowType})  SpotPrice: {step.UnderlyingPrice:F2}  StrikePrice: {strike:F2}  Ask: {ask:F2}  Contracts: {contracts}");

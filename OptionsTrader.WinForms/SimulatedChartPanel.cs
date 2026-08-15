@@ -176,6 +176,19 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markStrike({priceStr});");
     }
 
+    // White line at the underlying spot price the moment a demo trade was opened — panel 3 only,
+    // bounded to just the entry candle's own width. No time argument needed — chart.html's
+    // markEntrySpot anchors to whichever candle is CURRENTLY last in the series (the one actually
+    // forming right when the trade opens), same convention MarkStrikeAsync/the premarket line
+    // already use, and computes the candle-width span itself from the chart's own bar spacing.
+    // Accumulates, one segment per trade, never auto-removed.
+    public async Task MarkEntrySpotAsync(decimal price)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr});");
+    }
+
     // Dashed Piso/Techo reference line (15m RTH / RTH+Overnight charts) — ported from ChartPanel,
     // called by SimulatorForm.EvaluatePisoTecho for each SMA that survived the market-open-gap
     // check. See markPisoTechoRefLine/removePisoTechoRefLine in chart.html.
