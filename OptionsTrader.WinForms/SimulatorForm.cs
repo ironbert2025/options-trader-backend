@@ -476,7 +476,16 @@ public class SimulatorForm : Form
     private void LogSimEvent(string message)
     {
         if (IsDisposed) return;
-        void Append() => _txtEventLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+
+        // The simulated tick's own time, not the real wall-clock time — this is a replay, so the
+        // log should read like it happened during that historical session, same convention the
+        // grids already use (EasternTime(step.Time)). Falls back to DateTime.Now only if nothing's
+        // loaded yet (shouldn't normally happen — every event source fires from step processing).
+        var timestamp = _currentIndex >= 0 && _currentIndex < _steps.Count
+            ? EasternTime(_steps[_currentIndex].Time)
+            : DateTime.Now;
+
+        void Append() => _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
         if (InvokeRequired) BeginInvoke(Append); else Append();
     }
 
