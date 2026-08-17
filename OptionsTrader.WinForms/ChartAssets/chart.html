@@ -2248,11 +2248,11 @@
   let bollingerConfig = null; // { period, mult }
   let bollingerSeries = null; // { upper, middle, lower }
 
-  // Simulator only (panel 2, 15m RTH): white markers over the CURRENT Bollinger upper/lower band
-  // values, bounded to just the forming (last) candle's width — a quick visual of exactly where
-  // the bands sit right now, updated every step alongside recalculateBollinger itself. Never
-  // enabled on the live chart (enableBollingerEdgeMarkers is only ever called from
-  // SimulatedChartPanel), even though this panel's chart.html instance is otherwise identical.
+  // Panel 2 (15m RTH), both Simulator and Live Chart: white markers over the CURRENT Bollinger
+  // upper/lower band values, bounded to just the forming (last) candle's width — a quick visual of
+  // exactly where the bands sit right now, updated every step/tick alongside recalculateBollinger
+  // itself. Enabled via enableBollingerEdgeMarkers(), called from both SimulatedChartPanel and
+  // ChartPanel's Fifteen_RTH setup.
   let bollingerEdgeMarkersEnabled = false;
   function enableBollingerEdgeMarkers() { bollingerEdgeMarkersEnabled = true; }
 
@@ -2345,9 +2345,9 @@
     bollingerSeries.middle.setData(midData);
     bollingerSeries.lower.setData(lowerData);
 
-    // Simulator-only white edge markers (see enableBollingerEdgeMarkers) — a 2-point segment from
-    // the PREVIOUS candle's band value to the forming candle's, re-set every recalculation, so its
-    // slope shows the band opening/closing/going sideways between those two candles.
+    // White edge markers (see enableBollingerEdgeMarkers) — a 2-point segment from the PREVIOUS
+    // candle's band value to the forming candle's, re-set every recalculation, so its slope shows
+    // the band opening/closing/going sideways between those two candles.
     if (bollingerEdgeMarkersEnabled && upperData.length >= 2) {
       if (!bollingerEdgeMarkerAttached) { candleSeries.attachPrimitive(bollingerEdgeMarkerPrimitive); bollingerEdgeMarkerAttached = true; }
       const prevUpper = upperData[upperData.length - 2], currUpper = upperData[upperData.length - 1];

@@ -1510,18 +1510,41 @@ public class ChartPanel : Panel
     // "are the bands opening right now", not the full Abriendo la Volatilidad signal (which stays
     // 15m-RTH-only). Colored to match THIS panel's own PM (SMA20 tilt), so "PM verde + BB verde"
     // reads as directional momentum AND volatility both agreeing.
+    // Set once per "opening" episode (reset the moment it stops), so EvaluateBollingerWideningLabel
+    // logs it exactly once instead of spamming on every tick while it holds — see the log block
+    // below and OnBollingerOpeningEvent.
+    private bool _bbOpeningLogged;
+
+    // Fires (caption) the moment "BB" starts showing (PM tilted + bands opening, either in
+    // aggregate or just the band on PM's own side) — MultiChartForm logs it to crossLog with a
+    // timestamp. Persisted to EventLogStore in the same place, for offline review later.
+    public event Action<string>? OnBollingerOpeningEvent;
+
     private void EvaluateBollingerWideningLabel(decimal livePrice)
     {
         if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Hourly15) return;
 
         var current = BollingerBandsAt(_closedCandles.Count - 1);
         var earlier = BollingerBandsAt(_closedCandles.Count - 1 - VolatilityWidthLookback);
+        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
+        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
+
         bool show = false;
-        if (current != null && earlier != null)
+        bool bullish = false;
+        if (current != null && earlier != null && smaNow != null && smaEarlier != null && smaNow != smaEarlier)
         {
+            bullish = smaNow > smaEarlier;
             var currentWidth = current.Value.Upper - current.Value.Lower;
             var earlierWidth = earlier.Value.Upper - earlier.Value.Lower;
-            show = currentWidth > earlierWidth;
+            var widthOpening = currentWidth > earlierWidth;
+
+            // Counts as "opening" even if the aggregate width hasn't grown, as long as the band on
+            // PM's own side moved that same direction (e.g. PM bullish and the upper band alone
+            // climbed, even if the lower band climbed almost as much and kept total width flat).
+            var upperOpening = bullish && current.Value.Upper > earlier.Value.Upper;
+            var lowerOpening = !bullish && current.Value.Lower < earlier.Value.Lower;
+
+            show = widthOpening || upperOpening || lowerOpening;
         }
 
         if (!show)
@@ -1529,16 +1552,24 @@ public class ChartPanel : Panel
             BeginInvoke(async () => await MarkBollingerWideningAsync(false, false));
             BeginInvoke(async () => await MarkBollingerDeltaAsync(false, 0));
             BeginInvoke(() => OnBollingerWideningLevelEvent?.Invoke(false, false));
+            _bbOpeningLogged = false;
             return;
         }
 
-        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
-        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
-        if (smaNow == null || smaEarlier == null) return; // no PM color available yet — leave as-is
-
-        var bullish = smaNow > smaEarlier;
         BeginInvoke(async () => await MarkBollingerWideningAsync(true, bullish));
         BeginInvoke(() => OnBollingerWideningLevelEvent?.Invoke(true, bullish));
+
+        if (!_bbOpeningLogged)
+        {
+            _bbOpeningLogged = true;
+            var direction = bullish ? "Alza" : "Baja";
+            var timeframeLabel = _mode == ChartPanelMode.Hourly15 ? "Hora" : "15Min";
+            var caption = $"Abriendo Bollinger con Volatilidad — PM {direction} — SMA20 {smaEarlier!.Value:F2} → {smaNow!.Value:F2} — spot {livePrice:F2}";
+            EventLogStore.Append(_symbol, timeframeLabel, "BollingerOpening", direction, caption, livePrice,
+                $"BollUpper={current!.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
+            EventLogMarkdownWriter.AppendEvent(_symbol, caption);
+            BeginInvoke(() => OnBollingerOpeningEvent?.Invoke(caption));
+        }
 
         // "Δ" — distance from the live price to whichever band is closer, next to "BB". Only while
         // the price is still actually BETWEEN the two bands (bands widening but not broken out yet)
@@ -1792,6 +1823,12 @@ public class ChartPanel : Panel
             if (_mode == ChartPanelMode.Fifteen_RTH)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+
+                // White markers over the current upper/lower Bollinger band values, bounded to the
+                // forming candle's width — same marker the Simulator already draws, per explicit
+                // request extending it to the live app.
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerEdgeMarkers();");
+
                 _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
             }
 

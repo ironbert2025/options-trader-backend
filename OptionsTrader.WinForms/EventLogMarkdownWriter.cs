@@ -1,17 +1,21 @@
 namespace OptionsTrader.WinForms;
 
-// Appends one markdown entry per event notification actually pushed to Telegram (Cross-SMA,
-// T-Line+SMA20, Demand Zone rebote, Piso/Techo, Abriendo la Volatilidad) to a daily Obsidian note
-// — same vault/folder and "one file per day per PC" convention as DailyTradeLogWriter, but a
-// separate _EventLogs file so trade open/close entries and event notifications don't mix.
+// Appends one markdown entry per event notification to a daily Obsidian note — same vault/folder
+// and "one file per day per PC" convention as DailyTradeLogWriter, but a separate _EventLogs file
+// so trade open/close entries and event notifications don't mix. Most callers only call this after
+// a successful Telegram push (Cross-SMA, T-Line+SMA20, Demand Zone rebote, Piso/Techo, Abriendo la
+// Volatilidad), embedding that same screenshot — but it's also called directly for events with no
+// screenshot/Telegram push of their own (Abriendo Bollinger), which just omit imagePath.
 // Live app only — the simulator never pushes to Telegram (log-only), so it never calls this.
 internal static class EventLogMarkdownWriter
 {
     private const string VaultFolder = @"C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades";
 
     // imagePath is the same local PNG the caller already saved before pushing to Telegram —
-    // referenced here via file:// instead of re-uploaded/copied into the vault.
-    public static void AppendEvent(string symbol, string caption, string imagePath)
+    // referenced here via file:// instead of re-uploaded/copied into the vault. Optional — events
+    // that never generate a screenshot (e.g. "Abriendo Bollinger", which has no Telegram push of
+    // its own) pass null and just get the text entry, no image line.
+    public static void AppendEvent(string symbol, string caption, string? imagePath = null)
     {
         try
         {
@@ -21,11 +25,11 @@ internal static class EventLogMarkdownWriter
 
             var time = DateTime.Now.ToString("HH:mm:ss");
             var nl   = Environment.NewLine;
-            var imageUri = new Uri(imagePath).AbsoluteUri;
+            var imageLine = imagePath != null ? $"![Event]({new Uri(imagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
             var entry =
                 $"### {symbol} — {time}{nl}{nl}" +
                 $"{caption}{nl}{nl}" +
-                $"![Event]({imageUri}){nl}{nl}" +
+                imageLine +
                 $"---{nl}{nl}";
 
             WithRetry(() =>

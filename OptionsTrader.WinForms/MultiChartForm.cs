@@ -542,6 +542,27 @@ public class MultiChartForm : Form
             };
         }
 
+        // "Abriendo Bollinger con Volatilidad" — logs the exact moment "BB" starts showing on
+        // EITHER panel (1h or 15m RTH), already persisted to EventLogStore/EventLogMarkdownWriter
+        // by ChartPanel itself (see OnBollingerOpeningEvent) — this just mirrors it into crossLog
+        // with a timestamp for real-time visibility.
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnBollingerOpeningEvent += caption =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [1h] {caption}{Environment.NewLine}"));
+            };
+        }
+        if (rthPanel != null)
+        {
+            rthPanel.OnBollingerOpeningEvent += caption =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [15m RTH] {caption}{Environment.NewLine}"));
+            };
+        }
+
         // "Expuesto en 3 charts" — premarket-only: on every premarket tick (fired from the 1h
         // panel, see ChartPanel.OnPreMarketPriceUpdated), check whether that price broke the SAME
         // side (upper or lower) of the Bollinger(20,2) band on Daily, 1h AND 15m RTH all at once.
