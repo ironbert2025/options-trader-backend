@@ -1838,6 +1838,7 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
         {
             await chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
+            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -2614,6 +2615,13 @@ public partial class Form1 : Form
             _liveChartForms.TryGetValue(symbol, out var chartFormDelta) && !chartFormDelta.IsDisposed)
         {
             await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDelta);
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
+
+        // White spot-price line at close — same marker drawn on entry, mirrors the Simulator.
+        if (_lastSpotPrice > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
+        {
+            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 

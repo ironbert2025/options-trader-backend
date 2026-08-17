@@ -467,6 +467,18 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markAllTimeHigh({priceStr});");
     }
 
+    // White line at the underlying spot price the moment a trade is opened or closed — panel 3
+    // (RTH+Overnight) only, per explicit request extending the Simulator's identical marker to the
+    // live app. Same markEntrySpot JS function the Simulator already uses (anchors to whichever
+    // candle is currently last in the series, spans 3 bar-widths). Accumulates, one segment per
+    // call, never auto-removed.
+    public async Task MarkEntrySpotAsync(decimal price)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr});");
+    }
+
     // Re-evaluated on every live tick (all 3 panels) — purely visual, flips the ATH line green
     // while the live price is currently trading above it, gold otherwise. Independent of whether
     // today's high actually gets persisted as a new ATH (that only happens once, at the close).

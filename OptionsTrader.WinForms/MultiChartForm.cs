@@ -995,6 +995,11 @@ public class MultiChartForm : Form
     public Task MarkStrikeOnOvernightChartAsync(decimal strike) =>
         _overnightPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask;
 
+    // White spot-price line — panel 3 (15m RTH+Overnight) only, same marker the Simulator already
+    // draws on trade open/close. Fired at both.
+    public Task MarkEntrySpotOnOvernightChartAsync(decimal price) =>
+        _overnightPanel?.MarkEntrySpotAsync(price) ?? Task.CompletedTask;
+
     // Forwards an already-timestamped WS connect/disconnect/reconnect line from Form1 (which owns
     // the actual Schwab streamer connection) into this window's small event log — safe to call
     // from any thread, since streamer reconnects fire from its own background receive-loop thread.
