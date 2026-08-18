@@ -589,6 +589,8 @@ public class MultiChartForm : Form
         {
             hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
             {
+                if (period == 100) return; // SMA100 (green) ref line disabled per explicit request
+
                 // BeginInvoke — this event can fire from Streamer_OnNewCandle's background
                 // (WebSocket) thread, and a direct ExecuteScriptAsync call from that thread
                 // silently fails (same threading bug the PM indicator had).
@@ -1049,12 +1051,31 @@ public class MultiChartForm : Form
     // markPisoTechoRefLine in chart.html for the full rationale).
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
-    private static long GetTodaySessionStartFakeEpoch()
+    // Yesterday's last hourly candle (its close) — the Piso/Techo reference line's real anchor,
+    // per explicit request ("así estaba implementado"): it should be born at yesterday's close and
+    // run through the whole of today's RTH session, not at a fixed hour of today. Read from
+    // HourlyCandleStore (already persisted/updated by the 1h panel) instead of the 1h panel's own
+    // in-memory candles, so this can't race against that panel's history load. Falls back to
+    // today 4:00 AM ET if no prior-day history is on disk yet (shouldn't normally happen).
+    private long GetTodaySessionStartFakeEpoch()
     {
+        var hourly = HourlyCandleStore.Load(_symbol);
         var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).Date;
-        var sessionStartEastern = todayEastern.AddHours(9).AddMinutes(30);
-        var sessionStartUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionStartEastern, DateTimeKind.Unspecified), EasternZone);
-        return ChartPanel.FakeUtcEpochSeconds(sessionStartUtc);
+        var prior = hourly
+            .Select(c => (Candle: c, Date: TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date))
+            .Where(x => x.Date < todayEastern)
+            .ToList();
+
+        if (prior.Count > 0)
+        {
+            var prevDate = prior.Max(x => x.Date);
+            var lastBar = prior.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
+            return ChartPanel.FakeUtcEpochSeconds(lastBar.Time);
+        }
+
+        var fallbackEastern = todayEastern.AddHours(4);
+        var fallbackUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(fallbackEastern, DateTimeKind.Unspecified), EasternZone);
+        return ChartPanel.FakeUtcEpochSeconds(fallbackUtc);
     }
 
     // RTH session close (16:00 ET, today) — so the Piso/Techo reference line stops there instead

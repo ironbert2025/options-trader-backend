@@ -428,6 +428,8 @@ public class SimulatorForm : Form
         // pre-market snapshot) — same as the live app's identical ChartPanel wiring.
         _hourlyChart.OnPisoTechoLevelUpdatedEvent += (period, price) =>
         {
+            if (period == 100) return; // SMA100 (green) ref line disabled per explicit request
+
             var sessionStart = GetSessionStartFakeEpoch();
             var sessionEnd   = GetSessionEndFakeEpoch();
             _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
@@ -693,18 +695,33 @@ public class SimulatorForm : Form
         // line from a previous day load whose SMA no longer has a result this time.
         await ApplyPisoTechoRefLine(bars, 20, result20);
         await ApplyPisoTechoRefLine(bars, 40, result40);
-        await ApplyPisoTechoRefLine(bars, 100, result100);
+        await ApplyPisoTechoRefLine(bars, 100, null); // SMA100 (green) ref line disabled per explicit request
         await ApplyPisoTechoRefLine(bars, 200, result200);
     }
 
-    // The replayed day's 9:30 AM ET, in the same fake-epoch units the chart itself uses — the
-    // Piso/Techo reference line's anchor, computed independently of any candle data so it can't
-    // race against history loading (see markPisoTechoRefLine in chart.html for the full rationale).
+    // The day BEFORE _simDate's last hourly candle (its close) — the Piso/Techo reference line's
+    // real anchor, per explicit request ("así estaba implementado"): born at the prior day's close,
+    // running through the whole of the replayed day's RTH session — same as the live app's
+    // identical GetTodaySessionStartFakeEpoch. _hourlyCandles already carries prior-day context
+    // (SimulationDataLoader.LoadHourlyCandlesWithContext), so no extra fetch needed. Falls back to
+    // 4:00 AM ET of the replayed day if no prior-day context is loaded (shouldn't normally happen).
     private long GetSessionStartFakeEpoch()
     {
-        var sessionStartEastern = _simDate.ToDateTime(new TimeOnly(9, 30));
-        var sessionStartUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionStartEastern, DateTimeKind.Unspecified), EasternZone);
-        return SimulatedChartPanel.ToFakeUtcEpochSeconds(sessionStartUtc);
+        var prior = _hourlyCandles
+            .Select(c => (Candle: c, Date: TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date))
+            .Where(x => x.Date < _simDate.ToDateTime(TimeOnly.MinValue))
+            .ToList();
+
+        if (prior.Count > 0)
+        {
+            var prevDate = prior.Max(x => x.Date);
+            var lastBar = prior.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
+            return SimulatedChartPanel.ToFakeUtcEpochSeconds(lastBar.Time);
+        }
+
+        var fallbackEastern = _simDate.ToDateTime(new TimeOnly(4, 0));
+        var fallbackUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(fallbackEastern, DateTimeKind.Unspecified), EasternZone);
+        return SimulatedChartPanel.ToFakeUtcEpochSeconds(fallbackUtc);
     }
 
     // The replayed day's 16:00 ET close — so the Piso/Techo reference line stops there instead of

@@ -93,6 +93,7 @@
     wickUpColor: '#26a69a',
     wickDownColor: '#ef5350',
     autoscaleInfoProvider: sharedAutoscaleInfoProvider,
+    priceLineVisible: false, // built-in dashed "current price" line, disabled per explicit request
   };
   const candleSeries = chart.addCandlestickSeries(candleSeriesOpts);
 
@@ -2026,14 +2027,31 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
+                // timeToCoordinate requires an EXACT match against a real candle's own time — the
+                // C#-computed session start/end (4:00 AM / 16:00 ET) essentially never lands on an
+                // actual candle boundary, so a direct call silently returns null and falls back to
+                // the edge of the WHOLE loaded range (days of history), not just today — the same
+                // bug the entry-spot line had. Snap each endpoint to the nearest REAL candle instead:
+                // first candle at/after the target for the start, last candle at/before it for the
+                // end — both guaranteed exact matches once found.
+                const snapTime = (target, mode) => {
+                  if (allCandles.length === 0) return null;
+                  if (mode === 'ceil') {
+                    for (let i = 0; i < allCandles.length; i++) if (allCandles[i].time >= target) return allCandles[i].time;
+                    return null;
+                  }
+                  for (let i = allCandles.length - 1; i >= 0; i--) if (allCandles[i].time <= target) return allCandles[i].time;
+                  return null;
+                };
+
                 self._lines.forEach(l => {
-                  const xRaw = ts.timeToCoordinate(l.time);
-                  const x = xRaw == null ? 0 : xRaw; // falls back to left edge until session-start time is in range
-                  // Right edge stops at today's RTH session close (16:00 ET) instead of running off
-                  // to the chart's own right edge — falls back to the right edge only if the session
-                  // end itself isn't in the visible range yet (e.g. still mid-session, panned left).
-                  const x2Raw = ts.timeToCoordinate(l.timeEnd);
-                  const x2 = x2Raw == null ? scope.bitmapSize.width : x2Raw;
+                  const snappedStart = snapTime(l.time, 'ceil');
+                  const snappedEnd = snapTime(l.timeEnd, 'floor');
+                  if (snappedStart == null || snappedEnd == null || snappedStart > snappedEnd) return;
+
+                  const x = ts.timeToCoordinate(snappedStart);
+                  const x2 = ts.timeToCoordinate(snappedEnd);
+                  if (x == null || x2 == null) return;
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (y == null) return;
 
