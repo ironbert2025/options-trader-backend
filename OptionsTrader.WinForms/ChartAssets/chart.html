@@ -1137,12 +1137,24 @@
   // 4pm close). Gold normally; recolored green (see updateAllTimeHighBroken) while the live price
   // is trading above it, so an intraday break is visible before the file itself gets updated.
   let athPriceLine = null;
+  // Remembered separately from the price line object itself — markAllTimeHigh recreates that
+  // object from scratch every call (e.g. when a new ATH is saved at the close), which would
+  // otherwise silently reset a user's "hidden" choice back to visible.
+  let athVisible = true;
   function markAllTimeHigh(price) {
     if (athPriceLine) candleSeries.removePriceLine(athPriceLine);
     athPriceLine = candleSeries.createPriceLine({
       price, color: '#ffd700', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid,
-      axisLabelVisible: true, title: 'ATH'
+      axisLabelVisible: athVisible, lineVisible: athVisible, title: 'ATH'
     });
+  }
+
+  // Toolbar checkbox — same show/hide-only convention as setBollingerEdgeMarkersVisible (nothing
+  // about the underlying value/calculation changes, just whether it's drawn).
+  function setAllTimeHighVisible(show) {
+    athVisible = show;
+    if (!athPriceLine) return;
+    athPriceLine.applyOptions({ lineVisible: show, axisLabelVisible: show });
   }
 
   // show=true while the live price is currently above the ATH line — purely visual, re-evaluated

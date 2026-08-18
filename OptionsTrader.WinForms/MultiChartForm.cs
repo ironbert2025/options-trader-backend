@@ -229,6 +229,16 @@ public class MultiChartForm : Form
             await hourlyPanel.ToggleDayDividersAsync();
         };
 
+        // Shows/hides the ATH reference line — drawn on all 3 panels, so this single checkbox
+        // toggles all 3 at once instead of needing one per panel.
+        var chkAth = new CheckBox { Text = "ATH", Location = new Point(208, 78), AutoSize = true, Checked = true };
+        chkAth.CheckedChanged += async (s, e) =>
+        {
+            if (hourlyPanel != null) await hourlyPanel.SetAllTimeHighVisibleAsync(chkAth.Checked);
+            if (rthPanel != null) await rthPanel.SetAllTimeHighVisibleAsync(chkAth.Checked);
+            if (overnightPanel != null) await overnightPanel.SetAllTimeHighVisibleAsync(chkAth.Checked);
+        };
+
         crossHost.Controls.Add(btnTLine);
         crossHost.Controls.Add(btnHourlyClear);
         crossHost.Controls.Add(btnRectGris);
@@ -236,6 +246,7 @@ public class MultiChartForm : Form
         crossHost.Controls.Add(btnFlechaRoja);
         crossHost.Controls.Add(btnDaily);
         crossHost.Controls.Add(chkDayDividers);
+        crossHost.Controls.Add(chkAth);
         toolbar.Controls.Add(crossHost, 0, 0);
 
         // T-Line drawing tool for the 15m RTH panel (column 1) — no persistence like the 1h

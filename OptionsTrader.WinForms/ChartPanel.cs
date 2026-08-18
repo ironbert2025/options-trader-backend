@@ -483,6 +483,14 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markAllTimeHigh({priceStr});");
     }
 
+    // Shows/hides the ATH reference line — a toolbar checkbox, per explicit request, same
+    // show/hide-only convention as SetBollingerEdgeMarkersVisibleAsync.
+    public async Task SetAllTimeHighVisibleAsync(bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setAllTimeHighVisible({(show ? "true" : "false")});");
+    }
+
     // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,
     // per explicit request. The underlying calculation keeps running either way (see
     // enableBollingerEdgeMarkers/recalculateBollinger in chart.html); this only toggles the draw.
