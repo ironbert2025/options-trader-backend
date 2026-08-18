@@ -98,6 +98,22 @@ public class ChartPanel : Panel
     // first pre-market tick (Hourly15/Fifteen_RTH before 9:30). This guards against firing twice.
     private bool _drewPrevDayHiLo;
 
+    // Guards against double-subscribing WebMessageReceived when LoadHistoryAsync re-runs after a
+    // WebView2 renderer crash (see ProcessFailed handling below) — without this, a crash-recovery
+    // reload would leave every drawn T-Line/arrow/rect etc. double-processed (appended to its store
+    // twice, moved twice, etc.) for the rest of the session.
+    private bool _webMessageHandlerAttached;
+
+    // WebView2's own crash-recovery reload is blocked by Chromium's same-origin policy for file://
+    // URLs whenever the cache-busting query string changed since the page loaded (confirmed live:
+    // "Unsafe attempt to load URL chart.html?v=X from frame with URL chart.html?v=Y — 'file:' URLs
+    // are treated as unique security origins") — that leaves the panel permanently blank after a
+    // renderer crash, since nothing else ever re-Navigates it. ProcessFailed (subscribed once,
+    // guarded by _processFailedHandlerAttached) detects that and re-runs LoadHistoryAsync itself —
+    // an explicit host-initiated Navigate() isn't subject to that frame-origin check.
+    private bool _processFailedHandlerAttached;
+    private bool _crashReloadInProgress;
+
     // All-Time High reference line (all 3 panels) — see AllTimeHighStore. Null until loaded (or if
     // no file exists yet for this symbol). _athTodaysHigh only tracked on the 1h panel (avoids
     // 3 redundant file writes at the close) — running max of every live price seen today, compared
@@ -504,9 +520,25 @@ public class ChartPanel : Panel
     // markPisoTechoRefLine/removePisoTechoRefLine in chart.html for the rendering.
     public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch, long sessionEndFakeEpoch)
     {
-        if (_webView.CoreWebView2 == null) return;
-        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch}, {sessionEndFakeEpoch});");
+        // Temporary diagnostic — chasing a report where this silently never reaches chart.html on
+        // ONE panel (confirmed via pisoTechoRefLineAttached staying false in DevTools) while the
+        // sibling panel, called from the exact same C# call site, works fine. Safe to remove once
+        // the cause is confirmed and fixed.
+        if (_webView.CoreWebView2 == null)
+        {
+            DebugLog($"MarkPisoTechoRefLineAsync SKIPPED (CoreWebView2 null): symbol={_symbol} mode={_mode} period={period}");
+            return;
+        }
+        try
+        {
+            var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch}, {sessionEndFakeEpoch});");
+            DebugLog($"MarkPisoTechoRefLineAsync OK: symbol={_symbol} mode={_mode} period={period} price={priceStr}");
+        }
+        catch (Exception ex)
+        {
+            DebugLog($"MarkPisoTechoRefLineAsync THREW: symbol={_symbol} mode={_mode} period={period} ex={ex}");
+        }
     }
 
     public async Task RemovePisoTechoRefLineAsync(int period)
@@ -1765,6 +1797,22 @@ public class ChartPanel : Panel
         {
             await _webView.EnsureCoreWebView2Async();
 
+            if (!_processFailedHandlerAttached)
+            {
+                _processFailedHandlerAttached = true;
+                _webView.CoreWebView2.ProcessFailed += (s, e) =>
+                {
+                    if (_closing || _crashReloadInProgress) return;
+                    _crashReloadInProgress = true;
+                    DebugLog($"CoreWebView2.ProcessFailed: symbol={_symbol} mode={_mode} kind={e.ProcessFailedKind} reason={e.Reason} — reloading panel");
+                    BeginInvoke(async () =>
+                    {
+                        try { await LoadHistoryAsync(); }
+                        finally { _crashReloadInProgress = false; }
+                    });
+                };
+            }
+
             var chartPath = Path.Combine(AppContext.BaseDirectory, "ChartAssets", "chart.html");
             var navDone = new TaskCompletionSource();
             _webView.CoreWebView2.NavigationCompleted += (s, args) =>
@@ -1792,7 +1840,11 @@ public class ChartPanel : Panel
                 // T-Line + vertical-arrow persistence (per symbol) — reload whatever was drawn in
                 // a previous session so it reappears at the same point, and listen for new/
                 // deleted/moved ones from now on so they get saved too.
-                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                if (!_webMessageHandlerAttached)
+                {
+                    _webMessageHandlerAttached = true;
+                    _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                }
 
                 var savedLines = TLineStore.Load(_symbol);
                 if (savedLines.Count > 0)
@@ -1829,7 +1881,11 @@ public class ChartPanel : Panel
                 // request extending it to the live app.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerEdgeMarkers();");
 
-                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                if (!_webMessageHandlerAttached)
+                {
+                    _webMessageHandlerAttached = true;
+                    _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                }
             }
 
             // Pre-market blue line (1h and 15m RTH panels): only if the chart is opened before
@@ -1876,7 +1932,11 @@ public class ChartPanel : Panel
             if (_mode == ChartPanelMode.Fifteen_Full)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureOvernightBands();");
-                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                if (!_webMessageHandlerAttached)
+                {
+                    _webMessageHandlerAttached = true;
+                    _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                }
             }
 
             // Default zoom on open: 1h panel shows the last 7 days, the two 15m panels show the

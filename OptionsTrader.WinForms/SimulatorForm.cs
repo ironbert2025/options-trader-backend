@@ -428,8 +428,6 @@ public class SimulatorForm : Form
         // pre-market snapshot) — same as the live app's identical ChartPanel wiring.
         _hourlyChart.OnPisoTechoLevelUpdatedEvent += (period, price) =>
         {
-            if (period == 100) return; // SMA100 (green) ref line disabled per explicit request
-
             var sessionStart = GetSessionStartFakeEpoch();
             var sessionEnd   = GetSessionEndFakeEpoch();
             _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
@@ -695,7 +693,7 @@ public class SimulatorForm : Form
         // line from a previous day load whose SMA no longer has a result this time.
         await ApplyPisoTechoRefLine(bars, 20, result20);
         await ApplyPisoTechoRefLine(bars, 40, result40);
-        await ApplyPisoTechoRefLine(bars, 100, null); // SMA100 (green) ref line disabled per explicit request
+        await ApplyPisoTechoRefLine(bars, 100, result100);
         await ApplyPisoTechoRefLine(bars, 200, result200);
     }
 

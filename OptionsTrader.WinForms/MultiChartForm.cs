@@ -589,8 +589,6 @@ public class MultiChartForm : Form
         {
             hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
             {
-                if (period == 100) return; // SMA100 (green) ref line disabled per explicit request
-
                 // BeginInvoke — this event can fire from Streamer_OnNewCandle's background
                 // (WebSocket) thread, and a direct ExecuteScriptAsync call from that thread
                 // silently fails (same threading bug the PM indicator had).
