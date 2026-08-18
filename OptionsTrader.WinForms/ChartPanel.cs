@@ -1294,14 +1294,27 @@ public class ChartPanel : Panel
     // candle (see EvaluatePisoTechoWatches) and right when the pair first arms at premarket.
     private void EvaluateFirstReboundLabel()
     {
-        if (_mode != ChartPanelMode.Hourly15 || _webView.CoreWebView2 == null) return;
-
-        var watch20 = s_pisoTechoWatches.FirstOrDefault(w => w.Period == 20);
-        var show = s_pisoTechoResult20 == "Techo" && s_pisoTechoResult40 == "Techo"
-            && watch20 is { Done: false } && !s_sma20TechoTouched;
+        // THREADING BUG (confirmed live, root cause of the 1h panel freezing exactly at the day's
+        // first hourly bucket): _webView.CoreWebView2 is a COM property that can only be touched
+        // from the UI thread — this method is called from EvaluatePisoTechoWatches, itself called
+        // from Streamer_OnNewCandle's background (WebSocket/relay) thread. The null-check used to
+        // run OUTSIDE the BeginInvoke below (only the ExecuteScriptAsync call was wrapped), so it
+        // threw "CoreWebView2 can only be accessed from the UI thread" on every single call from
+        // there — and since this runs BEFORE Streamer_OnNewCandle's own _liveBucket/_liveBucketIndex
+        // reassignment for that tick, the exception (previously silently swallowed by HandleMessage's
+        // catch-all, now caught per-subscriber and logged — see RaiseOnNewCandle) meant the bucket
+        // never advanced past whatever it was on the very first call, forever. The entire method
+        // body — including the guard — now runs inside BeginInvoke.
+        if (_mode != ChartPanelMode.Hourly15) return;
 
         BeginInvoke(async () =>
-            await _webView.CoreWebView2.ExecuteScriptAsync($"updateFirstRebound({(show ? "true" : "false")});"));
+        {
+            if (_webView.CoreWebView2 == null) return;
+            var watch20 = s_pisoTechoWatches.FirstOrDefault(w => w.Period == 20);
+            var show = s_pisoTechoResult20 == "Techo" && s_pisoTechoResult40 == "Techo"
+                && watch20 is { Done: false } && !s_sma20TechoTouched;
+            await _webView.CoreWebView2.ExecuteScriptAsync($"updateFirstRebound({(show ? "true" : "false")});");
+        });
     }
 
     // Live-tick counterpart to EvaluatePisoTechoWatches' crossedByGapOpen — that one only fires
