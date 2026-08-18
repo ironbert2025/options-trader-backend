@@ -297,6 +297,16 @@ public partial class Form1 : Form
             {
                 _closeSnapshotDoneFor = today;
                 _ = CaptureOpenCloseSnapshotsAsync("Close");
+
+                // Only the primary (first) ticker instance builds the combined daily note — every
+                // other ticker's own Open/Close PNGs already exist on disk (each process saves its
+                // own via CaptureOpenCloseSnapshotsAsync above), this just gathers all of them into
+                // one markdown file instead of each process writing a redundant copy.
+                if (IsPrimaryTickerInstance())
+                {
+                    var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).ToList();
+                    _ = DailyChartSnapshotsMarkdownWriter.WriteAsync(symbols, MarketHours.NowEst);
+                }
             }
 
             if (MarketHours.IsInMarketCloseSnapshotWindow && _expiredTradesClosedFor != today)
