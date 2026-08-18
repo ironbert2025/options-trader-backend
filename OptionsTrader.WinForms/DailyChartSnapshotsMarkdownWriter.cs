@@ -6,7 +6,7 @@ namespace OptionsTrader.WinForms;
 // (first) ticker instance calls this (see Form1.IsPrimaryTickerInstance), so there's exactly one
 // combined file per day instead of each process writing a redundant copy. Same vault/folder and
 // "one file per day per PC" convention as DailyTradeLogWriter/EventLogMarkdownWriter, but a
-// separate _ChartSnapshots file so it doesn't mix with per-trade or per-event entries.
+// separate _OpenClose file so it doesn't mix with per-trade or per-event entries.
 internal static class DailyChartSnapshotsMarkdownWriter
 {
     private const string VaultFolder = @"C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades";
@@ -52,7 +52,7 @@ internal static class DailyChartSnapshotsMarkdownWriter
                 .ToList();
 
             Directory.CreateDirectory(VaultFolder);
-            var fileName = $"{dateEst:yyyy_MM_dd}_{Environment.MachineName}_ChartSnapshots.md";
+            var fileName = $"{dateEst:yyyy_MM_dd}_{Environment.MachineName}_OpenClose.md";
             var path = Path.Combine(VaultFolder, fileName);
             var nl = Environment.NewLine;
 
