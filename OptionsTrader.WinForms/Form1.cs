@@ -24,6 +24,7 @@ public partial class Form1 : Form
     private readonly HttpClient _apiHttpClient    = new();
     private const string ApiBaseUrl = "http://3.133.58.172:5000/api";
     private System.Windows.Forms.Timer? _pollingTimer;
+    private System.Windows.Forms.Timer? _tokenKeepAliveTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
     private System.Windows.Forms.Timer? _autoCaptureTimer;
     private System.Windows.Forms.Timer? _marketSnapshotTimer;
@@ -98,6 +99,7 @@ public partial class Form1 : Form
         FormClosing += async (s, e) =>
         {
             _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose();
+            _tokenKeepAliveTimer?.Dispose();
             if (_historyClient != null) await _historyClient.DisposeAsync();
             if (_candleHubClient != null) await _candleHubClient.DisposeAsync();
             _candleHubServer?.Dispose();
@@ -970,6 +972,14 @@ public partial class Form1 : Form
             }
         }
 
+        // Primary ticker only: keep the access token alive proactively (checked/renewed every 30
+        // min, from right now through the RTH close) instead of only refreshing reactively whenever
+        // some REST/WS call happens to need it — BeginPolling itself waits for market open before
+        // making any real request when clicked in premarket (see the else branch below), so without
+        // this the token would just sit unrefreshed the whole premarket window, and a manual
+        // "Fetch Quotes" click (or anything else) during that window could hit a stale one.
+        if (IsPrimaryTickerInstance()) StartTokenKeepAlive();
+
         if (MarketHours.IsOpen)
         {
             StartPollingTimer();
@@ -987,6 +997,56 @@ public partial class Form1 : Form
                 if (_isPolling) StartPollingTimer();
             };
             _marketOpenTimer.Start();
+        }
+    }
+
+    // Proactively renews the Schwab access token every 30 minutes, starting immediately and
+    // running through the RTH close (16:00 ET) regardless of whether polling itself is later
+    // stopped/restarted — the point is to guarantee a fresh token is available all session,
+    // including premarket, for anything that needs to query options (not just this instance's
+    // own polling loop). Only ever started on the primary ticker instance (see BeginPolling); the
+    // actual Schwab call inside GetAccessTokenAsync still only fires for real if this PC is also
+    // the token authority (IsTokenAuthority) — same gate every other caller already respects.
+    private void StartTokenKeepAlive()
+    {
+        if (_tokenKeepAliveTimer != null) return; // already running — BeginPolling can be called more than once today
+
+        _ = RenewAccessTokenIfNeededAsync();
+
+        _tokenKeepAliveTimer = new System.Windows.Forms.Timer { Interval = 30 * 60 * 1000 };
+        _tokenKeepAliveTimer.Tick += async (s, e) =>
+        {
+            if (MarketHours.NowEst.TimeOfDay >= new TimeSpan(16, 0, 0))
+            {
+                _tokenKeepAliveTimer?.Stop();
+                _tokenKeepAliveTimer?.Dispose();
+                _tokenKeepAliveTimer = null;
+                return;
+            }
+            await RenewAccessTokenIfNeededAsync();
+        };
+        _tokenKeepAliveTimer.Start();
+    }
+
+    private async Task RenewAccessTokenIfNeededAsync()
+    {
+        try
+        {
+            var creds  = SchwabCredentialsStore.Load();
+            var tokens = SchwabTokenStore.Load();
+            if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return;
+
+            await _schwabAuth.GetAccessTokenAsync(
+                creds.ApiKey, creds.ApiSecret,
+                tokens?.AccessToken ?? string.Empty,
+                tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
+                tokens?.RefreshToken ?? string.Empty,
+                OnSchwabTokenRenewed,
+                IsTokenAuthority(), ReloadTokenFromDisk);
+        }
+        catch (Exception ex)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Token] Keep-alive renewal failed: {ex.Message}", Color.Orange);
         }
     }
 
