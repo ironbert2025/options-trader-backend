@@ -564,15 +564,17 @@ public class MultiChartForm : Form
         }
 
         // "Abriendo Bollinger con Volatilidad" — logs the exact moment "BB" starts showing on
-        // EITHER panel (1h or 15m RTH), already persisted to EventLogStore/EventLogMarkdownWriter
-        // by ChartPanel itself (see OnBollingerOpeningEvent) — this just mirrors it into crossLog
-        // with a timestamp for real-time visibility.
+        // EITHER panel (1h or 15m RTH), already persisted to EventLogStore by ChartPanel itself
+        // (see OnBollingerOpeningEvent). Here: mirror into crossLog with a timestamp for real-time
+        // visibility, AND save the combined 3-chart screenshot into the events .md — no Telegram
+        // push for this one, just the local record (see SaveBollingerOpeningSnapshotAsync).
         if (hourlyPanel != null)
         {
             hourlyPanel.OnBollingerOpeningEvent += caption =>
             {
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [1h] {caption}{Environment.NewLine}"));
+                _ = SaveBollingerOpeningSnapshotAsync(caption);
             };
         }
         if (rthPanel != null)
@@ -581,6 +583,7 @@ public class MultiChartForm : Form
             {
                 if (IsDisposed) return;
                 BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [15m RTH] {caption}{Environment.NewLine}"));
+                _ = SaveBollingerOpeningSnapshotAsync(caption);
             };
         }
 
@@ -1152,6 +1155,30 @@ public class MultiChartForm : Form
     // Pushes the combined 3-chart snapshot for a Piso/Techo Cruce/Rebote resolution — additional to
     // ChartPanel's own single-panel push (SendChartToTelegramAsync, fired from the 1h panel itself
     // for the SAME event), per explicit request. Same best-effort pattern as every other push here.
+    // Saves the combined 3-chart screenshot for "Abriendo Bollinger con Volatilidad" into the
+    // events .md — no Telegram push for this one (per explicit request, it's local-only), just
+    // the same capture-and-embed step every other combined-snapshot event already does.
+    private async Task SaveBollingerOpeningSnapshotAsync(string caption)
+    {
+        try
+        {
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null) return;
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_BollingerOpening_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+        }
+        catch
+        {
+            // Best-effort, same as every other snapshot/push in this file — never let this affect
+            // the analysis that just fired.
+        }
+    }
+
     private async Task SendPisoTechoTelegramPushAsync(string caption)
     {
         try

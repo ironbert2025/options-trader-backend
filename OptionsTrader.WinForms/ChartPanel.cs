@@ -1616,7 +1616,9 @@ public class ChartPanel : Panel
             var caption = $"Abriendo Bollinger con Volatilidad — PM {direction} — SMA20 {smaEarlier!.Value:F2} → {smaNow!.Value:F2} — spot {livePrice:F2}";
             EventLogStore.Append(_symbol, timeframeLabel, "BollingerOpening", direction, caption, livePrice,
                 $"BollUpper={current!.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
-            EventLogMarkdownWriter.AppendEvent(_symbol, caption);
+            // The .md entry (with the combined 3-chart screenshot) is MultiChartForm's job, not
+            // this panel's — it's the only one that can capture all 3 charts at once. See its
+            // OnBollingerOpeningEvent wiring / SaveBollingerOpeningSnapshotAsync.
             BeginInvoke(() => OnBollingerOpeningEvent?.Invoke(caption));
         }
 
