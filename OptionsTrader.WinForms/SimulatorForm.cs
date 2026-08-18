@@ -1006,6 +1006,23 @@ public class SimulatorForm : Form
             e.CellStyle.BackColor = decimal.TryParse(row.Cells["colPutSprd"].Value?.ToString(), out var putSprd) && putSprd <= 2
                 ? Color.LightGreen : _dgvChain.DefaultCellStyle.BackColor;
         }
+
+        // Range: same rule as Form1.DgvQuotes_CellFormatting's identical colRange handling — the
+        // Strike button active (not blocked) AND this row's own Ask actually falls within the
+        // ticker's Low-High → green, same as the Bid columns above.
+        var rangeCol = _dgvChain.Columns["colRange"].Index;
+        if (e.ColumnIndex == rangeCol)
+        {
+            var rowType = row.Tag?.ToString();
+            var active  = !IsChainRowTradeBlocked(row, rowType);
+            var askCol  = rowType == "PUT" ? "colPutAsk" : "colCallAsk";
+            var inRange = active
+                && Form1.TryParseRange(row.Cells["colRange"].Value?.ToString(), out var low, out var high)
+                && decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask)
+                && ask >= low && ask <= high;
+
+            e.CellStyle.BackColor = inRange ? Color.LightGreen : _dgvChain.DefaultCellStyle.BackColor;
+        }
     }
 
     private void DgvChain_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)

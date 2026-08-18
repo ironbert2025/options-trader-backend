@@ -1258,7 +1258,9 @@ public partial class Form1 : Form
     }
 
     // Parses the "Low - High" text PopulateQuotesGrid writes into colRange (e.g. "0.30 - 0.45").
-    private static bool TryParseRange(string? rangeText, out decimal low, out decimal high)
+    // internal (not private) so SimulatorForm's DgvChain_CellFormatting can reuse it for the same
+    // Range-column green-fill rule, instead of duplicating this parsing.
+    internal static bool TryParseRange(string? rangeText, out decimal low, out decimal high)
     {
         low = high = 0;
         var parts = rangeText?.Split(" - ", StringSplitOptions.TrimEntries);
