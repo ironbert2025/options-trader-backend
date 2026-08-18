@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Linq;
 using OptionsTrader.Application.DTOs.Streaming;
 using OptionsTrader.Application.Interfaces;
 
@@ -491,7 +492,7 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                         // replay once that's built (phase 2, later).
                         TickPriceStore.Append(symbol, candle.Time, candle.Close);
 
-                        OnNewCandle?.Invoke(symbol, candle);
+                        RaiseOnNewCandle(symbol, candle);
                     }
                 }
                 else if (serviceName == "LEVELONE_EQUITIES")
@@ -512,7 +513,7 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                         // price of 0 on the chart.
                         LevelOneTickStore.Append(symbol, tradeTime, lastPrice);
                         if (lastPrice > 0)
-                            OnLevelOneTick?.Invoke(symbol, lastPrice, tradeTime);
+                            RaiseOnLevelOneTick(symbol, lastPrice, tradeTime);
                     }
                 }
             }
@@ -525,6 +526,60 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
 
     private static decimal GetDecimal(JsonElement item, string field) =>
         item.TryGetProperty(field, out var v) && v.TryGetDecimal(out var d) ? d : 0m;
+
+    // OnNewCandle/OnLevelOneTick are multicast events — each ChartPanel (Hourly15/Fifteen_RTH/
+    // Fifteen_Full) subscribes independently, all sharing this one SchwabStreamerClient/
+    // CandleHubClient instance. A plain "OnNewCandle?.Invoke(...)" calls every subscriber in
+    // registration order as ONE delegate chain: if any single subscriber throws, every subscriber
+    // registered AFTER it in that same invocation silently never runs — and HandleMessage's own
+    // outer try/catch swallows the exception with zero trace, so a bug in (say) the 1h panel's
+    // handler can permanently starve the 15m RTH panel of every future tick, forever, with no
+    // visible error anywhere. Confirmed happening live: dayreset_debug.log (written from inside
+    // Fifteen_RTH's own tick handler) went completely silent for a symbol mid-session while
+    // ws_raw.log kept showing fresh CHART_EQUITY for that same symbol arriving normally.
+    //
+    // Invoking each subscriber individually, in its own try/catch, fixes both problems at once:
+    // one throwing handler can no longer block its siblings, and the actual exception (with stack
+    // trace) gets written to disk instead of vanishing — so if this happens again, the real cause
+    // is finally visible instead of having to infer it from a live console dump.
+    private void RaiseOnNewCandle(string symbol, CandleData candle)
+    {
+        var handlers = OnNewCandle;
+        if (handlers == null) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<string, CandleData>>())
+        {
+            try { handler(symbol, candle); }
+            catch (Exception ex) { LogHandlerException("OnNewCandle", symbol, ex); }
+        }
+    }
+
+    private void RaiseOnLevelOneTick(string symbol, decimal price, DateTime tradeTime)
+    {
+        var handlers = OnLevelOneTick;
+        if (handlers == null) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<string, decimal, DateTime>>())
+        {
+            try { handler(symbol, price, tradeTime); }
+            catch (Exception ex) { LogHandlerException("OnLevelOneTick", symbol, ex); }
+        }
+    }
+
+    private const string HandlerExceptionLogPath = @"C:\OptionsData\EventLog\handler_exceptions.log";
+    private static readonly object HandlerExceptionLogLock = new();
+
+    private static void LogHandlerException(string eventName, string symbol, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(HandlerExceptionLogPath)!);
+            lock (HandlerExceptionLogLock)
+            {
+                File.AppendAllText(HandlerExceptionLogPath,
+                    $"[{DateTime.Now:O}] {eventName} symbol={symbol}{Environment.NewLine}{ex}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch { /* best-effort diagnostic logging — never let this affect the tick handler */ }
+    }
 
     // Retries forever (never gives up — the app should keep trying for as long as it's open
     // during market hours) with a backoff that actually escalates across repeated failures.

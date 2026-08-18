@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -314,7 +315,7 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
 
             if (type == "l1")
             {
-                OnLevelOneTick?.Invoke(symbol, root.GetProperty("price").GetDecimal(), time);
+                RaiseOnLevelOneTick(symbol, root.GetProperty("price").GetDecimal(), time);
                 return;
             }
 
@@ -326,7 +327,7 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
                 Low   = root.GetProperty("low").GetDecimal(),
                 Close = root.GetProperty("close").GetDecimal()
             };
-            OnNewCandle?.Invoke(symbol, candle);
+            RaiseOnNewCandle(symbol, candle);
         }
         catch
         {
@@ -348,5 +349,50 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
 
         _client?.Dispose();
         _cts?.Dispose();
+    }
+
+    // Same reasoning as SchwabStreamerClient's identical helpers — OnNewCandle/OnLevelOneTick are
+    // multicast events with one subscriber per ChartPanel (Hourly15/Fifteen_RTH/Fifteen_Full). A
+    // plain "?.Invoke(...)" calls every subscriber as ONE chain: if any throws, every subscriber
+    // registered after it silently never runs again for the rest of the session, and the outer
+    // try/catch in HandleLine swallows the exception with zero trace. Invoking each individually
+    // stops one bad handler from starving its siblings, and logs the real exception if it happens.
+    private void RaiseOnNewCandle(string symbol, CandleData candle)
+    {
+        var handlers = OnNewCandle;
+        if (handlers == null) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<string, CandleData>>())
+        {
+            try { handler(symbol, candle); }
+            catch (Exception ex) { LogHandlerException("OnNewCandle", symbol, ex); }
+        }
+    }
+
+    private void RaiseOnLevelOneTick(string symbol, decimal price, DateTime tradeTime)
+    {
+        var handlers = OnLevelOneTick;
+        if (handlers == null) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<string, decimal, DateTime>>())
+        {
+            try { handler(symbol, price, tradeTime); }
+            catch (Exception ex) { LogHandlerException("OnLevelOneTick", symbol, ex); }
+        }
+    }
+
+    private const string HandlerExceptionLogPath = @"C:\OptionsData\EventLog\handler_exceptions.log";
+    private static readonly object HandlerExceptionLogLock = new();
+
+    private static void LogHandlerException(string eventName, string symbol, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(HandlerExceptionLogPath)!);
+            lock (HandlerExceptionLogLock)
+            {
+                File.AppendAllText(HandlerExceptionLogPath,
+                    $"[{DateTime.Now:O}] {eventName} symbol={symbol}{Environment.NewLine}{ex}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch { /* best-effort diagnostic logging — never let this affect the tick handler */ }
     }
 }
