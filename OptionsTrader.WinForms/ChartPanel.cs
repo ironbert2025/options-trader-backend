@@ -483,6 +483,15 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markAllTimeHigh({priceStr});");
     }
 
+    // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,
+    // per explicit request. The underlying calculation keeps running either way (see
+    // enableBollingerEdgeMarkers/recalculateBollinger in chart.html); this only toggles the draw.
+    public async Task SetBollingerEdgeMarkersVisibleAsync(bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setBollingerEdgeMarkersVisible({(show ? "true" : "false")});");
+    }
+
     // White line at the underlying spot price the moment a trade is opened or closed — panel 3
     // (RTH+Overnight) only, per explicit request extending the Simulator's identical marker to the
     // live app. Same markEntrySpot JS function the Simulator already uses (anchors to whichever

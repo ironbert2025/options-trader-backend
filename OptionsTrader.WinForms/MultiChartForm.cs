@@ -297,10 +297,20 @@ public class MultiChartForm : Form
         btnBringAllForward.Click += (s, e) =>
             CrossProcessWindowHelper.BringAllToFront("Live Charts — ");
 
+        // Shows/hides the white Bollinger-band edge markers on this panel — checked by default
+        // (matches the always-on behavior before this toggle existed).
+        var chkBollingerEdges = new CheckBox { Text = "BB edges", Location = new Point(132, 34), AutoSize = true, Checked = true };
+        chkBollingerEdges.CheckedChanged += async (s, e) =>
+        {
+            if (rthPanel == null) return;
+            await rthPanel.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
+        };
+
         rthToolsHost.Controls.Add(btnRthTLine);
         rthToolsHost.Controls.Add(btnRthHLine);
         rthToolsHost.Controls.Add(btnRthClear);
         rthToolsHost.Controls.Add(btnBringAllForward);
+        rthToolsHost.Controls.Add(chkBollingerEdges);
         toolbar.Controls.Add(rthToolsHost, 1, 0);
 
         // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the

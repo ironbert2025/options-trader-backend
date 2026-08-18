@@ -2274,6 +2274,13 @@
   let bollingerEdgeMarkersEnabled = false;
   function enableBollingerEdgeMarkers() { bollingerEdgeMarkersEnabled = true; }
 
+  // Separate from bollingerEdgeMarkersEnabled above — that one gates whether the values get
+  // computed at all (set once, per panel, at load); this one is the user-facing show/hide toggle
+  // (a checkbox in the toolbar), checked only in draw() so calculation keeps running underneath
+  // even while hidden (cheap, and means it's already up to date the moment it's shown again).
+  let bollingerEdgeMarkersVisible = true;
+  function setBollingerEdgeMarkersVisible(show) { bollingerEdgeMarkersVisible = show; forceRepaint(); }
+
   // Each band's marker is a 2-point segment (previous candle -> forming candle), NOT a fixed-width
   // horizontal mark — so its slope visually shows the band opening outward, moving sideways, or
   // closing inward between those two candles, which a horizontal-only mark couldn't show.
@@ -2287,7 +2294,7 @@
         renderer() {
           return {
             draw(target) {
-              if (!self._chart) return;
+              if (!self._chart || !bollingerEdgeMarkersVisible) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();

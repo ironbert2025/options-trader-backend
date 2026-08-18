@@ -77,8 +77,7 @@ public class SimulatedChartPanel : Panel
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
                 // White markers over the current upper/lower Bollinger band values, bounded to the
-                // forming candle's width — simulator-only, never enabled on the live chart even
-                // though it shares this same chart.html.
+                // forming candle's width — also enabled on the live chart's own 15m RTH panel.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerEdgeMarkers();");
 
                 // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
@@ -192,6 +191,15 @@ public class SimulatedChartPanel : Panel
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr});");
+    }
+
+    // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,
+    // per explicit request. The underlying calculation keeps running either way; this only toggles
+    // the draw.
+    public async Task SetBollingerEdgeMarkersVisibleAsync(bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setBollingerEdgeMarkersVisible({(show ? "true" : "false")});");
     }
 
     // Dashed Piso/Techo reference line (15m RTH / RTH+Overnight charts) — ported from ChartPanel,
