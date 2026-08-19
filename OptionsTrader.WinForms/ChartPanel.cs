@@ -1394,7 +1394,7 @@ public class ChartPanel : Panel
 
     private const int VolatilityBollingerPeriod = 20;
     private const decimal VolatilityBollingerMult = 2m;
-    private const int VolatilityWidthLookback = 3; // candles back to compare band width against
+    private const int VolatilityWidthLookback = 1; // candles back to compare band width against
 
     private bool _volatilityOpeningArmedUpper;
     private bool _volatilityOpeningArmedLower;

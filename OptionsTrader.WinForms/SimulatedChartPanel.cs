@@ -873,7 +873,7 @@ public class SimulatedChartPanel : Panel
 
     private const int VolatilityBollingerPeriod = 20;
     private const decimal VolatilityBollingerMult = 2m;
-    private const int VolatilityWidthLookback = 3;
+    private const int VolatilityWidthLookback = 1;
 
     private bool _volatilityOpeningArmed;
     private bool _volatilityOpeningFired;
