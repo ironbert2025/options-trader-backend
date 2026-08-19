@@ -2338,14 +2338,14 @@
   const bollingerEdgeMarkerPrimitive = new BollingerEdgeMarkerPrimitive();
   let bollingerEdgeMarkerAttached = false;
 
-  function configureBollinger(period, deviations) {
+  function configureBollinger(period, deviations, middleSolid) {
     bollingerConfig = { period: period, mult: deviations };
     if (!bollingerSeries) {
       // Same reasoning as smaSeries — never contribute to the shared price scale's autoscale.
       const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
       bollingerSeries = {
         upper:  chart.addLineSeries({ ...opts, color: '#787b86' }),
-        middle: chart.addLineSeries({ ...opts, color: '#787b86', lineStyle: LightweightCharts.LineStyle.Dashed }),
+        middle: chart.addLineSeries({ ...opts, color: '#FFD700', lineStyle: middleSolid ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed }),
         lower:  chart.addLineSeries({ ...opts, color: '#787b86' }),
       };
     }

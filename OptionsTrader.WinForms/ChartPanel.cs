@@ -1917,7 +1917,8 @@ public class ChartPanel : Panel
             // can be deleted from ANY of the 3 panels, not just 1h/RTH+Overnight.
             if (_mode == ChartPanelMode.Fifteen_RTH)
             {
-                await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+                // Middle band (SMA20) drawn solid here (vs dashed on the 1h panel), per explicit request.
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2, true);");
 
                 // White markers over the current upper/lower Bollinger band values, bounded to the
                 // forming candle's width — same marker the Simulator already draws, per explicit
