@@ -952,7 +952,11 @@ public class ChartPanel : Panel
                 _autoZonePushArmed = true; // start auto-pushing the combined 3-chart image on every closed candle from here
                 var caption = $"Rebote en Zona de Demanda — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
                 OnDemandZoneReboundEvent?.Invoke(caption);
-                _ = SendChartToTelegramAsync(caption);
+                // BeginInvoke — this runs from Streamer_OnNewCandle's background (WebSocket) thread,
+                // and SendChartToTelegramAsync touches _webView.CoreWebView2 (a UI-thread-only COM
+                // property) as its very first line — same threading bug class as
+                // EvaluateFirstReboundLabel (see that fix's comment for the full rationale).
+                BeginInvoke(async () => await SendChartToTelegramAsync(caption));
                 EventLogStore.Append(_symbol, "15Min", "DemandZoneRebound", "Alza", caption, justClosed.Close,
                     $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
             }
@@ -989,7 +993,8 @@ public class ChartPanel : Panel
                 _autoZonePushArmed = true; // start auto-pushing the combined 3-chart image on every closed candle from here
                 var caption = $"Rebote en Zona de Supply — cierre {justClosed.Close:F2} (Proximal {zone.Proximal:F2}, Distal {zone.Distal:F2})";
                 OnSupplyZoneReboundEvent?.Invoke(caption);
-                _ = SendChartToTelegramAsync(caption);
+                // BeginInvoke — same threading bug class as the Demand Zone branch above.
+                BeginInvoke(async () => await SendChartToTelegramAsync(caption));
                 EventLogStore.Append(_symbol, "15Min", "SupplyZoneRebound", "Baja", caption, justClosed.Close,
                     $"Proximal={zone.Proximal:F2};Distal={zone.Distal:F2}");
             }
@@ -1559,7 +1564,8 @@ public class ChartPanel : Panel
         var direction = bullish ? "Alza" : "Baja";
         var caption = $"Abriendo la Volatilidad — SMA20 girando a la {direction} ({smaEarlier.Value:F2} → {smaNow.Value:F2}), ancho bandas {currentWidth:F2} (vs {earlierWidth:F2} hace {VolatilityWidthLookback} velas) — spot {livePrice:F2}, Banda {bandLabel}";
         OnVolatilityOpeningEvent?.Invoke(caption);
-        _ = SendChartToTelegramAsync(caption);
+        // BeginInvoke — same threading bug class as the Demand/Supply Zone branches above.
+        BeginInvoke(async () => await SendChartToTelegramAsync(caption));
         EventLogStore.Append(_symbol, "15Min", "VolatilityOpening", direction, caption, livePrice,
             $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
     }
