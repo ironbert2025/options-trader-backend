@@ -1737,7 +1737,7 @@ public partial class Form1 : Form
     }
 
     // Guards the Strike button on the tradable (current-expiration) grid: blocks the trade if
-    // the option is illiquid (bid = 0), the spread is too wide (Sprd >= 5, same cents units
+    // the option is illiquid (bid = 0), the spread is too wide (Sprd >= 6, same cents units
     // shown in the Sprd column), or there's no room for even 1 contract at the current Position
     // Size (Conts = 0) — any one of these makes clicking Strike a guaranteed-bad trade.
     private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName)
@@ -1745,7 +1745,7 @@ public partial class Form1 : Form
         if (IsRowBidZero(row, callBidColName, putBidColName)) return true;
 
         var sprdColName = row.Tag?.ToString() == "PUT" ? "colPutSprd" : "colCallSprd";
-        if (decimal.TryParse(row.Cells[sprdColName].Value?.ToString(), out var sprd) && sprd >= 5) return true;
+        if (decimal.TryParse(row.Cells[sprdColName].Value?.ToString(), out var sprd) && sprd >= 6) return true;
 
         if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
 

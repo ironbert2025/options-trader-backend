@@ -868,7 +868,7 @@ public class MultiChartForm : Form
 
         // Strike button: dark green for Call rows, red for Put rows, light gray when blocked —
         // identical to DgvQuotes_CellPainting's colStrikePrice button on Form1's own grid (same
-        // IsRowTradeBlocked rule: bid == 0, OR spread >= 5, OR 0 contracts).
+        // IsRowTradeBlocked rule: bid == 0, OR spread >= 6, OR 0 contracts).
         _dgvOptions.CellPainting += (s, e) =>
         {
             if (e.RowIndex < 0 || e.ColumnIndex != _dgvOptions.Columns["colStrikeLive"]!.Index) return;
@@ -881,7 +881,7 @@ public class MultiChartForm : Form
 
             var disabled =
                 !decimal.TryParse(row.Cells["colBidLive"].Value?.ToString(), out var bid) || bid == 0m
-                || (decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd >= 5)
+                || (decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd >= 6)
                 || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0;
 
             var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);

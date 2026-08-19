@@ -953,14 +953,14 @@ public class SimulatorForm : Form
         _dgvTrades.CellContentClick += DgvTrades_CellContentClick;
     }
 
-    // Same rule as Form1's private static IsRowTradeBlocked: bid == 0, OR spread >= 5 (FormatSprd's
-    // stripped-decimal-point encoding, so 5 == a real $0.05 spread), OR 0 contracts.
+    // Same rule as Form1's private static IsRowTradeBlocked: bid == 0, OR spread >= 6 (FormatSprd's
+    // stripped-decimal-point encoding, so 6 == a real $0.06 spread), OR 0 contracts.
     private static bool IsChainRowTradeBlocked(DataGridViewRow row, string? rowType)
     {
         var bidCol  = rowType == "PUT" ? "colPutBid"  : "colCallBid";
         var sprdCol = rowType == "PUT" ? "colPutSprd" : "colCallSprd";
         if (!decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid) || bid == 0m) return true;
-        if (decimal.TryParse(row.Cells[sprdCol].Value?.ToString(), out var sprd) && sprd >= 5) return true;
+        if (decimal.TryParse(row.Cells[sprdCol].Value?.ToString(), out var sprd) && sprd >= 6) return true;
         if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
         return false;
     }
