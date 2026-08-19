@@ -390,6 +390,18 @@ public class MultiChartForm : Form
             Size     = new Size(80, 24)
         };
 
+        // Per-ticker "send events to Telegram" toggle — gates only the event pushes (Piso/Techo,
+        // T-Line, Abriendo la Volatilidad, Demand/Supply Zone, auto-push); trade open/close pushes
+        // are untouched. Persisted per symbol in tickers.json via Form1.SetTelegramEnabledFor.
+        var chkTelegramEvents = new CheckBox
+        {
+            Text     = "Telegram",
+            Location = new Point(236, 34),
+            AutoSize = true,
+            Checked  = Form1.IsTelegramEnabledFor(_symbol)
+        };
+        chkTelegramEvents.CheckedChanged += (s, e) => Form1.SetTelegramEnabledFor(_symbol, chkTelegramEvents.Checked);
+
         // Live "time — price" readout, updated on every raw tick this panel receives via the
         // WebSocket — not tied to candle formation, so it updates even mid-bucket.
         var lblLiveTick = new Label
@@ -454,6 +466,7 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(btn5Min);
         toolsHost.Controls.Add(btnArrow);
         toolsHost.Controls.Add(btnStopPush);
+        toolsHost.Controls.Add(chkTelegramEvents);
         toolsHost.Controls.Add(lblLiveTick);
         toolbar.Controls.Add(toolsHost, 2, 0);
 
@@ -1115,6 +1128,7 @@ public class MultiChartForm : Form
     // affect the chart/detection logic itself.
     private async Task SendTLineSignalTelegramPushAsync(string caption)
     {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
         try
         {
             var (botToken, chatId) = TelegramSettingsStore.Load();
@@ -1181,6 +1195,7 @@ public class MultiChartForm : Form
 
     private async Task SendPisoTechoTelegramPushAsync(string caption)
     {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
         try
         {
             var (botToken, chatId) = TelegramSettingsStore.Load();
@@ -1221,6 +1236,7 @@ public class MultiChartForm : Form
     // "Stop Push" hasn't been clicked since. Same best-effort pattern as every other Telegram push.
     private async Task SendAutoZonePushAsync(CandleData candle)
     {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
         try
         {
             var (botToken, chatId) = TelegramSettingsStore.Load();

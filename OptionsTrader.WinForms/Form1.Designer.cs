@@ -867,7 +867,7 @@ partial class Form1
         lblPositionAmount.TabIndex = 1;
         // 
         // grpTickerButtons
-        // 
+        //
         grpTickerButtons.Controls.Add(flpTickers);
         grpTickerButtons.Location = new Point(128, 4);
         grpTickerButtons.Name = "grpTickerButtons";
@@ -875,16 +875,16 @@ partial class Form1
         grpTickerButtons.TabIndex = 6;
         grpTickerButtons.TabStop = false;
         grpTickerButtons.Text = "Tickers";
-        // 
+        //
         // flpTickers
-        // 
+        //
         flpTickers.Dock = DockStyle.Fill;
         flpTickers.Location = new Point(3, 19);
         flpTickers.Name = "flpTickers";
         flpTickers.Padding = new Padding(4);
         flpTickers.Size = new Size(279, 73);
         flpTickers.TabIndex = 0;
-        // 
+        //
         // grpTrade
         // 
         grpTrade.Controls.Add(rbNoTrade);

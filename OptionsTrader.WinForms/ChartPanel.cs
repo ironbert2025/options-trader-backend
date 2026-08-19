@@ -777,6 +777,11 @@ public class ChartPanel : Panel
     // pushes it to the configured Telegram channel.
     private async Task<(bool Ok, string Detail)> SendChartToTelegramAsync(string caption)
     {
+        // Per-ticker "send events to Telegram" toggle (Form1's ticker-selection checkbox) — skip
+        // silently, not a failure, so it doesn't spam OnTelegramPushFailedEvent/crossLog.
+        if (!Form1.IsTelegramEnabledFor(_symbol))
+            return (true, "Telegram events disabled for this ticker.");
+
         if (_webView.CoreWebView2 == null)
         {
             OnTelegramPushFailedEvent?.Invoke("Chart not loaded yet.");

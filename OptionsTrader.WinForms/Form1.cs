@@ -565,6 +565,28 @@ public partial class Form1 : Form
         }
     }
 
+    // Per-ticker toggle: only gates "event" Telegram pushes (Piso/Techo, T-Line, Abriendo la
+    // Volatilidad, Demand/Supply Zone, auto-push) — trade open/close pushes are unaffected.
+    // The checkbox itself lives on MultiChartForm (the live chart window), not here — this is
+    // just the shared persistence helper both Form1's ticker list and MultiChartForm read/write.
+    internal static void SetTelegramEnabledFor(string symbol, bool enabled)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { TelegramEnabled = enabled };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    // Reusable helper for ChartPanel/MultiChartForm to check before sending an "event" Telegram push.
+    internal static bool IsTelegramEnabledFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.TelegramEnabled ?? true;
+    }
+
     private void TickerButton_Click(object? sender, EventArgs e)
     {
         if (sender is not Button clicked) return;
