@@ -2345,6 +2345,10 @@ public class ChartPanel : Panel
         // High/Close silently overwritten with TODAY's opening price — confirmed via real tick
         // data (yesterday's real 15:59 close ~302.71 vs the corrupted bucket's Close ~304.11,
         // which almost exactly matched today's 9:30 open ~304.07).
+        // Hourly15 (1h panel) had this exact same gap — only Fifteen_RTH was guarded, so a raw
+        // tick landing before Streamer_OnNewCandle's own day-reset could silently stretch
+        // yesterday's 15:00-16:00 bar's High/Low/Close into today's open (reported live: the 4pm
+        // close candle visually "extended" to today's open on the 1h panel).
         if (_mode == ChartPanelMode.Fifteen_RTH)
         {
             var liveBucketDate = TimeZoneInfo.ConvertTimeFromUtc(_liveBucket.Time, EasternZone).Date;
@@ -2353,6 +2357,19 @@ public class ChartPanel : Panel
                 _liveAnchor      = eastern.Date.AddHours(9).AddMinutes(30);
                 _liveBucketIndex = CandleAggregation.BucketIndex(utcTime, _liveAnchor, _intervalMinutes);
                 _liveBucket      = new CandleData { Time = utcTime, Open = price, High = price, Low = price, Close = price };
+                var freshBucket  = _liveBucket;
+                BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
+                return;
+            }
+        }
+        else if (_mode == ChartPanelMode.Hourly15)
+        {
+            var liveBucketDate = TimeZoneInfo.ConvertTimeFromUtc(_liveBucket.Time, EasternZone).Date;
+            if (eastern.Date != liveBucketDate)
+            {
+                _liveBucketIndex = CandleAggregation.HourlyRthBucketKey(utcTime);
+                var start        = CandleAggregation.HourlyRthBucketStartUtc(utcTime);
+                _liveBucket      = new CandleData { Time = start, Open = price, High = price, Low = price, Close = price };
                 var freshBucket  = _liveBucket;
                 BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                 return;
