@@ -910,7 +910,19 @@ public class MultiChartForm : Form
         };
 
         var optionsGridHost = new Panel { Dock = DockStyle.Right, Width = 345, Padding = new Padding(6, 0, 6, 6) };
+
+        // ExpDate above the grid — same resolved value (handles "0DTE"/weekday shorthand etc.) as
+        // everywhere else this ticker's expiration is shown.
+        var lblExpDate = new Label
+        {
+            Dock      = DockStyle.Top,
+            Height    = 20,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font      = new Font("Segoe UI", 9F, FontStyle.Bold),
+            ForeColor = Color.White
+        };
         optionsGridHost.Controls.Add(_dgvOptions);
+        optionsGridHost.Controls.Add(lblExpDate);
 
         void RefreshOptionsGrid()
         {
@@ -919,6 +931,8 @@ public class MultiChartForm : Form
             if (_dgvOptions.IsDisposed || !_dgvOptions.IsHandleCreated) return;
             _dgvOptions.BeginInvoke(() => Form1.PopulateSingleSideOptionsGrid(
                 _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker));
+            if (!lblExpDate.IsDisposed)
+                lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
         }
 
         // Strike click: forwards into Form1's own click handler — opens a trade using whatever
