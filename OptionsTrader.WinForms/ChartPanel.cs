@@ -184,12 +184,12 @@ public class ChartPanel : Panel
         public bool Done;
     }
 
-    // T-Line + SMA20 breakout signal (Hourly15 panel only, see EvaluateTLineSignal): only one
-    // T-Line is ever allowed to exist for a symbol at a time — enforced in
-    // CoreWebView2_WebMessageReceived — so there's no ambiguity about which line to evaluate
-    // against. Fires once per T-Line, then stays silent until that line is deleted and a new one
-    // drawn (_tLineSignalFired resets in both those cases).
-    private bool _tLineSignalFired;
+    // T-Line + SMA20 breakout signal (Hourly15 and Fifteen_RTH panels, see EvaluateTLineSignal):
+    // multiple T-Lines can now be drawn on the same panel, each evaluated independently — this
+    // tracks which ones have already fired (by their 4 defining values) so each line signals at
+    // most once, the same "fires once per line" guarantee _tLineSignalFired used to give a single
+    // shared line. Entries are removed when that specific line is deleted.
+    private readonly HashSet<(long T1, decimal P1, long T2, decimal P2)> _tLineSignalFiredFor = new();
 
     // Fires with a human-readable caption when the T-Line+SMA20 breakout signal triggers — the
     // caller (MultiChartForm) both logs it and pushes the combined 3-chart Telegram snapshot.
@@ -373,31 +373,6 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Fired when a T-Line gets drawn/deleted on THIS panel (any of the 3, not just the 1h one —
-    // see CoreWebView2_WebMessageReceived's "tline"/"tline_delete" case) — MultiChartForm mirrors
-    // it onto the other 2 panels, same pattern as OnStrikeDeletedEvent/OnHLineDeletedEvent.
-    public event Action<long, decimal, long, decimal>? OnTLineDrawnEvent;
-    public event Action<long, decimal, long, decimal>? OnTLineRemovedEvent;
-
-    // Draws/removes a T-Line MIRRORED from another panel — additive (addMirroredTLine), doesn't go
-    // through this panel's own "only 1 T-Line at a time" limit or TLineStore at all, since the
-    // line already exists for real on the originating panel.
-    public async Task AddMirroredTLineAsync(long t1, decimal p1, long t2, decimal p2)
-    {
-        if (_webView.CoreWebView2 == null) return;
-        var p1Str = p1.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var p2Str = p2.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
-    }
-
-    public async Task RemoveMirroredTLineAsync(long t1, decimal p1, long t2, decimal p2)
-    {
-        if (_webView.CoreWebView2 == null) return;
-        var p1Str = p1.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var p2Str = p2.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"removeMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
-    }
-
     // Toggles H-Line drawing mode on/off. While on, every click draws a new red horizontal line
     // from the click point to the right edge of the chart. Same toggle pattern as DZ/SZ.
     public async Task<bool> ToggleHLineModeAsync()
@@ -463,8 +438,7 @@ public class ChartPanel : Panel
     }
 
     // Adds an H-Line to THIS panel without arming click mode — called on the 2 SIBLING panels when
-    // OnHLineDrawnEvent fires from wherever the user actually drew it. Same idea as
-    // AddMirroredTLineAsync.
+    // OnHLineDrawnEvent fires from wherever the user actually drew it.
     public async Task AddMirroredHLineAsync(long time, decimal price)
     {
         if (_webView.CoreWebView2 == null) return;
@@ -589,13 +563,16 @@ public class ChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
+        if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_RTH)
+        {
+            TLineStore.Clear(_symbol, TLineModeTag);
+            _tLineSignalFiredFor.Clear();
+            _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
+        }
         if (_mode == ChartPanelMode.Hourly15)
         {
-            TLineStore.Clear(_symbol);
             VerticalArrowStore.Clear(_symbol);
             RectGrisStore.Clear(_symbol);
-            _tLineSignalFired = false;
-            _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
         }
         if (_mode == ChartPanelMode.Fifteen_Full)
         {
@@ -604,6 +581,11 @@ public class ChartPanel : Panel
             _supplyZones.Clear();
         }
     }
+
+    // "1h" for the Hourly15 panel, "RTH" for the 15m RTH panel — T-Lines are only drawable on
+    // these 2 (panel 3 lost its T-Line tool entirely, per explicit request), each with its own
+    // TLineStore file so they're fully independent instead of sharing one.
+    private string TLineModeTag => _mode == ChartPanelMode.Hourly15 ? "1h" : "RTH";
 
     // Sets the "Potencial CT al Alza/Baja" hint right after a T-Line finishes drawing — direction
     // comes from how the line itself was drawn (technical-analysis convention: a descending line
@@ -615,6 +597,18 @@ public class ChartPanel : Panel
     {
         var text = p1 > p2 ? "Potencial CT al Alza" : "Potencial CT a la Baja";
         _ = _webView.CoreWebView2?.ExecuteScriptAsync($"setTLineHint({JsonSerializer.Serialize(text)});");
+    }
+
+    // Reloads this panel's own saved T-Lines (TLineModeTag-scoped) on chart open — shared by
+    // Hourly15 and Fifteen_RTH, each fully independent from the other now.
+    private async Task LoadSavedTLinesAsync()
+    {
+        var savedLines = TLineStore.Load(_symbol, TLineModeTag);
+        if (savedLines.Count == 0) return;
+
+        var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
+        await _webView.CoreWebView2!.ExecuteScriptAsync($"loadTLines({linesJson});");
+        UpdateTLineHint(savedLines[^1].P1, savedLines[^1].P2);
     }
 
     // Receives T-Line and vertical-arrow events from the 1h panel (window.chrome.webview.
@@ -640,28 +634,16 @@ public class ChartPanel : Panel
                     var p2 = root.GetProperty("p2").GetDecimal();
                     if (type == "tline")
                     {
-                        // Only 1 T-Line allowed at a time (the breakout signal below needs an
-                        // unambiguous line to evaluate against) — reject a 2nd one, undo it on
-                        // the chart, and tell the user why.
-                        if (TLineStore.Load(_symbol).Count > 0)
-                        {
-                            _ = _webView.CoreWebView2.ExecuteScriptAsync("removeLastTLine();");
-                            MessageBox.Show(
-                                "Ya existe una T-Line dibujada para este símbolo. Borra la actual (selecciónala y presiona Delete) antes de dibujar una nueva.",
-                                "T-Line ya existe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            break;
-                        }
-                        TLineStore.Append(_symbol, t1, p1, t2, p2);
-                        _tLineSignalFired = false;
+                        // Multiple T-Lines per panel are allowed now — each evaluated
+                        // independently by EvaluateTLineSignal (see _tLineSignalFiredFor).
+                        TLineStore.Append(_symbol, TLineModeTag, t1, p1, t2, p2);
                         UpdateTLineHint(p1, p2);
-                        OnTLineDrawnEvent?.Invoke(t1, p1, t2, p2);
                     }
                     else
                     {
-                        TLineStore.Remove(_symbol, t1, p1, t2, p2);
-                        _tLineSignalFired = false;
+                        TLineStore.Remove(_symbol, TLineModeTag, t1, p1, t2, p2);
+                        _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
-                        OnTLineRemovedEvent?.Invoke(t1, p1, t2, p2);
                     }
                     break;
                 }
@@ -874,47 +856,55 @@ public class ChartPanel : Panel
 
     private const int TLineSmaPeriod = 20;
 
-    // T-Line + SMA20 breakout: fires once (per T-Line — see _tLineSignalFired) when a just-closed
-    // 1h candle crosses BOTH the T-Line and SMA20 in the same direction and closes past both —
-    // either direction counts, mirrored:
+    // T-Line + SMA20 breakout: fires once per T-Line (see _tLineSignalFiredFor) when a just-closed
+    // candle crosses BOTH that T-Line and this panel's own SMA20 in the same direction and closes
+    // past both — either direction counts, mirrored:
     //   Al alza:  opened BELOW the T-Line, High got above BOTH T-Line and SMA20 during the
     //             candle (approximated with High since only OHLC is available), closed above both.
     //   A la baja: opened ABOVE the T-Line, Low got below BOTH during the candle, closed below both.
-    // Automatic — runs for as long as exactly one T-Line is drawn, no arm/disarm toggle (unlike
-    // Cross-SMA).
+    // Automatic — every T-Line on this panel (Hourly15 or Fifteen_RTH, evaluated fully
+    // independently of the other panel) gets checked, no arm/disarm toggle (unlike Cross-SMA).
     private void EvaluateTLineSignal(CandleData justClosed)
     {
-        if (_tLineSignalFired) return;
-
-        var lines = TLineStore.Load(_symbol);
-        if (lines.Count == 0) return; // enforced to be 0 or 1, never more
-
-        var (t1, p1, t2, p2) = lines[0];
-        var candleTimeSec = new DateTimeOffset(DateTime.SpecifyKind(justClosed.Time, DateTimeKind.Utc)).ToUnixTimeSeconds();
-        var tLineValue = TLineValueAt(t1, p1, t2, p2, candleTimeSec);
+        var lines = TLineStore.Load(_symbol, TLineModeTag);
+        if (lines.Count == 0) return;
 
         if (_closedCandles.Count < TLineSmaPeriod) return; // not enough history for SMA20 yet
         var sma20 = Sma(TLineSmaPeriod, _closedCandles.Count - 1);
         if (sma20 == null) return;
 
-        var upBreakout = justClosed.Open < tLineValue
-            && justClosed.High > tLineValue && justClosed.High > sma20.Value
-            && justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
+        var candleTimeSec = new DateTimeOffset(DateTime.SpecifyKind(justClosed.Time, DateTimeKind.Utc)).ToUnixTimeSeconds();
+        var timeframeLabel = _mode == ChartPanelMode.Hourly15 ? "Hora" : "15Min RTH";
+        var logPeriod = _mode == ChartPanelMode.Hourly15 ? "Hora" : "15Min";
 
-        var downBreakout = justClosed.Open > tLineValue
-            && justClosed.Low < tLineValue && justClosed.Low < sma20.Value
-            && justClosed.Close < tLineValue && justClosed.Close < sma20.Value;
+        // Every T-Line on this panel is evaluated independently — each fires its own signal at
+        // most once (see _tLineSignalFiredFor), so 2+ lines can each break out on their own.
+        foreach (var line in lines)
+        {
+            if (_tLineSignalFiredFor.Contains(line)) continue;
 
-        if (!upBreakout && !downBreakout) return;
+            var (t1, p1, t2, p2) = line;
+            var tLineValue = TLineValueAt(t1, p1, t2, p2, candleTimeSec);
 
-        _tLineSignalFired = true;
-        var direction = upBreakout ? "al alza" : "a la baja";
-        var caption = $"CT {direction} en Hora — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})";
-        OnTLineSignalEvent?.Invoke(caption);
+            var upBreakout = justClosed.Open < tLineValue
+                && justClosed.High > tLineValue && justClosed.High > sma20.Value
+                && justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
 
-        var eventDirection = upBreakout ? "Alza" : "Baja";
-        EventLogStore.Append(_symbol, "Hora", "TLineBreakout", eventDirection, caption, justClosed.Close,
-            $"TLine={tLineValue:F2};SMA{TLineSmaPeriod}={sma20.Value:F2}");
+            var downBreakout = justClosed.Open > tLineValue
+                && justClosed.Low < tLineValue && justClosed.Low < sma20.Value
+                && justClosed.Close < tLineValue && justClosed.Close < sma20.Value;
+
+            if (!upBreakout && !downBreakout) continue;
+
+            _tLineSignalFiredFor.Add(line);
+            var direction = upBreakout ? "al alza" : "a la baja";
+            var caption = $"CT {direction} en {timeframeLabel} — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})";
+            OnTLineSignalEvent?.Invoke(caption);
+
+            var eventDirection = upBreakout ? "Alza" : "Baja";
+            EventLogStore.Append(_symbol, logPeriod, "TLineBreakout", eventDirection, caption, justClosed.Close,
+                $"TLine={tLineValue:F2};SMA{TLineSmaPeriod}={sma20.Value:F2}");
+        }
     }
 
     // Demand Zone rebote (15m RTH+Overnight panel only): evaluated against every tracked demand
@@ -1889,13 +1879,7 @@ public class ChartPanel : Panel
                     _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
                 }
 
-                var savedLines = TLineStore.Load(_symbol);
-                if (savedLines.Count > 0)
-                {
-                    var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
-                    await _webView.CoreWebView2.ExecuteScriptAsync($"loadTLines({linesJson});");
-                    UpdateTLineHint(savedLines[0].P1, savedLines[0].P2);
-                }
+                await LoadSavedTLinesAsync();
 
                 var savedArrows = VerticalArrowStore.Load(_symbol);
                 if (savedArrows.Count > 0)
@@ -1930,6 +1914,8 @@ public class ChartPanel : Panel
                     _webMessageHandlerAttached = true;
                     _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
                 }
+
+                await LoadSavedTLinesAsync();
             }
 
             // Pre-market blue line (1h and 15m RTH panels): only if the chart is opened before
@@ -2067,6 +2053,14 @@ public class ChartPanel : Panel
                         // 1h panel resolves a Cruce en Techo.
                         _closedCandles.Clear();
                         _closedCandles.AddRange(aggregated);
+
+                        // Same "prior-day last bar never gets a live follow-up tick to close it"
+                        // catch-up Hourly15 does above, now that this panel evaluates its own
+                        // T-Lines independently too.
+                        var todayRth = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+                        var lastBarDateRth = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(last.Time, EasternZone));
+                        if (lastBarDateRth < todayRth)
+                            EvaluateTLineSignal(last);
                     }
 
                     await EvaluatePrevDayHiLoAsync(aggregated);
@@ -2271,6 +2265,7 @@ public class ChartPanel : Panel
                 else if (_mode == ChartPanelMode.Fifteen_RTH)
                 {
                     _closedCandles.Add(_liveBucket);
+                    EvaluateTLineSignal(_liveBucket);
                 }
 
                 _liveBucketIndex = index;
