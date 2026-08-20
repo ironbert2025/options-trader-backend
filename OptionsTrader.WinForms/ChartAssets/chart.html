@@ -2057,13 +2057,30 @@
                 };
 
                 self._lines.forEach(l => {
-                  const snappedStart = snapTime(l.time, 'ceil');
-                  const snappedEnd = snapTime(l.timeEnd, 'floor');
-                  if (snappedStart == null || snappedEnd == null || snappedStart > snappedEnd) return;
+                  let snappedStart = snapTime(l.time, 'ceil');
+                  let x, x2Bitmap;
 
-                  const x = ts.timeToCoordinate(snappedStart);
-                  const x2 = ts.timeToCoordinate(snappedEnd);
-                  if (x == null || x2 == null) return;
+                  if (snappedStart != null) {
+                    const snappedEnd = snapTime(l.timeEnd, 'floor');
+                    if (snappedEnd == null || snappedStart > snappedEnd) return;
+                    const xCss = ts.timeToCoordinate(snappedStart);
+                    const x2Css = ts.timeToCoordinate(snappedEnd);
+                    if (xCss == null || x2Css == null) return;
+                    x = xCss * scope.horizontalPixelRatio;
+                    x2Bitmap = x2Css * scope.horizontalPixelRatio;
+                  } else {
+                    // No real candle yet at/after the session's own start (e.g. the RTH-only 15m
+                    // panel during premarket, before today's first 9:30 bar has formed) — anchor
+                    // to the LAST candle actually loaded (yesterday's close) and ray forward to
+                    // the chart's right edge instead, same fallback markPrevDayClose uses, so the
+                    // line still shows up rather than being silently skipped until market open.
+                    if (allCandles.length === 0) return;
+                    const xCss = ts.timeToCoordinate(allCandles[allCandles.length - 1].time);
+                    if (xCss == null) return;
+                    x = xCss * scope.horizontalPixelRatio;
+                    x2Bitmap = scope.bitmapSize.width;
+                  }
+
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (y == null) return;
 
@@ -2071,8 +2088,8 @@
                   ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
                   ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
                   ctx.beginPath();
-                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
-                  ctx.lineTo(x2 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.moveTo(x, y * scope.verticalPixelRatio);
+                  ctx.lineTo(x2Bitmap, y * scope.verticalPixelRatio);
                   ctx.stroke();
 
                   if (l.selected) {
@@ -2081,8 +2098,8 @@
                     ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
                     ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
                     ctx.beginPath();
-                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
-                    ctx.lineTo(x2 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.moveTo(x, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.lineTo(x2Bitmap, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
                     ctx.stroke();
                     ctx.restore();
                   }
