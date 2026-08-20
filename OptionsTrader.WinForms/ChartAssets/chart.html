@@ -1196,6 +1196,13 @@
                 ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
                 ctx.stroke();
                 ctx.setLineDash([]);
+
+                // "C" label — right edge of the line, just above it.
+                ctx.fillStyle = '#ef5350';
+                ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'bottom';
+                ctx.fillText('C', scope.bitmapSize.width - 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
               });
             }
           };
