@@ -74,7 +74,7 @@ Todas implementadas como *Series Primitives* de Lightweight Charts v4 en `chart.
 
 | Herramienta | Panel(es) | Notas |
 |---|---|---|
-| T-Line | 1h, 15m RTH | Persistida por símbolo en 1h (`TLineStore`); no persistida en 15m RTH |
+| T-Line | 1h, 15m RTH (panel 3 ya no tiene esta herramienta) | Persistida por símbolo en **ambos** paneles, cada uno con su propio `TLineStore` (tag "1h"/"RTH"); múltiples líneas independientes por panel, sin límite de 1; ya no se mirrorea entre paneles |
 | H-Line | 1h, 15m RTH | Línea roja hasta el borde derecho; misma herramienta reusada en ambos paneles |
 | Rect (azul) | 15m RTH+Overnight | Rectángulo por 2 clicks |
 | Rect (gris) | 1h | Para marcar lateralidad |

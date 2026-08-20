@@ -31,7 +31,7 @@ Pero **deliberadamente NO es una subclase ni variante de `ChartPanel`** — el p
 | Feature | Estado en Simulador | Persistencia/Telegram |
 |---|---|---|
 | Cross-SMA (Cruce/Rebote 20/40/100/200) | Presente (`EvaluateCrossings`/`ToggleCrossMonitor`/`AdvanceCrossSequence`), panel 1h | Solo log (`OnCrossSequenceEvent`), sin Telegram/persistencia |
-| T-Line + SMA20 breakout | Presente (`EvaluateTLineSignal`), 1 sola línea en memoria (sin store), panel 1h | Solo log (`OnTLineSignalEvent`) |
+| T-Line + SMA20 breakout | Presente (`EvaluateTLineSignal`), **1 sola línea en memoria** (sin store), panel 1h — **el Simulador NO fue actualizado** cuando el Live Chart pasó a permitir múltiples T-Lines independientes por panel; sigue con el límite viejo de 1 línea, ver nota de divergencia abajo | Solo log (`OnTLineSignalEvent`) |
 | Demand/Supply Zone rebote (DZ/SZ) | Presente (`EvaluateDemandZoneRebounds`/`EvaluateSupplyZoneRebounds`), armado en Overnight, mirroreado a 15m RTH | **Única excepción**: SÍ escribe en `EventLogStore` (`events_log.csv`, el mismo archivo compartido con la app en vivo) — "per explicit request" |
 | PM (Punto Medio) | Presente (`EvaluatePuntoMedioSlope`/`MarkPuntoMedioAsync`), 1h y 15m RTH, con coordinación cross-panel de tamaño ("grande" si ambos coinciden) igual que `MultiChartForm` | Solo evento, sin persistencia |
 | BB widening + Δ | Presente (`EvaluateBollingerWideningLabel`), 1h y 15m RTH | Puramente visual, sin log |
@@ -42,6 +42,14 @@ Pero **deliberadamente NO es una subclase ni variante de `ChartPanel`** — el p
 **Ausente/no implementado en el Simulador:**
 - **Prev-day High/Low (H-Lines rojas auto-dibujadas)** — `DrawPrevDayHiLoAsync`/`EvaluatePrevDayHiLoAsync`/`OnPrevDayHiLoDebugEvent`/`markPrevDayHiLo` **no tienen ninguna contraparte** en `SimulatedChartPanel` (confirmado por grep — cero referencias). Es el **único** análisis automático de la lista original que falta; todo lo demás (Piso/Techo, T-Line+SMA20, DZ/SZ rebote, PM, BB widening, daily bounce) tiene equivalente portado.
 - **"BB" en premarket** — en el Live Chart, "BB" ahora se evalúa también durante el premarket real (antes de 9:30 AM ET). El Simulador no tiene un concepto de "premarket" propio (arranca directo con los pasos del día grabado), así que este cambio no aplica/no tiene contraparte aquí.
+
+**Divergencias recientes Live Chart vs. Simulador (a fecha de este análisis, el Simulador quedó desactualizado en estos puntos):**
+- **T-Line múltiple/independiente por panel**: portado al Live Chart (paneles 1h y 15m RTH, cada uno con su propio `TLineStore` y sin límite de líneas, sin mirror entre paneles), **no portado al Simulador** — `SimulatedChartPanel` sigue con el campo único `_tLine` (nullable, 1 sola línea, se reemplaza al dibujar una segunda).
+- **Panel 3 sin T-Line**: en el Live Chart, panel 3 perdió la herramienta T-Line. El Simulador solo tiene T-Line en el panel 1h de todas formas, así que este punto no genera divergencia real.
+- **ATH (checkbox/línea de referencia)**: no tiene contraparte en `SimulatedChartPanel`/`SimulatorForm` (sin coincidencias de `AllTimeHigh`/`ATH`) — no portado.
+- **Marcadores de borde de Bollinger**: SÍ portados (`SetBollingerEdgeMarkersVisibleAsync`, `enableBollingerEdgeMarkers()`).
+- **Línea blanca de entrada/cierre de trade en panel 2 (15m RTH)**: el Live Chart la agregó recientemente a ese panel; en el Simulador, `MarkEntrySpotAsync` **solo se llama sobre `_fullChart`** (el equivalente al panel 3/Overnight) — el panel 15m RTH del Simulador **no** dibuja esta línea. Divergencia confirmada.
+- **Spread ≥ 6 para deshabilitar Strike**: SÍ está replicado en el Simulador (`c9f97bd`/comentarios en Form1 confirman "misma regla en Live Chart + Simulador"), a diferencia de las divergencias de arriba.
 - **Log "PM + BB alineados" (backtesting)** — `MultiChartForm.CheckPmBbAlignment` (nuevo, ver `LIVE_CHART_ANALYSIS.md`) no está portado al Simulador; `SimulatorForm` no rastrea el cruce de color entre paneles para BB, solo para PM (tamaño del label, no logging).
 - **"Expuesto" (texto premarket junto a la línea azul)** — mismo motivo que "BB en premarket": no hay línea azul premarket en el Simulador.
 

@@ -102,9 +102,14 @@ Dispara Telegram + `EventLogStore.Append(..., "DemandZoneRebound", "Alza", ...)`
 
 ## 4. T-Line + SMA20 breakout — paneles 1h y 15m RTH
 
-El usuario dibuja una T-Line (línea de tendencia, 2 clicks) — persistida por símbolo en el panel 1h
-(`TLineStore`), no persistida en 15m RTH. `TLineValueAt` extrapola el valor de la línea a cualquier
-tiempo (no solo entre sus 2 puntos ancla), usando la pendiente entre ambos.
+El usuario dibuja una T-Line (línea de tendencia, 2 clicks). **Ambos paneles (1h y 15m RTH) persisten
+por símbolo en su propio archivo `TLineStore`** (tag "1h" y tag "RTH" respectivamente) — antes solo el
+panel 1h persistía. Se pueden dibujar **varias T-Lines a la vez** en el mismo panel; cada una se
+evalúa de forma independiente y dispara su propia señal como máximo una vez. Dibujar o borrar una
+T-Line **ya no se mirrorea** entre los 2 paneles (cambio reciente — antes se mirroreaba a los 3
+paneles del Live Chart, incluyendo el panel 3, que ahora perdió la herramienta T-Line por completo).
+`TLineValueAt` extrapola el valor de la línea a cualquier tiempo (no solo entre sus 2 puntos ancla),
+usando la pendiente entre ambos.
 
 **Resolución** (`EvaluateTLineSignal`, por vela cerrada, una sola vez por T-Line dibujada):
 ```

@@ -8,9 +8,9 @@ Cada ticker corre como un proceso de WinForms independiente. `MultiChartForm` es
 
 | Panel | Modo | Velas | Sesión | Overlays automáticos propios |
 |---|---|---|---|---|
-| **1h** | `Hourly15` | 1h | Solo RTH (9:30–16:00 ET) | SMA 20/40/100/200, Bollinger(20,2), day dividers, Piso/Techo, PM, BB widening + Δ, prev-day Hi/Lo, "1er Rebote 90%", hint "Potencial CT al Alza/Baja" (T-Line), hint "Análisis Diario" |
-| **15m RTH** | `Fifteen_RTH` | 15m | Solo RTH | Bollinger(20,2), PM, BB widening + Δ, prev-day Hi/Lo, banner "Expuesto en 3 charts", reference lines Piso/Techo (mirroreadas desde 1h) |
-| **15m RTH+Overnight** | `Fifteen_Full` | 15m (toggle a 5m) | RTH + pre/after-hours | prev-day Hi/Lo, reference lines Piso/Techo (mirroreadas), zonas Demand/Supply (manuales pero evaluadas automáticamente) |
+| **1h** | `Hourly15` | 1h | Solo RTH (9:30–16:00 ET) | SMA 20/40/100/200, Bollinger(20,2) con banda media amarilla punteada + marcadores de borde opcionales, day dividers, Piso/Techo, PM, BB widening + Δ, prev-day Hi/Lo, línea de cierre del día anterior (etiqueta "C"), ATH (checkbox), "1er Rebote 90%", hint "Potencial CT al Alza/Baja" (T-Line), hint "Análisis Diario", línea "Stk="/"ΔS=" |
+| **15m RTH** | `Fifteen_RTH` | 15m | Solo RTH | Bollinger(20,2) con banda media amarilla **sólida** + marcadores de borde (checkbox), PM, BB widening + Δ, prev-day Hi/Lo, línea "C", ATH, banner "Expuesto en 3 charts", reference lines Piso/Techo (mirroreadas desde 1h, **ahora también visibles en premarket**), línea blanca de entrada/cierre de trade (**nuevo**, antes solo en panel 3) |
+| **15m RTH+Overnight** | `Fifteen_Full` | 15m (toggle a 5m) | RTH + pre/after-hours | prev-day Hi/Lo, línea "C", ATH, reference lines Piso/Techo (mirroreadas), zonas Demand/Supply (manuales pero evaluadas automáticamente), línea blanca de entrada/cierre de trade, label "ΔS" — **ya no tiene la herramienta T-Line** |
 
 Además: botón **Daily** (1h) abre `DailyChartForm` (ventana separada, WebView2 propio) con velas diarias agregadas desde `HourlyCandleStore` (hasta 250 días, para tener suficiente historia para SMA100/200).
 
@@ -45,8 +45,10 @@ Todos corren en C# sobre `_closedCandles` (velas ya cerradas, recalculadas con S
 - Al confirmar, arma `_autoZonePushArmed`: desde ahí, **cada vela 15m cerrada** dispara un push automático del snapshot combinado a Telegram hasta que se presiona **"Stop Push"** (o hasta que otra zona reconfirme).
 - Log en `EventLogStore` (`15Min`, `DemandZoneRebound`/`SupplyZoneRebound`) + Telegram (self-contained, panel individual) + Telegram combinado adicional vía auto-push.
 
-### T-Line + SMA20 breakout (panel 1h)
-- Solo se permite **1 T-Line a la vez** por símbolo (enforced al dibujar). Al cerrar una vela 1h: dispara si abrió de un lado de la T-Line, el High/Low cruzó T-Line Y SMA20 durante la vela, y el cierre quedó del otro lado de ambas. Dispara una sola vez por T-Line (`_tLineSignalFired`, se resetea si se borra/redibuja la línea).
+### T-Line + SMA20 breakout (panel 1h y panel 15m RTH — panel 3 ya no tiene T-Line)
+- **Ya no hay límite de 1 T-Line**: se pueden dibujar varias T-Lines a la vez en el mismo panel, cada una evaluada de forma completamente independiente (`_tLineSignalFiredFor`, un `HashSet` de líneas en vez de un único flag). Cada T-Line dispara su señal como máximo una vez, y solo se resetea si se borra esa línea puntual.
+- Panel 1h y panel 15m RTH son ahora **totalmente independientes entre sí**: cada uno tiene su propio archivo `TLineStore` (tag "1h" o "RTH"), y dibujar/borrar una T-Line en un panel **ya no se mirrorea** al otro (a diferencia del H-Line, que sigue mirroreándose entre los 3 paneles). El **panel 3 (15m RTH+Overnight) perdió la herramienta T-Line por completo**, por pedido explícito.
+- Al cerrar una vela: dispara si abrió de un lado de la T-Line, el High/Low cruzó T-Line Y SMA20 (propia del panel) durante la vela, y el cierre quedó del otro lado de ambas.
 - Log en `EventLogStore` (`Hora`, `TLineBreakout`) + Telegram combinado (`SendTLineSignalTelegramPushAsync`, en MultiChartForm).
 - El hint "Potencial CT al Alza/Baja" se decide por convención técnica al dibujar la línea (descendente → alza; ascendente → baja) — puramente visual, overlay dentro del chart.
 
@@ -88,7 +90,7 @@ Todos corren en C# sobre `_closedCandles` (velas ya cerradas, recalculadas con S
 | Prev-day Hi/Lo (H-Line roja) | Automático | Todos | No | Delete manual (click + Delete) — dispara `OnHLineDeletedEvent` | Sí, a los otros 2 paneles |
 | PM / BB / Δ / "1er Rebote" | Automático | 1h / 15m RTH | No | — (se recalcula en cada tick) | PM sí (tamaño compartido); BB/Δ no se mirrorean visualmente, pero su alineación cross-panel SÍ se rastrea para el log de backtesting (ver sección 2) |
 | Banner "Expuesto en 3 charts" | Automático | 15m RTH | No | — (re-evaluado en cada tick) | No |
-| **T-Line** | Manual (toolbar) | 1h, 15m RTH, 15m Overnight | **Sí** — `TLineStore` (solo aplica persistencia real en 1h; en RTH/Overnight se dibuja pero sin store propio) | Click + Delete (`tline_delete`) | Sí — dibujar/borrar en cualquiera de los 3 se mirrorea a los otros 2 (`AddMirroredTLineAsync`/`RemoveMirroredTLineAsync`) |
+| **T-Line** | Manual (toolbar) | 1h, 15m RTH (panel 3 ya no tiene esta herramienta) | **Sí** — `TLineStore` propio por panel (tag "1h" y tag "RTH", archivos separados) | Click + Delete (`tline_delete`) | **No** — cada panel es independiente; ya no se mirrorea al otro (cambio reciente, antes se mirroreaba a los 3) |
 | **H-Line** | Manual (**un solo botón**, sobre el panel 2 — arma el modo dibujo en los 3 paneles a la vez) | 1h, 15m RTH, 15m Overnight | No (no hay HLineStore) | Click + Delete | Sí — dibujar (`hline_add`/`addMirroredHLine`) y borrar en cualquiera de los 3 se mirrorea a los otros 2 |
 | **Rect** (celeste) | Manual (toolbar) | 15m RTH+Overnight | No | Solo vía Clear (no individual) | No |
 | **Rect Gris** | Manual (toolbar) | 1h | **Sí** — `RectGrisStore` | Click borde + Delete | No |
@@ -97,6 +99,9 @@ Todos corren en C# sobre `_closedCandles` (velas ya cerradas, recalculadas con S
 | **Flecha Verde/Roja** (vertical) | Manual (toolbar) | 1h | **Sí** — `VerticalArrowStore` (incluye drag/move) | Click shaft + Delete | No |
 | **Stk (verde, "Stk=xxx")** | Automático al abrir trade | Todos (o solo Overnight según llamada) | No | Click + Delete (`strike_delete`) | Sí, a los otros 2 |
 | **ΔS (Delta-S)** | Automático al cerrar trade | Overnight (llamada explícita `MarkDeltaSOnOvernightChartAsync`) | No | Se borra junto con su Stk line (commit reciente) | — |
+| **Línea blanca de entrada/cierre de trade** | Automático al abrir/cerrar trade | Panel 2 (15m RTH) **y** panel 3 (Overnight) — antes solo panel 3 | No | Se recalcula/redibuja | — |
+| **ATH (línea de referencia)** | Automático (calculado) + checkbox show/hide | Todos | Sí — `AllTimeHighStore` | Checkbox oculta/muestra, no borra el dato | Sí, el valor calculado en 1h se propaga a los otros 2 |
+| **Línea de cierre del día anterior ("C")** | Automático al cargar historial | Todos | No | — (se redibuja) | Sí, cada panel la calcula por su cuenta desde sus propias velas |
 
 **Clear** (botón por columna) borra todo lo dibujado en ese panel y, en 1h, además limpia `TLineStore`, `VerticalArrowStore` y `RectGrisStore` en disco (borra el archivo).
 
@@ -112,6 +117,15 @@ Todos corren en C# sobre `_closedCandles` (velas ya cerradas, recalculadas con S
 | **No persiste** | — | Piso/Techo (estático en memoria, `s_pisoTecho*`), línea azul premarket (`s_preMarketLineState`, en memoria), H-Lines manuales, Rect celeste, DZ/SZ, Arrow diagonal, estado de "Abriendo la Volatilidad"/PM/BB (todo se recalcula desde `_closedCandles` en cada apertura) | — | — |
 
 Nota: `s_preMarketLineState` (línea azul premarket + exposición Bollinger congelada) es estático en memoria, keyed por `{symbol}_{mode}` — sobrevive cerrar/reabrir el Live Chart el mismo día de proceso pero se pierde al reiniciar la app.
+
+## 4bis. Gating por ticker: AWS y Telegram
+
+`TickerSettingsStore` guarda, por cada símbolo, dos checkboxes independientes:
+
+- **AWS**: si está apagado, el trade abierto desde el grid del Live Chart **no** hace `POST` a la API ASP.NET Core ni sube screenshots a S3 — usa un id de trade negativo como fallback local. El trade sigue apareciendo en `dgvTrades` (mirror) y en la nota diaria combinada en Markdown, pero las imágenes referenciadas son rutas `file://` locales en vez de URLs de S3. No dispara push a Telegram tampoco (no hay nada que enviar sin el registro persistido).
+- **Telegram**: gatilla únicamente los pushes de **"evento"** — Piso/Techo, T-Line breakout, Abriendo la Volatilidad, DZ/SZ (manual y auto-push) — pero **no** afecta los pushes de apertura/cierre de trade, que siguen su propio camino independiente de este checkbox.
+
+Ambos se consultan vía `Form1.IsAwsEnabledFor(symbol)` / `IsTelegramEnabledFor(symbol)`, reutilizados por `ChartPanel`/`MultiChartForm` antes de cada push o persistencia remota.
 
 ## 5. Eventos y trades guardados en disco
 
