@@ -270,6 +270,15 @@ public class MultiChartForm : Form
             Location = new Point(132, 4),
             Size     = new Size(60, 24)
         };
+        // Single "Text" button (above the 15m RTH panel, same convention as H-Line) arms
+        // text-placement mode on all 3 panels at once — no mirroring, each panel only places text
+        // where IT was clicked. Reads the Windows clipboard fresh each time this button is pressed.
+        var btnText = new Button
+        {
+            Text     = "Text",
+            Location = new Point(198, 4),
+            Size     = new Size(60, 24)
+        };
         btnRthTLine.Click += async (s, e) =>
         {
             if (rthPanel == null) return;
@@ -293,6 +302,15 @@ public class MultiChartForm : Form
             await rthPanel.ClearDrawingsAsync();
             btnRthTLine.BackColor = SystemColors.Control;
             btnRthHLine.BackColor = SystemColors.Control;
+            btnText.BackColor = SystemColors.Control;
+        };
+        btnText.Click += async (s, e) =>
+        {
+            bool on = false;
+            if (hourlyPanel != null) on = await hourlyPanel.ToggleTextModeAsync();
+            if (rthPanel != null) on = await rthPanel.ToggleTextModeAsync();
+            if (overnightPanel != null) on = await overnightPanel.ToggleTextModeAsync();
+            btnText.BackColor = on ? Color.LightBlue : SystemColors.Control;
         };
 
         // Brings every "Live Charts — <Symbol>" window to the front, across ALL running ticker
@@ -320,6 +338,7 @@ public class MultiChartForm : Form
         rthToolsHost.Controls.Add(btnRthTLine);
         rthToolsHost.Controls.Add(btnRthHLine);
         rthToolsHost.Controls.Add(btnRthClear);
+        rthToolsHost.Controls.Add(btnText);
         rthToolsHost.Controls.Add(btnBringAllForward);
         rthToolsHost.Controls.Add(chkBollingerEdges);
         toolbar.Controls.Add(rthToolsHost, 1, 0);

@@ -605,6 +605,14 @@
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'arrow_delete', time: removed.time, price: removed.price, up: removed.up });
       }
+      return;
+    }
+
+    // Click-text: session-only, nothing to report to C# — just remove it locally.
+    const textIdx = clickTextPrimitive._labels.findIndex(l => l.selected);
+    if (textIdx !== -1) {
+      clickTextPrimitive._labels.splice(textIdx, 1);
+      forceRepaint();
     }
   });
 
@@ -629,6 +637,10 @@
     tLinePrimitive._preview = null;
     tLineArmed = false;
     tLinePending = null;
+
+    clickTextPrimitive._labels = [];
+    textArmed = false;
+    pendingTextValue = '';
 
     hLinePrimitive._segments = [];
     hLineArmed = false;
@@ -820,6 +832,21 @@
       }
     }
 
+    // Click-text click selection — same idea as ΔS above.
+    if (clickTextPrimitive._labels.length > 0) {
+      const hitIdx = findClickTextByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        clickTextPrimitive._labels.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadTextSelection = clickTextPrimitive._labels.some(l => l.selected);
+      if (hadTextSelection) {
+        clickTextPrimitive._labels.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // Vertical arrow click selection (1h panel) — same idea as gray rect/T-Line above.
     if (verticalArrowPrimitive._arrows.length > 0) {
       const hitIdx = findVerticalArrowByClick(param.point.x, param.point.y);
@@ -905,6 +932,11 @@
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'hline_add', time: clickTime, price });
       }
+      forceRepaint();
+    }
+
+    if (textArmed && pendingTextValue) {
+      clickTextPrimitive._labels.push({ time: clickTime, price, text: pendingTextValue, selected: false });
       forceRepaint();
     }
 
@@ -2016,6 +2048,132 @@
       const approxWidth = l.text.length * 7 + 8;
       if (px >= chartWidthCss - 4 - approxWidth - tolerance && px <= chartWidthCss + tolerance &&
           py >= y + 2 - tolerance && py <= y + 2 + 14 + tolerance) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // ---- "Text" tool — a single button (over panel 2) arms this on all 3 panels at once, same
+  // convention as H-Line above. Each click places whatever text was captured from the Windows
+  // clipboard at the moment the button was pressed (see ChartPanel.ToggleTextModeAsync), anchored
+  // at that click's own (time, price) point. Session-only — no persistence, no mirroring across
+  // panels (each panel only places text where IT was clicked). ----
+
+  // Max paragraph width in CSS px before wrapping to a new line — kept in one place so both the
+  // draw() word-wrap below and findClickTextByClick's hit-test estimate agree on it.
+  const ClickTextMaxWidthCss = 180;
+
+  // Greedy word-wrap: fits as many whole words per line as measureText allows under maxWidthPx
+  // (bitmap px, already scaled by pixelRatio) — a single word longer than the max width is left
+  // on its own line rather than broken mid-word.
+  function wrapClickText(ctx, text, maxWidthPx) {
+    const words = text.split(/\s+/).filter(w => w.length > 0);
+    if (words.length === 0) return [''];
+    const lines = [];
+    let current = words[0];
+    for (let i = 1; i < words.length; i++) {
+      const candidate = `${current} ${words[i]}`;
+      if (ctx.measureText(candidate).width <= maxWidthPx) {
+        current = candidate;
+      } else {
+        lines.push(current);
+        current = words[i];
+      }
+    }
+    lines.push(current);
+    return lines;
+  }
+
+  class ClickTextPrimitive {
+    constructor() { this._labels = []; this._chart = null; } // [{ time, price, text, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                self._labels.forEach(l => {
+                  const x = ts.timeToCoordinate(l.time);
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (x == null || y == null) return;
+
+                  ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textBaseline = 'top';
+                  ctx.textAlign = 'left';
+                  const textX = x * scope.horizontalPixelRatio + 4 * scope.horizontalPixelRatio;
+                  const textY = y * scope.verticalPixelRatio + 4 * scope.verticalPixelRatio;
+                  const lineHeight = 15 * scope.verticalPixelRatio;
+                  const maxWidthPx = ClickTextMaxWidthCss * scope.horizontalPixelRatio;
+
+                  const lines = wrapClickText(ctx, l.text, maxWidthPx);
+
+                  if (l.selected) {
+                    const width = Math.max(...lines.map(line => ctx.measureText(line).width));
+                    const height = lines.length * lineHeight;
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.strokeRect(textX - 2, textY - 2, width + 4, height + 4);
+                    ctx.restore();
+                  }
+
+                  ctx.fillStyle = '#ffffff';
+                  lines.forEach((line, i) => ctx.fillText(line, textX, textY + i * lineHeight));
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const clickTextPrimitive = new ClickTextPrimitive();
+  let clickTextAttached = false;
+  let textArmed = false;
+  let pendingTextValue = '';
+
+  // Arms/disarms the tool and captures the text to place on every subsequent click while armed —
+  // called fresh each time the button is pressed (re-reads the clipboard C# side), so toggling
+  // off and back on again picks up whatever's on the clipboard NOW.
+  function toggleTextMode(text) {
+    if (!clickTextAttached) { candleSeries.attachPrimitive(clickTextPrimitive); clickTextAttached = true; }
+    textArmed = !textArmed;
+    pendingTextValue = text || '';
+    return textArmed;
+  }
+
+  // Same tolerance-based approach as findDeltaSByClick — no exact ctx.measureText available
+  // outside the bitmap draw() context.
+  function findClickTextByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 4;
+    // Same greedy word-wrap the draw() call uses, just to count how many lines this label
+    // occupies for the hit box's height — width stays the fixed max (good enough for hit-testing,
+    // same "approximate, not exact" convention as the other tools' click hit-tests here).
+    const approxCharsPerLine = Math.max(1, Math.floor(ClickTextMaxWidthCss / 7));
+    for (let i = clickTextPrimitive._labels.length - 1; i >= 0; i--) {
+      const l = clickTextPrimitive._labels[i];
+      const x = ts.timeToCoordinate(l.time);
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (x == null || y == null) continue;
+      const words = l.text.split(/\s+/).filter(w => w.length > 0);
+      let lineCount = 1, lineLen = 0;
+      words.forEach(w => {
+        if (lineLen > 0 && lineLen + 1 + w.length > approxCharsPerLine) { lineCount++; lineLen = w.length; }
+        else { lineLen += (lineLen > 0 ? 1 : 0) + w.length; }
+      });
+      const approxWidth = Math.min(l.text.length, approxCharsPerLine) * 7 + 8;
+      const approxHeight = lineCount * 15;
+      if (px >= x + 4 - tolerance && px <= x + 4 + approxWidth + tolerance &&
+          py >= y + 4 - tolerance && py <= y + 4 + approxHeight + tolerance) {
         return i;
       }
     }
