@@ -353,6 +353,21 @@ public class MultiChartForm : Form
             var on = await overnightPanel.ToggleTLineModeAsync();
             btnOvernightTLine.BackColor = on ? Color.Orange : SystemColors.Control;
         };
+        // Per-symbol "send trade data to API/S3" toggle — when off, a trade opened from this
+        // window's own options grid (colStrikeLive click) still opens normally in the grid/log,
+        // but SaveTradeToApiAsync skips the POST (falls back to a local negative id, same
+        // mechanism as an unreachable API), which UploadScreenshotAsync and the close Telegram
+        // push already treat as "keep this trade fully local" — see those in Form1.cs. Persisted
+        // per ticker (tickers.json), same pattern as chkTelegramEvents below.
+        var chkAws = new CheckBox
+        {
+            Text     = "AWS",
+            Location = new Point(236, 8),
+            AutoSize = true,
+            Checked  = Form1.IsAwsEnabledFor(_symbol)
+        };
+        chkAws.CheckedChanged += (s, e) => Form1.SetAwsEnabledFor(_symbol, chkAws.Checked);
+
         var btnClear = new Button
         {
             Text   = "Clear",
@@ -462,6 +477,7 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(btnDzSz);
         toolsHost.Controls.Add(btnRect);
         toolsHost.Controls.Add(btnOvernightTLine);
+        toolsHost.Controls.Add(chkAws);
         toolsHost.Controls.Add(btnClear);
         toolsHost.Controls.Add(btn5Min);
         toolsHost.Controls.Add(btnArrow);
@@ -919,7 +935,7 @@ public class MultiChartForm : Form
             var rowType = row.Tag?.ToString();
             var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
             if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
-            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText);
+            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, chkAws.Checked);
         };
 
         _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;

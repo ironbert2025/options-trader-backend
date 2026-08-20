@@ -33,4 +33,4 @@ internal static class TickerSettingsStore
     }
 }
 
-internal record TickerEntry(string Symbol, string Low, string High, string ExpDate, bool TelegramEnabled = true);
+internal record TickerEntry(string Symbol, string Low, string High, string ExpDate, bool TelegramEnabled = true, bool AwsEnabled = true);

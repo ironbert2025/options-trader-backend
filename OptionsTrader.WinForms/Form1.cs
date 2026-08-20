@@ -587,6 +587,28 @@ public partial class Form1 : Form
         return entry?.TelegramEnabled ?? true;
     }
 
+    // Per-ticker toggle: MultiChartForm's "AWS" checkbox — controls whether a trade opened from
+    // that live-chart window's own options grid gets POSTed to the API / uploaded to S3 at all.
+    // When off, SaveTradeToApiAsync skips the POST (id falls back negative, same mechanism as an
+    // unreachable API), and everything downstream (UploadScreenshotAsync, the close Telegram push)
+    // reuses that negative-id signal to stay fully local — see those methods for the actual gating.
+    internal static void SetAwsEnabledFor(string symbol, bool enabled)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { AwsEnabled = enabled };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static bool IsAwsEnabledFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.AwsEnabled ?? true;
+    }
+
     private void TickerButton_Click(object? sender, EventArgs e)
     {
         if (sender is not Button clicked) return;
@@ -1362,7 +1384,14 @@ public partial class Form1 : Form
     // Trade-Target / Trade / Trade-Target). Finds the matching row by (type, strike text) since
     // MultiChartForm doesn't have its own row indices into this grid. Same one-instance-per-ticker
     // restriction as the methods above.
-    internal void TriggerQuoteStrikeClick(string symbol, string rowType, string strikeText)
+    // sendToApi mirrors MultiChartForm's "AWS" checkbox — DgvQuotes_CellClick has no way to take
+    // an extra parameter (it's a fixed-signature event handler, also wired to real user clicks),
+    // so it's handed off through this field instead. Safe because DgvQuotes_CellClick reads (and
+    // resets) it as the very FIRST statement in its body, before any await could let another click
+    // interleave — see DgvQuotes_CellClick.
+    private bool _pendingTradeSendToApi = true;
+
+    internal void TriggerQuoteStrikeClick(string symbol, string rowType, string strikeText, bool sendToApi = true)
     {
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         for (int i = 0; i < dgvQuotes.Rows.Count; i++)
@@ -1370,6 +1399,7 @@ public partial class Form1 : Form
             var row = dgvQuotes.Rows[i];
             if (row.Tag?.ToString() != rowType) continue;
             if (row.Cells["colStrikePrice"].Value?.ToString() != strikeText) continue;
+            _pendingTradeSendToApi = sendToApi;
             DgvQuotes_CellClick(this, new DataGridViewCellEventArgs(dgvQuotes.Columns["colStrikePrice"].Index, i));
             return;
         }
@@ -1790,6 +1820,12 @@ public partial class Form1 : Form
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
 
+        // Read-and-reset FIRST, before anything else — see _pendingTradeSendToApi's comment. A
+        // real user click on this grid (not via TriggerQuoteStrikeClick) never touches the field,
+        // so it's always still true here, same as before this feature existed.
+        var sendToApi = _pendingTradeSendToApi;
+        _pendingTradeSendToApi = true;
+
         // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
         if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
 
@@ -1797,16 +1833,16 @@ public partial class Form1 : Form
         // ("No Trade-Target") is the one that auto-closes at target — swapped 2026-08-03, the
         // wiring had these backwards since rbNoTradeTarget was added.
         if (rbNoTrade.Checked)
-            OpenSimulatedTradeNoTarget(e.RowIndex);
+            OpenSimulatedTradeNoTarget(e.RowIndex, sendToApi);
         else if (rbTrade.Checked)
-            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false);
+            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false, sendToApi);
         else if (rbTradeTarget.Checked)
-            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true);
+            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true, sendToApi);
         else if (rbNoTradeTarget.Checked)
-            OpenSimulatedTrade(e.RowIndex);
+            OpenSimulatedTrade(e.RowIndex, sendToApi);
     }
 
-    private async void OpenSimulatedTrade(int rowIndex)
+    private async void OpenSimulatedTrade(int rowIndex, bool sendToApi = true)
     {
         var row       = dgvQuotes.Rows[rowIndex];
         var rowType   = row.Tag?.ToString() ?? "CALL";
@@ -1818,12 +1854,12 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false);
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false, sendToApi: sendToApi);
     }
 
     // Same as OpenSimulatedTrade, but with suppressAutoClose: true — no target% auto-close, the
     // demo trade just runs until closed manually or auto-closed at 4pm ET if it expires today.
-    private async void OpenSimulatedTradeNoTarget(int rowIndex)
+    private async void OpenSimulatedTradeNoTarget(int rowIndex, bool sendToApi = true)
     {
         var row       = dgvQuotes.Rows[rowIndex];
         var rowType   = row.Tag?.ToString() ?? "CALL";
@@ -1835,7 +1871,7 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true);
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true, sendToApi: sendToApi);
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
@@ -1858,7 +1894,7 @@ public partial class Form1 : Form
     // Shared by simulated trades and real (broker) trades. Returns the API trade id and the new grid row.
     private async Task<(int TradeId, DataGridViewRow Row)> RecordEntryAsync(string symbol, string rowType, string strike, string level,
         decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool suppressAutoClose = false,
-        string? accountHash = null, string? occSymbol = null, int quantity = 0, decimal? overrideTargetPct = null)
+        string? accountHash = null, string? occSymbol = null, int quantity = 0, decimal? overrideTargetPct = null, bool sendToApi = true)
     {
         decimal targetPct;
         if (overrideTargetPct.HasValue) targetPct = overrideTargetPct.Value;
@@ -1905,7 +1941,7 @@ public partial class Form1 : Form
 
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
-        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
+        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo, sendToApi);
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
             ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice);
@@ -2327,7 +2363,7 @@ public partial class Form1 : Form
         _liveFeed        = hubClient;
     }
 
-    private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)
+    private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget, bool sendToApi = true)
     {
         var row          = dgvQuotes.Rows[rowIndex];
         var rowType      = row.Tag?.ToString() ?? "CALL";
@@ -2338,12 +2374,12 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType);
         if (!decimal.TryParse(strikeStr, out var strike)) return;
 
-        await PlaceRealTradeCoreAsync(rowType, strike, contractsStr, level, bid, ask, withTarget);
+        await PlaceRealTradeCoreAsync(rowType, strike, contractsStr, level, bid, ask, withTarget, sendToApi);
     }
 
     // Places a REAL market BUY_TO_OPEN order for the given option (row click in the Quotes tab
     // grid; quantity/level already computed by PopulateQuotesGrid).
-    private async Task PlaceRealTradeCoreAsync(string rowType, decimal strike, string contractsStr, string level, decimal bid, decimal ask, bool withTarget)
+    private async Task PlaceRealTradeCoreAsync(string rowType, decimal strike, string contractsStr, string level, decimal bid, decimal ask, bool withTarget, bool sendToApi = true)
     {
         var account = SelectedAccountStore.Load();
         if (account == null || string.IsNullOrEmpty(account.HashValue))
@@ -2400,7 +2436,7 @@ public partial class Form1 : Form
             // Trade-Target rows still auto-close in the log (mirrors the real LIMIT order closing
             // on the server); plain Trade rows are manual-close only.
             var (_, tradeRow) = await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false, suppressAutoClose: !withTarget,
-                accountHash: account.HashValue, occSymbol: occ, quantity: qty);
+                accountHash: account.HashValue, occSymbol: occ, quantity: qty, sendToApi: sendToApi);
 
             // Poll for the real fill, sync it into the log, then (if Trade-Target) send the LIMIT exit.
             _ = FinalizeRealEntryAsync(trading, account.HashValue, occ, qty, entryOrderId, targetPct, withTarget, tradeRow);
@@ -2724,7 +2760,9 @@ public partial class Form1 : Form
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
-        if (tradeId != 0)
+        // tradeId <= 0 means this trade never left the machine (see UploadScreenshotAsync) — no
+        // Telegram push for it either, same "fully local" signal.
+        if (tradeId > 0)
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
         // Screenshot TradeLog (Trades + Logger section of the form)
@@ -3004,13 +3042,17 @@ public partial class Form1 : Form
     // whenever it's reachable; if it isn't (apiTradeId stays 0), TradeHistoryStore.Add assigns a
     // local negative id instead of losing the trade, and THAT becomes the id used everywhere else
     // (OpenTradesStore, screenshots, close) for the rest of this trade's life.
+    // sendToApi=false (MultiChartForm's "AWS" checkbox off) skips the POST entirely — same
+    // negative-id fallback as an unreachable API, which UploadScreenshotAsync/the close Telegram
+    // push already treat as "keep this trade fully local" (see those call sites).
     private async Task<int> SaveTradeToApiAsync(string symbol, string rowType, string strike, decimal ask,
-        int contracts, int level, decimal targetPct, DateTime entryTime, bool isDemo = false)
+        int contracts, int level, decimal targetPct, DateTime entryTime, bool isDemo = false, bool sendToApi = true)
     {
         var ticker = _selectedTicker!;
         var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
         var apiTradeId = 0;
 
+        if (sendToApi)
         try
         {
             var optionType = rowType == "CALL"
@@ -3083,8 +3125,20 @@ public partial class Form1 : Form
     // kind, when given, also saves the resulting S3 URL onto the local TradeHistoryStore record
     // (EntryImageUrl/CloseImageUrl/TradeLogImageUrl) — this is what lets the trade-detail view
     // show all 3 images without needing the API, once a trade is uploaded through this path.
+    // tradeId <= 0 (MultiChartForm's "AWS" checkbox off at open time, or a genuinely unreachable
+    // API/SaveTradeToApiAsync fallback — same signal either way) means this trade never leaves the
+    // machine: no S3 upload, no /screenshots POST. It still needs a viewable path though, so the
+    // local file itself (as a file:// URI) is saved onto TradeHistoryStore instead of an S3 URL —
+    // that's what lets TradeDetailForm and the DailyTradeLogWriter .md still show the images.
     private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr, TradeImageKind? kind = null)
     {
+        if (tradeId <= 0)
+        {
+            if (kind.HasValue)
+                TradeHistoryStore.SetImageUrl(tradeId, kind.Value, new Uri(localPath).AbsoluteUri);
+            return;
+        }
+
         try
         {
             var aws = AwsSettingsStore.Load();
