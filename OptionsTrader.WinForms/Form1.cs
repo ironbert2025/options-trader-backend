@@ -392,22 +392,49 @@ public partial class Form1 : Form
         {
             if (chartForm.IsDisposed) continue;
 
-            try
+            // CaptureCombinedChartImageAsync has no catch of its own — a transient WebView2 issue
+            // on any one of the 3 panels (e.g. mid-recovery from a crash, see 4fdaa72) throws
+            // straight through it. One retry after a short delay covers exactly that case (the
+            // panel is usually back by then); if it still fails, log it instead of swallowing
+            // silently — confirmed live: IWM/DIA's Close snapshot went missing one day with zero
+            // trace of why, even though every Live Chart window was visibly open and healthy.
+            for (var attempt = 1; attempt <= 2; attempt++)
             {
-                using var combined = await chartForm.CaptureCombinedChartImageAsync();
-                if (combined == null) continue;
+                try
+                {
+                    using var combined = await chartForm.CaptureCombinedChartImageAsync();
+                    if (combined == null) break;
 
-                var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
-                Directory.CreateDirectory(folder);
-                var fileName = $"{symbol}_{MarketHours.NowEst:yyyyMMdd}_{tag}.png";
-                combined.Save(Path.Combine(folder, fileName), System.Drawing.Imaging.ImageFormat.Png);
-            }
-            catch
-            {
-                // Best-effort — a snapshot failure for one symbol must never affect trading or
-                // the other symbols' snapshots.
+                    var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
+                    Directory.CreateDirectory(folder);
+                    var fileName = $"{symbol}_{MarketHours.NowEst:yyyyMMdd}_{tag}.png";
+                    combined.Save(Path.Combine(folder, fileName), System.Drawing.Imaging.ImageFormat.Png);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    if (attempt == 1) { await Task.Delay(2000); continue; }
+                    LogSnapshotException(tag, symbol, ex);
+                }
             }
         }
+    }
+
+    private const string SnapshotExceptionLogPath = @"C:\OptionsData\EventLog\handler_exceptions.log";
+    private static readonly object SnapshotExceptionLogLock = new();
+
+    private static void LogSnapshotException(string tag, string symbol, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SnapshotExceptionLogPath)!);
+            lock (SnapshotExceptionLogLock)
+            {
+                File.AppendAllText(SnapshotExceptionLogPath,
+                    $"[{DateTime.Now:O}] CaptureOpenCloseSnapshotsAsync tag={tag} symbol={symbol}{Environment.NewLine}{ex}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch { /* best-effort diagnostic logging — never let this affect the snapshot flow */ }
     }
 
     // Maps each broker radio button to its BrokerName via its control Name (rbSchwab → Schwab,
