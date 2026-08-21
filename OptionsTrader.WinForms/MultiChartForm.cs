@@ -1076,9 +1076,18 @@ public class MultiChartForm : Form
             _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, chkAws.Checked);
         };
 
-        // "Próxima" tab strike clicks don't open a trade yet — Fase 3 (pendiente) wires this into
-        // a new Form1 handler that opens the trade with TOMORROW's ExpirationDate instead of the
-        // ticker's default resolved date.
+        // "Próxima" tab strike clicks — same idea as _dgvOptions.CellClick above, but forwards into
+        // Form1.TriggerQuoteStrikeClickNext, which opens the trade with the NEXT expiration date
+        // (tomorrow, for a daily ExpDate code) instead of the ticker's default resolved date.
+        _dgvOptionsNext.CellClick += (s, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex != _dgvOptionsNext.Columns["colStrikeLive"]!.Index) return;
+            var row = _dgvOptionsNext.Rows[e.RowIndex];
+            var rowType = row.Tag?.ToString();
+            var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
+            if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
+            _form1.TriggerQuoteStrikeClickNext(_symbol, rowType, strikeText, chkAws.Checked);
+        };
 
         _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
         void OnForm1QuotesUpdated(string updatedSymbol)

@@ -1422,6 +1422,39 @@ public partial class Form1 : Form
         }
     }
 
+    // Same as TriggerQuoteStrikeClick, but for a strike clicked on the Live Chart's "Próxima" tab
+    // (dgvQuotesNext, next expiration — e.g. tomorrow for a daily ExpDate code). Unlike
+    // TriggerQuoteStrikeClick, this doesn't replay Form1's own DgvQuotes_CellClick (dgvQuotesNext
+    // has no click handler of its own on Form1 — its Strike column isn't even a button there) —
+    // instead it dispatches directly to the same four trade-open paths, using NextGridColumns and
+    // forcing expDateOverride to tomorrow's resolved date so the trade is persisted (and, for a
+    // REAL order, the OCC symbol built) against the correct expiration.
+    internal void TriggerQuoteStrikeClickNext(string symbol, string rowType, string strikeText, bool sendToApi = true)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
+        for (int i = 0; i < dgvQuotesNext.Rows.Count; i++)
+        {
+            var row = dgvQuotesNext.Rows[i];
+            if (row.Tag?.ToString() != rowType) continue;
+            if (row.Cells["colStrikePriceNext"].Value?.ToString() != strikeText) continue;
+            if (IsRowTradeBlocked(row, "colCallBidNext", "colPutBidNext")) return;
+
+            // Same mapping as DgvQuotes_CellClick: rbNoTrade → no target auto-close,
+            // rbNoTradeTarget → the one that DOES auto-close at target (named backwards, fixed
+            // 2026-08-03 — see DgvQuotes_CellClick's own comment).
+            var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
+            if (rbNoTrade.Checked)
+                _ = OpenSimulatedTradeNoTargetFromRow(row, NextGridColumns, sendToApi, nextExpDate);
+            else if (rbTrade.Checked)
+                _ = PlaceRealTradeFromRowAsync(row, NextGridColumns, withTarget: false, sendToApi, nextExpDate);
+            else if (rbTradeTarget.Checked)
+                _ = PlaceRealTradeFromRowAsync(row, NextGridColumns, withTarget: true, sendToApi, nextExpDate);
+            else if (rbNoTradeTarget.Checked)
+                _ = OpenSimulatedTradeFromRow(row, NextGridColumns, sendToApi, nextExpDate);
+            return;
+        }
+    }
+
     // Fires (symbol) every time dgvTrades changes — a trade opens, closes, or its PnL is refreshed
     // on the regular poll cycle — so MultiChartForm's mirrored trades grid can stay in sync.
     public event Action<string>? OnTradesUpdatedEvent;
@@ -1859,50 +1892,64 @@ public partial class Form1 : Form
             OpenSimulatedTrade(e.RowIndex, sendToApi);
     }
 
-    private async void OpenSimulatedTrade(int rowIndex, bool sendToApi = true)
+    // Column names differ between dgvQuotes (today's chain) and dgvQuotesNext (next chain, e.g.
+    // tomorrow for daily) — this lets the trade-open methods below work against either grid instead
+    // of hardcoding dgvQuotes's own column names. See TriggerQuoteStrikeClickNext.
+    private readonly record struct OptionsGridColumns(
+        string Strike, string Contracts, string Level, string CallBid, string CallAsk, string PutBid, string PutAsk);
+    private static readonly OptionsGridColumns TodayGridColumns = new(
+        "colStrikePrice", "colContracts", "colLevel", "colCallBid", "colCallAsk", "colPutBid", "colPutAsk");
+    private static readonly OptionsGridColumns NextGridColumns = new(
+        "colStrikePriceNext", "colContractsNext", "colLevelNext", "colCallBidNext", "colCallAskNext", "colPutBidNext", "colPutAskNext");
+
+    private async void OpenSimulatedTrade(int rowIndex, bool sendToApi = true) =>
+        await OpenSimulatedTradeFromRow(dgvQuotes.Rows[rowIndex], TodayGridColumns, sendToApi, expDateOverride: null);
+
+    private async Task OpenSimulatedTradeFromRow(DataGridViewRow row, OptionsGridColumns cols, bool sendToApi, DateOnly? expDateOverride)
     {
-        var row       = dgvQuotes.Rows[rowIndex];
         var rowType   = row.Tag?.ToString() ?? "CALL";
-        var strike    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
-        var contracts = row.Cells["colContracts"].Value?.ToString() ?? "0";
-        var level     = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
+        var strike    = row.Cells[cols.Strike].Value?.ToString() ?? string.Empty;
+        var contracts = row.Cells[cols.Contracts].Value?.ToString() ?? "0";
+        var level     = row.Cells[cols.Level].Value?.ToString() ?? string.Empty;
         var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
-        var (bid, ask) = ReadRowBidAsk(row, rowType);
+        var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false, sendToApi: sendToApi);
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false, sendToApi: sendToApi, expDateOverride: expDateOverride);
     }
 
     // Same as OpenSimulatedTrade, but with suppressAutoClose: true — no target% auto-close, the
     // demo trade just runs until closed manually or auto-closed at 4pm ET if it expires today.
-    private async void OpenSimulatedTradeNoTarget(int rowIndex, bool sendToApi = true)
+    private async void OpenSimulatedTradeNoTarget(int rowIndex, bool sendToApi = true) =>
+        await OpenSimulatedTradeNoTargetFromRow(dgvQuotes.Rows[rowIndex], TodayGridColumns, sendToApi, expDateOverride: null);
+
+    private async Task OpenSimulatedTradeNoTargetFromRow(DataGridViewRow row, OptionsGridColumns cols, bool sendToApi, DateOnly? expDateOverride)
     {
-        var row       = dgvQuotes.Rows[rowIndex];
         var rowType   = row.Tag?.ToString() ?? "CALL";
-        var strike    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
-        var contracts = row.Cells["colContracts"].Value?.ToString() ?? "0";
-        var level     = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
+        var strike    = row.Cells[cols.Strike].Value?.ToString() ?? string.Empty;
+        var contracts = row.Cells[cols.Contracts].Value?.ToString() ?? "0";
+        var level     = row.Cells[cols.Level].Value?.ToString() ?? string.Empty;
         var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
-        var (bid, ask) = ReadRowBidAsk(row, rowType);
+        var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true, sendToApi: sendToApi);
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true, sendToApi: sendToApi, expDateOverride: expDateOverride);
     }
 
-    private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
+    private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType, OptionsGridColumns cols)
     {
         decimal bid, ask;
         if (rowType == "CALL")
         {
-            decimal.TryParse(row.Cells["colCallBid"].Value?.ToString(), out bid);
-            decimal.TryParse(row.Cells["colCallAsk"].Value?.ToString(), out ask);
+            decimal.TryParse(row.Cells[cols.CallBid].Value?.ToString(), out bid);
+            decimal.TryParse(row.Cells[cols.CallAsk].Value?.ToString(), out ask);
         }
         else
         {
-            decimal.TryParse(row.Cells["colPutBid"].Value?.ToString(), out bid);
-            decimal.TryParse(row.Cells["colPutAsk"].Value?.ToString(), out ask);
+            decimal.TryParse(row.Cells[cols.PutBid].Value?.ToString(), out bid);
+            decimal.TryParse(row.Cells[cols.PutAsk].Value?.ToString(), out ask);
         }
         return (bid, ask);
     }
@@ -1911,7 +1958,8 @@ public partial class Form1 : Form
     // Shared by simulated trades and real (broker) trades. Returns the API trade id and the new grid row.
     private async Task<(int TradeId, DataGridViewRow Row)> RecordEntryAsync(string symbol, string rowType, string strike, string level,
         decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool suppressAutoClose = false,
-        string? accountHash = null, string? occSymbol = null, int quantity = 0, decimal? overrideTargetPct = null, bool sendToApi = true)
+        string? accountHash = null, string? occSymbol = null, int quantity = 0, decimal? overrideTargetPct = null, bool sendToApi = true,
+        DateOnly? expDateOverride = null)
     {
         decimal targetPct;
         if (overrideTargetPct.HasValue) targetPct = overrideTargetPct.Value;
@@ -1959,7 +2007,11 @@ public partial class Form1 : Form
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
         var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo, sendToApi);
-        var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
+        // expDateOverride carries the clicked-tab's own expiration (e.g. "Próxima" tab on the Live
+        // Chart's tabbed options grid — see TriggerQuoteStrikeClickNext) instead of always the
+        // ticker's default resolved date, so a trade opened for tomorrow's chain is persisted with
+        // tomorrow's ExpirationDate, not today's.
+        var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
             ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice);
         PadWithBlankRows(dgvTrades, 4);
@@ -2373,23 +2425,28 @@ public partial class Form1 : Form
         _liveFeed        = hubClient;
     }
 
-    private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget, bool sendToApi = true)
-    {
-        var row          = dgvQuotes.Rows[rowIndex];
-        var rowType      = row.Tag?.ToString() ?? "CALL";
-        var strikeStr    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
-        var contractsStr = row.Cells["colContracts"].Value?.ToString() ?? "0";
-        var level        = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
+    private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget, bool sendToApi = true) =>
+        await PlaceRealTradeFromRowAsync(dgvQuotes.Rows[rowIndex], TodayGridColumns, withTarget, sendToApi, expDateOverride: null);
 
-        var (bid, ask) = ReadRowBidAsk(row, rowType);
+    private async Task PlaceRealTradeFromRowAsync(DataGridViewRow row, OptionsGridColumns cols, bool withTarget, bool sendToApi, DateOnly? expDateOverride)
+    {
+        var rowType      = row.Tag?.ToString() ?? "CALL";
+        var strikeStr    = row.Cells[cols.Strike].Value?.ToString() ?? string.Empty;
+        var contractsStr = row.Cells[cols.Contracts].Value?.ToString() ?? "0";
+        var level        = row.Cells[cols.Level].Value?.ToString() ?? string.Empty;
+
+        var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
         if (!decimal.TryParse(strikeStr, out var strike)) return;
 
-        await PlaceRealTradeCoreAsync(rowType, strike, contractsStr, level, bid, ask, withTarget, sendToApi);
+        await PlaceRealTradeCoreAsync(rowType, strike, contractsStr, level, bid, ask, withTarget, sendToApi, expDateOverride);
     }
 
     // Places a REAL market BUY_TO_OPEN order for the given option (row click in the Quotes tab
-    // grid; quantity/level already computed by PopulateQuotesGrid).
-    private async Task PlaceRealTradeCoreAsync(string rowType, decimal strike, string contractsStr, string level, decimal bid, decimal ask, bool withTarget, bool sendToApi = true)
+    // grid; quantity/level already computed by PopulateQuotesGrid). expDateOverride carries the
+    // clicked-tab's own expiration (see TriggerQuoteStrikeClickNext) — it drives BOTH the OCC
+    // symbol sent to Schwab and the persisted trade's ExpirationDate, so a "Próxima" tab order
+    // actually targets tomorrow's contract, not today's.
+    private async Task PlaceRealTradeCoreAsync(string rowType, decimal strike, string contractsStr, string level, decimal bid, decimal ask, bool withTarget, bool sendToApi = true, DateOnly? expDateOverride = null)
     {
         var account = SelectedAccountStore.Load();
         if (account == null || string.IsNullOrEmpty(account.HashValue))
@@ -2410,7 +2467,7 @@ public partial class Form1 : Form
             return;
         }
 
-        var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
+        var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
         var occ     = OccOptionSymbol.Build(symbol, expDate, rowType, strike);
         var masked  = MaskAccount(account.AccountNumber);
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
@@ -2446,7 +2503,7 @@ public partial class Form1 : Form
             // Trade-Target rows still auto-close in the log (mirrors the real LIMIT order closing
             // on the server); plain Trade rows are manual-close only.
             var (_, tradeRow) = await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false, suppressAutoClose: !withTarget,
-                accountHash: account.HashValue, occSymbol: occ, quantity: qty, sendToApi: sendToApi);
+                accountHash: account.HashValue, occSymbol: occ, quantity: qty, sendToApi: sendToApi, expDateOverride: expDateOverride);
 
             // Poll for the real fill, sync it into the log, then (if Trade-Target) send the LIMIT exit.
             _ = FinalizeRealEntryAsync(trading, account.HashValue, occ, qty, entryOrderId, targetPct, withTarget, tradeRow);
