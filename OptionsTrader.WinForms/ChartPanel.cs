@@ -1197,6 +1197,32 @@ public class ChartPanel : Panel
         if (period == 20 || period == 40) EvaluateFirstReboundLabel();
     }
 
+    // Snaps the blue premarket line to the ACTUAL RTH open price the moment the market opens,
+    // overriding whatever premarket tick it last froze at. Previously it just stopped being
+    // updated once RTH started (see Streamer_OnNewCandle's premarket-tick guard), freezing at
+    // "the last premarket price" — usually close to the open, but genuinely different from it
+    // whenever price moves sharply in the final seconds before 9:30 (confirmed live: AAPL rallied
+    // to a premarket high right up to 9:29:59, then reversed at the bell, leaving the line sitting
+    // well above the real open). Called once, exactly at the market-open transition, from both
+    // Hourly15 and Fifteen_RTH's own bucket-reset logic (see Streamer_OnNewCandle).
+    private void FinalizePreMarketLineAtOpen(decimal openPrice, DateTime eastern)
+    {
+        var exposedDir = GetBollingerDirection(openPrice);
+        var exposedArg = exposedDir switch
+        {
+            BollingerDirection.Above => "'above'",
+            BollingerDirection.Below => "'below'",
+            _ => "null"
+        };
+        s_preMarketLineState[$"{_symbol}_{_mode}"] = (DateOnly.FromDateTime(eastern), openPrice, exposedDir);
+        BeginInvoke(async () =>
+        {
+            if (_webView.CoreWebView2 == null) return;
+            await _webView.CoreWebView2.ExecuteScriptAsync(
+                $"updatePreMarketLine({openPrice.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {exposedArg});");
+        });
+    }
+
     // Continuous premarket counterpart to ValidatePisoTechoAgainstOpen — that one only checks ONCE,
     // against the actual 9:30 RTH open. This runs on every premarket tick instead (same tick that
     // feeds the blue premarket line), so a Techo the live price already trades above (or a Piso it
@@ -2279,6 +2305,7 @@ public class ChartPanel : Panel
                     _liveBucketIndex = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
                     _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
                     var freshBucket = _liveBucket;
+                    FinalizePreMarketLineAtOpen(candle.Open, eastern);
                     BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                     return;
                 }
@@ -2322,6 +2349,7 @@ public class ChartPanel : Panel
                         // This transition IS today's market open (the outgoing bucket was
                         // yesterday's) — candle.Open below is the actual RTH opening price.
                         ValidatePisoTechoAgainstOpen(candle.Open);
+                        FinalizePreMarketLineAtOpen(candle.Open, eastern);
                         isHourlyNewDayFirstBucket = true;
                     }
                 }
