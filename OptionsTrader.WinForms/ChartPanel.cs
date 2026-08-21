@@ -1577,6 +1577,24 @@ public class ChartPanel : Panel
         return BollingerDirection.None;
     }
 
+    // "Spot fuera de BB" — red text top-center of panel 2 (15m RTH), RTH only, while the live price
+    // is outside this panel's own Bollinger(20,2) band. Purely visual, re-evaluated on every tick.
+    private bool _spotOutsideBBShown;
+
+    private void EvaluateSpotOutsideBollinger(decimal price)
+    {
+        var show = GetBollingerDirection(price) != BollingerDirection.None;
+        if (show == _spotOutsideBBShown) return;
+        _spotOutsideBBShown = show;
+        BeginInvoke(async () => await MarkSpotOutsideBBAsync(show));
+    }
+
+    private async Task MarkSpotOutsideBBAsync(bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateSpotOutsideBB({(show ? "true" : "false")});");
+    }
+
     // Daily Bollinger(20,2) position for `price` — "managed in memory": there's no dedicated Daily
     // ChartPanel, so this aggregates HourlyCandleStore's persisted history (same pipeline
     // EvaluateDailyBounce uses) into daily bars on demand, dropping today's still-forming bar.
@@ -2389,6 +2407,7 @@ public class ChartPanel : Panel
         {
             EvaluateVolatilityOpening(candle.Close);
             EvaluateBollingerWideningLabel(candle.Close);
+            EvaluateSpotOutsideBollinger(candle.Close);
         }
         else if (_mode == ChartPanelMode.Hourly15)
         {
@@ -2483,6 +2502,7 @@ public class ChartPanel : Panel
         {
             EvaluateVolatilityOpening(price);
             EvaluateBollingerWideningLabel(price);
+            EvaluateSpotOutsideBollinger(price);
         }
         else if (_mode == ChartPanelMode.Hourly15)
         {

@@ -1884,6 +1884,21 @@
     forceRepaint();
   }
 
+  // "Spot fuera de BB" — 15m RTH panel only, red text fixed at the top-center of the pane (same
+  // fixedTop convention as markExpired). Shown while the live price is currently outside this
+  // panel's own Bollinger(20,2) band, RTH only (see ChartPanel.EvaluateSpotOutsideBollinger) —
+  // hidden the moment price is back inside. Replace-not-accumulate, same as PM/BB/Δ.
+  function updateSpotOutsideBB(show) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'spotOutsideBB');
+    if (show) {
+      textLabelsPrimitive._labels.push({
+        id: 'spotOutsideBB', text: 'Spot fuera de BB', color: '#ff0000', bold: true, fixedTop: true
+      });
+    }
+    forceRepaint();
+  }
+
   // "Δ0.42" — sits right next to "BB" (bottom-left, offset further over). Shown while price is
   // still between the widening Bollinger Bands (see ChartPanel.EvaluateBollingerWideningLabel) —
   // the live distance to whichever band is closer. Hidden the moment BB itself hides, or price
