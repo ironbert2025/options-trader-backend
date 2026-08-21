@@ -273,6 +273,17 @@ public class MultiChartForm : Form
         // Single "Text" button (above the 15m RTH panel, same convention as H-Line) arms
         // text-placement mode on all 3 panels at once — no mirroring, each panel only places text
         // where IT was clicked. Reads the Windows clipboard fresh each time this button is pressed.
+        // Source text for the "Text" tool below — declared here (used by btnText.Click) but only
+        // actually added to the options grid layout further down, where optionsGridHost is built.
+        var txtChartText = new TextBox
+        {
+            Dock       = DockStyle.Bottom,
+            Height     = 80,
+            Multiline  = true,
+            ScrollBars = ScrollBars.Vertical,
+            Font       = new Font("Segoe UI", 9F)
+        };
+
         var btnText = new Button
         {
             Text     = "Text",
@@ -307,9 +318,9 @@ public class MultiChartForm : Form
         btnText.Click += async (s, e) =>
         {
             bool on = false;
-            if (hourlyPanel != null) on = await hourlyPanel.ToggleTextModeAsync();
-            if (rthPanel != null) on = await rthPanel.ToggleTextModeAsync();
-            if (overnightPanel != null) on = await overnightPanel.ToggleTextModeAsync();
+            if (hourlyPanel != null) on = await hourlyPanel.ToggleTextModeAsync(txtChartText.Text);
+            if (rthPanel != null) on = await rthPanel.ToggleTextModeAsync(txtChartText.Text);
+            if (overnightPanel != null) on = await overnightPanel.ToggleTextModeAsync(txtChartText.Text);
             btnText.BackColor = on ? Color.LightBlue : SystemColors.Control;
         };
 
@@ -320,9 +331,11 @@ public class MultiChartForm : Form
         void OnTextPlaced(ChartPanel? placedOn)
         {
             btnText.BackColor = SystemColors.Control;
-            if (hourlyPanel != null && hourlyPanel != placedOn) _ = hourlyPanel.ToggleTextModeAsync();
-            if (rthPanel != null && rthPanel != placedOn) _ = rthPanel.ToggleTextModeAsync();
-            if (overnightPanel != null && overnightPanel != placedOn) _ = overnightPanel.ToggleTextModeAsync();
+            // Disarm-only calls — the text argument is irrelevant here since these panels never
+            // get clicked while armed from this path.
+            if (hourlyPanel != null && hourlyPanel != placedOn) _ = hourlyPanel.ToggleTextModeAsync(string.Empty);
+            if (rthPanel != null && rthPanel != placedOn) _ = rthPanel.ToggleTextModeAsync(string.Empty);
+            if (overnightPanel != null && overnightPanel != placedOn) _ = overnightPanel.ToggleTextModeAsync(string.Empty);
         }
         if (hourlyPanel != null) hourlyPanel.OnTextPlacedEvent += () => OnTextPlaced(hourlyPanel);
         if (rthPanel != null) rthPanel.OnTextPlacedEvent += () => OnTextPlaced(rthPanel);
@@ -936,7 +949,11 @@ public class MultiChartForm : Form
             Font      = new Font("Segoe UI", 9F, FontStyle.Bold),
             ForeColor = Color.White
         };
+        // txtChartText (source text for the "Text" tool, replaces the Windows clipboard entirely
+        // per explicit request) declared earlier alongside btnText — just wire it into the layout
+        // here. The grid (Dock=Fill) shrinks automatically to make room since it's added after.
         optionsGridHost.Controls.Add(_dgvOptions);
+        optionsGridHost.Controls.Add(txtChartText);
         optionsGridHost.Controls.Add(lblExpDate);
 
         void RefreshOptionsGrid()

@@ -382,16 +382,14 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Toggles Text-placement mode on/off. While on, every click writes whatever text was on the
-    // Windows clipboard AT THE MOMENT THIS TOGGLE WAS PRESSED (re-read fresh each press, so
-    // turning it off and back on again picks up the clipboard's current contents) at that click's
-    // point — session-only, never persisted. Same single-button-arms-all-3-panels convention as
-    // H-Line (see MultiChartForm's btnRthTLine sibling button), but no mirroring: each panel only
-    // places text where it was itself clicked.
-    public async Task<bool> ToggleTextModeAsync()
+    // Toggles Text-placement mode on/off. While on, every click writes `text` (captured by the
+    // caller — MultiChartForm's own multiline textbox, not the Windows clipboard, per explicit
+    // request) at that click's point — session-only, never persisted. Same
+    // single-button-arms-all-3-panels convention as H-Line (see MultiChartForm's btnRthTLine
+    // sibling button), but no mirroring: each panel only places text where it was itself clicked.
+    public async Task<bool> ToggleTextModeAsync(string text)
     {
         if (_webView.CoreWebView2 == null) return false;
-        var text = Clipboard.ContainsText() ? Clipboard.GetText() : string.Empty;
         var result = await _webView.CoreWebView2.ExecuteScriptAsync($"toggleTextMode({JsonSerializer.Serialize(text)});");
         return result == "true";
     }
