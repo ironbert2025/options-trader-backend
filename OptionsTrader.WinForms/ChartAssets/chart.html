@@ -1175,34 +1175,51 @@
   // primitive like the other H-Lines, since this one never needs click-select/Delete/mirroring —
   // it's a single read-only reference per panel, sourced from AllTimeHighStore). Called once on
   // chart open with the persisted value, and again whenever C# updates it (a new ATH saved at the
-  // 4pm close). Gold normally; recolored green (see updateAllTimeHighBroken) while the live price
-  // is trading above it, so an intraday break is visible before the file itself gets updated.
+  // 4pm close). Yellow normally; recolored green (see updateAllTimeHighBroken) while the live
+  // price is trading above it, so an intraday break is visible before the file itself gets
+  // updated. Visible only when BOTH the toolbar checkbox is on AND the live price is within
+  // AthProximityThreshold of the ATH value (updateAllTimeHighNear, driven by
+  // ChartPanel.EvaluateAllTimeHighLive on every tick) — far from the level, the line just clutters
+  // the chart, per explicit request.
   let athPriceLine = null;
   // Remembered separately from the price line object itself — markAllTimeHigh recreates that
   // object from scratch every call (e.g. when a new ATH is saved at the close), which would
-  // otherwise silently reset a user's "hidden" choice back to visible.
+  // otherwise silently reset a user's "hidden"/"far away" state back to visible.
   let athVisible = true;
+  let athNear = false;
+  function athComputeVisible() { return athVisible && athNear; }
+
   function markAllTimeHigh(price) {
     if (athPriceLine) candleSeries.removePriceLine(athPriceLine);
+    const visible = athComputeVisible();
     athPriceLine = candleSeries.createPriceLine({
-      price, color: '#ffd700', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid,
-      axisLabelVisible: athVisible, lineVisible: athVisible, title: 'ATH'
+      price, color: '#ffff00', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: visible, lineVisible: visible, title: 'ATH'
     });
   }
 
-  // Toolbar checkbox — same show/hide-only convention as setBollingerEdgeMarkersVisible (nothing
-  // about the underlying value/calculation changes, just whether it's drawn).
+  // Toolbar checkbox — a master on/off; when on, actual visibility still depends on athNear.
   function setAllTimeHighVisible(show) {
     athVisible = show;
     if (!athPriceLine) return;
-    athPriceLine.applyOptions({ lineVisible: show, axisLabelVisible: show });
+    const visible = athComputeVisible();
+    athPriceLine.applyOptions({ lineVisible: visible, axisLabelVisible: visible });
+  }
+
+  // near=true while the live price is within AthProximityThreshold of the ATH value — called on
+  // every tick from C#. Re-applies the combined visibility (checkbox AND proximity) each time.
+  function updateAllTimeHighNear(near) {
+    athNear = near;
+    if (!athPriceLine) return;
+    const visible = athComputeVisible();
+    athPriceLine.applyOptions({ lineVisible: visible, axisLabelVisible: visible });
   }
 
   // show=true while the live price is currently above the ATH line — purely visual, re-evaluated
   // on every tick, no state kept here (C# tracks the actual "did today's high beat it" decision).
   function updateAllTimeHighBroken(show) {
     if (!athPriceLine) return;
-    athPriceLine.applyOptions({ color: show ? '#00e676' : '#ffd700' });
+    athPriceLine.applyOptions({ color: show ? '#00e676' : '#ffff00' });
   }
 
   // Previous day's close — dashed red line, no label, anchored at the time of the previous day's

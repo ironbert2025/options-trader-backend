@@ -512,6 +512,17 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"updateAllTimeHighBroken({(show ? "true" : "false")});");
     }
 
+    // The ATH line only clutters the chart when price is nowhere near it — shown automatically
+    // (independent of the toolbar checkbox, which stays a master on/off) only while the live
+    // price is within AthProximityThreshold dollars of the stored ATH value, per explicit request.
+    private const decimal AthProximityThreshold = 5m;
+
+    private async Task MarkAllTimeHighNearAsync(bool near)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateAllTimeHighNear({(near ? "true" : "false")});");
+    }
+
     // "ΔS=value" label at trade close — anchored at the trade's strike (same price as its green
     // "Stk=xxx" line), drawn just below it. See markDeltaS in chart.html for the exact rationale.
     public async Task MarkDeltaSAsync(decimal entrySpot, decimal closeSpot, decimal strike)
@@ -1210,7 +1221,10 @@ public class ChartPanel : Panel
     private void EvaluateAllTimeHighLive(decimal livePrice, DateTime eastern)
     {
         if (_athValue != null)
+        {
             BeginInvoke(async () => await MarkAllTimeHighBrokenAsync(livePrice > _athValue.Value));
+            BeginInvoke(async () => await MarkAllTimeHighNearAsync(Math.Abs(livePrice - _athValue.Value) < AthProximityThreshold));
+        }
 
         if (_mode != ChartPanelMode.Hourly15) return;
 
