@@ -1092,7 +1092,22 @@
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
                 self._segments.forEach(seg => {
-                  const x = ts.timeToCoordinate(seg.time);
+                  // timeToCoordinate requires an EXACT match against a real candle's own time —
+                  // markPrevDayHiLo's anchor (built from _rawHistory, 1-minute-granularity data
+                  // in C#) essentially never lands on an actual candle boundary on the 1h/15m RTH
+                  // panels, so a direct call silently returned null and the line just never drew,
+                  // even though C# thought it had (confirmed live via prevday_hilo_debug.log).
+                  // Snap to the nearest REAL candle at/before the target instead — same fallback
+                  // PisoTechoRefLinePrimitive already uses.
+                  let snappedTime = seg.time;
+                  if (ts.timeToCoordinate(snappedTime) == null && allCandles.length > 0) {
+                    let floor = null;
+                    for (let i = allCandles.length - 1; i >= 0; i--) {
+                      if (allCandles[i].time <= seg.time) { floor = allCandles[i].time; break; }
+                    }
+                    snappedTime = floor ?? allCandles[0].time;
+                  }
+                  const x = ts.timeToCoordinate(snappedTime);
                   const y = candleSeries.priceToCoordinate(seg.price);
                   if (x == null || y == null) return;
                   ctx.strokeStyle = '#ef5350'; // red
