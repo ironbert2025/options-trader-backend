@@ -953,17 +953,23 @@
       const arrow = { time: clickTime, price, up: true, selected: false };
       verticalArrowPrimitive._arrows.push(arrow);
       forceRepaint();
-      // Persisted per-symbol by C# (VerticalArrowStore) — see ChartPanel.CoreWebView2_WebMessageReceived.
+      // Single-shot per arm — placing one arrow disarms the tool instead of staying armed for
+      // more, per explicit request. Persisted per-symbol by C# (VerticalArrowStore) — see
+      // ChartPanel.CoreWebView2_WebMessageReceived.
+      greenArrowArmed = false;
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'arrow_add', time: arrow.time, price: arrow.price, up: arrow.up });
+        window.chrome.webview.postMessage({ type: 'arrow_placed', up: true });
       }
     }
     if (redArrowArmed) {
       const arrow = { time: clickTime, price, up: false, selected: false };
       verticalArrowPrimitive._arrows.push(arrow);
       forceRepaint();
+      redArrowArmed = false;
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'arrow_add', time: arrow.time, price: arrow.price, up: arrow.up });
+        window.chrome.webview.postMessage({ type: 'arrow_placed', up: false });
       }
     }
   });

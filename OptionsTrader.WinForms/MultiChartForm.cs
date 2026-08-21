@@ -191,6 +191,16 @@ public class MultiChartForm : Form
             var on = await hourlyPanel.ToggleFlechaRojaModeAsync();
             btnFlechaRoja.BackColor = on ? Color.LightSalmon : SystemColors.Control;
         };
+        // Placing one arrow (either color) auto-disarms itself in chart.html — reset the
+        // corresponding button's color here so it doesn't stay highlighted after the fact.
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnArrowPlacedEvent += up =>
+            {
+                if (up) btnFlechaVerde.BackColor = SystemColors.Control;
+                else btnFlechaRoja.BackColor = SystemColors.Control;
+            };
+        }
 
         btnHourlyClear.Click += async (s, e) =>
         {

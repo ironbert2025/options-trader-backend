@@ -584,6 +584,11 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Fires (up) when a click while green/red arrow mode is armed actually places an arrow —
+    // chart.html auto-disarms itself at that point (single-shot per press), so MultiChartForm
+    // listens for this to reset the corresponding button's color back to normal.
+    public event Action<bool>? OnArrowPlacedEvent;
+
     // Clears every DZ/SZ pair, rectangle, T-Line, H-Line, Arrow and Piso/Techo label drawn on
     // this panel, and turns all drawing modes off. Also wipes the persisted T-Line/vertical-arrow
     // files for this symbol (1h panel only) — a real "clear" should clear what's saved too.
@@ -705,6 +710,16 @@ public class ChartPanel : Panel
                     var up = root.GetProperty("up").GetBoolean();
                     if (type == "arrow_add") VerticalArrowStore.Append(_symbol, time, price, up);
                     else VerticalArrowStore.Remove(_symbol, time, price, up);
+                    break;
+                }
+                case "arrow_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment one arrow is placed
+                    // (see the click handler's greenArrowArmed/redArrowArmed block) — this just
+                    // tells C# so the corresponding button's color resets (see MultiChartForm's
+                    // btnFlechaVerde/btnFlechaRoja wiring).
+                    var up = root.GetProperty("up").GetBoolean();
+                    OnArrowPlacedEvent?.Invoke(up);
                     break;
                 }
                 case "arrow_move":
