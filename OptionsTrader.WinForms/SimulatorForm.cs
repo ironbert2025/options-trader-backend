@@ -512,6 +512,11 @@ public class SimulatorForm : Form
 
         void Append() => _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
         if (InvokeRequired) BeginInvoke(Append); else Append();
+
+        // Permanent record of this replay — see SimEventLogMarkdownWriter for the rundate vs
+        // datadate distinction. runDate is "today" regardless of what step is currently loaded;
+        // dataDate is _simDate, the historical day whose ticks were loaded for this replay.
+        SimEventLogMarkdownWriter.AppendEvent(_symbol, DateOnly.FromDateTime(DateTime.Now), _simDate, timestamp, message);
     }
 
     private void BuildGoToTimeButtons()
