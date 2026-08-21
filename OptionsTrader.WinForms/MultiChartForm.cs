@@ -556,7 +556,7 @@ public class MultiChartForm : Form
             hourlyPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
                 _ = SendTLineSignalTelegramPushAsync(message);
             };
 
@@ -565,7 +565,7 @@ public class MultiChartForm : Form
             hourlyPanel.OnDailyBounceEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
         }
 
@@ -576,7 +576,7 @@ public class MultiChartForm : Form
             rthPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
                 _ = SendTLineSignalTelegramPushAsync(message);
             };
         }
@@ -589,14 +589,14 @@ public class MultiChartForm : Form
             overnightPanel.OnDemandZoneReboundEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
 
             // Supply Zone rebote — symmetric counterpart, same self-contained pattern.
             overnightPanel.OnSupplyZoneReboundEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
 
             // Auto-push loop armed by either rebote above — fires on EVERY closed 15m candle from
@@ -623,7 +623,7 @@ public class MultiChartForm : Form
                 rthPanel.ArmVolatilityOpeningWatch(bullish);
 
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
                 _ = SendPisoTechoTelegramPushAsync(caption);
             };
         }
@@ -632,7 +632,7 @@ public class MultiChartForm : Form
             hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
                 _ = SendPisoTechoTelegramPushAsync(caption);
             };
         }
@@ -641,7 +641,7 @@ public class MultiChartForm : Form
             rthPanel.OnVolatilityOpeningEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
 
             // "Ya abiertas al armar" — informational heads-up, log-only, doesn't wait for the
@@ -649,7 +649,7 @@ public class MultiChartForm : Form
             rthPanel.OnVolatilityAlreadyOpenEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
         }
 
@@ -663,7 +663,7 @@ public class MultiChartForm : Form
             hourlyPanel.OnBollingerOpeningEvent += caption =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [1h] {caption}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  [1h] {caption}{Environment.NewLine}"));
                 _ = SaveBollingerOpeningSnapshotAsync(caption);
             };
         }
@@ -672,7 +672,7 @@ public class MultiChartForm : Form
             rthPanel.OnBollingerOpeningEvent += caption =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [15m RTH] {caption}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  [15m RTH] {caption}{Environment.NewLine}"));
                 _ = SaveBollingerOpeningSnapshotAsync(caption);
             };
         }
@@ -770,7 +770,7 @@ public class MultiChartForm : Form
                 if (aligned && !pmBbAligned)
                 {
                     var direction = hourlyPmBullish!.Value ? "Alza (verde)" : "Baja (rojo)";
-                    crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  PM + BB alineados en {direction} (1h y 15m RTH){Environment.NewLine}");
+                    AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  PM + BB alineados en {direction} (1h y 15m RTH){Environment.NewLine}");
                 }
                 pmBbAligned = aligned;
             }
@@ -790,7 +790,7 @@ public class MultiChartForm : Form
             panel.OnTelegramPushFailedEvent += detail =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
             };
             panel.OnPrevDayHiLoDebugEvent += detail =>
             {
@@ -1142,6 +1142,16 @@ public class MultiChartForm : Form
     // markPisoTechoRefLine in chart.html for the full rationale).
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
+    // Single choke point for every crossLog write — per explicit request, nothing gets logged
+    // before 9:30 AM ET (premarket), regardless of event type (PM/BB alignment, T-Line, DZ/SZ,
+    // Piso/Techo, Telegram push failures, etc.). Doesn't affect the underlying detection/Telegram
+    // push logic itself, only whether this window's own on-screen log shows it.
+    private void AppendCrossLog(TextBox log, string text)
+    {
+        if (TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).TimeOfDay < new TimeSpan(9, 30, 0)) return;
+        log.AppendText(text);
+    }
+
     // Yesterday's last hourly candle (its close) — the Piso/Techo reference line's real anchor,
     // per explicit request ("así estaba implementado"): it should be born at yesterday's close and
     // run through the whole of today's RTH session, not at a fixed hour of today. Read from
@@ -1333,7 +1343,7 @@ public class MultiChartForm : Form
     private void LogTelegramPushFailure(string detail)
     {
         if (IsDisposed || _crossLog == null) return;
-        BeginInvoke(() => _crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
+        BeginInvoke(() => AppendCrossLog(_crossLog, $"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
     }
 
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
