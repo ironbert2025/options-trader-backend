@@ -581,13 +581,16 @@ public class SimulatedChartPanel : Panel
     }
 
     // ==================================================================================
-    // T-Line + SMA20 breakout — ported from ChartPanel. Only 1 T-Line, in memory only (no
-    // TLineStore — nothing about a practice T-Line should survive closing the simulator).
+    // T-Line + SMA20 breakout — ported from ChartPanel, now matching Live's multi-line,
+    // per-panel-independent model: any number of T-Lines can be drawn on this instance (1h and
+    // 15m RTH both get their own toggle from SimulatorForm), each evaluated independently
+    // (_tLineSignalFiredFor is a HashSet, not a single bool). Still in-memory only — no
+    // TLineStore, nothing about a practice T-Line should survive closing the simulator.
     // ==================================================================================
 
     private const int TLineSmaPeriod = 20;
-    private (long T1, decimal P1, long T2, decimal P2)? _tLine;
-    private bool _tLineSignalFired;
+    private readonly List<(long T1, decimal P1, long T2, decimal P2)> _tLines = new();
+    private readonly HashSet<(long T1, decimal P1, long T2, decimal P2)> _tLineSignalFiredFor = new();
     private bool _tLineArmed;
 
     public async Task<bool> ToggleTLineModeAsync()
@@ -602,8 +605,8 @@ public class SimulatedChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
-        _tLine = null;
-        _tLineSignalFired = false;
+        _tLines.Clear();
+        _tLineSignalFiredFor.Clear();
     }
 
     // ==================================================================================
@@ -807,21 +810,12 @@ public class SimulatedChartPanel : Panel
 
             if (type == "tline")
             {
-                if (_tLine != null)
-                {
-                    _ = _webView.CoreWebView2?.ExecuteScriptAsync("removeLastTLine();");
-                    MessageBox.Show(
-                        "Ya existe una T-Line dibujada. Borrala (Clear) antes de dibujar una nueva.",
-                        "T-Line ya existe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-                _tLine = (t1, p1, t2, p2);
-                _tLineSignalFired = false;
+                _tLines.Add((t1, p1, t2, p2));
             }
             else
             {
-                _tLine = null;
-                _tLineSignalFired = false;
+                _tLines.Remove((t1, p1, t2, p2));
+                _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
             }
         }
         catch
@@ -832,29 +826,38 @@ public class SimulatedChartPanel : Panel
 
     private void EvaluateTLineSignal(CandleData justClosed)
     {
-        if (_tLineSignalFired || _tLine == null) return;
-
-        var (t1, p1, t2, p2) = _tLine.Value;
-        var candleTimeSec = new DateTimeOffset(DateTime.SpecifyKind(justClosed.Time, DateTimeKind.Utc)).ToUnixTimeSeconds();
-        var tLineValue = TLineValueAt(t1, p1, t2, p2, candleTimeSec);
+        if (_tLines.Count == 0) return;
 
         if (_closedCandles.Count < TLineSmaPeriod) return;
         var sma20 = Sma(TLineSmaPeriod, _closedCandles.Count - 1);
         if (sma20 == null) return;
 
-        var upBreakout = justClosed.Open < tLineValue
-            && justClosed.High > tLineValue && justClosed.High > sma20.Value
-            && justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
+        var candleTimeSec = new DateTimeOffset(DateTime.SpecifyKind(justClosed.Time, DateTimeKind.Utc)).ToUnixTimeSeconds();
+        var timeframeLabel = _mode == ChartPanelMode.Hourly15 ? "Hora" : "15Min RTH";
 
-        var downBreakout = justClosed.Open > tLineValue
-            && justClosed.Low < tLineValue && justClosed.Low < sma20.Value
-            && justClosed.Close < tLineValue && justClosed.Close < sma20.Value;
+        // Every T-Line on this panel is evaluated independently — each fires its own signal at
+        // most once (see _tLineSignalFiredFor), same as ChartPanel's live equivalent.
+        foreach (var line in _tLines.ToList())
+        {
+            if (_tLineSignalFiredFor.Contains(line)) continue;
 
-        if (!upBreakout && !downBreakout) return;
+            var (t1, p1, t2, p2) = line;
+            var tLineValue = TLineValueAt(t1, p1, t2, p2, candleTimeSec);
 
-        _tLineSignalFired = true;
-        var direction = upBreakout ? "al alza" : "a la baja";
-        OnTLineSignalEvent?.Invoke($"CT {direction} en Hora — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})");
+            var upBreakout = justClosed.Open < tLineValue
+                && justClosed.High > tLineValue && justClosed.High > sma20.Value
+                && justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
+
+            var downBreakout = justClosed.Open > tLineValue
+                && justClosed.Low < tLineValue && justClosed.Low < sma20.Value
+                && justClosed.Close < tLineValue && justClosed.Close < sma20.Value;
+
+            if (!upBreakout && !downBreakout) continue;
+
+            _tLineSignalFiredFor.Add(line);
+            var direction = upBreakout ? "al alza" : "a la baja";
+            OnTLineSignalEvent?.Invoke($"CT {direction} en {timeframeLabel} — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})");
+        }
     }
 
     private static decimal TLineValueAt(long t1, decimal p1, long t2, decimal p2, long atTime)
@@ -1054,7 +1057,7 @@ public class SimulatedChartPanel : Panel
             _crossArmedPeriods.Clear();
             _crossActivePeriod = null;
             _crossFinished = false;
-            _tLineSignalFired = false;
+            _tLineSignalFiredFor.Clear();
             foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
             foreach (var zone in _supplyZones) { zone.Entered = false; zone.Done = false; }
             foreach (var watch in _pisoTechoWatches) watch.Done = false;

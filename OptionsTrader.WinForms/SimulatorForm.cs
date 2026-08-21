@@ -397,8 +397,26 @@ public class SimulatorForm : Form
             await _rthChart.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
         _pnlSmaEvents.Controls.Add(chkBollingerEdges);
 
+        // 15m RTH's own T-Line — independent from the 1h one above (own toggle, own Clear, own
+        // signal), same multi-line-per-panel model the live app now uses.
+        var btnRthTLine = new Button { Text = "T-Line RTH", Location = new Point(420, 0), Size = new Size(80, 24) };
+        btnRthTLine.Click += async (s, e) =>
+        {
+            var on = await _rthChart.ToggleTLineModeAsync();
+            btnRthTLine.BackColor = on ? Color.Orange : SystemColors.Control;
+        };
+        var btnRthClear = new Button { Text = "Clear", Location = new Point(504, 0), Size = new Size(60, 24) };
+        btnRthClear.Click += async (s, e) =>
+        {
+            await _rthChart.ClearTLineAsync();
+            btnRthTLine.BackColor = SystemColors.Control;
+        };
+        _pnlSmaEvents.Controls.Add(btnRthTLine);
+        _pnlSmaEvents.Controls.Add(btnRthClear);
+
         _hourlyChart.OnCrossSequenceEvent += msg => LogSimEvent(msg);
         _hourlyChart.OnTLineSignalEvent   += msg => LogSimEvent(msg);
+        _rthChart.OnTLineSignalEvent      += msg => LogSimEvent(msg);
 
         // Demand Zone rebote (RTH+Overnight chart) — logged to the on-screen text log AND to the
         // same persisted events_log.csv the live app's Cross-SMA/T-Line/Daily-bounce events use,
@@ -494,6 +512,11 @@ public class SimulatorForm : Form
 
         void Append() => _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
         if (InvokeRequired) BeginInvoke(Append); else Append();
+
+        // Permanent record of this replay — see SimEventLogMarkdownWriter for the rundate vs
+        // datadate distinction. runDate is "today" regardless of what step is currently loaded;
+        // dataDate is _simDate, the historical day whose ticks were loaded for this replay.
+        SimEventLogMarkdownWriter.AppendEvent(_symbol, DateOnly.FromDateTime(DateTime.Now), _simDate, timestamp, message);
     }
 
     private void BuildGoToTimeButtons()
