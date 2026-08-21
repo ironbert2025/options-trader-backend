@@ -4,6 +4,11 @@ using System.Text.Json;
 
 namespace OptionsTrader.WinForms;
 
+// One incoming Telegram message from getUpdates — ReplyToMessageId is set only when the message
+// is a reply to another one (what TimeframeViewerForm uses to match a SpotPrice reply back to the
+// rebote push that prompted it).
+public sealed record TelegramUpdate(long UpdateId, string ChatId, long? ReplyToMessageId, string Text);
+
 // Sends push messages/photos to a Telegram channel via the Bot API (sendMessage/sendPhoto).
 // Ported from the TradeSignal project, where this exact code is already proven in production.
 public static class TelegramNotifier
@@ -77,6 +82,46 @@ public static class TelegramNotifier
         catch (Exception ex)
         {
             return (false, ex.Message, null);
+        }
+    }
+
+    // Short-poll (not true long-poll, to stay simple/robust under a WinForms Timer) — offset is
+    // "highest update_id processed so far + 1", so Telegram only returns NEW updates each call.
+    // Used by TimeframeViewerForm to detect a reply to a specific rebote push (SpotPrice number).
+    public static async Task<(bool Ok, string Detail, List<TelegramUpdate> Updates)> GetUpdatesAsync(string botToken, long offset)
+    {
+        if (string.IsNullOrWhiteSpace(botToken))
+            return (false, "Bot Token vacío", new List<TelegramUpdate>());
+
+        string url = $"https://api.telegram.org/bot{botToken}/getUpdates?offset={offset}&timeout=0";
+        try
+        {
+            var resp = await Http.GetAsync(url);
+            string body = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                return (false, body, new List<TelegramUpdate>());
+
+            using var doc = JsonDocument.Parse(body);
+            var updates = new List<TelegramUpdate>();
+            if (doc.RootElement.TryGetProperty("result", out var results))
+            {
+                foreach (var item in results.EnumerateArray())
+                {
+                    var updateId = item.GetProperty("update_id").GetInt64();
+                    if (!item.TryGetProperty("message", out var message)) continue;
+                    var chatId = message.GetProperty("chat").GetProperty("id").GetRawText();
+                    var text = message.TryGetProperty("text", out var textEl) ? textEl.GetString() ?? "" : "";
+                    long? replyToId = message.TryGetProperty("reply_to_message", out var replyTo) && replyTo.TryGetProperty("message_id", out var replyIdEl)
+                        ? replyIdEl.GetInt64()
+                        : null;
+                    updates.Add(new TelegramUpdate(updateId, chatId, replyToId, text));
+                }
+            }
+            return (true, "OK", updates);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, new List<TelegramUpdate>());
         }
     }
 

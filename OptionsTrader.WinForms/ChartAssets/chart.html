@@ -36,7 +36,7 @@
       timeVisible: true,
       secondsVisible: false,
       borderColor: '#2a2e39',
-      rightOffset: 3, // leaves room for ~3 empty candles to the right, so the latest one isn't jammed against the edge
+      rightOffset: 8, // leaves room for ~8 empty candles to the right, so today's candles have visible room to form
     },
     rightPriceScale: {
       borderColor: '#2a2e39',
@@ -46,26 +46,56 @@
     },
   });
 
-  const candleSeries = chart.addCandlestickSeries({
+  // Keeps the current price roughly centered vertically: instead of Lightweight Charts' default
+  // autoscale (which just fits min/max of the visible candles), force a price range symmetric
+  // around the LAST close — same margin above and below it, sized to whichever side needs more
+  // room to fit the visible data.
+  //
+  // Computed directly from displaySeries() sliced to lastAppliedRange (the window WE last told the
+  // chart to show — see applyVisibleRange), not from original()'s own priceRange — relying on
+  // Lightweight Charts to have already re-scoped its autoscale to only the visible bars turned out
+  // to be unreliable (e.g. right after toggling Daily mode, an old outlier bar far outside the
+  // visible window was still leaking into the price range, blowing the chart out to a near-empty
+  // box).
+  // displaySeries(), so whichever one is actually visible reports the correct range regardless.
+  function sharedAutoscaleInfoProvider(original) {
+    const series = displaySeries();
+    if (series.length === 0) return original();
+
+    let visible = series;
+    if (lastAppliedRange) {
+      const from = Math.max(0, Math.floor(lastAppliedRange.from));
+      const to = Math.min(series.length - 1, Math.ceil(lastAppliedRange.to));
+      if (to >= from) visible = series.slice(from, to + 1);
+    }
+    if (visible.length === 0) return original();
+
+    // Genuinely the most-recent bar's close, by time — not just series[series.length - 1], which
+    // assumes the array is already correctly ordered (see aggregateToDaily's own note on why that
+    // assumption isn't trusted anymore).
+    const lastClose = series.reduce((a, b) => (b.time > a.time ? b : a)).close;
+    let minValue = Infinity, maxValue = -Infinity;
+    for (const c of visible) {
+      if (c.low < minValue) minValue = c.low;
+      if (c.high > maxValue) maxValue = c.high;
+    }
+    if (!(maxValue > minValue)) return original();
+
+    const halfRange = Math.max(maxValue - lastClose, lastClose - minValue);
+    if (!(halfRange > 0)) return original();
+    return { priceRange: { minValue: lastClose - halfRange, maxValue: lastClose + halfRange } };
+  }
+
+  const candleSeriesOpts = {
     upColor: '#26a69a',
     downColor: '#ef5350',
     borderVisible: false,
     wickUpColor: '#26a69a',
     wickDownColor: '#ef5350',
-    // Keeps the current price roughly centered vertically: instead of Lightweight Charts'
-    // default autoscale (which just fits min/max of the visible candles), force a price range
-    // symmetric around the LAST close — same margin above and below it, sized to whichever side
-    // needs more room to fit the visible data.
-    autoscaleInfoProvider: original => {
-      const res = original();
-      if (!res || !res.priceRange || allCandles.length === 0) return res;
-      const lastClose = allCandles[allCandles.length - 1].close;
-      const { minValue, maxValue } = res.priceRange;
-      const halfRange = Math.max(maxValue - lastClose, lastClose - minValue);
-      if (!(halfRange > 0)) return res;
-      return { priceRange: { minValue: lastClose - halfRange, maxValue: lastClose + halfRange } };
-    },
-  });
+    autoscaleInfoProvider: sharedAutoscaleInfoProvider,
+    priceLineVisible: false, // built-in dashed "current price" line, disabled per explicit request
+  };
+  const candleSeries = chart.addCandlestickSeries(candleSeriesOpts);
 
   window.addEventListener('resize', () => {
     chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
@@ -85,32 +115,51 @@
   let userHasInteracted = false;
   let lastAppliedRange = null;
 
-  chart.timeScale().subscribeVisibleTimeRangeChange(range => {
+  // Logical (bar-index) range instead of a time range — setVisibleRange's exact "to" time, once
+  // padded past the last real candle for the right-edge margin, gets silently clamped/rounded by
+  // Lightweight Charts when it reports the range back through this same event, which made EVERY
+  // reapply look like a user pan/zoom and permanently disable the margin the very first time it
+  // was ever applied. Logical indices don't have that problem — "to" can cleanly point past the
+  // last bar with no clamping.
+  chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
     if (userHasInteracted || !lastAppliedRange || !range) return;
-    const matches = Math.abs(range.from - lastAppliedRange.from) < 1 && Math.abs(range.to - lastAppliedRange.to) < 1;
+    const matches = Math.abs(range.from - lastAppliedRange.from) < 0.5;
     if (!matches) userHasInteracted = true;
   });
 
-  function applyVisibleRange() {
+  // Split out from applyVisibleRange so toggleDaily can update lastAppliedRange to the NEW
+  // (dailyMode-aware) indices BEFORE calling renderCandles() — candleSeries.setData() triggers
+  // Lightweight Charts' own autoscale/price-range computation immediately, synchronously, which
+  // calls autoscaleInfoProvider using WHATEVER lastAppliedRange currently holds. Applying the range
+  // only afterward (the old order) meant that first autoscale pass ran against the previous mode's
+  // stale indices — logical positions that meant something for the ~1500-bar hourly array but not
+  // for the much shorter daily one — and that bad price range stuck visually, since nothing forces
+  // a second autoscale pass afterward.
+  function computeVisibleRange() {
     const series = displaySeries();
-    if (!visibleDays || series.length === 0) return;
+    if (!visibleDays || series.length === 0) return null;
     const days = [...new Set(series.map(c => dayStartOf(c.time)))].sort((a, b) => a - b);
-    if (days.length === 0) return;
+    if (days.length === 0) return null;
     const cutoffIdx = Math.max(0, days.length - visibleDays);
-
-    // setVisibleRange is an EXACT range — it overrides timeScale.rightOffset's usual empty-space
-    // margin, so the last candle would sit flush against the edge. Pad "to" by ~3 bars' worth of
-    // time ourselves (bar spacing taken from the last two candles of whichever series is
-    // currently displayed — hourly or daily) to leave that same margin.
-    const barDuration = series.length > 1
-      ? series[series.length - 1].time - series[series.length - 2].time
-      : 900;
-    const range = {
-      from: days[cutoffIdx],
-      to: series[series.length - 1].time + barDuration * 3,
+    const cutoffTime = days[cutoffIdx];
+    const fromIdx = series.findIndex(c => c.time >= cutoffTime);
+    // The right-edge margin (8 bars past the real last index) is skipped in Daily mode as a test —
+    // suspected of breaking something internally when combined with a small array (~50 bars) and
+    // from=0 (the whole array visible, no hidden portion to the left) — a combination that never
+    // came up in Hourly mode (from is deep inside a ~1500-bar array there), where the padding is
+    // confirmed working fine.
+    const rightPad = dailyMode ? 0 : 8;
+    return {
+      from: fromIdx >= 0 ? fromIdx : 0,
+      to: series.length - 1 + rightPad,
     };
+  }
+
+  function applyVisibleRange() {
+    const range = computeVisibleRange();
+    if (!range) return;
     lastAppliedRange = range;
-    chart.timeScale().setVisibleRange(range);
+    chart.timeScale().setVisibleLogicalRange(range);
   }
 
   // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
@@ -456,8 +505,12 @@
 
     const rectIdx = grayRectPrimitive._rects.findIndex(r => r.selected);
     if (rectIdx !== -1) {
+      const removedRect = grayRectPrimitive._rects[rectIdx];
       grayRectPrimitive._rects.splice(rectIdx, 1);
       forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'rect_delete', t1: removedRect.t1, p1: removedRect.p1, t2: removedRect.t2, p2: removedRect.p2 });
+      }
       return;
     }
 
@@ -522,10 +575,14 @@
     // Stk line: removed here AND reported to C# (ChartPanel.CoreWebView2_WebMessageReceived),
     // which relays it to the other 2 panels' removeStrikeLine so deleting from any one chart
     // removes it from all 3 — markStrike draws the same line on all 3 panels at trade open.
+    // Its matching "ΔS=" label (markDeltaS keys it by the SAME strike price) is removed right
+    // along with it — per explicit request, deleting the Stk line takes the delta label with it
+    // instead of leaving it orphaned on screen.
     const strikeIdx = strikeLinesPrimitive._lines.findIndex(l => l.selected);
     if (strikeIdx !== -1) {
       const removed = strikeLinesPrimitive._lines[strikeIdx];
       strikeLinesPrimitive._lines.splice(strikeIdx, 1);
+      deltaSPrimitive._labels = deltaSPrimitive._labels.filter(l => l.price !== removed.price);
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'strike_delete', price: removed.price });
@@ -548,6 +605,14 @@
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'arrow_delete', time: removed.time, price: removed.price, up: removed.up });
       }
+      return;
+    }
+
+    // Click-text: session-only, nothing to report to C# — just remove it locally.
+    const textIdx = clickTextPrimitive._labels.findIndex(l => l.selected);
+    if (textIdx !== -1) {
+      clickTextPrimitive._labels.splice(textIdx, 1);
+      forceRepaint();
     }
   });
 
@@ -572,6 +637,10 @@
     tLinePrimitive._preview = null;
     tLineArmed = false;
     tLinePending = null;
+
+    clickTextPrimitive._labels = [];
+    textArmed = false;
+    pendingTextValue = '';
 
     hLinePrimitive._segments = [];
     hLineArmed = false;
@@ -763,6 +832,21 @@
       }
     }
 
+    // Click-text click selection — same idea as ΔS above.
+    if (clickTextPrimitive._labels.length > 0) {
+      const hitIdx = findClickTextByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        clickTextPrimitive._labels.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadTextSelection = clickTextPrimitive._labels.some(l => l.selected);
+      if (hadTextSelection) {
+        clickTextPrimitive._labels.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // Vertical arrow click selection (1h panel) — same idea as gray rect/T-Line above.
     if (verticalArrowPrimitive._arrows.length > 0) {
       const hitIdx = findVerticalArrowByClick(param.point.x, param.point.y);
@@ -811,10 +895,16 @@
       if (!grayRectPending) {
         grayRectPending = { time: clickTime, price };
       } else {
-        grayRectPrimitive._rects.push({ t1: grayRectPending.time, p1: grayRectPending.price, t2: clickTime, p2: price, selected: false });
+        const rect = { t1: grayRectPending.time, p1: grayRectPending.price, t2: clickTime, p2: price, selected: false };
+        grayRectPrimitive._rects.push(rect);
         grayRectPrimitive._preview = null;
         grayRectPending = null;
         forceRepaint();
+        // Persisted per-symbol by C# (RectGrisStore) so it reappears at the same point after
+        // closing and reopening the app — see ChartPanel.CoreWebView2_WebMessageReceived.
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'rect_add', t1: rect.t1, p1: rect.p1, t2: rect.t2, p2: rect.p2 });
+        }
       }
     }
 
@@ -837,6 +927,16 @@
 
     if (hLineArmed) {
       hLinePrimitive._segments.push({ time: clickTime, price, selected: false });
+      // Reported to C# (ChartPanel.CoreWebView2_WebMessageReceived) so it can mirror this H-Line
+      // onto the other 2 panels — see addMirroredHLine below.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'hline_add', time: clickTime, price });
+      }
+      forceRepaint();
+    }
+
+    if (textArmed && pendingTextValue) {
+      clickTextPrimitive._labels.push({ time: clickTime, price, text: pendingTextValue, selected: false });
       forceRepaint();
     }
 
@@ -1041,6 +1141,15 @@
     forceRepaint();
   }
 
+  // Mirrors an H-Line drawn on ANOTHER panel onto this one — additive, no postMessage sent back
+  // out (unlike the click-driven push above), so the 3 panels don't ping-pong the same draw
+  // forever. Same idea as addMirroredTLine.
+  function addMirroredHLine(time, price) {
+    if (!hLineAttached) { candleSeries.attachPrimitive(hLinePrimitive); hLineAttached = true; }
+    hLinePrimitive._segments.push({ time, price, selected: false });
+    forceRepaint();
+  }
+
   // Auto-drawn previous-day High/Low — same red H-Line primitive as the manual tool above (same
   // color, same "anchor to right edge" rendering, same click-select + Delete behavior), just
   // pushed programmatically by C# instead of via a user click. Either argument can be null (the
@@ -1053,6 +1162,157 @@
     forceRepaint();
   }
 
+  // All-Time High reference line — solid, full-width (a built-in price line, not a custom
+  // primitive like the other H-Lines, since this one never needs click-select/Delete/mirroring —
+  // it's a single read-only reference per panel, sourced from AllTimeHighStore). Called once on
+  // chart open with the persisted value, and again whenever C# updates it (a new ATH saved at the
+  // 4pm close). Gold normally; recolored green (see updateAllTimeHighBroken) while the live price
+  // is trading above it, so an intraday break is visible before the file itself gets updated.
+  let athPriceLine = null;
+  // Remembered separately from the price line object itself — markAllTimeHigh recreates that
+  // object from scratch every call (e.g. when a new ATH is saved at the close), which would
+  // otherwise silently reset a user's "hidden" choice back to visible.
+  let athVisible = true;
+  function markAllTimeHigh(price) {
+    if (athPriceLine) candleSeries.removePriceLine(athPriceLine);
+    athPriceLine = candleSeries.createPriceLine({
+      price, color: '#ffd700', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: athVisible, lineVisible: athVisible, title: 'ATH'
+    });
+  }
+
+  // Toolbar checkbox — same show/hide-only convention as setBollingerEdgeMarkersVisible (nothing
+  // about the underlying value/calculation changes, just whether it's drawn).
+  function setAllTimeHighVisible(show) {
+    athVisible = show;
+    if (!athPriceLine) return;
+    athPriceLine.applyOptions({ lineVisible: show, axisLabelVisible: show });
+  }
+
+  // show=true while the live price is currently above the ATH line — purely visual, re-evaluated
+  // on every tick, no state kept here (C# tracks the actual "did today's high beat it" decision).
+  function updateAllTimeHighBroken(show) {
+    if (!athPriceLine) return;
+    athPriceLine.applyOptions({ color: show ? '#00e676' : '#ffd700' });
+  }
+
+  // Previous day's close — dashed red line, no label, anchored at the time of the previous day's
+  // closing candle and running rightward to the edge (same "anchor at a specific candle, extend
+  // right" convention as the premarket blue line), instead of a full-width axis line — so it
+  // visually "starts" where that candle sits rather than spanning the whole chart. A custom
+  // primitive (not createPriceLine) is needed for that partial-width behavior. Persists through
+  // the whole RTH session — nothing ever removes it once drawn, same as the premarket line.
+  class PrevDayCloseLinePrimitive {
+    constructor() { this._time = null; this._price = null; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || self._time == null || self._price == null) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const xRaw = ts.timeToCoordinate(self._time);
+                const x = xRaw == null ? 0 : xRaw;
+                const y = candleSeries.priceToCoordinate(self._price);
+                if (y == null) return;
+                ctx.strokeStyle = '#ef5350';
+                ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                ctx.beginPath();
+                ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // "C" label — right edge of the line, just above it.
+                ctx.fillStyle = '#ef5350';
+                ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'bottom';
+                ctx.fillText('C', scope.bitmapSize.width - 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const prevDayCloseLinePrimitive = new PrevDayCloseLinePrimitive();
+  let prevDayCloseLineAttached = false;
+
+  function markPrevDayClose(time, price) {
+    if (!prevDayCloseLineAttached) { candleSeries.attachPrimitive(prevDayCloseLinePrimitive); prevDayCloseLineAttached = true; }
+    prevDayCloseLinePrimitive._time = time;
+    prevDayCloseLinePrimitive._price = price;
+    forceRepaint();
+  }
+
+  // Simulator only (panel 3, RTH+Overnight): white line marking the underlying spot price at the
+  // exact moment a demo trade was opened, bounded to just that one candle's own width — computed
+  // from the candle's center x (timeToCoordinate) +/- half the chart's current bar spacing, NOT a
+  // 2nd timeToCoordinate call for a "next candle" time (that time doesn't necessarily match an
+  // actual data point exactly, and a non-matching time silently falls back to the chart edge,
+  // which is what previously made the line stretch across most of the visible chart instead of
+  // sitting over just the one candle). Accumulates, one segment per trade opened — never removed.
+  class EntrySpotLinePrimitive {
+    constructor() { this._lines = []; this._chart = null; } // [{ time, price }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const barSpacing = ts.options().barSpacing; // CSS px per bar, current zoom level
+                self._lines.forEach(l => {
+                  const centerXRaw = ts.timeToCoordinate(l.time);
+                  if (centerXRaw == null) return; // candle scrolled out of the loaded range
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (y == null) return;
+                  // 3 bar-widths total, centered on the entry candle: the previous candle, the
+                  // entry candle itself, and the space where the next (future) one will form.
+                  const x1 = (centerXRaw - barSpacing * 1.5) * scope.horizontalPixelRatio;
+                  const x2 = (centerXRaw + barSpacing * 1.5) * scope.horizontalPixelRatio;
+                  ctx.strokeStyle = '#ffffff';
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x1, y * scope.verticalPixelRatio);
+                  ctx.lineTo(x2, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const entrySpotLinePrimitive = new EntrySpotLinePrimitive();
+  let entrySpotLineAttached = false;
+
+  // No time argument — anchors to whichever candle is CURRENTLY last in the series (the one
+  // actually forming right when the trade is opened), same "anchor at the last loaded candle"
+  // convention markStrike/the premarket line already use. Snapshotted into the stored line entry
+  // at push time, so it stays put even as later candles get added.
+  function markEntrySpot(price) {
+    if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
+    if (allCandles.length === 0) return;
+    entrySpotLinePrimitive._lines.push({ time: allCandles[allCandles.length - 1].time, price });
+    forceRepaint();
+  }
+
   // ---- Pre-market line (1h and 15m RTH panels): blue line from the LAST candle currently
   // loaded (yesterday's close, since the market hasn't opened today yet) to the right edge,
   // following the live price tick by tick until the market opens at 9:30 — after that C# simply
@@ -1061,7 +1321,7 @@
   // startPreMarketLine() call replaces it entirely. ----
 
   class PreMarketLinePrimitive {
-    constructor() { this._armed = false; this._price = null; this._chart = null; }
+    constructor() { this._armed = false; this._price = null; this._exposed = null; this._chart = null; } // _exposed: null | 'above' | 'below'
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1084,6 +1344,24 @@
                 ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
                 ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
                 ctx.stroke();
+
+                if (self._exposed === 'above' || self._exposed === 'below') {
+                  ctx.font = `bold ${13 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.fillStyle = '#2196f3';
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = self._exposed === 'above' ? 'bottom' : 'top';
+                  // Follows the line's own anchor (x, recomputed every frame from the last-loaded
+                  // candle's time coordinate) instead of a fixed screen-pixel position — otherwise
+                  // the text stays visually pinned to the canvas center while panning/zooming moves
+                  // the line itself. Clamped so it stays on-screen if that anchor pans off-canvas.
+                  const labelMargin = 40 * scope.horizontalPixelRatio;
+                  const labelX = Math.min(
+                    Math.max(x * scope.horizontalPixelRatio + labelMargin, labelMargin),
+                    scope.bitmapSize.width - labelMargin
+                  );
+                  const labelY = (y * scope.verticalPixelRatio) + (self._exposed === 'above' ? -6 * scope.verticalPixelRatio : 6 * scope.verticalPixelRatio);
+                  ctx.fillText('Expuesto', labelX, labelY);
+                }
               });
             }
           };
@@ -1105,9 +1383,10 @@
 
   // Called on every pre-market tick until 9:30 AM ET; C# stops calling this once the market
   // opens, which is what makes the line freeze in place with no extra logic needed here.
-  function updatePreMarketLine(price) {
+  function updatePreMarketLine(price, exposed) {
     if (!preMarketLinePrimitive._armed) return; // startPreMarketLine wasn't called this session
     preMarketLinePrimitive._price = price;
+    preMarketLinePrimitive._exposed = exposed || null;
     forceRepaint();
   }
 
@@ -1360,14 +1639,41 @@
                 ctx.textBaseline = 'middle';
                 self._labels.forEach(l => {
                   ctx.fillStyle = l.color || '#ff9800'; // orange default (Piso/Techo)
-                  ctx.font = l.bold ? `bold ${14 * scope.verticalPixelRatio}px sans-serif` : `${12 * scope.verticalPixelRatio}px sans-serif`;
+                  const size = l.fontSize || (l.bold ? 14 : 12);
+                  ctx.font = l.bold ? `bold ${size * scope.verticalPixelRatio}px sans-serif` : `${size * scope.verticalPixelRatio}px sans-serif`;
 
                   // Fixed at the top-center of the chart pane, ignoring pan/zoom/price entirely —
                   // used for markExpired, which needs to stay put and readable regardless of where
                   // the last candle's price happens to be.
                   if (l.fixedTop) {
                     ctx.textAlign = 'center';
-                    ctx.fillText(l.text, scope.bitmapSize.width / 2, 18 * scope.verticalPixelRatio);
+                    ctx.fillText(l.text, scope.bitmapSize.width / 2, 70 * scope.verticalPixelRatio);
+                    ctx.textAlign = 'left';
+                    return;
+                  }
+
+                  // Same idea as fixedTop, but anchored near the bottom-center instead.
+                  if (l.fixedBottom) {
+                    ctx.textAlign = 'center';
+                    ctx.fillText(l.text, scope.bitmapSize.width / 2, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
+                    ctx.textAlign = 'left';
+                    return;
+                  }
+
+                  // Same idea, bottom-LEFT — used for "PM" (Punto Medio / SMA20 slope), moved out
+                  // here so it doesn't sit on top of "1er Rebote: 90%" (fixedBottomRight below).
+                  // Optional offsetX (in un-scaled px) lets a second label — "BB" — sit right next
+                  // to "PM" instead of on top of it.
+                  if (l.fixedBottomLeft) {
+                    ctx.textAlign = 'left';
+                    ctx.fillText(l.text, (10 + (l.offsetX || 0)) * scope.horizontalPixelRatio, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
+                    return;
+                  }
+
+                  // Same idea, bottom-RIGHT instead — used for "1er Rebote: 90%".
+                  if (l.fixedBottomRight) {
+                    ctx.textAlign = 'right';
+                    ctx.fillText(l.text, scope.bitmapSize.width - 10 * scope.horizontalPixelRatio, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
                     ctx.textAlign = 'left';
                     return;
                   }
@@ -1493,6 +1799,70 @@
     return true;
   }
 
+  // "PM" (Punto Medio / SMA20 slope) live indicator — 1h and 15m RTH panels only, updated on every
+  // live tick from C# (EvaluatePuntoMedioSlope). Green when the SMA20 is tilting up, red when
+  // tilting down. Unlike markExpired's one-shot label, this REPLACES its own previous entry each
+  // call instead of accumulating — only ever one "PM" label showing at a time.
+  // `large` (set by MultiChartForm when BOTH panels' PM currently agree) is still passed but no
+  // longer changes the font size — PM/BB/Δ must always render at the SAME fixed size (14px) so
+  // their spacing (offsetX 0/28/56) and character size stay visually consistent whether or not
+  // they happen to agree, instead of PM jumping to 20px and throwing the row out of alignment.
+  function updatePuntoMedio(bullish, large) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'pm');
+    textLabelsPrimitive._labels.push({
+      id: 'pm', text: 'PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
+      fontSize: 14
+    });
+    forceRepaint();
+  }
+
+  // "BB" — 15m RTH panel only, sits right next to "PM" (bottom-left, offset over). Shown while the
+  // Bollinger Bands are CURRENTLY widening (see ChartPanel.EvaluateBollingerWideningLabel) —
+  // purely visual, not tied to whether a Cruce/Rebote watch is armed. Colored to match this
+  // panel's own PM. show=false removes it instead of pushing an empty label.
+  function updateBollingerWidening(show, bullish) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'bb');
+    if (show) {
+      textLabelsPrimitive._labels.push({
+        id: 'bb', text: 'BB', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
+        fontSize: 14, offsetX: 28 // clears "PM" at the same fixed 14px font size
+      });
+    }
+    forceRepaint();
+  }
+
+  // "Δ0.42" — sits right next to "BB" (bottom-left, offset further over). Shown while price is
+  // still between the widening Bollinger Bands (see ChartPanel.EvaluateBollingerWideningLabel) —
+  // the live distance to whichever band is closer. Hidden the moment BB itself hides, or price
+  // actually breaks a band. Same replace-not-accumulate pattern as PM/BB.
+  function updateBollingerDelta(show, delta, bullish) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'bbdelta');
+    if (show) {
+      textLabelsPrimitive._labels.push({
+        id: 'bbdelta', text: `Δ${delta.toFixed(2)}`, color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
+        fontSize: 14, offsetX: 56 // clears "PM" + "BB" at the same fixed 14px font size
+      });
+    }
+    forceRepaint();
+  }
+
+  // "1er Rebote: 90%" — 1h panel only, bottom-right, yellow. Shown while SMA20 and SMA40 are both
+  // Techo and SMA20 hasn't been touched/resolved yet (see ChartPanel.EvaluateFirstReboundLabel).
+  // Same replace-not-accumulate pattern as updatePuntoMedio.
+  function updateFirstRebound(show) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'firstRebound');
+    if (show) {
+      textLabelsPrimitive._labels.push({
+        id: 'firstRebound', text: '1er Rebote: 90%', color: '#ffeb3b', bold: true, fixedBottomRight: true
+      });
+    }
+    forceRepaint();
+  }
+
   // ---- Strike marker: full-width green line + "Stk=xxx" label, drawn programmatically when a
   // trade (demo or real) opens — see markStrike below. Accumulates, one per trade, never removed
   // automatically (stays as a historical reference even after the trade closes). ----
@@ -1557,11 +1927,13 @@
 
   // Anchors at the LAST candle currently loaded (i.e. "now", the moment the trade opened) instead
   // of the left edge — same "current candle to the right edge" convention as the H-Line tool.
-  function markStrike(price) {
+  // label is optional — defaults to "Stk={price}"; TimeframeViewerForm's "5 OTM strikes on
+  // rebote" feature passes a custom "Stk={price}   Ask={ask}" label instead.
+  function markStrike(price, label) {
     if (!strikeLinesAttached) { candleSeries.attachPrimitive(strikeLinesPrimitive); strikeLinesAttached = true; }
     if (allCandles.length === 0) return;
     const anchorTime = allCandles[allCandles.length - 1].time;
-    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: `Stk=${price}`, selected: false });
+    strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: label || `Stk=${price}`, selected: false });
     forceRepaint();
   }
 
@@ -1570,6 +1942,17 @@
   // postMessage sent back out from here, so the 3 panels don't ping-pong the same delete forever.
   function removeStrikeLine(price) {
     strikeLinesPrimitive._lines = strikeLinesPrimitive._lines.filter(l => l.price !== price);
+    // Same cross-removal as the local Delete-key path — matters on this panel if it's the one
+    // (15m RTH+Overnight) that actually has a ΔS label for this strike; a no-op elsewhere.
+    deltaSPrimitive._labels = deltaSPrimitive._labels.filter(l => l.price !== price);
+    forceRepaint();
+  }
+
+  // Appends text to an existing Stk line's label in place (doesn't remove/redraw the line) — used
+  // by TimeframeViewerForm to add "   Bid=xxx" to the "Stk=xxx   Ask=xxx" label once the SpotPrice
+  // cross confirms, keeping the original line exactly where it was.
+  function appendStrikeLineLabel(price, extraText) {
+    strikeLinesPrimitive._lines.forEach(l => { if (l.price === price) l.label += extraText; });
     forceRepaint();
   }
 
@@ -1671,18 +2054,39 @@
     return -1;
   }
 
-  // ---- Piso/Techo reference line (15m RTH / 15m RTH+Overnight panels only) — dashed horizontal
-  // line at a Piso/Techo SMA's pre-market level, same color as that SMA on the 1h panel
-  // (smaColors), so it's visible on the RTH charts as "how far price could go and bounce" without
-  // needing the 1h panel open. Drawn once pre-market by ChartPanel (1h) pushing the value here via
-  // MultiChartForm, removed either by the user (click + Delete, same as every other tool) or
-  // automatically if the market-open gap invalidates that SMA's Piso/Techo (removePisoTechoRefLine,
-  // called from ChartPanel.ValidatePisoTechoAgainstOpen). Anchored at the last loaded candle (same
-  // "anchor to last candle, extend right" convention as markStrike/H-Line), so it covers the RTH
-  // price action from whenever it was drawn (pre-market) onward. ----
+  // ---- "Text" tool — a single button (over panel 2) arms this on all 3 panels at once, same
+  // convention as H-Line above. Each click places whatever text was captured from the Windows
+  // clipboard at the moment the button was pressed (see ChartPanel.ToggleTextModeAsync), anchored
+  // at that click's own (time, price) point. Session-only — no persistence, no mirroring across
+  // panels (each panel only places text where IT was clicked). ----
 
-  class PisoTechoRefLinePrimitive {
-    constructor() { this._lines = []; this._chart = null; } // [{ period, time, price, color, selected }, ...]
+  // Max paragraph width in CSS px before wrapping to a new line — kept in one place so both the
+  // draw() word-wrap below and findClickTextByClick's hit-test estimate agree on it.
+  const ClickTextMaxWidthCss = 180;
+
+  // Greedy word-wrap: fits as many whole words per line as measureText allows under maxWidthPx
+  // (bitmap px, already scaled by pixelRatio) — a single word longer than the max width is left
+  // on its own line rather than broken mid-word.
+  function wrapClickText(ctx, text, maxWidthPx) {
+    const words = text.split(/\s+/).filter(w => w.length > 0);
+    if (words.length === 0) return [''];
+    const lines = [];
+    let current = words[0];
+    for (let i = 1; i < words.length; i++) {
+      const candidate = `${current} ${words[i]}`;
+      if (ctx.measureText(candidate).width <= maxWidthPx) {
+        current = candidate;
+      } else {
+        lines.push(current);
+        current = words[i];
+      }
+    }
+    lines.push(current);
+    return lines;
+  }
+
+  class ClickTextPrimitive {
+    constructor() { this._labels = []; this._chart = null; } // [{ time, price, text, selected }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1695,9 +2099,153 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
+                self._labels.forEach(l => {
+                  const x = ts.timeToCoordinate(l.time);
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (x == null || y == null) return;
+
+                  ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textBaseline = 'top';
+                  ctx.textAlign = 'left';
+                  const textX = x * scope.horizontalPixelRatio + 4 * scope.horizontalPixelRatio;
+                  const textY = y * scope.verticalPixelRatio + 4 * scope.verticalPixelRatio;
+                  const lineHeight = 15 * scope.verticalPixelRatio;
+                  const maxWidthPx = ClickTextMaxWidthCss * scope.horizontalPixelRatio;
+
+                  const lines = wrapClickText(ctx, l.text, maxWidthPx);
+
+                  if (l.selected) {
+                    const width = Math.max(...lines.map(line => ctx.measureText(line).width));
+                    const height = lines.length * lineHeight;
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b';
+                    ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.strokeRect(textX - 2, textY - 2, width + 4, height + 4);
+                    ctx.restore();
+                  }
+
+                  ctx.fillStyle = '#ffffff';
+                  lines.forEach((line, i) => ctx.fillText(line, textX, textY + i * lineHeight));
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const clickTextPrimitive = new ClickTextPrimitive();
+  let clickTextAttached = false;
+  let textArmed = false;
+  let pendingTextValue = '';
+
+  // Arms/disarms the tool and captures the text to place on every subsequent click while armed —
+  // called fresh each time the button is pressed (re-reads the clipboard C# side), so toggling
+  // off and back on again picks up whatever's on the clipboard NOW.
+  function toggleTextMode(text) {
+    if (!clickTextAttached) { candleSeries.attachPrimitive(clickTextPrimitive); clickTextAttached = true; }
+    textArmed = !textArmed;
+    pendingTextValue = text || '';
+    return textArmed;
+  }
+
+  // Same tolerance-based approach as findDeltaSByClick — no exact ctx.measureText available
+  // outside the bitmap draw() context.
+  function findClickTextByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 4;
+    // Same greedy word-wrap the draw() call uses, just to count how many lines this label
+    // occupies for the hit box's height — width stays the fixed max (good enough for hit-testing,
+    // same "approximate, not exact" convention as the other tools' click hit-tests here).
+    const approxCharsPerLine = Math.max(1, Math.floor(ClickTextMaxWidthCss / 7));
+    for (let i = clickTextPrimitive._labels.length - 1; i >= 0; i--) {
+      const l = clickTextPrimitive._labels[i];
+      const x = ts.timeToCoordinate(l.time);
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (x == null || y == null) continue;
+      const words = l.text.split(/\s+/).filter(w => w.length > 0);
+      let lineCount = 1, lineLen = 0;
+      words.forEach(w => {
+        if (lineLen > 0 && lineLen + 1 + w.length > approxCharsPerLine) { lineCount++; lineLen = w.length; }
+        else { lineLen += (lineLen > 0 ? 1 : 0) + w.length; }
+      });
+      const approxWidth = Math.min(l.text.length, approxCharsPerLine) * 7 + 8;
+      const approxHeight = lineCount * 15;
+      if (px >= x + 4 - tolerance && px <= x + 4 + approxWidth + tolerance &&
+          py >= y + 4 - tolerance && py <= y + 4 + approxHeight + tolerance) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // ---- Piso/Techo reference line (15m RTH / 15m RTH+Overnight panels only) — dashed horizontal
+  // line at a Piso/Techo SMA's pre-market level, same color as that SMA on the 1h panel
+  // (smaColors), so it's visible on the RTH charts as "how far price could go and bounce" without
+  // needing the 1h panel open. Drawn once pre-market by ChartPanel (1h) pushing the value here via
+  // MultiChartForm, removed either by the user (click + Delete, same as every other tool) or
+  // automatically if the market-open gap invalidates that SMA's Piso/Techo (removePisoTechoRefLine,
+  // called from ChartPanel.ValidatePisoTechoAgainstOpen). Anchored at the last loaded candle (same
+  // "anchor to last candle, extend right" convention as markStrike/H-Line), so it covers the RTH
+  // price action from whenever it was drawn (pre-market) onward. ----
+
+  class PisoTechoRefLinePrimitive {
+    constructor() { this._lines = []; this._chart = null; } // [{ period, time, timeEnd, price, color, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                // timeToCoordinate requires an EXACT match against a real candle's own time — the
+                // C#-computed session start/end (4:00 AM / 16:00 ET) essentially never lands on an
+                // actual candle boundary, so a direct call silently returns null and falls back to
+                // the edge of the WHOLE loaded range (days of history), not just today — the same
+                // bug the entry-spot line had. Snap each endpoint to the nearest REAL candle instead:
+                // first candle at/after the target for the start, last candle at/before it for the
+                // end — both guaranteed exact matches once found.
+                const snapTime = (target, mode) => {
+                  if (allCandles.length === 0) return null;
+                  if (mode === 'ceil') {
+                    for (let i = 0; i < allCandles.length; i++) if (allCandles[i].time >= target) return allCandles[i].time;
+                    return null;
+                  }
+                  for (let i = allCandles.length - 1; i >= 0; i--) if (allCandles[i].time <= target) return allCandles[i].time;
+                  return null;
+                };
+
                 self._lines.forEach(l => {
-                  const xRaw = ts.timeToCoordinate(l.time);
-                  const x = xRaw == null ? 0 : xRaw; // falls back to left edge until session-start time is in range
+                  let snappedStart = snapTime(l.time, 'ceil');
+                  let x, x2Bitmap;
+
+                  if (snappedStart != null) {
+                    const snappedEnd = snapTime(l.timeEnd, 'floor');
+                    if (snappedEnd == null || snappedStart > snappedEnd) return;
+                    const xCss = ts.timeToCoordinate(snappedStart);
+                    const x2Css = ts.timeToCoordinate(snappedEnd);
+                    if (xCss == null || x2Css == null) return;
+                    x = xCss * scope.horizontalPixelRatio;
+                    x2Bitmap = x2Css * scope.horizontalPixelRatio;
+                  } else {
+                    // No real candle yet at/after the session's own start (e.g. the RTH-only 15m
+                    // panel during premarket, before today's first 9:30 bar has formed) — anchor
+                    // to the LAST candle actually loaded (yesterday's close) and ray forward to
+                    // the chart's right edge instead, same fallback markPrevDayClose uses, so the
+                    // line still shows up rather than being silently skipped until market open.
+                    if (allCandles.length === 0) return;
+                    const xCss = ts.timeToCoordinate(allCandles[allCandles.length - 1].time);
+                    if (xCss == null) return;
+                    x = xCss * scope.horizontalPixelRatio;
+                    x2Bitmap = scope.bitmapSize.width;
+                  }
+
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (y == null) return;
 
@@ -1705,8 +2253,8 @@
                   ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
                   ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
                   ctx.beginPath();
-                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
-                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.moveTo(x, y * scope.verticalPixelRatio);
+                  ctx.lineTo(x2Bitmap, y * scope.verticalPixelRatio);
                   ctx.stroke();
 
                   if (l.selected) {
@@ -1715,8 +2263,8 @@
                     ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
                     ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
                     ctx.beginPath();
-                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
-                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.moveTo(x, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    ctx.lineTo(x2Bitmap, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
                     ctx.stroke();
                     ctx.restore();
                   }
@@ -1733,16 +2281,16 @@
   const pisoTechoRefLinePrimitive = new PisoTechoRefLinePrimitive();
   let pisoTechoRefLineAttached = false;
 
-  // sessionStartTime is the RTH session's own 9:30 ET anchor, computed in C# (ChartPanel/
-  // SimulatedChartPanel.ToFakeUtcEpochSeconds) — NOT derived from allCandles (unlike markStrike),
-  // since this gets called right after a day/history load, before allCandles is necessarily
-  // populated yet (SimulatorForm calls EvaluatePisoTecho before RenderCurrentStep, and both are
-  // fire-and-forget into the WebView, so the order isn't guaranteed). A fixed, independently
-  // computed timestamp sidesteps that race entirely.
-  function markPisoTechoRefLine(period, price, sessionStartTime) {
+  // sessionStartTime/sessionEndTime are the RTH session's own 9:30/16:00 ET anchors, computed in
+  // C# (ChartPanel/SimulatedChartPanel.ToFakeUtcEpochSeconds) — NOT derived from allCandles (unlike
+  // markStrike), since this gets called right after a day/history load, before allCandles is
+  // necessarily populated yet (SimulatorForm calls EvaluatePisoTecho before RenderCurrentStep, and
+  // both are fire-and-forget into the WebView, so the order isn't guaranteed). Fixed, independently
+  // computed timestamps sidestep that race entirely.
+  function markPisoTechoRefLine(period, price, sessionStartTime, sessionEndTime) {
     if (!pisoTechoRefLineAttached) { candleSeries.attachPrimitive(pisoTechoRefLinePrimitive); pisoTechoRefLineAttached = true; }
     pisoTechoRefLinePrimitive._lines = pisoTechoRefLinePrimitive._lines.filter(l => l.period !== period);
-    pisoTechoRefLinePrimitive._lines.push({ period, time: sessionStartTime, price, color: smaColors[period] || '#888888', selected: false });
+    pisoTechoRefLinePrimitive._lines.push({ period, time: sessionStartTime, timeEnd: sessionEndTime, price, color: smaColors[period] || '#888888', selected: false });
     forceRepaint();
   }
 
@@ -1784,6 +2332,11 @@
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false, // no dot on the SMA line when hovering
+          // Never contribute to the shared price scale's autoscale — its own data (recalculateSmas)
+          // spans the FULL history, not just the visible window, so its default autoscale
+          // contribution could pull the price range toward months-old values, overriding
+          // candleSeries' custom autoscaleInfoProvider (the one actually meant to drive this).
+          autoscaleInfoProvider: () => null,
         });
       }
     });
@@ -1792,7 +2345,10 @@
   }
 
   function recalculateSmas() {
-    const source = displaySeries();
+    // Full daily history (not the ~50-bar displaySeries()) so long lookbacks like SMA200 stay
+    // accurate — only the portion of the resulting line that falls within the visible time range
+    // actually gets drawn, so this doesn't show anything beyond what displaySeries() shows.
+    const source = dailyMode ? dailySeriesFull() : allCandles;
     smaPeriods.forEach(p => {
       if (source.length < p) { smaSeries[p].setData([]); smaLastPoint[p] = null; return; }
       const data = [];
@@ -1821,9 +2377,17 @@
 
   function aggregateToDaily(candles) {
     if (candles.length === 0) return [];
+    // Explicitly sorted first — the caller's own order isn't trusted here (this turned out to
+    // matter: whatever order `candles` arrived in, the LAST day bucket must genuinely be the most
+    // recent one, since renderCandles/setData and the price-centering logic both key off the
+    // final element being "today"). Also filters out any day-bucket whose time didn't come out as
+    // a finite number, cheap insurance against a single malformed row silently becoming the
+    // sorted-last entry and dragging the whole chart's scale toward some months-old price.
+    const sorted = candles.slice().sort((a, b) => a.time - b.time);
     const byDay = new Map(); // dayStart -> aggregated bar
-    for (const c of candles) {
+    for (const c of sorted) {
       const day = dayStartOf(c.time);
+      if (!Number.isFinite(day)) continue;
       const bucket = byDay.get(day);
       if (!bucket) {
         byDay.set(day, { time: day, open: c.open, high: c.high, low: c.low, close: c.close });
@@ -1836,25 +2400,58 @@
     return Array.from(byDay.values()).sort((a, b) => a.time - b.time);
   }
 
+  // Daily candles rendered are capped to the last ~50 — SMAs still need the FULL daily history for
+  // an accurate lookback (see recalculateSmas, which uses dailySeriesFull() instead), but the
+  // candlestick series itself only ever needs to actually show a reasonable recent window. This
+  // also sidesteps a real repaint bug: swapping candleSeries between a small hourly array (~45
+  // bars) and the FULL ~200+ day daily array, then narrowing the visible range back down via
+  // setVisibleLogicalRange, left the candles invisible until a manual scroll/zoom forced a real
+  // repaint — fitContent/forceRepaint/resize/a synthetic wheel event none reliably fixed it.
+  // Feeding candleSeries an already right-sized ~50-bar array outright avoids the whole situation.
+  const DailyCandlesShown = 50;
+
+  function dailySeriesFull() {
+    return aggregateToDaily(allCandles);
+  }
+
   function displaySeries() {
-    return dailyMode ? aggregateToDaily(allCandles) : allCandles;
+    return dailyMode ? dailySeriesFull().slice(-DailyCandlesShown) : allCandles;
   }
 
   function renderCandles() {
     candleSeries.setData(displaySeries());
   }
 
-  // Toggle: Daily shows one bar per day (last 20 by default) built from up to ~200 trading days
-  // of persisted hourly history; H1 goes back to plain hourly bars (last 7 days by default).
-  // Drawings (T-Line, arrows, etc.) aren't touched — they're anchored to real timestamps, which
-  // stay valid regardless of which series is currently rendered.
+  // Toggle: Daily shows the last ~50 daily bars (see DailyCandlesShown/displaySeries) built from
+  // up to ~200 trading days of persisted hourly history — SMAs still use the full history for an
+  // accurate lookback (see recalculateSmas). H1 goes back to plain hourly bars (last 7 days by
+  // default). Drawings (T-Line, arrows, etc.) aren't touched — they're anchored to real
+  // timestamps, which stay valid regardless of which series is currently rendered.
   function toggleDaily() {
     dailyMode = !dailyMode;
-    visibleDays = dailyMode ? 20 : 7;
+    visibleDays = dailyMode ? DailyCandlesShown : 7; // daily: show the whole (already ~50-bar) displaySeries()
     userHasInteracted = false; // each mode gets its own fresh default view, not the other's manual pan/zoom
+
+    // Update lastAppliedRange to the NEW mode's indices BEFORE renderCandles() — see
+    // computeVisibleRange's comment for why (setData's own synchronous autoscale pass would
+    // otherwise run against the previous mode's stale range first).
+    const range = computeVisibleRange();
+    if (range) lastAppliedRange = range;
+
     renderCandles();
+    chart.timeScale().fitContent();
     applyVisibleRange();
     recalculateSmas();
+
+    // Nothing programmatic through Lightweight Charts' own API (fitContent, forceRepaint, resize,
+    // a synthetic wheel event) has reliably forced a repaint here — only an actual manual
+    // scroll/zoom does. Forcing a real DOM/CSS reflow instead, independent of the charting library
+    // entirely: toggling display off and back on forces the browser engine to discard and rebuild
+    // layout for the whole container, which drags the canvas repaint along with it.
+    container.style.display = 'none';
+    void container.offsetHeight; // reading a layout property forces the reflow to happen NOW, synchronously
+    container.style.display = '';
+
     return dailyMode;
   }
 
@@ -1863,13 +2460,74 @@
   let bollingerConfig = null; // { period, mult }
   let bollingerSeries = null; // { upper, middle, lower }
 
-  function configureBollinger(period, deviations) {
+  // Panel 2 (15m RTH), both Simulator and Live Chart: white markers over the CURRENT Bollinger
+  // upper/lower band values, bounded to just the forming (last) candle's width — a quick visual of
+  // exactly where the bands sit right now, updated every step/tick alongside recalculateBollinger
+  // itself. Enabled via enableBollingerEdgeMarkers(), called from both SimulatedChartPanel and
+  // ChartPanel's Fifteen_RTH setup.
+  let bollingerEdgeMarkersEnabled = false;
+  function enableBollingerEdgeMarkers() { bollingerEdgeMarkersEnabled = true; }
+
+  // Separate from bollingerEdgeMarkersEnabled above — that one gates whether the values get
+  // computed at all (set once, per panel, at load); this one is the user-facing show/hide toggle
+  // (a checkbox in the toolbar), checked only in draw() so calculation keeps running underneath
+  // even while hidden (cheap, and means it's already up to date the moment it's shown again).
+  let bollingerEdgeMarkersVisible = true;
+  function setBollingerEdgeMarkersVisible(show) { bollingerEdgeMarkersVisible = show; forceRepaint(); }
+
+  // Each band's marker is a 2-point segment (previous candle -> forming candle), NOT a fixed-width
+  // horizontal mark — so its slope visually shows the band opening outward, moving sideways, or
+  // closing inward between those two candles, which a horizontal-only mark couldn't show.
+  class BollingerEdgeMarkerPrimitive {
+    constructor() { this._upper = null; this._lower = null; this._chart = null; } // { prev:{time,price}, curr:{time,price} } | null
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || !bollingerEdgeMarkersVisible) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const drawOne = (segment) => {
+                  if (!segment) return;
+                  const x1Raw = ts.timeToCoordinate(segment.prev.time);
+                  const x2Raw = ts.timeToCoordinate(segment.curr.time);
+                  if (x1Raw == null || x2Raw == null) return;
+                  const y1 = candleSeries.priceToCoordinate(segment.prev.price);
+                  const y2 = candleSeries.priceToCoordinate(segment.curr.price);
+                  if (y1 == null || y2 == null) return;
+                  ctx.strokeStyle = '#ffffff';
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x1Raw * scope.horizontalPixelRatio, y1 * scope.verticalPixelRatio);
+                  ctx.lineTo(x2Raw * scope.horizontalPixelRatio, y2 * scope.verticalPixelRatio);
+                  ctx.stroke();
+                };
+                drawOne(self._upper);
+                drawOne(self._lower);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const bollingerEdgeMarkerPrimitive = new BollingerEdgeMarkerPrimitive();
+  let bollingerEdgeMarkerAttached = false;
+
+  function configureBollinger(period, deviations, middleSolid) {
     bollingerConfig = { period: period, mult: deviations };
     if (!bollingerSeries) {
-      const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+      // Same reasoning as smaSeries — never contribute to the shared price scale's autoscale.
+      const opts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
       bollingerSeries = {
         upper:  chart.addLineSeries({ ...opts, color: '#787b86' }),
-        middle: chart.addLineSeries({ ...opts, color: '#787b86', lineStyle: LightweightCharts.LineStyle.Dashed }),
+        middle: chart.addLineSeries({ ...opts, color: '#FFD700', lineStyle: middleSolid ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed }),
         lower:  chart.addLineSeries({ ...opts, color: '#787b86' }),
       };
     }
@@ -1883,6 +2541,10 @@
       bollingerSeries.upper.setData([]);
       bollingerSeries.middle.setData([]);
       bollingerSeries.lower.setData([]);
+      if (bollingerEdgeMarkersEnabled) {
+        bollingerEdgeMarkerPrimitive._upper = null;
+        bollingerEdgeMarkerPrimitive._lower = null;
+      }
       return;
     }
     const upperData = [], midData = [], lowerData = [];
@@ -1901,6 +2563,22 @@
     bollingerSeries.upper.setData(upperData);
     bollingerSeries.middle.setData(midData);
     bollingerSeries.lower.setData(lowerData);
+
+    // White edge markers (see enableBollingerEdgeMarkers) — a 2-point segment from the PREVIOUS
+    // candle's band value to the forming candle's, re-set every recalculation, so its slope shows
+    // the band opening/closing/going sideways between those two candles.
+    if (bollingerEdgeMarkersEnabled && upperData.length >= 2) {
+      if (!bollingerEdgeMarkerAttached) { candleSeries.attachPrimitive(bollingerEdgeMarkerPrimitive); bollingerEdgeMarkerAttached = true; }
+      const prevUpper = upperData[upperData.length - 2], currUpper = upperData[upperData.length - 1];
+      const prevLower = lowerData[lowerData.length - 2], currLower = lowerData[lowerData.length - 1];
+      bollingerEdgeMarkerPrimitive._upper = {
+        prev: { time: prevUpper.time, price: prevUpper.value }, curr: { time: currUpper.time, price: currUpper.value }
+      };
+      bollingerEdgeMarkerPrimitive._lower = {
+        prev: { time: prevLower.time, price: prevLower.value }, curr: { time: currLower.time, price: currLower.value }
+      };
+      forceRepaint();
+    }
   }
 
   // ---- Overnight shading (optional — only enabled on panels that call configureOvernightBands) ----
@@ -1948,6 +2626,87 @@
   }
 
   const overnightPrimitive = new OvernightBandsPrimitive();
+
+  // ---- Day dividers (1h panel only — see ChartPanel.ToggleDayDividersAsync) ----
+  // Dashed vertical line at the start of each of the last 4 days present in allCandles, so the 7
+  // hourly candles (9:30-10:00 slot + 6 clock-hour slots) belonging to one trading day are
+  // visually separated from the next. Deliberately only the last 4 — that separates the last 5
+  // days without drawing a line for "today" itself, so today's candles just sit to the right of
+  // the most recent line with nothing bounding them on the right (still mid-session).
+  let dayDividersEnabled = false;
+
+  class DayDividerPrimitive {
+    constructor() { this._times = []; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                ctx.strokeStyle = '#787b86';
+                ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                ctx.setLineDash([4 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                self._times.forEach(t => {
+                  const x = ts.timeToCoordinate(t);
+                  if (x == null) return;
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, 0);
+                  ctx.lineTo(x * scope.horizontalPixelRatio, scope.bitmapSize.height);
+                  ctx.stroke();
+                });
+                ctx.setLineDash([]);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const dayDividerPrimitive = new DayDividerPrimitive();
+
+  function toggleDayDividers() {
+    dayDividersEnabled = !dayDividersEnabled;
+    if (dayDividersEnabled) {
+      candleSeries.attachPrimitive(dayDividerPrimitive);
+      recalculateDayDividers();
+    } else {
+      dayDividerPrimitive._times = [];
+      forceRepaint();
+    }
+    return dayDividersEnabled;
+  }
+
+  // Unconditional "turn on" (unlike toggleDayDividers, which flips) — called once at chart load
+  // so the day dividers are on by default, matching the "Día" checkbox's default checked state.
+  function enableDayDividers() {
+    if (dayDividersEnabled) return;
+    toggleDayDividers();
+  }
+
+  function recalculateDayDividers() {
+    if (!dayDividersEnabled || allCandles.length === 0) { dayDividerPrimitive._times = []; return; }
+
+    // First candle's time per distinct day, in order — dayStartOf's own value works fine as the
+    // divider's x-position too (every day's first candle lands at/after its own dayStartOf).
+    const dayStarts = [];
+    let lastDay = null;
+    for (const c of allCandles) {
+      const day = dayStartOf(c.time);
+      if (day !== lastDay) { dayStarts.push(c.time); lastDay = day; }
+    }
+
+    // Last 4 boundaries = separates the last 5 days; drop the very first one of those 5 (that's
+    // the START of the oldest of the 5 days, not a divider BETWEEN two of them).
+    dayDividerPrimitive._times = dayStarts.slice(-5).slice(1);
+    forceRepaint();
+  }
 
   function configureOvernightBands() {
     overnightBandsEnabled = true;
@@ -2035,10 +2794,34 @@
 
   // ---- Functions called from C# via WebView2.ExecuteScriptAsync ----
 
+  // Seeds gray-rect drawings persisted from a previous session (1h panel only — see RectGrisStore.cs).
+  function loadRectGris(rects) {
+    if (!grayRectAttached) { candleSeries.attachPrimitive(grayRectPrimitive); grayRectAttached = true; }
+    grayRectPrimitive._rects = (rects || []).map(r => ({ t1: r.t1, p1: r.p1, t2: r.t2, p2: r.p2, selected: false }));
+    forceRepaint();
+  }
+
   // Seeds T-Line drawings persisted from a previous session (1h panel only — see TLineStore.cs).
   function loadTLines(lines) {
     if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }
     tLinePrimitive._lines = (lines || []).map(l => ({ t1: l.t1, p1: l.p1, t2: l.t2, p2: l.p2 }));
+    forceRepaint();
+  }
+
+  // Mirrors a T-Line drawn on ANOTHER panel onto this one — additive (unlike loadTLines, which
+  // replaces the whole set), and skips this panel's own "only 1 T-Line at a time" limit entirely
+  // (that check lives in C#'s WebMessageReceived handler, only for a line drawn BY CLICKING on
+  // this panel — a mirrored one arrives already-drawn, not through that flow).
+  function addMirroredTLine(t1, p1, t2, p2) {
+    if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }
+    tLinePrimitive._lines.push({ t1, p1, t2, p2 });
+    forceRepaint();
+  }
+
+  // Removes a mirrored T-Line by its exact coordinates (a delete on the ORIGINATING panel fires
+  // this on the other 2) — same idea as removeStrikeLine/removeHLine's mirror-delete pattern.
+  function removeMirroredTLine(t1, p1, t2, p2) {
+    tLinePrimitive._lines = tLinePrimitive._lines.filter(l => !(l.t1 === t1 && l.p1 === p1 && l.t2 === t2 && l.p2 === p2));
     forceRepaint();
   }
 
@@ -2080,6 +2863,7 @@
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
+    recalculateDayDividers();
   }
 
   // Updates the still-forming candle (same Time as the last one) without redrawing everything.
@@ -2092,6 +2876,7 @@
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
+    recalculateDayDividers();
     // series.update()/setData() can auto-scroll the time scale to keep following the latest bar,
     // which eats into the right-edge margin set at load time — reapply it on every live tick so
     // it sticks, but only while the user is actually following the live edge (see
@@ -2108,6 +2893,7 @@
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
+    recalculateDayDividers();
     reapplyVisibleRangeIfLive();
   }
 
@@ -2124,6 +2910,7 @@
     recalculateSmas();
     recalculateBollinger();
     recalculateOvernightBands();
+    recalculateDayDividers();
     reapplyVisibleRangeIfLive();
   }
 </script>

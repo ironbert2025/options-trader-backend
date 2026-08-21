@@ -86,6 +86,7 @@ partial class Form1
         btnHubHost = new Button();
         btnSimulator = new Button();
         btnFourEtfSimulator = new Button();
+        btnTimeframeViewer = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
@@ -224,6 +225,7 @@ partial class Form1
         tabQuotes.Controls.Add(btnHubHost);
         tabQuotes.Controls.Add(btnSimulator);
         tabQuotes.Controls.Add(btnFourEtfSimulator);
+        tabQuotes.Controls.Add(btnTimeframeViewer);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -803,6 +805,15 @@ partial class Form1
         btnFourEtfSimulator.Text = "Sim 4 ETF";
         btnFourEtfSimulator.Click += BtnFourEtfSimulator_Click;
         //
+        // btnTimeframeViewer
+        //
+        btnTimeframeViewer.Location = new Point(1020, 154);
+        btnTimeframeViewer.Name = "btnTimeframeViewer";
+        btnTimeframeViewer.Size = new Size(120, 25);
+        btnTimeframeViewer.TabIndex = 7;
+        btnTimeframeViewer.Text = "Timeframes";
+        btnTimeframeViewer.Click += BtnTimeframeViewer_Click;
+        //
         // btnStartPolling
         //
         btnStartPolling.BackColor = Color.DarkGreen;
@@ -819,12 +830,14 @@ partial class Form1
         // lblLastUpdate
         // 
         lblLastUpdate.AutoSize = true;
+        lblLastUpdate.Cursor = Cursors.Hand;
         lblLastUpdate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblLastUpdate.ForeColor = Color.DarkGoldenrod;
         lblLastUpdate.Location = new Point(435, 39);
         lblLastUpdate.Name = "lblLastUpdate";
         lblLastUpdate.Size = new Size(0, 13);
         lblLastUpdate.TabIndex = 5;
+        lblLastUpdate.Click += LblLastUpdate_Click;
         //
         // grpBalance
         // 
@@ -854,7 +867,7 @@ partial class Form1
         lblPositionAmount.TabIndex = 1;
         // 
         // grpTickerButtons
-        // 
+        //
         grpTickerButtons.Controls.Add(flpTickers);
         grpTickerButtons.Location = new Point(128, 4);
         grpTickerButtons.Name = "grpTickerButtons";
@@ -862,16 +875,16 @@ partial class Form1
         grpTickerButtons.TabIndex = 6;
         grpTickerButtons.TabStop = false;
         grpTickerButtons.Text = "Tickers";
-        // 
+        //
         // flpTickers
-        // 
+        //
         flpTickers.Dock = DockStyle.Fill;
         flpTickers.Location = new Point(3, 19);
         flpTickers.Name = "flpTickers";
         flpTickers.Padding = new Padding(4);
         flpTickers.Size = new Size(279, 73);
         flpTickers.TabIndex = 0;
-        // 
+        //
         // grpTrade
         // 
         grpTrade.Controls.Add(rbNoTrade);
@@ -1802,6 +1815,7 @@ partial class Form1
     private Button btnHubHost;
     private Button btnSimulator;
     private Button btnFourEtfSimulator;
+    private Button btnTimeframeViewer;
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;

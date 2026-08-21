@@ -59,6 +59,7 @@ Toda la configuración del operador vive en la pestaña **Settings** y se persis
 | **Schwab Credentials** | API Key y API Secret de Schwab para el flujo OAuth2. | `SchwabCredentialsStore` |
 | **Broker Accounts (Schwab)** | Grid con las cuentas reales del broker; se elige la cuenta por defecto para enviar órdenes. **Se cachea localmente** y se **auto-carga al abrir el programa** (con la cuenta default ya marcada), sin esperar a pulsar Refresh Accounts. | `SelectedAccountStore`, `AccountsCacheStore` |
 | **AWS S3 Settings** | Access Key, Secret Key, Bucket y Region para subir screenshots a S3. | `AwsSettingsStore` |
+| **AWS / Telegram por ticker** | Cada fila de `TickerSettingsStore` tiene un checkbox **AWS** y uno **Telegram** independientes. AWS=off deja el trade **totalmente local**: no hace `POST` a la API/S3, usa un id de trade negativo como fallback, y aun así se ve en `dgvTrades` y en la nota diaria `.md` con rutas de imagen `file://` locales (sin push a Telegram tampoco). Telegram=off solo silencia los pushes de "evento" (Piso/Techo, T-Line, Abriendo la Volatilidad, DZ/SZ, auto-push) — **no** afecta los pushes de apertura/cierre de trade, que van aparte. | `TickerSettingsStore`, `Form1.IsAwsEnabledFor`/`IsTelegramEnabledFor` |
 | **Save Dumps** | Si está activo, vuelca el JSON crudo de cada respuesta de Schwab a `C:\Dumps` (depuración). | `DumpSettingsStore` |
 | **Quotes to CSV** | Si está activo, registra cada ciclo de cotizaciones a CSV (ver §8). | (estado en UI) |
 | **Hide Next ExpDate** | Marcado por defecto. Oculta el grid *OptionsChain (Next ExpDate)* y **no escribe su CSV**, sin afectar el grid/CSV de la expiración actual. Cambia en vivo, incluso con el polling activo. | (estado en UI) |
@@ -100,7 +101,7 @@ Pestaña **Options Quotes**: corazón operativo del programa.
 - **Filtro por rango**: solo opciones OTM cuyo Ask cae dentro del `Low`–`High` del ticker.
 - **Resaltado visual**: spread en rojo, Ask en verde, fondo verde claro en el Bid cuando el spread ≤ 2 (buena liquidez).
 - **Strike sin decimales redundantes**: `302.50` completo, pero `305.00` como `305`.
-- **Protección contra órdenes a pérdida segura**: si el Bid de la opción es 0, el botón **Strike se pinta en gris y se deshabilita el click** en ambos grids.
+- **Protección contra órdenes a pérdida segura**: el botón **Strike se pinta en gris y se deshabilita el click** en ambos grids cuando el Bid de la opción es 0, cuando Conts es 0, **o cuando el spread es ≥ 6** (antes el umbral era ≥ 5) — misma regla replicada en Form1, Live Chart y Simulador.
 - **Filtro "Counts"** (solo grid actual): en vez de mostrar todo lo que cae en el rango Low/High, permite fijar cuántos strikes OTM mostrar (3 a 14, más cercanos al Spot) o volver a **"In Range"** (comportamiento por rango, default). Selección de sesión, no se persiste entre reinicios.
 - **Filtro CALL / PUT** (solo grid actual): dos checkboxes sobre los encabezados Call/Put — si se marca solo uno, el grid muestra únicamente ese lado; si ambos están marcados o ambos desmarcados, muestra los dos. Se aplica al instante sobre la última cotización recibida.
 - **Ocultar Next ExpDate**: con el checkbox *Hide Next ExpDate* (Settings) marcado, el grid de la próxima expiración no se muestra ni se reconstruye en cada ciclo, y tampoco se abre/escribe su CSV.
@@ -317,6 +318,12 @@ Puntos clave (detalle completo en [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_ST
 - **Auto-push a Telegram tras rebote DZ/SZ**: una vez confirmado un rebote de Zona de Demanda/Oferta en el panel 15m RTH+Overnight, se envía automáticamente un snapshot combinado de los 3 charts a Telegram en cada vela de 15m que cierra, hasta pulsar "Stop Push".
 - **Vista Daily** en el panel 1h: agrega hasta 200 días de historial horario en velas diarias.
 - **Herramientas de dibujo** (T-Line, H-Line, rectángulos, zonas DZ/SZ, flechas) — seleccionables y borrables con la tecla Delete; T-Line y flechas verticales del panel 1h se **persisten por símbolo** entre sesiones. El toggle manual Cross-SMA y la herramienta de texto Piso/Techo fueron removidos del Live Chart en vivo (el sistema automático de Piso/Techo sigue activo — ver [`SENALES_Y_ESTRATEGIAS.md`](SENALES_Y_ESTRATEGIAS.md)).
+- **T-Line: ahora múltiples e independientes por panel, sin mirror.** Se pueden dibujar varias T-Lines a la vez en el panel 1h y varias en el panel 15m RTH, cada una con su propio archivo `TLineStore` ("1h"/"RTH") y su propia señal de ruptura evaluada por separado — ya no comparten un único archivo ni se limitan a 1 línea. El **panel 3 (15m RTH+Overnight) ya no tiene la herramienta T-Line**. A diferencia de antes, dibujar o borrar una T-Line **ya no se mirrorea** a los otros paneles — el H-Line sí sigue mirroreándose entre los 3.
+- **ATH (All-Time High)**: checkbox en la toolbar compartida que muestra/oculta una línea de referencia del máximo histórico, dibujada en los 3 paneles a la vez.
+- **Bollinger Bands**: la banda media (SMA20) se dibuja en amarillo — punteada en el panel 1h, sólida en el panel 15m RTH. Checkbox aparte para mostrar/ocultar los marcadores blancos de borde de banda (panel 15m RTH).
+- **Línea de cierre del día anterior**: línea punteada con etiqueta "C" en su extremo derecho, dibujada en los 3 paneles.
+- **Línea blanca de entrada/cierre de trade**: ahora se dibuja también en el panel 2 (15m RTH), además del panel 3 (antes solo en el panel 3/Overnight).
+- **Piso/Techo en premarket**: la reference-line también aparece en el panel 2 (15m RTH) durante el premarket, no solo tras la apertura.
 - **Línea azul de pre-market** (panel 15m RTH): si se abre el chart antes de las 9:30 AM ET, sigue el precio en vivo hasta la apertura y ahí se congela — no se persiste, cada apertura reinicia el proceso.
 - **Snapshot local de los 3 charts** al registrar un trade (ver §7).
 - Ventana **"Block Mov"**: 4 charts de 1h (SPY/QQQ/DIA/IWM) lado a lado, para ver el movimiento del mercado en conjunto.

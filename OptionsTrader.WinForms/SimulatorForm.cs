@@ -117,9 +117,11 @@ public class SimulatorForm : Form
     private string _symbol = string.Empty;
     private DateOnly _simDate;
     private TickerEntry? _ticker;
+    private readonly string? _ownSymbol;
 
-    public SimulatorForm()
+    public SimulatorForm(string? ownSymbol = null)
     {
+        _ownSymbol = ownSymbol;
         Text          = "Simulador";
         Width         = 1190;
         Height        = 1000;
@@ -388,6 +390,13 @@ public class SimulatorForm : Form
         _pnlSmaEvents.Controls.Add(btnTLine);
         _pnlSmaEvents.Controls.Add(btnClear);
 
+        // Shows/hides the white Bollinger-band edge markers on the 15m RTH panel — checked by
+        // default (matches the always-on behavior before this toggle existed).
+        var chkBollingerEdges = new CheckBox { Text = "BB edges", Location = new Point(320, 4), AutoSize = true, Checked = true };
+        chkBollingerEdges.CheckedChanged += async (s, e) =>
+            await _rthChart.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
+        _pnlSmaEvents.Controls.Add(chkBollingerEdges);
+
         _hourlyChart.OnCrossSequenceEvent += msg => LogSimEvent(msg);
         _hourlyChart.OnTLineSignalEvent   += msg => LogSimEvent(msg);
 
@@ -427,8 +436,9 @@ public class SimulatorForm : Form
         _hourlyChart.OnPisoTechoLevelUpdatedEvent += (period, price) =>
         {
             var sessionStart = GetSessionStartFakeEpoch();
-            _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart);
-            _ = _fullChart.MarkPisoTechoRefLineAsync(period, price, sessionStart);
+            var sessionEnd   = GetSessionEndFakeEpoch();
+            _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
+            _ = _fullChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
         };
 
         // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a
@@ -438,6 +448,23 @@ public class SimulatorForm : Form
         // "Ya abiertas al armar" — informational heads-up, doesn't wait for the spot to touch a
         // band (see SimulatedChartPanel.OnVolatilityAlreadyOpenEvent).
         _rthChart.OnVolatilityAlreadyOpenEvent += msg => LogSimEvent(msg);
+
+        // "PM" (Punto Medio) cross-panel coordination — same pattern as MultiChartForm's
+        // RedrawPuntoMedio for the live app: bigger text when both the 1h and 15m RTH panels'
+        // SMA20 tilt currently agree, normal size otherwise.
+        bool? hourlyPmBullish = null;
+        bool? rthPmBullish = null;
+
+        void RedrawPuntoMedio()
+        {
+            if (hourlyPmBullish == null || rthPmBullish == null) return;
+            var large = hourlyPmBullish == rthPmBullish;
+            _ = _hourlyChart.MarkPuntoMedioAsync(hourlyPmBullish.Value, large);
+            _ = _rthChart.MarkPuntoMedioAsync(rthPmBullish.Value, large);
+        }
+
+        _hourlyChart.OnPuntoMedioLevelEvent += bullish => { hourlyPmBullish = bullish; RedrawPuntoMedio(); };
+        _rthChart.OnPuntoMedioLevelEvent += bullish => { rthPmBullish = bullish; RedrawPuntoMedio(); };
 
         _hourlyChart.OnCrossSequenceFinished += () =>
         {
@@ -456,7 +483,16 @@ public class SimulatorForm : Form
     private void LogSimEvent(string message)
     {
         if (IsDisposed) return;
-        void Append() => _txtEventLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+
+        // The simulated tick's own time, not the real wall-clock time — this is a replay, so the
+        // log should read like it happened during that historical session, same convention the
+        // grids already use (EasternTime(step.Time)). Falls back to DateTime.Now only if nothing's
+        // loaded yet (shouldn't normally happen — every event source fires from step processing).
+        var timestamp = _currentIndex >= 0 && _currentIndex < _steps.Count
+            ? EasternTime(_steps[_currentIndex].Time)
+            : DateTime.Now;
+
+        void Append() => _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
         if (InvokeRequired) BeginInvoke(Append); else Append();
     }
 
@@ -525,7 +561,12 @@ public class SimulatorForm : Form
         var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
         _cmbSymbol.Items.Clear();
         foreach (var s in symbols) _cmbSymbol.Items.Add(s);
-        if (_cmbSymbol.Items.Count > 0) _cmbSymbol.SelectedIndex = 0;
+        if (_cmbSymbol.Items.Count == 0) return;
+
+        // Defaults to Form1's OWN ticker when available — same idea as TimeframeViewerForm.LoadSymbols
+        // — falls back to the first symbol in the list otherwise.
+        var ownSymbolIndex = _ownSymbol is { } ownSymbol ? symbols.IndexOf(ownSymbol) : -1;
+        _cmbSymbol.SelectedIndex = ownSymbolIndex >= 0 ? ownSymbolIndex : 0;
     }
 
     private void RefreshAvailableDates()
@@ -663,14 +704,38 @@ public class SimulatorForm : Form
         await ApplyPisoTechoRefLine(bars, 200, result200);
     }
 
-    // The replayed day's 9:30 AM ET, in the same fake-epoch units the chart itself uses — the
-    // Piso/Techo reference line's anchor, computed independently of any candle data so it can't
-    // race against history loading (see markPisoTechoRefLine in chart.html for the full rationale).
+    // The day BEFORE _simDate's last hourly candle (its close) — the Piso/Techo reference line's
+    // real anchor, per explicit request ("así estaba implementado"): born at the prior day's close,
+    // running through the whole of the replayed day's RTH session — same as the live app's
+    // identical GetTodaySessionStartFakeEpoch. _hourlyCandles already carries prior-day context
+    // (SimulationDataLoader.LoadHourlyCandlesWithContext), so no extra fetch needed. Falls back to
+    // 4:00 AM ET of the replayed day if no prior-day context is loaded (shouldn't normally happen).
     private long GetSessionStartFakeEpoch()
     {
-        var sessionStartEastern = _simDate.ToDateTime(new TimeOnly(9, 30));
-        var sessionStartUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionStartEastern, DateTimeKind.Unspecified), EasternZone);
-        return SimulatedChartPanel.ToFakeUtcEpochSeconds(sessionStartUtc);
+        var prior = _hourlyCandles
+            .Select(c => (Candle: c, Date: TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date))
+            .Where(x => x.Date < _simDate.ToDateTime(TimeOnly.MinValue))
+            .ToList();
+
+        if (prior.Count > 0)
+        {
+            var prevDate = prior.Max(x => x.Date);
+            var lastBar = prior.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
+            return SimulatedChartPanel.ToFakeUtcEpochSeconds(lastBar.Time);
+        }
+
+        var fallbackEastern = _simDate.ToDateTime(new TimeOnly(4, 0));
+        var fallbackUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(fallbackEastern, DateTimeKind.Unspecified), EasternZone);
+        return SimulatedChartPanel.ToFakeUtcEpochSeconds(fallbackUtc);
+    }
+
+    // The replayed day's 16:00 ET close — so the Piso/Techo reference line stops there instead of
+    // running off to the chart's own right edge.
+    private long GetSessionEndFakeEpoch()
+    {
+        var sessionEndEastern = _simDate.ToDateTime(new TimeOnly(16, 0));
+        var sessionEndUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionEndEastern, DateTimeKind.Unspecified), EasternZone);
+        return SimulatedChartPanel.ToFakeUtcEpochSeconds(sessionEndUtc);
     }
 
     private async Task ApplyPisoTechoRefLine(List<CandleData> bars, int period, string? result)
@@ -681,8 +746,9 @@ public class SimulatorForm : Form
             for (int i = bars.Count - period; i < bars.Count; i++) sum += bars[i].Close;
             var sma = sum / period;
             var sessionStart = GetSessionStartFakeEpoch();
-            await _rthChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart);
-            await _fullChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart);
+            var sessionEnd   = GetSessionEndFakeEpoch();
+            await _rthChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart, sessionEnd);
+            await _fullChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart, sessionEnd);
         }
         else
         {
@@ -887,6 +953,18 @@ public class SimulatorForm : Form
         _dgvTrades.CellContentClick += DgvTrades_CellContentClick;
     }
 
+    // Same rule as Form1's private static IsRowTradeBlocked: bid == 0, OR spread >= 6 (FormatSprd's
+    // stripped-decimal-point encoding, so 6 == a real $0.06 spread), OR 0 contracts.
+    private static bool IsChainRowTradeBlocked(DataGridViewRow row, string? rowType)
+    {
+        var bidCol  = rowType == "PUT" ? "colPutBid"  : "colCallBid";
+        var sprdCol = rowType == "PUT" ? "colPutSprd" : "colCallSprd";
+        if (!decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid) || bid == 0m) return true;
+        if (decimal.TryParse(row.Cells[sprdCol].Value?.ToString(), out var sprd) && sprd >= 6) return true;
+        if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
+        return false;
+    }
+
     // Same rendering as Form1.DgvQuotes_CellPainting — a colored button (green CALL / red PUT /
     // gray if illiquid) instead of plain text, since the Strike cell is clickable here too
     // (DgvChain_CellClick below).
@@ -928,6 +1006,23 @@ public class SimulatorForm : Form
             e.CellStyle.BackColor = decimal.TryParse(row.Cells["colPutSprd"].Value?.ToString(), out var putSprd) && putSprd <= 2
                 ? Color.LightGreen : _dgvChain.DefaultCellStyle.BackColor;
         }
+
+        // Range: same rule as Form1.DgvQuotes_CellFormatting's identical colRange handling — the
+        // Strike button active (not blocked) AND this row's own Ask actually falls within the
+        // ticker's Low-High → green, same as the Bid columns above.
+        var rangeCol = _dgvChain.Columns["colRange"].Index;
+        if (e.ColumnIndex == rangeCol)
+        {
+            var rowType = row.Tag?.ToString();
+            var active  = !IsChainRowTradeBlocked(row, rowType);
+            var askCol  = rowType == "PUT" ? "colPutAsk" : "colCallAsk";
+            var inRange = active
+                && Form1.TryParseRange(row.Cells["colRange"].Value?.ToString(), out var low, out var high)
+                && decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask)
+                && ask >= low && ask <= high;
+
+            e.CellStyle.BackColor = inRange ? Color.LightGreen : _dgvChain.DefaultCellStyle.BackColor;
+        }
     }
 
     private void DgvChain_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
@@ -938,8 +1033,7 @@ public class SimulatorForm : Form
         var val      = e.Value?.ToString();
         var row      = _dgvChain.Rows[e.RowIndex];
         var rowType  = row.Tag?.ToString();
-        var bidCol   = rowType == "PUT" ? "colPutBid" : "colCallBid";
-        var disabled = !decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid) || bid == 0m;
+        var disabled = IsChainRowTradeBlocked(row, rowType);
 
         e.PaintBackground(e.ClipBounds, true);
 
@@ -977,11 +1071,12 @@ public class SimulatorForm : Form
         var strikeOk = decimal.TryParse(row.Cells["colStrikePrice"].Value?.ToString(), out var strike);
         if (!strikeOk) return;
 
+        if (IsChainRowTradeBlocked(row, rowType)) return; // same guard as the real grid
+
         var bidCol = rowType == "CALL" ? "colCallBid" : "colPutBid";
         var askCol = rowType == "CALL" ? "colCallAsk" : "colPutAsk";
         decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid);
         decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask);
-        if (ask <= 0) return; // same guard as the real grid — never open on an illiquid quote
 
         int.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts);
         if (contracts <= 0) contracts = 1;
@@ -1010,6 +1105,9 @@ public class SimulatorForm : Form
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
         _ = _fullChart.MarkStrikeAsync(strike);
+
+        // White spot-price line at the moment of entry — panel 3 only, bounded to that one candle.
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
         var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
@@ -1084,6 +1182,9 @@ public class SimulatorForm : Form
         foreach (DataGridViewCell cell in row.Cells) cell.Style.BackColor = Color.Gainsboro;
         row.ReadOnly = true;
         _openSimTrades.Remove(trade);
+
+        // White spot-price line at the moment of close — same marker as the entry one.
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");
