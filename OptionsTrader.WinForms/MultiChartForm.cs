@@ -27,8 +27,6 @@ public class MultiChartForm : Form
     private ChartPanel? _rthPanel;
     private ChartPanel? _overnightPanel;
 
-    // Kept for LogWebSocketEvent (Form1 forwards WS connect/disconnect/reconnect events here,
-    // since the hub's Schwab connection isn't owned by this window).
     private TextBox? _crossLog;
 
     // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
@@ -539,9 +537,8 @@ public class MultiChartForm : Form
         toolbar.Controls.Add(toolsHost, 2, 0);
 
         // Small event log below the charts — logs Cross-SMA cruce/rebote detections (so the
-        // Telegram-push feature can be sanity-checked without digging through Telegram itself)
-        // and, via LogWebSocketEvent, WS connect/disconnect/reconnect events forwarded from
-        // Form1's hub connection. Temporary/diagnostic for now.
+        // Telegram-push feature can be sanity-checked without digging through Telegram itself).
+        // Temporary/diagnostic for now.
         var crossLog = new TextBox
         {
             Dock       = DockStyle.Bottom,
@@ -1137,28 +1134,6 @@ public class MultiChartForm : Form
     {
         if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price);
         if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price);
-    }
-
-    // Forwards an already-timestamped WS connect/disconnect/reconnect line from Form1 (which owns
-    // the actual Schwab streamer connection) into this window's small event log — safe to call
-    // from any thread, since streamer reconnects fire from its own background receive-loop thread.
-    public void LogWebSocketEvent(string line)
-    {
-        if (_crossLog == null || IsDisposed) return;
-        // ReplayWebSocketEvents is called right after construction, before Show() — the window
-        // has no handle yet at that point, so IsHandleCreated must NOT gate this (it used to,
-        // which silently dropped every replayed line). InvokeRequired safely returns false when
-        // there's no handle yet, so this still routes through BeginInvoke once one exists.
-        if (IsHandleCreated && InvokeRequired) { BeginInvoke(() => LogWebSocketEvent(line)); return; }
-        _crossLog.AppendText(line + Environment.NewLine);
-    }
-
-    // Replays every WS event Form1 has buffered so far — the streamer connects once when the
-    // FIRST Live Charts window of the session is opened (before this window even exists), so
-    // without this the "Connected" line would otherwise be lost for every window but that first.
-    public void ReplayWebSocketEvents(IEnumerable<string> lines)
-    {
-        foreach (var line in lines) LogWebSocketEvent(line);
     }
 
     // Today's 9:30 AM ET, in the same "ET wall-clock digits disguised as UTC" fake-epoch units the

@@ -329,36 +329,13 @@ public partial class Form1 : Form
         RaiseWsStatusEvent("Disconnected");
     }
 
-    // Buffers every WS event line for the session (the streamer connects once, when the FIRST
-    // Live Charts window is opened — before that window even exists — so later windows need a
-    // way to catch up on what already happened). Locked since reconnect events fire from the
-    // streamer's own background thread.
-    private readonly List<string> _wsEventLog = new();
-    private readonly object _wsEventLogLock = new();
-
     // Only the hub instance ever calls this directly (ForceDisconnectWebSocketAsync, and the
-    // OnWsStatusEvent hookup in SetUpLiveFeedAsync) — it both shows the line locally AND relays
-    // it to every other instance's process via the hub TCP socket. Client instances instead relay
-    // an already-hub-broadcast line straight into BroadcastWebSocketEventToCharts.
+    // OnWsStatusEvent hookup in SetUpLiveFeedAsync) — relays the WS connect/disconnect/reconnect
+    // status to every other instance's process via the hub TCP socket. No longer surfaced in any
+    // Live Chart window's own log (per explicit request — that log stays free of WS noise).
     private void RaiseWsStatusEvent(string text)
     {
         _candleHubServer?.BroadcastWsEvent(text);
-        BroadcastWebSocketEventToCharts(text);
-    }
-
-    // Forwards a WS connect/disconnect/reconnect line to every currently open Live Charts child
-    // window's own event log — the connection itself is owned by Form1 (the hub instance), not
-    // any single chart window, so every open one gets the same line.
-    private void BroadcastWebSocketEventToCharts(string text)
-    {
-        var line = $"{DateTime.Now:HH:mm:ss}  [WS] {text}";
-        lock (_wsEventLogLock) _wsEventLog.Add(line);
-
-        foreach (var chartForm in _liveChartForms.Values.ToList())
-        {
-            if (!chartForm.IsDisposed)
-                chartForm.LogWebSocketEvent(line);
-        }
     }
 
     // At 4pm ET, any still-open trade whose own expiration date is today is worthless — close it
@@ -2152,7 +2129,6 @@ public partial class Form1 : Form
         var multiChartForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!, this);
         multiChartForm.FormClosed += (s, e2) => _liveChartForms.Remove(symbol);
         _liveChartForms[symbol] = multiChartForm;
-        lock (_wsEventLogLock) multiChartForm.ReplayWebSocketEvents(_wsEventLog);
         multiChartForm.Show();
     }
 
@@ -2321,7 +2297,6 @@ public partial class Form1 : Form
         if (!string.IsNullOrWhiteSpace(remoteHost))
         {
             var remoteHubClient = new CandleHubClient();
-            remoteHubClient.OnWsStatusEvent += msg => BroadcastWebSocketEventToCharts(msg);
 
             // This machine never touches Schwab or the hub machine's C:\OptionsData — without
             // this, it has no local tick history at all, so its own Simulator/4-ETF Simulator
@@ -2348,12 +2323,8 @@ public partial class Form1 : Form
 
             var streamer = CreateSchwabStreamerClient(allowRefresh: true);
             _isWebSocketHub = true;
-            // Shown only in each open Live Charts child window's own event log (crossLog), not
-            // the main form's log — LogWebSocketEvent is itself safe to call from any thread,
-            // which matters here since reconnects fire from the receive loop's background thread.
-            // Also relayed to every OTHER instance via the hub TCP socket (BroadcastWsEvent) —
-            // only the hub instance owns the real Schwab connection, but every ticker's own
-            // process/window should still be able to show its connection history.
+            // Relayed to every OTHER instance via the hub TCP socket (BroadcastWsEvent) — only
+            // the hub instance owns the real Schwab connection.
             streamer.OnWsStatusEvent += RaiseWsStatusEvent;
             await streamer.ConnectAsync();
             await streamer.SubscribeChartEquity(symbols);
@@ -2374,7 +2345,6 @@ public partial class Form1 : Form
         // instead. Still need our OWN SchwabStreamerClient for REST history fetches (no
         // per-account limit on that, unlike the streaming socket) — it's never connected/subscribed.
         var hubClient = new CandleHubClient();
-        hubClient.OnWsStatusEvent += msg => BroadcastWebSocketEventToCharts(msg);
         await hubClient.ConnectAsync(LiveHubPort);
 
         _candleHubClient = hubClient;
