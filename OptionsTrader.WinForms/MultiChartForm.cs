@@ -45,6 +45,21 @@ public class MultiChartForm : Form
         SelectionMode = DataGridViewSelectionMode.FullRowSelect
     };
 
+    // Same grid, mirroring Form1's NEXT-expiration chain (dgvQuotesNext) — shown in its own tab
+    // (Fase 2 of the tabbed options-grid feature), only when Form1.IsNextExpDateVisible is true.
+    private readonly DataGridView _dgvOptionsNext = new()
+    {
+        Dock = DockStyle.Fill,
+        AllowUserToAddRows = false,
+        AllowUserToDeleteRows = false,
+        RowHeadersVisible = false,
+        ReadOnly = true,
+        Font = new Font("Segoe UI", 8F),
+        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+        ColumnHeadersHeight = 24,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect
+    };
+
     // Trades grid mirrored from Form1's own dgvTrades (see Form1.OnTradesUpdatedEvent /
     // GetTradesGrid) — full read-only copy of values + per-cell colors every refresh; Close button
     // forwards into Form1.TriggerTradeCloseClick, same handler Form1's own grid uses.
@@ -870,87 +885,116 @@ public class MultiChartForm : Form
         // Bid/Ask/Sprd/Conts/Level moved to the right of Strike with Range pushed to the end
         // (Form1's own grid keeps Range/Sprd/Bid/Ask BEFORE the Strike button — different order,
         // per explicit request for this one).
-        _dgvOptions.Columns.AddRange(
-            new DataGridViewButtonColumn { Name = "colStrikeLive", HeaderText = "Strike", Width = 46, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
-            new DataGridViewTextBoxColumn { Name = "colBidLive",   HeaderText = "Bid",   Width = 38, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colAskLive",   HeaderText = "Ask",   Width = 38, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colSprdLive",  HeaderText = "Sprd",  Width = 34, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colContsLive", HeaderText = "Conts", Width = 40, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colLevelLive", HeaderText = "Level", Width = 38, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colRangeLive", HeaderText = "Range", Width = 70, ReadOnly = true });
-        foreach (DataGridViewColumn col in _dgvOptions.Columns)
-            col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-
-        // Same per-cell styling as Form1's own dgvQuotes (DgvQuotes_CellFormatting): Sprd bold red,
-        // Ask bold dark green, Bid background green when that row's Sprd <= 2.
-        _dgvOptions.CellFormatting += (s, e) =>
+        // Columns + per-cell styling + Strike-button painting — identical setup for both the
+        // "today" and "next" expiration grids (Fase 2 of the tabbed options-grid feature), so this
+        // is factored into one local function instead of duplicated verbatim.
+        void WireOptionsGrid(DataGridView grid)
         {
-            if (e.RowIndex < 0) return;
-            var row = _dgvOptions.Rows[e.RowIndex];
-            var sprdCol  = _dgvOptions.Columns["colSprdLive"]!.Index;
-            var bidCol   = _dgvOptions.Columns["colBidLive"]!.Index;
-            var askCol   = _dgvOptions.Columns["colAskLive"]!.Index;
-            var rangeCol = _dgvOptions.Columns["colRangeLive"]!.Index;
+            grid.Columns.AddRange(
+                new DataGridViewButtonColumn { Name = "colStrikeLive", HeaderText = "Strike", Width = 46, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
+                new DataGridViewTextBoxColumn { Name = "colBidLive",   HeaderText = "Bid",   Width = 38, ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colAskLive",   HeaderText = "Ask",   Width = 38, ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colSprdLive",  HeaderText = "Sprd",  Width = 34, ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colContsLive", HeaderText = "Conts", Width = 40, ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colLevelLive", HeaderText = "Level", Width = 38, ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colRangeLive", HeaderText = "Range", Width = 70, ReadOnly = true });
+            foreach (DataGridViewColumn col in grid.Columns)
+                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
-            if (e.ColumnIndex == sprdCol)
+            // Same per-cell styling as Form1's own dgvQuotes (DgvQuotes_CellFormatting): Sprd bold
+            // red, Ask bold dark green, Bid background green when that row's Sprd <= 2.
+            grid.CellFormatting += (s, e) =>
             {
-                e.CellStyle.ForeColor = Color.Red;
-                e.CellStyle.Font = new Font(_dgvOptions.Font, FontStyle.Bold);
-            }
-            else if (e.ColumnIndex == askCol)
-            {
-                e.CellStyle.ForeColor = Color.DarkGreen;
-                e.CellStyle.Font = new Font(_dgvOptions.Font, FontStyle.Bold);
-            }
-            else if (e.ColumnIndex == bidCol)
-            {
-                e.CellStyle.BackColor = decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd <= 2
-                    ? Color.LightGreen
-                    : _dgvOptions.DefaultCellStyle.BackColor;
-            }
-            else if (e.ColumnIndex == rangeCol)
-            {
-                // Same rule as Form1's dgvQuotes colRange (DgvQuotes_CellFormatting): green when
-                // this row's own Ask actually falls within "Low - High".
-                var rangeText = row.Cells["colRangeLive"].Value?.ToString();
-                var parts = rangeText?.Split(" - ", StringSplitOptions.TrimEntries);
-                var inRange = parts?.Length == 2
-                    && decimal.TryParse(parts[0], out var low) && decimal.TryParse(parts[1], out var high)
-                    && decimal.TryParse(row.Cells["colAskLive"].Value?.ToString(), out var ask)
-                    && ask >= low && ask <= high;
-                e.CellStyle.BackColor = inRange ? Color.LightGreen : _dgvOptions.DefaultCellStyle.BackColor;
-            }
-        };
+                if (e.RowIndex < 0) return;
+                var row = grid.Rows[e.RowIndex];
+                var sprdCol  = grid.Columns["colSprdLive"]!.Index;
+                var bidCol   = grid.Columns["colBidLive"]!.Index;
+                var askCol   = grid.Columns["colAskLive"]!.Index;
+                var rangeCol = grid.Columns["colRangeLive"]!.Index;
 
-        // Strike button: dark green for Call rows, red for Put rows, light gray when blocked —
-        // identical to DgvQuotes_CellPainting's colStrikePrice button on Form1's own grid (same
-        // IsRowTradeBlocked rule: bid == 0, OR spread >= 6, OR 0 contracts).
-        _dgvOptions.CellPainting += (s, e) =>
+                if (e.ColumnIndex == sprdCol)
+                {
+                    e.CellStyle.ForeColor = Color.Red;
+                    e.CellStyle.Font = new Font(grid.Font, FontStyle.Bold);
+                }
+                else if (e.ColumnIndex == askCol)
+                {
+                    e.CellStyle.ForeColor = Color.DarkGreen;
+                    e.CellStyle.Font = new Font(grid.Font, FontStyle.Bold);
+                }
+                else if (e.ColumnIndex == bidCol)
+                {
+                    e.CellStyle.BackColor = decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd <= 2
+                        ? Color.LightGreen
+                        : grid.DefaultCellStyle.BackColor;
+                }
+                else if (e.ColumnIndex == rangeCol)
+                {
+                    // Same rule as Form1's dgvQuotes colRange (DgvQuotes_CellFormatting): green when
+                    // this row's own Ask actually falls within "Low - High".
+                    var rangeText = row.Cells["colRangeLive"].Value?.ToString();
+                    var parts = rangeText?.Split(" - ", StringSplitOptions.TrimEntries);
+                    var inRange = parts?.Length == 2
+                        && decimal.TryParse(parts[0], out var low) && decimal.TryParse(parts[1], out var high)
+                        && decimal.TryParse(row.Cells["colAskLive"].Value?.ToString(), out var ask)
+                        && ask >= low && ask <= high;
+                    e.CellStyle.BackColor = inRange ? Color.LightGreen : grid.DefaultCellStyle.BackColor;
+                }
+            };
+
+            // Strike button: dark green for Call rows, red for Put rows, light gray when blocked —
+            // identical to DgvQuotes_CellPainting's colStrikePrice button on Form1's own grid (same
+            // IsRowTradeBlocked rule: bid == 0, OR spread >= 6, OR 0 contracts).
+            grid.CellPainting += (s, e) =>
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex != grid.Columns["colStrikeLive"]!.Index) return;
+
+                var val     = e.Value?.ToString();
+                var row     = grid.Rows[e.RowIndex];
+                var rowType = row.Tag?.ToString();
+                e.PaintBackground(e.ClipBounds, true);
+                if (string.IsNullOrEmpty(val)) { e.Handled = true; return; }
+
+                var disabled =
+                    !decimal.TryParse(row.Cells["colBidLive"].Value?.ToString(), out var bid) || bid == 0m
+                    || (decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd >= 6)
+                    || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0;
+
+                var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
+                var textColor = disabled ? Color.Gray : Color.White;
+                var btnRect   = Rectangle.Inflate(e.CellBounds, -3, -3);
+                using var fillBrush = new SolidBrush(btnColor);
+                using var borderPen = new Pen(ControlPaint.Dark(btnColor, 0.2f));
+                using var textFont  = new Font(grid.Font, FontStyle.Bold);
+                e.Graphics!.FillRectangle(fillBrush, btnRect);
+                e.Graphics.DrawRectangle(borderPen, btnRect);
+                TextRenderer.DrawText(e.Graphics, val, textFont, btnRect, textColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+                e.Handled = true;
+            };
+        }
+        WireOptionsGrid(_dgvOptions);
+        WireOptionsGrid(_dgvOptionsNext);
+
+        // Tab control hosting the "today" and "next" expiration grids (Fase 2 of the tabbed
+        // options-grid feature) — the "Next" tab is only added while Form1.IsNextExpDateVisible is
+        // true (mirrors chkHideNextExpDate on Form1), toggled in RefreshOptionsGrid below. Owner-
+        // drawn so the selected tab's header can be bolded/highlighted, per explicit request.
+        var tabToday = new TabPage("Hoy") { Padding = new Padding(2) };
+        tabToday.Controls.Add(_dgvOptions);
+        var tabNext = new TabPage("Próxima") { Padding = new Padding(2) };
+        tabNext.Controls.Add(_dgvOptionsNext);
+        var tabOptions = new TabControl { Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed };
+        tabOptions.TabPages.Add(tabToday);
+        tabOptions.DrawItem += (s, e) =>
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != _dgvOptions.Columns["colStrikeLive"]!.Index) return;
-
-            var val     = e.Value?.ToString();
-            var row     = _dgvOptions.Rows[e.RowIndex];
-            var rowType = row.Tag?.ToString();
-            e.PaintBackground(e.ClipBounds, true);
-            if (string.IsNullOrEmpty(val)) { e.Handled = true; return; }
-
-            var disabled =
-                !decimal.TryParse(row.Cells["colBidLive"].Value?.ToString(), out var bid) || bid == 0m
-                || (decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd >= 6)
-                || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0;
-
-            var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
-            var textColor = disabled ? Color.Gray : Color.White;
-            var btnRect   = Rectangle.Inflate(e.CellBounds, -3, -3);
-            using var fillBrush = new SolidBrush(btnColor);
-            using var borderPen = new Pen(ControlPaint.Dark(btnColor, 0.2f));
-            using var textFont  = new Font(_dgvOptions.Font, FontStyle.Bold);
-            e.Graphics!.FillRectangle(fillBrush, btnRect);
-            e.Graphics.DrawRectangle(borderPen, btnRect);
-            TextRenderer.DrawText(e.Graphics, val, textFont, btnRect, textColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
-            e.Handled = true;
+            var page = tabOptions.TabPages[e.Index];
+            var selected = e.Index == tabOptions.SelectedIndex;
+            using var backBrush = new SolidBrush(selected ? Color.FromArgb(230, 244, 255) : tabOptions.BackColor);
+            e.Graphics.FillRectangle(backBrush, e.Bounds);
+            using var font = new Font(tabOptions.Font, selected ? FontStyle.Bold : FontStyle.Regular);
+            TextRenderer.DrawText(e.Graphics, page.Text, font, e.Bounds, selected ? Color.FromArgb(0, 90, 180) : Color.Black,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         };
 
         var optionsGridHost = new Panel { Dock = DockStyle.Right, Width = 345, Padding = new Padding(6, 0, 6, 6) };
@@ -979,7 +1023,7 @@ public class MultiChartForm : Form
         // txtChartText (source text for the "Text" tool, replaces the Windows clipboard entirely
         // per explicit request) declared earlier alongside btnText — just wire it into the layout
         // here. The grid (Dock=Fill) shrinks automatically to make room since it's added after.
-        optionsGridHost.Controls.Add(_dgvOptions);
+        optionsGridHost.Controls.Add(tabOptions);
         optionsGridHost.Controls.Add(txtChartText);
         optionsGridHost.Controls.Add(lblExpDateNext);
         optionsGridHost.Controls.Add(lblExpDate);
@@ -995,6 +1039,28 @@ public class MultiChartForm : Form
                 lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
             if (!lblExpDateNext.IsDisposed)
                 lblExpDateNext.Text = $"Next: {ExpirationDateResolver.ResolveNext(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
+
+            // "Próxima" tab: only present while Form1 itself shows the next-expiration chain
+            // (mirrors chkHideNextExpDate) — added/removed here instead of once at startup so
+            // toggling that checkbox on Form1 while the Live Chart is already open still takes
+            // effect on the very next poll cycle.
+            if (!tabOptions.IsDisposed && tabOptions.IsHandleCreated)
+            {
+                tabOptions.BeginInvoke(() =>
+                {
+                    var shouldShowNext = _form1.IsNextExpDateVisible;
+                    var hasNextTab = tabOptions.TabPages.Contains(tabNext);
+                    if (shouldShowNext && !hasNextTab) tabOptions.TabPages.Add(tabNext);
+                    else if (!shouldShowNext && hasNextTab) tabOptions.TabPages.Remove(tabNext);
+                });
+            }
+
+            var snapshotNext = _form1.GetQuoteSnapshotNext(_symbol);
+            if (snapshotNext != null && !_dgvOptionsNext.IsDisposed && _dgvOptionsNext.IsHandleCreated)
+            {
+                _dgvOptionsNext.BeginInvoke(() => Form1.PopulateSingleSideOptionsGrid(
+                    _dgvOptionsNext, snapshotNext.Value.AllQuotes, snapshotNext.Value.OtmCalls, snapshotNext.Value.OtmPuts, snapshotNext.Value.Ticker));
+            }
         }
 
         // Strike click: forwards into Form1's own click handler — opens a trade using whatever
@@ -1009,6 +1075,10 @@ public class MultiChartForm : Form
             if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
             _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, chkAws.Checked);
         };
+
+        // "Próxima" tab strike clicks don't open a trade yet — Fase 3 (pendiente) wires this into
+        // a new Form1 handler that opens the trade with TOMORROW's ExpirationDate instead of the
+        // ticker's default resolved date.
 
         _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
         void OnForm1QuotesUpdated(string updatedSymbol)

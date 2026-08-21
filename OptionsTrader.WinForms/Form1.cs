@@ -79,6 +79,13 @@ public partial class Form1 : Form
     private List<OptionQuoteDto> _lastOtmCalls = new();
     private List<OptionQuoteDto> _lastOtmPuts = new();
 
+    // Same idea as the three fields above, but for the NEXT-expiration chain (dgvQuotesNext) — lets
+    // MultiChartForm's tabbed options grid mirror the "next" tab too (Fase 2 of the tabbed-grid
+    // feature), same identical-rows guarantee.
+    private List<OptionQuoteDto> _lastAllQuotesNext = new();
+    private List<OptionQuoteDto> _lastOtmCallsNext = new();
+    private List<OptionQuoteDto> _lastOtmPutsNext = new();
+
     // Strikes force-shown in dgvQuotes regardless of the OTM-only filter — set by clicking a
     // trade's Strike cell in dgvTrades (DgvTrades_CellClick), so a trade that's gone ITM (and
     // would otherwise vanish from the grid) stays visible from then on. Cleared on ticker switch.
@@ -1215,7 +1222,8 @@ public partial class Form1 : Form
                 if (chkSaveToCsv.Checked)
                     _csvLoggerNext?.AppendRows(allQuotesNext);
 
-                PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
+                _lastAllQuotesNext = allQuotesNext;
+                (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
             }
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -1373,6 +1381,19 @@ public partial class Form1 : Form
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return null;
         return (_lastAllQuotes, _lastOtmCalls, _lastOtmPuts, _selectedTicker);
     }
+
+    // Same as GetQuoteSnapshot but for the NEXT-expiration chain — only meaningful while
+    // IsNextExpDateVisible is true (chkHideNextExpDate unchecked); the fields are simply stale/
+    // empty otherwise since the poll loop skips refreshing them (see PollAsync).
+    internal (List<OptionQuoteDto> AllQuotes, List<OptionQuoteDto> OtmCalls, List<OptionQuoteDto> OtmPuts, TickerEntry Ticker)? GetQuoteSnapshotNext(string symbol)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return null;
+        return (_lastAllQuotesNext, _lastOtmCallsNext, _lastOtmPutsNext, _selectedTicker);
+    }
+
+    // Whether Form1 itself currently shows the "next" expiration chain grid — MultiChartForm only
+    // renders its second tab when this is true, per explicit request.
+    internal bool IsNextExpDateVisible => !chkHideNextExpDate.Checked;
 
     // Forwards a Strike-button click from MultiChartForm's mirrored options grid into the EXACT
     // same handler a click on Form1's own dgvQuotes Strike button would run (DgvQuotes_CellClick —
