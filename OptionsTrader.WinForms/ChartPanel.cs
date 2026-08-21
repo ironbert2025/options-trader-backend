@@ -382,19 +382,22 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Toggles Text-placement mode on/off. While on, every click writes whatever text was on the
-    // Windows clipboard AT THE MOMENT THIS TOGGLE WAS PRESSED (re-read fresh each press, so
-    // turning it off and back on again picks up the clipboard's current contents) at that click's
-    // point — session-only, never persisted. Same single-button-arms-all-3-panels convention as
-    // H-Line (see MultiChartForm's btnRthTLine sibling button), but no mirroring: each panel only
-    // places text where it was itself clicked.
-    public async Task<bool> ToggleTextModeAsync()
+    // Toggles Text-placement mode on/off. While on, every click writes `text` (captured by the
+    // caller — MultiChartForm's own multiline textbox, not the Windows clipboard, per explicit
+    // request) at that click's point — session-only, never persisted. Same
+    // single-button-arms-all-3-panels convention as H-Line (see MultiChartForm's btnRthTLine
+    // sibling button), but no mirroring: each panel only places text where it was itself clicked.
+    public async Task<bool> ToggleTextModeAsync(string text)
     {
         if (_webView.CoreWebView2 == null) return false;
-        var text = Clipboard.ContainsText() ? Clipboard.GetText() : string.Empty;
         var result = await _webView.CoreWebView2.ExecuteScriptAsync($"toggleTextMode({JsonSerializer.Serialize(text)});");
         return result == "true";
     }
+
+    // Fires when a click while Text-placement mode is armed actually places a label — chart.html
+    // auto-disarms itself at that point (single-shot per press), so MultiChartForm listens for
+    // this to reset the "Text" button's color back to normal on all 3 panels.
+    public event Action? OnTextPlacedEvent;
 
     // Toggles Arrow drawing mode on/off. While on, every pair of clicks draws a line + arrowhead
     // between them — red if the 1st click is above (higher price than) the 2nd, green otherwise.
@@ -507,6 +510,17 @@ public class ChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync($"updateAllTimeHighBroken({(show ? "true" : "false")});");
+    }
+
+    // The ATH line only clutters the chart when price is nowhere near it — shown automatically
+    // (independent of the toolbar checkbox, which stays a master on/off) only while the live
+    // price is within AthProximityThreshold dollars of the stored ATH value, per explicit request.
+    private const decimal AthProximityThreshold = 5m;
+
+    private async Task MarkAllTimeHighNearAsync(bool near)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateAllTimeHighNear({(near ? "true" : "false")});");
     }
 
     // "ΔS=value" label at trade close — anchored at the trade's strike (same price as its green
@@ -659,6 +673,15 @@ public class ChartPanel : Panel
                         _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
                     }
+                    break;
+                }
+                case "text_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment one label is placed
+                    // (see the click handler's textArmed block) — this just tells C# so the
+                    // "Text" button's color resets on all 3 panels, since arming it in the first
+                    // place armed all 3 at once (see MultiChartForm's btnText.Click).
+                    OnTextPlacedEvent?.Invoke();
                     break;
                 }
                 case "rect_add":
@@ -1198,7 +1221,10 @@ public class ChartPanel : Panel
     private void EvaluateAllTimeHighLive(decimal livePrice, DateTime eastern)
     {
         if (_athValue != null)
+        {
             BeginInvoke(async () => await MarkAllTimeHighBrokenAsync(livePrice > _athValue.Value));
+            BeginInvoke(async () => await MarkAllTimeHighNearAsync(Math.Abs(livePrice - _athValue.Value) < AthProximityThreshold));
+        }
 
         if (_mode != ChartPanelMode.Hourly15) return;
 
