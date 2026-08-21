@@ -938,6 +938,15 @@
     if (textArmed && pendingTextValue) {
       clickTextPrimitive._labels.push({ time: clickTime, price, text: pendingTextValue, selected: false });
       forceRepaint();
+      // Single-shot per arm — placing one label disarms the tool instead of staying armed for
+      // more, per explicit request. Reported to C# so the "Text" button's color resets on all 3
+      // panels (see ChartPanel/MultiChartForm's text_placed handling), same as this button armed
+      // all 3 in the first place.
+      textArmed = false;
+      pendingTextValue = '';
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'text_placed' });
+      }
     }
 
     if (greenArrowArmed) {

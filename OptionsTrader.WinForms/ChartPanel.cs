@@ -396,6 +396,11 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Fires when a click while Text-placement mode is armed actually places a label — chart.html
+    // auto-disarms itself at that point (single-shot per press), so MultiChartForm listens for
+    // this to reset the "Text" button's color back to normal on all 3 panels.
+    public event Action? OnTextPlacedEvent;
+
     // Toggles Arrow drawing mode on/off. While on, every pair of clicks draws a line + arrowhead
     // between them — red if the 1st click is above (higher price than) the 2nd, green otherwise.
     // Same toggle pattern as Rect/T-Line.
@@ -659,6 +664,15 @@ public class ChartPanel : Panel
                         _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
                     }
+                    break;
+                }
+                case "text_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment one label is placed
+                    // (see the click handler's textArmed block) — this just tells C# so the
+                    // "Text" button's color resets on all 3 panels, since arming it in the first
+                    // place armed all 3 at once (see MultiChartForm's btnText.Click).
+                    OnTextPlacedEvent?.Invoke();
                     break;
                 }
                 case "rect_add":

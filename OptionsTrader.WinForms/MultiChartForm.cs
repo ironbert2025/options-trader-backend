@@ -313,6 +313,21 @@ public class MultiChartForm : Form
             btnText.BackColor = on ? Color.LightBlue : SystemColors.Control;
         };
 
+        // A click on whichever panel actually placed the text auto-disarms just THAT panel's own
+        // JS state (see chart.html's textArmed handling) — the other 2 armed it too (btnText arms
+        // all 3 at once) and are still waiting for a click of their own. Force them off too and
+        // reset the button, so "one placement anywhere" fully normalizes the tool everywhere.
+        void OnTextPlaced(ChartPanel? placedOn)
+        {
+            btnText.BackColor = SystemColors.Control;
+            if (hourlyPanel != null && hourlyPanel != placedOn) _ = hourlyPanel.ToggleTextModeAsync();
+            if (rthPanel != null && rthPanel != placedOn) _ = rthPanel.ToggleTextModeAsync();
+            if (overnightPanel != null && overnightPanel != placedOn) _ = overnightPanel.ToggleTextModeAsync();
+        }
+        if (hourlyPanel != null) hourlyPanel.OnTextPlacedEvent += () => OnTextPlaced(hourlyPanel);
+        if (rthPanel != null) rthPanel.OnTextPlacedEvent += () => OnTextPlaced(rthPanel);
+        if (overnightPanel != null) overnightPanel.OnTextPlacedEvent += () => OnTextPlaced(overnightPanel);
+
         // Brings every "Live Charts — <Symbol>" window to the front, across ALL running ticker
         // instances (each is a separate OS process) — not just this one's own windows. Uses raw
         // Win32 window enumeration (CrossProcessWindowHelper) since a normal BringToFront() can't
