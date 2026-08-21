@@ -18,25 +18,24 @@ internal static class DailyChartSnapshotsMarkdownWriter
     // than checking each symbol once and moving on, poll ALL of them together every 5s and only
     // proceed once every symbol's Close.png exists — i.e. wait for the minimum of "all 4 are
     // actually done" — up to a hard cap (5 minutes) so a crashed/closed sibling process can't
-    // block this file forever; whatever's still missing at the cap just gets skipped.
+    // block the FIRST write forever; whatever's still missing at that cap gets written as-is, and
+    // then handed off to a much longer background follow-up (see PollAndRewriteIfLateAsync) that
+    // regenerates the file if a late Close.png shows up afterward — confirmed live: a WebView2
+    // hang at market-close disconnect can delay a capture by 20+ minutes, well past this cap,
+    // with no exception thrown for the usual retry/log path to catch.
     private const int MaxPollCycles = 60; // 60 * 5s = 5 minutes
     private static readonly TimeSpan PollDelay = TimeSpan.FromSeconds(5);
+
+    // Follow-up window for late-arriving Close.png files — checked far less often since this is
+    // just a safety net, not the primary path.
+    private const int LateFollowUpCycles = 24; // 24 * 5 min = 2 hours
+    private static readonly TimeSpan LateFollowUpDelay = TimeSpan.FromMinutes(5);
 
     public static async Task WriteAsync(IReadOnlyList<string> symbols, DateTime dateEst)
     {
         try
         {
-            var dateTag = dateEst.ToString("yyyyMMdd");
-
-            (string Symbol, string OpenPath, string ClosePath) PathsFor(string symbol)
-            {
-                var folder = Path.Combine(SnapshotsFolder, symbol);
-                return (symbol,
-                    Path.Combine(folder, $"{symbol}_{dateTag}_Open.png"),
-                    Path.Combine(folder, $"{symbol}_{dateTag}_Close.png"));
-            }
-
-            var entries = symbols.Select(PathsFor).ToList();
+            var entries = symbols.Select(s => PathsFor(s, dateEst)).ToList();
 
             for (var cycle = 0; cycle < MaxPollCycles; cycle++)
             {
@@ -44,39 +43,83 @@ internal static class DailyChartSnapshotsMarkdownWriter
                 await Task.Delay(PollDelay);
             }
 
-            var images = entries
-                .Select(e => (
-                    e.Symbol,
-                    Open: File.Exists(e.OpenPath) ? e.OpenPath : null,
-                    Close: File.Exists(e.ClosePath) ? e.ClosePath : null))
-                .ToList();
+            WriteFile(entries, dateEst);
 
-            Directory.CreateDirectory(VaultFolder);
-            var fileName = $"{dateEst:yyyy_MM_dd}_{Environment.MachineName}_OpenClose.md";
-            var path = Path.Combine(VaultFolder, fileName);
-            var nl = Environment.NewLine;
-
-            var body = new System.Text.StringBuilder();
-            body.Append($"# Chart Snapshots — {dateEst:yyyy-MM-dd}{nl}{nl}");
-            foreach (var (symbol, openPath, closePath) in images)
-            {
-                body.Append($"## {symbol}{nl}{nl}");
-                if (openPath != null)
-                    body.Append($"**Open**{nl}![Open]({new Uri(openPath).AbsoluteUri}){nl}{nl}");
-                if (closePath != null)
-                    body.Append($"**Close**{nl}![Close]({new Uri(closePath).AbsoluteUri}){nl}{nl}");
-                if (openPath == null && closePath == null)
-                    body.Append($"_(sin imágenes hoy){nl}{nl}");
-                body.Append($"---{nl}{nl}");
-            }
-
-            WithRetry(() => File.WriteAllText(path, body.ToString()));
+            if (entries.Any(e => !File.Exists(e.ClosePath)))
+                _ = PollAndRewriteIfLateAsync(entries, dateEst);
         }
         catch
         {
             // Best-effort, same as every other local store here — never let this affect the
             // market-close flow that just finished.
         }
+    }
+
+    // Keeps checking, much less aggressively, for whichever Close.png files were still missing
+    // when the first write happened — rewrites the whole file (same WriteFile logic, so it stays
+    // consistent) each time it finds a new one, until every symbol has one or the follow-up window
+    // runs out.
+    private static async Task PollAndRewriteIfLateAsync(List<(string Symbol, string OpenPath, string ClosePath)> entries, DateTime dateEst)
+    {
+        try
+        {
+            for (var cycle = 0; cycle < LateFollowUpCycles; cycle++)
+            {
+                await Task.Delay(LateFollowUpDelay);
+                if (entries.All(e => File.Exists(e.ClosePath)))
+                {
+                    WriteFile(entries, dateEst);
+                    return;
+                }
+            }
+            // Whatever's still missing after 2 extra hours is likely gone for good — one last
+            // rewrite anyway, in case some (not all) symbols showed up late.
+            WriteFile(entries, dateEst);
+        }
+        catch
+        {
+            // Best-effort — never let this affect anything else running.
+        }
+    }
+
+    private static (string Symbol, string OpenPath, string ClosePath) PathsFor(string symbol, DateTime dateEst)
+    {
+        var dateTag = dateEst.ToString("yyyyMMdd");
+        var folder = Path.Combine(SnapshotsFolder, symbol);
+        return (symbol,
+            Path.Combine(folder, $"{symbol}_{dateTag}_Open.png"),
+            Path.Combine(folder, $"{symbol}_{dateTag}_Close.png"));
+    }
+
+    private static void WriteFile(List<(string Symbol, string OpenPath, string ClosePath)> entries, DateTime dateEst)
+    {
+        var images = entries
+            .Select(e => (
+                e.Symbol,
+                Open: File.Exists(e.OpenPath) ? e.OpenPath : null,
+                Close: File.Exists(e.ClosePath) ? e.ClosePath : null))
+            .ToList();
+
+        Directory.CreateDirectory(VaultFolder);
+        var fileName = $"{dateEst:yyyy_MM_dd}_{Environment.MachineName}_OpenClose.md";
+        var path = Path.Combine(VaultFolder, fileName);
+        var nl = Environment.NewLine;
+
+        var body = new System.Text.StringBuilder();
+        body.Append($"# Chart Snapshots — {dateEst:yyyy-MM-dd}{nl}{nl}");
+        foreach (var (symbol, openPath, closePath) in images)
+        {
+            body.Append($"## {symbol}{nl}{nl}");
+            if (openPath != null)
+                body.Append($"**Open**{nl}![Open]({new Uri(openPath).AbsoluteUri}){nl}{nl}");
+            if (closePath != null)
+                body.Append($"**Close**{nl}![Close]({new Uri(closePath).AbsoluteUri}){nl}{nl}");
+            if (openPath == null && closePath == null)
+                body.Append($"_(sin imágenes hoy){nl}{nl}");
+            body.Append($"---{nl}{nl}");
+        }
+
+        WithRetry(() => File.WriteAllText(path, body.ToString()));
     }
 
     private static void WithRetry(Action action)
