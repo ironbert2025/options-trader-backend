@@ -216,11 +216,7 @@ partial class Form1
         tabQuotes.Controls.Add(grpOptionsChainNext);
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnLiveChart);
-        tabQuotes.Controls.Add(btnFourEtfCharts);
-        tabQuotes.Controls.Add(btnHubHost);
         tabQuotes.Controls.Add(btnSimulator);
-        tabQuotes.Controls.Add(btnFourEtfSimulator);
-        tabQuotes.Controls.Add(btnTimeframeViewer);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -764,18 +760,18 @@ partial class Form1
         btnLiveChart.Text = "Live Chart";
         btnLiveChart.Click += BtnLiveChart_Click;
         //
-        // btnFourEtfCharts
+        // btnFourEtfCharts (moved to Settings tab)
         //
-        btnFourEtfCharts.Location = new Point(1020, 34);
+        btnFourEtfCharts.Location = new Point(8, 480);
         btnFourEtfCharts.Name = "btnFourEtfCharts";
         btnFourEtfCharts.Size = new Size(120, 25);
         btnFourEtfCharts.TabIndex = 3;
         btnFourEtfCharts.Text = "Block Mov";
         btnFourEtfCharts.Click += BtnFourEtfCharts_Click;
         //
-        // btnHubHost
+        // btnHubHost (moved to Settings tab)
         //
-        btnHubHost.Location = new Point(1020, 64);
+        btnHubHost.Location = new Point(134, 480);
         btnHubHost.Name = "btnHubHost";
         btnHubHost.Size = new Size(90, 25);
         btnHubHost.TabIndex = 4;
@@ -784,25 +780,25 @@ partial class Form1
         //
         // btnSimulator
         //
-        btnSimulator.Location = new Point(1020, 94);
+        btnSimulator.Location = new Point(1020, 34);
         btnSimulator.Name = "btnSimulator";
         btnSimulator.Size = new Size(90, 25);
         btnSimulator.TabIndex = 5;
         btnSimulator.Text = "Simulador";
         btnSimulator.Click += BtnSimulator_Click;
         //
-        // btnFourEtfSimulator
+        // btnFourEtfSimulator (moved to Settings tab)
         //
-        btnFourEtfSimulator.Location = new Point(1020, 124);
+        btnFourEtfSimulator.Location = new Point(230, 480);
         btnFourEtfSimulator.Name = "btnFourEtfSimulator";
         btnFourEtfSimulator.Size = new Size(90, 25);
         btnFourEtfSimulator.TabIndex = 6;
         btnFourEtfSimulator.Text = "Sim 4 ETF";
         btnFourEtfSimulator.Click += BtnFourEtfSimulator_Click;
         //
-        // btnTimeframeViewer
+        // btnTimeframeViewer (moved to Settings tab)
         //
-        btnTimeframeViewer.Location = new Point(1020, 154);
+        btnTimeframeViewer.Location = new Point(326, 480);
         btnTimeframeViewer.Name = "btnTimeframeViewer";
         btnTimeframeViewer.Size = new Size(120, 25);
         btnTimeframeViewer.TabIndex = 7;
@@ -1131,6 +1127,10 @@ partial class Form1
         tabSettings.Controls.Add(grpRefreshToken);
         tabSettings.Controls.Add(grpAccounts);
         tabSettings.Controls.Add(grpAwsSettings);
+        tabSettings.Controls.Add(btnFourEtfCharts);
+        tabSettings.Controls.Add(btnHubHost);
+        tabSettings.Controls.Add(btnFourEtfSimulator);
+        tabSettings.Controls.Add(btnTimeframeViewer);
         tabSettings.Location = new Point(4, 24);
         tabSettings.Name = "tabSettings";
         tabSettings.Padding = new Padding(8);

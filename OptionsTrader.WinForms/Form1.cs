@@ -123,15 +123,17 @@ public partial class Form1 : Form
 
         // Deletes every Telegram push this app has sent — across ALL ticker instances, since
         // they all share the same telegram_pushes.json file and the same channel. Added via code
-        // (not the designer) so it doesn't require touching Form1.Designer.cs's layout.
+        // (not the designer) so it doesn't require touching Form1.Designer.cs's layout. Lives on
+        // the Settings tab (moved from Quotes), alongside the other action buttons relocated
+        // there.
         var btnDeleteTelegramPushes = new Button
         {
-            Location = new Point(1020, 124),
+            Location = new Point(422, 480),
             Size     = new Size(90, 25),
             Text     = "Del. Telegram"
         };
         btnDeleteTelegramPushes.Click += BtnDeleteTelegramPushes_Click;
-        tabQuotes.Controls.Add(btnDeleteTelegramPushes);
+        tabSettings.Controls.Add(btnDeleteTelegramPushes);
 
         // "History" tab — Calendar (trading journal) + Trade Log views over TradeHistoryStore.
         // Built entirely in HistoryTabPanel (no designer file), same convention as
