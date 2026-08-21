@@ -142,6 +142,9 @@ public class MultiChartForm : Form
             var on = await hourlyPanel.ToggleTLineModeAsync();
             btnTLine.BackColor = on ? Color.Orange : SystemColors.Control;
         };
+        // Completing a T-Line (2nd click) auto-disarms itself in chart.html — reset the button
+        // color here so it doesn't stay highlighted after the fact.
+        if (hourlyPanel != null) hourlyPanel.OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
 
         var btnHourlyClear = new Button
         {
@@ -306,6 +309,7 @@ public class MultiChartForm : Form
             var on = await rthPanel.ToggleTLineModeAsync();
             btnRthTLine.BackColor = on ? Color.Orange : SystemColors.Control;
         };
+        if (rthPanel != null) rthPanel.OnTLinePlacedEvent += () => btnRthTLine.BackColor = SystemColors.Control;
         // Single H-Line button (above the 15m RTH panel) arms drawing on ALL 3 panels at once —
         // the user can then click on whichever one they want and it mirrors onto the other 2 (see
         // the OnHLineDrawnEvent wiring below), instead of needing a separate toggle per panel.

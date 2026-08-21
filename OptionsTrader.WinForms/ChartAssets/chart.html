@@ -917,10 +917,14 @@
         tLinePrimitive._preview = null;
         tLinePending = null;
         forceRepaint();
+        // Single-shot per arm — completing one T-Line (2nd click) disarms the tool instead of
+        // staying armed for more, per explicit request.
+        tLineArmed = false;
         // Persisted per-symbol by C# (TLineStore) so it reappears at the same point after
         // closing and reopening the app — see ChartPanel.CoreWebView2_WebMessageReceived.
         if (window.chrome && window.chrome.webview) {
           window.chrome.webview.postMessage({ type: 'tline', ...line });
+          window.chrome.webview.postMessage({ type: 'tline_placed' });
         }
       }
     }

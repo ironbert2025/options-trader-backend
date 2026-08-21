@@ -373,6 +373,11 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Fires when a T-Line's 2nd click completes it — chart.html auto-disarms itself at that
+    // point (single-shot per press), so MultiChartForm listens for this to reset the
+    // corresponding button's color back to normal.
+    public event Action? OnTLinePlacedEvent;
+
     // Toggles H-Line drawing mode on/off. While on, every click draws a new red horizontal line
     // from the click point to the right edge of the chart. Same toggle pattern as DZ/SZ.
     public async Task<bool> ToggleHLineModeAsync()
@@ -678,6 +683,14 @@ public class ChartPanel : Panel
                         _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
                     }
+                    break;
+                }
+                case "tline_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment a T-Line's 2nd click
+                    // completes it — this just tells C# so the corresponding button's color
+                    // resets (see MultiChartForm's btnTLine/btnRthTLine wiring).
+                    OnTLinePlacedEvent?.Invoke();
                     break;
                 }
                 case "text_placed":
