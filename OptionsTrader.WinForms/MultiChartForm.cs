@@ -965,11 +965,23 @@ public class MultiChartForm : Form
             Font      = new Font("Segoe UI", 9F, FontStyle.Bold),
             ForeColor = Color.DarkGoldenrod
         };
+        // Next expiration date — same ResolveNext used by Form1's own "next" chain grid
+        // (grpOptionsChainNext), just surfaced here as a label too (Fase 1 of the tabbed
+        // options-grid feature — the grid itself follows in a later phase).
+        var lblExpDateNext = new Label
+        {
+            Dock      = DockStyle.Top,
+            Height    = 20,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font      = new Font("Segoe UI", 9F, FontStyle.Regular),
+            ForeColor = Color.Gray
+        };
         // txtChartText (source text for the "Text" tool, replaces the Windows clipboard entirely
         // per explicit request) declared earlier alongside btnText — just wire it into the layout
         // here. The grid (Dock=Fill) shrinks automatically to make room since it's added after.
         optionsGridHost.Controls.Add(_dgvOptions);
         optionsGridHost.Controls.Add(txtChartText);
+        optionsGridHost.Controls.Add(lblExpDateNext);
         optionsGridHost.Controls.Add(lblExpDate);
 
         void RefreshOptionsGrid()
@@ -981,6 +993,8 @@ public class MultiChartForm : Form
                 _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker));
             if (!lblExpDate.IsDisposed)
                 lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
+            if (!lblExpDateNext.IsDisposed)
+                lblExpDateNext.Text = $"Next: {ExpirationDateResolver.ResolveNext(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
         }
 
         // Strike click: forwards into Form1's own click handler — opens a trade using whatever
