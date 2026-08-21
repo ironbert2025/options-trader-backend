@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -496,16 +497,37 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"setBollingerEdgeMarkersVisible({(show ? "true" : "false")});");
     }
 
-    // White line at the underlying spot price the moment a trade is opened or closed — panel 3
-    // (RTH+Overnight) only, per explicit request extending the Simulator's identical marker to the
-    // live app. Same markEntrySpot JS function the Simulator already uses (anchors to whichever
-    // candle is currently last in the series, spans 3 bar-widths). Accumulates, one segment per
-    // call, never auto-removed.
-    public async Task MarkEntrySpotAsync(decimal price)
+    // White line at the underlying spot price the moment a trade is opened or closed — panels 2
+    // (15m RTH) and 3 (RTH+Overnight). Same markEntrySpot JS function the Simulator already uses
+    // (anchors to whichever candle is currently last in the series, spans 3 bar-widths).
+    // Accumulates, one segment per call, never auto-removed.
+    //
+    // entryTime (Eastern wall-clock, same convention as CandleData.Time — see FakeUtcEpochSeconds)
+    // is only passed when REPLAYING a persisted trade from a previous day (see
+    // ReplayPersistedEntryMarkersAsync below) — omitted, it anchors to whichever candle is
+    // currently forming, same as the original live-tick call site always did.
+    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr});");
+        var timeArg = entryTime.HasValue
+            ? new DateTimeOffset(DateTime.SpecifyKind(entryTime.Value, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString()
+            : "undefined";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg});");
+    }
+
+    // Redraws the white entry-spot line for every trade still open on THIS symbol (per
+    // OpenTradesStore, which already survives across day boundaries and app restarts — see
+    // Form1.RestoreOpenTrades/CloseExpiredTradesAsync) — called once after history loads, so a
+    // trade opened yesterday for tomorrow's expiration (Fase 3, the "Próxima" tab) still shows its
+    // ORIGINAL entry line today, alongside today's own if a new one was opened, per explicit
+    // request ("para que se vean ambas si cierra al otro dia").
+    private async Task ReplayPersistedEntryMarkersAsync()
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Fifteen_Full) return;
+        var openTrades = OpenTradesStore.Load().Where(t => t.Symbol == _symbol && t.EntrySpotPrice > 0m);
+        foreach (var trade in openTrades)
+            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime);
     }
 
     // Re-evaluated on every live tick (all 3 panels) — purely visual, flips the ATH line green
@@ -2190,6 +2212,7 @@ public class ChartPanel : Panel
 
                     await EvaluatePrevDayHiLoAsync(aggregated);
                     await DrawPrevDayCloseAsync(aggregated);
+                    await ReplayPersistedEntryMarkersAsync();
                 }
             }
         }

@@ -1390,14 +1390,32 @@
   const entrySpotLinePrimitive = new EntrySpotLinePrimitive();
   let entrySpotLineAttached = false;
 
-  // No time argument — anchors to whichever candle is CURRENTLY last in the series (the one
-  // actually forming right when the trade is opened), same "anchor at the last loaded candle"
-  // convention markStrike/the premarket line already use. Snapshotted into the stored line entry
-  // at push time, so it stays put even as later candles get added.
-  function markEntrySpot(price) {
+  // time omitted (the live-tick call site, opening a trade right now) — anchors to whichever
+  // candle is CURRENTLY last in the series (the one actually forming), same "anchor at the last
+  // loaded candle" convention markStrike/the premarket line already use. Snapshotted into the
+  // stored line entry at push time, so it stays put even as later candles get added.
+  //
+  // time given (replaying a PREVIOUS day's still-open trade from OpenTradesStore on chart load —
+  // see ChartPanel.ReplayPersistedEntryMarkersAsync) — snapped to the nearest real candle at/before
+  // it, same fallback HLinePrimitive uses, since a raw C# timestamp essentially never lands on an
+  // exact candle boundary. This is what lets BOTH entry lines show (yesterday's and today's) when a
+  // trade opened yesterday is still open today.
+  function markEntrySpot(price, time) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
-    entrySpotLinePrimitive._lines.push({ time: allCandles[allCandles.length - 1].time, price });
+    let anchorTime = allCandles[allCandles.length - 1].time;
+    if (time !== undefined && time !== null) {
+      let floor = null;
+      for (let i = allCandles.length - 1; i >= 0; i--) {
+        if (allCandles[i].time <= time) { floor = allCandles[i].time; break; }
+      }
+      anchorTime = floor ?? allCandles[0].time;
+    }
+    // Dedup by (anchorTime, price) — ReplayPersistedEntryMarkersAsync calls this again on every
+    // LoadHistoryAsync (e.g. reopening the Live Chart window), which would otherwise push a fresh
+    // duplicate segment each time instead of just re-establishing the same one.
+    const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price);
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price });
     forceRepaint();
   }
 
