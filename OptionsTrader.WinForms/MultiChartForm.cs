@@ -472,10 +472,15 @@ public class MultiChartForm : Form
             var is5Min = await overnightPanel.ToggleIntervalAsync();
             btn5Min.BackColor = is5Min ? Color.LightBlue : SystemColors.Control;
         };
+        // Single Arrow button (over panel 3, same convention as H-Line/Text) arms drawing on ALL
+        // 3 panels at once — used to be overnightPanel-only. No mirroring: each panel only draws
+        // where it was itself clicked, same as Text.
         btnArrow.Click += async (s, e) =>
         {
-            if (overnightPanel == null) return;
-            var on = await overnightPanel.ToggleArrowModeAsync();
+            bool on = false;
+            if (hourlyPanel != null) on = await hourlyPanel.ToggleArrowModeAsync();
+            if (rthPanel != null) on = await rthPanel.ToggleArrowModeAsync();
+            if (overnightPanel != null) on = await overnightPanel.ToggleArrowModeAsync();
             btnArrow.BackColor = on ? Color.LightYellow : SystemColors.Control;
         };
         btnStopPush.Click += (s, e) => overnightPanel?.StopAutoZonePush();
