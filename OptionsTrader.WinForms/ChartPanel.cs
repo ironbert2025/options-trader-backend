@@ -1220,7 +1220,12 @@ public class ChartPanel : Panel
 
         _athEvaluatedAtClose = true;
 
-        if (_athValue != null && _athTodaysHigh.Value <= _athValue.Value) return;
+        // Re-read from disk right here instead of trusting the in-memory _athValue cached at
+        // chart-open time — that cache can be stale/null (e.g. a Load() that happened to land
+        // empty), and comparing against a stale value is exactly what let a lower "today's high"
+        // clobber a real historical ATH. This is the authoritative check.
+        var storedAth = AllTimeHighStore.Load(_symbol);
+        if (storedAth != null && _athTodaysHigh.Value <= storedAth.Value.Value) return;
 
         var newValue = _athTodaysHigh.Value;
         var today = DateOnly.FromDateTime(eastern);

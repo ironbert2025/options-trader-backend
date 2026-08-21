@@ -919,7 +919,7 @@ public class MultiChartForm : Form
             Height    = 20,
             TextAlign = ContentAlignment.MiddleCenter,
             Font      = new Font("Segoe UI", 9F, FontStyle.Bold),
-            ForeColor = Color.White
+            ForeColor = Color.DarkGoldenrod
         };
         optionsGridHost.Controls.Add(_dgvOptions);
         optionsGridHost.Controls.Add(lblExpDate);

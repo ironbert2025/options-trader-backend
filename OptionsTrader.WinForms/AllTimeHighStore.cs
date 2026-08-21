@@ -44,8 +44,26 @@ internal static class AllTimeHighStore
 
     public static (decimal Value, DateOnly Date)? Load(string symbol)
     {
-        var all = LoadAll();
-        return all.TryGetValue(symbol, out var record) ? (record.Value, record.Date) : null;
+        // Same cross-process mutex Save() uses — without it, a Load() landing mid-write from
+        // another ticker's process (all 4 tend to Save() around the same 16:00 ET close) could
+        // read a partially-written file, fail to deserialize, and silently come back empty
+        // (LoadAll's catch-all). Confirmed live: that's exactly how SPY's real ATH got clobbered —
+        // a null-value Load() left _athValue null in ChartPanel, which then bypassed
+        // EvaluateAllTimeHighAtClose's "don't overwrite with a lower value" guard entirely.
+        using var mutex = new Mutex(false, MutexName);
+        var acquired = false;
+        try
+        {
+            try { acquired = mutex.WaitOne(TimeSpan.FromSeconds(5)); }
+            catch (AbandonedMutexException) { acquired = true; }
+
+            var all = LoadAll();
+            return all.TryGetValue(symbol, out var record) ? (record.Value, record.Date) : null;
+        }
+        finally
+        {
+            if (acquired) mutex.ReleaseMutex();
+        }
     }
 
     public static void Save(string symbol, decimal value, DateOnly date)
