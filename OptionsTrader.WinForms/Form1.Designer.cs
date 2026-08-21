@@ -130,10 +130,6 @@ partial class Form1
         colHigh = new DataGridViewTextBoxColumn();
         colExpDate = new DataGridViewTextBoxColumn();
         btnSaveTickers = new Button();
-        grpScreenCoords = new GroupBox();
-        btnSaveCoords = new Button();
-        btnResetCoords = new Button();
-        pnlCoordsRows = new Panel();
         grpPositionSize = new GroupBox();
         rbPosition25 = new RadioButton();
         rbPosition5 = new RadioButton();
@@ -190,7 +186,6 @@ partial class Form1
         tabSettings.SuspendLayout();
         grpBroker.SuspendLayout();
         grpTickers.SuspendLayout();
-        grpScreenCoords.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvTickers).BeginInit();
         grpPositionSize.SuspendLayout();
         grpTarget.SuspendLayout();
@@ -1126,7 +1121,6 @@ partial class Form1
         // 
         tabSettings.Controls.Add(grpBroker);
         tabSettings.Controls.Add(grpTickers);
-        tabSettings.Controls.Add(grpScreenCoords);
         tabSettings.Controls.Add(grpPositionSize);
         tabSettings.Controls.Add(chkSaveDumps);
         tabSettings.Controls.Add(chkSaveToCsv);
@@ -1195,40 +1189,6 @@ partial class Form1
         grpTickers.TabIndex = 1;
         grpTickers.TabStop = false;
         grpTickers.Text = "Tickers";
-        //
-        // grpScreenCoords
-        //
-        grpScreenCoords.Controls.Add(btnSaveCoords);
-        grpScreenCoords.Controls.Add(btnResetCoords);
-        grpScreenCoords.Controls.Add(pnlCoordsRows);
-        grpScreenCoords.Location = new Point(525, 8);
-        grpScreenCoords.Name = "grpScreenCoords";
-        grpScreenCoords.Size = new Size(265, 200);
-        grpScreenCoords.TabIndex = 6;
-        grpScreenCoords.TabStop = false;
-        grpScreenCoords.Text = "Screen Coordinates";
-        // pnlCoordsRows — one row (button + 2 coord textboxes) generated per Ticker symbol at
-        // runtime by LoadCoordsButtons(); AutoScroll so it never overflows the GroupBox if more
-        // than ~4 tickers are configured.
-        pnlCoordsRows.Location = new Point(5, 22);
-        pnlCoordsRows.Name = "pnlCoordsRows";
-        pnlCoordsRows.Size = new Size(255, 128);
-        pnlCoordsRows.AutoScroll = true;
-        pnlCoordsRows.TabIndex = 0;
-        // btnSaveCoords
-        btnSaveCoords.Location = new Point(78, 155);
-        btnSaveCoords.Name = "btnSaveCoords";
-        btnSaveCoords.Size = new Size(80, 23);
-        btnSaveCoords.TabIndex = 12;
-        btnSaveCoords.Text = "Save";
-        btnSaveCoords.Click += BtnSaveCoords_Click;
-        // btnResetCoords
-        btnResetCoords.Location = new Point(166, 155);
-        btnResetCoords.Name = "btnResetCoords";
-        btnResetCoords.Size = new Size(80, 23);
-        btnResetCoords.TabIndex = 13;
-        btnResetCoords.Text = "Reset";
-        btnResetCoords.Click += BtnResetCoords_Click;
         //
         // dgvTickers
         // 
@@ -1702,8 +1662,6 @@ partial class Form1
         tabSettings.ResumeLayout(false);
         grpBroker.ResumeLayout(false);
         grpTickers.ResumeLayout(false);
-        grpScreenCoords.ResumeLayout(false);
-        grpScreenCoords.PerformLayout();
         ((System.ComponentModel.ISupportInitialize)dgvTickers).EndInit();
         grpPositionSize.ResumeLayout(false);
         grpTarget.ResumeLayout(false);
@@ -1874,8 +1832,4 @@ partial class Form1
     private TextBox txtAwsRegion;
     private Button btnSaveAwsSettings;
     private Label lblAwsSaved;
-    private GroupBox grpScreenCoords;
-    private Panel pnlCoordsRows;
-    private Button btnSaveCoords;
-    private Button btnResetCoords;
 }

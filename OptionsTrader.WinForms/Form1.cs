@@ -42,15 +42,6 @@ public partial class Form1 : Form
     private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
     private bool _throttledAfter11;   // true once the 6s poll has downshifted to 1-minute after 11 AM
 
-    // Screen coordinates capture state
-    private TextBox? _coordsTarget1;
-    private TextBox? _coordsTarget2;
-    private int      _coordsClickCount;
-    private System.Windows.Forms.Timer? _coordsCaptureTimer;
-    // One row per Tickers-table symbol, rebuilt by LoadCoordsButtons() whenever tickers change.
-    private readonly Dictionary<string, (TextBox T1, TextBox T2)> _coordsTextboxes = new();
-    private readonly List<Button> _coordsButtons = new();
-
     private TickerEntry? _selectedTicker;
 
     // Read-only peek at this instance's own ticker — used by TimeframeViewerForm to auto-select
@@ -122,7 +113,6 @@ public partial class Form1 : Form
         if (BrokerSettingsStore.Load() == BrokerName.Schwab)
             LoadSchwabCredentials();
         LoadAwsSettings();
-        LoadCoordsButtons();
         LoadBalance();
         LoadTickerButtons();
         LoadCachedAccounts();
@@ -2938,132 +2928,6 @@ public partial class Form1 : Form
         LogLine($"{DateTime.Now:HH:mm:ss} [Screenshot] Whole UI saved: {filePath}", Color.Cyan);
     }
 
-    // (Re)builds one row (button + 2 coord textboxes) per symbol currently in the Tickers table,
-    // preloading whatever coordinates were already saved for that symbol. Called at startup and
-    // whenever the Tickers table is saved, so adding/removing a ticker keeps this in sync.
-    private void LoadCoordsButtons()
-    {
-        pnlCoordsRows.Controls.Clear();
-        _coordsTextboxes.Clear();
-        _coordsButtons.Clear();
-
-        var saved = ScreenCoordsStore.Load();
-        var symbols = TickerSettingsStore.Load()
-            .Select(t => t.Symbol.ToUpperInvariant())
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Distinct()
-            .ToList();
-
-        var y = 2;
-        foreach (var symbol in symbols)
-        {
-            var btn = new Button
-            {
-                Text     = symbol,
-                Location = new Point(5, y),
-                Size     = new Size(60, 23),
-                Tag      = symbol
-            };
-            btn.Click += BtnCoords_Click;
-
-            var t1 = new TextBox { Location = new Point(73, y),  Size = new Size(80, 23), ReadOnly = true };
-            var t2 = new TextBox { Location = new Point(161, y), Size = new Size(80, 23), ReadOnly = true };
-            if (saved.TryGetValue(symbol, out var tc))
-            {
-                t1.Text = tc.Coords1;
-                t2.Text = tc.Coords2;
-            }
-
-            pnlCoordsRows.Controls.Add(btn);
-            pnlCoordsRows.Controls.Add(t1);
-            pnlCoordsRows.Controls.Add(t2);
-
-            _coordsTextboxes[symbol] = (t1, t2);
-            _coordsButtons.Add(btn);
-
-            y += 32;
-        }
-    }
-
-    private void BtnSaveCoords_Click(object? sender, EventArgs e)
-    {
-        var coords = _coordsTextboxes.ToDictionary(
-            kv => kv.Key,
-            kv => new TickerCoords(kv.Value.T1.Text, kv.Value.T2.Text));
-        ScreenCoordsStore.Save(coords);
-
-        MessageBox.Show("Coordinates saved.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
-    }
-
-    private void BtnResetCoords_Click(object? sender, EventArgs e)
-    {
-        foreach (var (t1, t2) in _coordsTextboxes.Values)
-            t1.Text = t2.Text = string.Empty;
-
-        var current = ScreenCoordsStore.Load();
-        foreach (var symbol in _coordsTextboxes.Keys)
-            current[symbol] = new TickerCoords(string.Empty, string.Empty);
-        ScreenCoordsStore.Save(current);
-    }
-
-    private void BtnCoords_Click(object? sender, EventArgs e)
-    {
-        if (sender is not Button btn || btn.Tag is not string symbol) return;
-        if (!_coordsTextboxes.TryGetValue(symbol, out var targets)) return;
-
-        _coordsTarget1    = targets.T1;
-        _coordsTarget2    = targets.T2;
-        _coordsClickCount = 0;
-
-        // Change cursor to crosshair to indicate capture mode
-        this.Cursor = Cursors.Cross;
-
-        // Poll mouse clicks via timer every 50ms
-        _coordsCaptureTimer?.Stop();
-        _coordsCaptureTimer = new System.Windows.Forms.Timer { Interval = 50 };
-        _coordsCaptureTimer.Tick += CoordsCaptureTick;
-        _coordsCaptureTimer.Start();
-
-        btn.BackColor = Color.Yellow;
-        btn.Text = btn.Text + " ...";
-    }
-
-    private void CoordsCaptureTick(object? sender, EventArgs e)
-    {
-        if ((Control.MouseButtons & MouseButtons.Left) == 0) return;
-
-        var pos = Control.MousePosition;
-
-        if (_coordsClickCount == 0)
-        {
-            _coordsTarget1!.Text = $"{pos.X},{pos.Y}";
-            _coordsClickCount = 1;
-        }
-        else
-        {
-            _coordsTarget2!.Text = $"{pos.X},{pos.Y}";
-            StopCoordsCapture();
-        }
-
-        // Wait for mouse release before detecting next click
-        while ((Control.MouseButtons & MouseButtons.Left) != 0)
-            System.Windows.Forms.Application.DoEvents();
-    }
-
-    private void StopCoordsCapture()
-    {
-        _coordsCaptureTimer?.Stop();
-        _coordsCaptureTimer = null;
-        this.Cursor = Cursors.Default;
-
-        // Reset every dynamically-generated coords button's appearance.
-        foreach (var b in _coordsButtons)
-        {
-            b.BackColor = SystemColors.Control;
-            b.Text = b.Text.Replace(" ...", string.Empty);
-        }
-    }
-
     // Dual-writes every trade to TradeHistoryStore alongside the API call — first step toward
     // being able to run without the EC2 backend. The API stays the source of truth for the id
     // whenever it's reachable; if it isn't (apiTradeId stays 0), TradeHistoryStore.Add assigns a
@@ -3405,6 +3269,5 @@ public partial class Form1 : Form
 
         TickerSettingsStore.Save(tickers);
         LoadTickerButtons();
-        LoadCoordsButtons();
     }
 }
