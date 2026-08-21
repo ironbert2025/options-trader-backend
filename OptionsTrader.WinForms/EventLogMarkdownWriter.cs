@@ -2,11 +2,14 @@ namespace OptionsTrader.WinForms;
 
 // Appends one markdown entry per event notification to a daily Obsidian note — same vault/folder
 // and "one file per day per PC" convention as DailyTradeLogWriter, but a separate _EventLogs file
-// so trade open/close entries and event notifications don't mix. Most callers only call this after
-// a successful Telegram push (Cross-SMA, T-Line+SMA20, Demand Zone rebote, Piso/Techo, Abriendo la
-// Volatilidad), embedding that same screenshot — but it's also called directly for events with no
-// screenshot/Telegram push of their own (Abriendo Bollinger), which just omit imagePath.
-// Live app only — the simulator never pushes to Telegram (log-only), so it never calls this.
+// so trade open/close entries and event notifications don't mix. One file PER SYMBOL (not shared
+// across the PC's other ticker instances) — each ChartPanel/MultiChartForm only ever calls this
+// with its own symbol, so this naturally isolates one instance's events from its siblings'.
+// Most callers only call this after a successful Telegram push (Cross-SMA, T-Line+SMA20, Demand
+// Zone rebote, Piso/Techo, Abriendo la Volatilidad), embedding that same screenshot — but it's
+// also called directly for events with no screenshot/Telegram push of their own (Abriendo
+// Bollinger), which just omit imagePath. Live app only — the simulator never pushes to Telegram
+// (log-only), so it never calls this.
 internal static class EventLogMarkdownWriter
 {
     private const string VaultFolder = @"C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades";
@@ -20,7 +23,7 @@ internal static class EventLogMarkdownWriter
         try
         {
             Directory.CreateDirectory(VaultFolder);
-            var fileName = $"{DateTime.Now:yyyy_MM_dd}_{Environment.MachineName}_EventLogs.md";
+            var fileName = $"{DateTime.Now:yyyy_MM_dd}_{Environment.MachineName}_{symbol}_EventLogs.md";
             var path = Path.Combine(VaultFolder, fileName);
 
             var time = DateTime.Now.ToString("HH:mm:ss");
