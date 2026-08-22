@@ -978,6 +978,28 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"updatePuntoMedio({(bullish ? "true" : "false")}, {(large ? "true" : "false")});");
     }
 
+    // "D.PM"/"BB" (Daily) + yellow reference line — same JS calls ChartPanel's live version uses.
+    // Computed by SimulatorForm (which has the symbol/_hourlyCandles/_simDate this panel doesn't
+    // carry) — see SimulatorForm.EvaluateDailyPmAndBb — this panel just forwards to chart.html.
+    public async Task MarkDailyPuntoMedioAsync(bool bullish)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateDailyPuntoMedio({(bullish ? "true" : "false")});");
+    }
+
+    public async Task MarkDailyBbAsync(bool open)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateDailyBb({(open ? "true" : "false")});");
+    }
+
+    public async Task MarkDailyPmLineAsync(decimal price, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyPmLine({anchorFakeEpoch}, {priceStr});");
+    }
+
     // ==================================================================================
     // "BB" (bands currently widening) + "Δ" (distance to nearest band) — ported from ChartPanel.
     // EvaluateBollingerWideningLabel. Purely visual, continuous, independent of the armed/fired

@@ -684,6 +684,78 @@ public class SimulatorForm : Form
         LogSimEvent($"Rebote {direction} en Diario");
     }
 
+    // Ported from ChartPanel.EvaluateDailyPmAndBb — "D.PM"/"BB" (Daily) labels + solid yellow
+    // reference line on the 1h panel, relayed to the RTH/RTH+Overnight panels same as the
+    // Piso/Techo line, so the simulator replicates exactly what the live app would be showing at
+    // this point in the replayed session. Recomputed every step (cheap in-memory math over
+    // _hourlyCandles, already fully loaded — no disk I/O concern the live version has to throttle
+    // for), using the step's own spot price as "today"'s (i.e. _simDate's) still-forming close.
+    private void EvaluateDailyPmAndBb(decimal livePrice)
+    {
+        var daily = CandleAggregation.AggregateToDaily(_hourlyCandles).Where(d => d.Date < _simDate).ToList();
+        var closes = daily.Select(d => d.Candle.Close).ToList();
+        closes.Add(livePrice);
+
+        var lastIdx = closes.Count - 1;
+        const int period = 20;
+        const decimal mult = 2m;
+
+        var smaToday = DailySma(closes, period, lastIdx);
+        var smaTwoDaysAgo = DailySma(closes, period, lastIdx - 2);
+        if (smaToday != null && smaTwoDaysAgo != null && smaToday != smaTwoDaysAgo)
+        {
+            var pmBullish = smaToday > smaTwoDaysAgo;
+            _ = _hourlyChart.MarkDailyPuntoMedioAsync(pmBullish);
+        }
+
+        var bandsToday = DailyBollingerBandsAt(closes, period, lastIdx, mult);
+        var bandsYesterday = DailyBollingerBandsAt(closes, period, lastIdx - 1, mult);
+        if (bandsToday != null && bandsYesterday != null)
+        {
+            var widthToday = bandsToday.Value.Upper - bandsToday.Value.Lower;
+            var widthYesterday = bandsYesterday.Value.Upper - bandsYesterday.Value.Lower;
+            var open = widthToday > widthYesterday;
+            _ = _hourlyChart.MarkDailyBbAsync(open);
+        }
+
+        if (smaToday != null)
+        {
+            var sessionStart = GetSessionStartFakeEpoch();
+            _ = _hourlyChart.MarkDailyPmLineAsync(smaToday.Value, sessionStart);
+            _ = _rthChart.MarkDailyPmLineAsync(smaToday.Value, sessionStart);
+            _ = _fullChart.MarkDailyPmLineAsync(smaToday.Value, sessionStart);
+        }
+    }
+
+    private static decimal? DailySma(List<decimal> closes, int period, int endIndex)
+    {
+        if (endIndex < period - 1 || endIndex >= closes.Count) return null;
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += closes[i];
+        return sum / period;
+    }
+
+    private static (decimal Upper, decimal Lower)? DailyBollingerBandsAt(List<decimal> closes, int period, int endIndex, decimal mult)
+    {
+        if (endIndex < period - 1 || endIndex >= closes.Count) return null;
+
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += closes[i];
+        var mean = sum / period;
+
+        decimal sqSum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+        {
+            var d = closes[i] - mean;
+            sqSum += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / period));
+
+        return (mean + mult * stdDev, mean - mult * stdDev);
+    }
+
     // Ported from ChartPanel.EvaluatePisoTechoPair, once per day load (not per step) — evaluates
     // the (20,40) and (100,200) SMA pairs against the hourly candles BEFORE _simDate (the
     // simulator's equivalent of "pre-market", since there's no real wall-clock here), then hands
@@ -912,6 +984,8 @@ public class SimulatorForm : Form
         _ = _rthChart.CargarHastaPasoAsync(rthCandles, visibleDays: 3);
         _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
             intradayUpToNow, 15, rthOnly: false), visibleDays: 3);
+
+        EvaluateDailyPmAndBb(step.UnderlyingPrice);
 
         RefreshOpenSimTradesPnL(step);
     }
