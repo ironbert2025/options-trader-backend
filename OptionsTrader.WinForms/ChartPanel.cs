@@ -2304,6 +2304,18 @@ public class ChartPanel : Panel
                             EvaluateTLineSignal(last);
                     }
 
+                    // "PM"/"BB" (hourly) — normally only recomputed on a live tick
+                    // (Streamer_OnNewCandle/UpdateLivePriceFromExternalSource), which never fires
+                    // outside market hours (weekends, or premarket before the feed's first tick) —
+                    // leaving the labels blank until then. Fire once here too, using the last
+                    // closed candle's own close as a stand-in for "live price", same fix as
+                    // "D.PM"/"BB" (Daily) above, per explicit request.
+                    if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_RTH)
+                    {
+                        EvaluatePuntoMedioSlope();
+                        EvaluateBollingerWideningLabel(last.Close);
+                    }
+
                     await EvaluatePrevDayHiLoAsync(aggregated);
                     await DrawPrevDayCloseAsync(aggregated);
                     await ReplayPersistedEntryMarkersAsync();
