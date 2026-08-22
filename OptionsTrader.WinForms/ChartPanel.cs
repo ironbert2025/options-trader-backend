@@ -2114,14 +2114,6 @@ public class ChartPanel : Panel
             var visibleDays = _mode == ChartPanelMode.Hourly15 ? 7 : 3;
             await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
 
-            // RTH auto-fit (panels 1/2 only, per explicit request): while today's RTH candles are
-            // on screen, the chart width/height auto-adjust to fit exactly the RTH session so far —
-            // no cropped candles, no wasted margin. The JS side (computeRthFitRange) only kicks in
-            // once a same-day RTH candle actually exists, so this falls back to the normal
-            // configureVisibleDays window outside RTH (premarket/overnight) automatically.
-            if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_RTH)
-                await _webView.CoreWebView2.ExecuteScriptAsync("configureRthFitMode(true);");
-
             // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
             // 1h panel shows the full 10 days; the two 15m panels show the last 3 days.
             var requestDays = _mode == ChartPanelMode.Hourly15 ? 10 : 3;

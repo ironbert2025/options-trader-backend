@@ -81,11 +81,6 @@
     }
     if (!(maxValue > minValue)) return original();
 
-    // RTH auto-fit (panels 1/2 only, see configureRthFitMode): a tight bounding box around the
-    // visible candles' actual highs/lows, not the symmetric-around-last-close padding below — the
-    // whole point here is every candle body fills the available height, no wasted margin.
-    if (rthFitMode) return { priceRange: { minValue, maxValue } };
-
     const halfRange = Math.max(maxValue - lastClose, lastClose - minValue);
     if (!(halfRange > 0)) return original();
     return { priceRange: { minValue: lastClose - halfRange, maxValue: lastClose + halfRange } };
@@ -112,14 +107,6 @@
   // still scroll/zoom out manually to see more.
   let visibleDays = null;
   function configureVisibleDays(days) { visibleDays = days; }
-
-  // RTH auto-fit (panels 1/2 only — Hourly15/Fifteen_RTH, wired from ChartPanel.cs): while
-  // enabled, the visible range is recomputed on every live update (see computeVisibleRange/
-  // reapplyVisibleRangeIfLive) to span EXACTLY today's RTH candles, no left/right padding, and
-  // the price scale (sharedAutoscaleInfoProvider above) tightly fits their highs/lows — so the
-  // whole RTH session is always fully visible, width and height, as new candles form.
-  let rthFitMode = false;
-  function configureRthFitMode(enabled) { rthFitMode = enabled; }
 
   // Tracks whether the user has manually changed the visible range (pan OR zoom) since we last
   // set it ourselves — once true, we stop touching their view entirely, forever (for this chart
@@ -148,33 +135,9 @@
   // stale indices — logical positions that meant something for the ~1500-bar hourly array but not
   // for the much shorter daily one — and that bad price range stuck visually, since nothing forces
   // a second autoscale pass afterward.
-  // Today's RTH-only candle indices within `series` — first/last index where the candle both
-  // falls on the most recent calendar day present AND is within 9:30 AM-4:00 PM ET. No right-edge
-  // padding (rightPad below is 0): the point of this mode is a tight fit, not room to form new
-  // bars off-screen.
-  function computeRthFitRange(series) {
-    if (series.length === 0) return null;
-    const lastDay = dayStartOf(series[series.length - 1].time);
-    let fromIdx = -1, toIdx = -1;
-    for (let i = 0; i < series.length; i++) {
-      const c = series[i];
-      if (dayStartOf(c.time) === lastDay && isRthTime(c.time)) {
-        if (fromIdx === -1) fromIdx = i;
-        toIdx = i;
-      }
-    }
-    if (fromIdx === -1) return null;
-    return { from: fromIdx, to: toIdx };
-  }
-
   function computeVisibleRange() {
     const series = displaySeries();
-    if (series.length === 0) return null;
-    if (rthFitMode) {
-      const rthRange = computeRthFitRange(series);
-      if (rthRange) return rthRange;
-    }
-    if (!visibleDays) return null;
+    if (!visibleDays || series.length === 0) return null;
     const days = [...new Set(series.map(c => dayStartOf(c.time)))].sort((a, b) => a - b);
     if (days.length === 0) return null;
     const cutoffIdx = Math.max(0, days.length - visibleDays);
@@ -202,7 +165,7 @@
   // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
   // the user hasn't manually panned/zoomed since the last time we set it — see userHasInteracted.
   function reapplyVisibleRangeIfLive() {
-    if ((!visibleDays && !rthFitMode) || userHasInteracted) return;
+    if (!visibleDays || userHasInteracted) return;
     applyVisibleRange();
   }
 
@@ -2956,7 +2919,7 @@
     allCandles = candles.slice().sort((a, b) => a.time - b.time);
     renderCandles();
     if (!historyLoadedOnce) {
-      if (rthFitMode || visibleDays) applyVisibleRange(); else chart.timeScale().fitContent();
+      if (visibleDays) applyVisibleRange(); else chart.timeScale().fitContent();
       historyLoadedOnce = true;
     } else {
       reapplyVisibleRangeIfLive();
