@@ -1178,10 +1178,6 @@ public partial class Form1 : Form
             _lastAllQuotes = allQuotes;
             _lastSpotPrice = fullChain.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
 
-            // Live options grid mirrored on the Live Chart window (MultiChartForm) — fires every
-            // poll cycle so that grid stays in sync with this one without polling on its own.
-            OnQuotesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
-
             // While LEVEL_ONE_EQUITIES stays disabled (see SchwabStreamerClient), feed this
             // polling cycle's spot price into the live chart's forming candle instead, if one
             // happens to be open for this symbol — every ~6s instead of waiting a full minute for
@@ -1225,6 +1221,14 @@ public partial class Form1 : Form
                 _lastAllQuotesNext = allQuotesNext;
                 (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
             }
+
+            // Live options grid mirrored on the Live Chart window (MultiChartForm) — fires every
+            // poll cycle so that grid stays in sync with this one without polling on its own. Fired
+            // LAST (moved 2026-08-21 from right after _lastAllQuotes/_lastSpotPrice above) so that
+            // by the time MultiChartForm's handler reads GetQuoteSnapshot/GetQuoteSnapshotNext, the
+            // "next" chain fields are already this same cycle's fresh values instead of the
+            // previous cycle's — otherwise the "Próxima" tab was always exactly one poll behind.
+            OnQuotesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {

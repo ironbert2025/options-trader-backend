@@ -1033,34 +1033,41 @@ public class MultiChartForm : Form
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
             if (snapshot == null) return;
             if (_dgvOptions.IsDisposed || !_dgvOptions.IsHandleCreated) return;
-            _dgvOptions.BeginInvoke(() => Form1.PopulateSingleSideOptionsGrid(
-                _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker));
             if (!lblExpDate.IsDisposed)
                 lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
             if (!lblExpDateNext.IsDisposed)
                 lblExpDateNext.Text = $"Next: {ExpirationDateResolver.ResolveNext(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
 
-            // "Próxima" tab: only present while Form1 itself shows the next-expiration chain
-            // (mirrors chkHideNextExpDate) — added/removed here instead of once at startup so
-            // toggling that checkbox on Form1 while the Live Chart is already open still takes
-            // effect on the very next poll cycle.
-            if (!tabOptions.IsDisposed && tabOptions.IsHandleCreated)
-            {
-                tabOptions.BeginInvoke(() =>
-                {
-                    var shouldShowNext = _form1.IsNextExpDateVisible;
-                    var hasNextTab = tabOptions.TabPages.Contains(tabNext);
-                    if (shouldShowNext && !hasNextTab) tabOptions.TabPages.Add(tabNext);
-                    else if (!shouldShowNext && hasNextTab) tabOptions.TabPages.Remove(tabNext);
-                });
-            }
-
             var snapshotNext = _form1.GetQuoteSnapshotNext(_symbol);
-            if (snapshotNext != null && !_dgvOptionsNext.IsDisposed && _dgvOptionsNext.IsHandleCreated)
+
+            // Everything below is queued as ONE BeginInvoke off _dgvOptions (whose handle is
+            // guaranteed created — it's part of tabToday, added to tabOptions at construction time)
+            // instead of separate BeginInvoke calls per control. Doing the "Próxima" tab add/remove
+            // and its grid populate in the SAME queued callback matters: TabPages.Add(tabNext)
+            // creates _dgvOptionsNext's handle synchronously (its parent, tabOptions, already has
+            // one), so the populate right after it can run immediately — no handle-created race
+            // where the populate call gets silently skipped because tabNext hadn't been added yet
+            // (which is what made the "Próxima" tab render its headers but never any rows/data).
+            _dgvOptions.BeginInvoke(() =>
             {
-                _dgvOptionsNext.BeginInvoke(() => Form1.PopulateSingleSideOptionsGrid(
-                    _dgvOptionsNext, snapshotNext.Value.AllQuotes, snapshotNext.Value.OtmCalls, snapshotNext.Value.OtmPuts, snapshotNext.Value.Ticker));
-            }
+                Form1.PopulateSingleSideOptionsGrid(
+                    _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker);
+
+                // "Próxima" tab: only present while Form1 itself shows the next-expiration chain
+                // (mirrors chkHideNextExpDate) — added/removed here instead of once at startup so
+                // toggling that checkbox on Form1 while the Live Chart is already open still takes
+                // effect on the very next poll cycle.
+                var shouldShowNext = _form1.IsNextExpDateVisible;
+                var hasNextTab = tabOptions.TabPages.Contains(tabNext);
+                if (shouldShowNext && !hasNextTab) tabOptions.TabPages.Add(tabNext);
+                else if (!shouldShowNext && hasNextTab) tabOptions.TabPages.Remove(tabNext);
+
+                if (shouldShowNext && snapshotNext != null)
+                {
+                    Form1.PopulateSingleSideOptionsGrid(
+                        _dgvOptionsNext, snapshotNext.Value.AllQuotes, snapshotNext.Value.OtmCalls, snapshotNext.Value.OtmPuts, snapshotNext.Value.Ticker);
+                }
+            });
         }
 
         // Strike click: forwards into Form1's own click handler — opens a trade using whatever
