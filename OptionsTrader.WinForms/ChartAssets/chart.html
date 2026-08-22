@@ -1297,6 +1297,52 @@
   const prevDayCloseLinePrimitive = new PrevDayCloseLinePrimitive();
   let prevDayCloseLineAttached = false;
 
+  // Daily "PM" (SMA20) reference line — solid yellow, all 3 panels, same partial-width "anchor at
+  // a time, extend right" convention as PrevDayCloseLinePrimitive above (just solid instead of
+  // dashed, and no "C" label). Value comes from ChartPanel.EvaluateDailyPmAndBb (computed on the
+  // 1h panel only) and is relayed to all 3 panels by MultiChartForm, same as the mirrored H-Lines.
+  class DailyPmLinePrimitive {
+    constructor() { this._time = null; this._price = null; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || self._time == null || self._price == null) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const xRaw = ts.timeToCoordinate(self._time);
+                const x = xRaw == null ? 0 : xRaw;
+                const y = candleSeries.priceToCoordinate(self._price);
+                if (y == null) return;
+                ctx.strokeStyle = '#ffeb3b';
+                ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                ctx.beginPath();
+                ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                ctx.stroke();
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const dailyPmLinePrimitive = new DailyPmLinePrimitive();
+  let dailyPmLineAttached = false;
+
+  function markDailyPmLine(time, price) {
+    if (!dailyPmLineAttached) { candleSeries.attachPrimitive(dailyPmLinePrimitive); dailyPmLineAttached = true; }
+    dailyPmLinePrimitive._time = time;
+    dailyPmLinePrimitive._price = price;
+    forceRepaint();
+  }
+
   function markPrevDayClose(time, price) {
     if (!prevDayCloseLineAttached) { candleSeries.attachPrimitive(prevDayCloseLinePrimitive); prevDayCloseLineAttached = true; }
     prevDayCloseLinePrimitive._time = time;

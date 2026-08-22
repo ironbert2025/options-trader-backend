@@ -1878,6 +1878,8 @@ public class ChartPanel : Panel
             var pmBullish = smaToday > smaTwoDaysAgo;
             BeginInvoke(async () => await MarkDailyPuntoMedioAsync(pmBullish));
         }
+        if (smaToday != null)
+            BeginInvoke(() => OnDailyPmValueEvent?.Invoke(smaToday.Value));
 
         // BB (Daily): today's Bollinger(20,2) (live) vs yesterday's closed bands — "open" when the
         // TOTAL width (upper - lower) is bigger than yesterday's, same "genuine expansion" test
@@ -1923,6 +1925,19 @@ public class ChartPanel : Panel
         var stdDev = (decimal)Math.Sqrt((double)(sqSum / period));
 
         return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
+    }
+
+    // Fires (smaValue) every time EvaluateDailyPmAndBb recomputes the Daily SMA20 (1h panel only) —
+    // MultiChartForm relays this to all 3 panels (MarkDailyPmLineAsync), same "sibling relay"
+    // pattern as the mirrored H-Lines, so the solid yellow "PM" reference line shows on every
+    // panel, not just the one that computed it.
+    public event Action<decimal>? OnDailyPmValueEvent;
+
+    public async Task MarkDailyPmLineAsync(decimal price, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyPmLine({anchorFakeEpoch}, {priceStr});");
     }
 
     private async Task MarkDailyPuntoMedioAsync(bool bullish)

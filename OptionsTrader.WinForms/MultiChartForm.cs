@@ -730,6 +730,23 @@ public class MultiChartForm : Form
                     if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
                 });
             };
+
+            // Daily "PM" (SMA20) solid yellow reference line — computed on the 1h panel only
+            // (EvaluateDailyPmAndBb), relayed to all 3 so it shows everywhere, same anchor
+            // (yesterday's last close, extending through today) the red dashed prev-day-close line
+            // uses, per explicit request ("igual que la línea roja... hasta el final").
+            hourlyPanel.OnDailyPmValueEvent += price =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    var sessionStart = GetTodaySessionStartFakeEpoch();
+                    _ = hourlyPanel.MarkDailyPmLineAsync(price, sessionStart);
+                    if (rthPanel != null) _ = rthPanel.MarkDailyPmLineAsync(price, sessionStart);
+                    if (overnightPanel != null) _ = overnightPanel.MarkDailyPmLineAsync(price, sessionStart);
+                });
+            };
+
             hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
             {
                 if (IsDisposed) return;
