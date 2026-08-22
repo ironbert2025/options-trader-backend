@@ -617,7 +617,17 @@ public class MultiChartForm : Form
             // Auto-push loop armed by either rebote above — fires on EVERY closed 15m candle from
             // then on, pushing the combined 3-chart snapshot each time, until "Stop Push" is
             // clicked (see btnStopPush) or a fresh rebote later re-arms it.
-            overnightPanel.OnAutoZonePushTickEvent += candle => _ = SendAutoZonePushAsync(candle);
+            // BeginInvoke — this event fires from Streamer_OnNewCandle's background (WebSocket)
+            // thread, and SendAutoZonePushAsync eventually touches CoreWebView2 (via
+            // CaptureCombinedChartImageAsync) — a direct call from that thread throws
+            // "CoreWebView2 can only be accessed from the UI thread.", surfaced as a Telegram push
+            // failure instead of an obvious crash (same threading bug class as the PM indicator/
+            // Piso-Techo events elsewhere in this file, all of which already marshal here).
+            overnightPanel.OnAutoZonePushTickEvent += candle =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => _ = SendAutoZonePushAsync(candle));
+            };
         }
 
         // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA
