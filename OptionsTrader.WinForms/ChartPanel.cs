@@ -2229,6 +2229,15 @@ public class ChartPanel : Panel
                     HourlyCandleStore.ReplaceDates(_symbol, aggregated);
                     aggregated = HourlyCandleStore.Load(_symbol);
                     EvaluateDailyBounce(aggregated);
+
+                    // "D.PM"/"BB" (Daily) — normally only recomputed on this panel's own hourly
+                    // candle close (live), which never happens premarket/weekend/before the first
+                    // close of the day, leaving the label blank until then. Fire once here too,
+                    // right after loading, using the last known close (most recent hourly bar) as
+                    // a stand-in for "today's live price" — per explicit request, so something
+                    // shows immediately on open regardless of market hours, even if it's slightly
+                    // stale until the first real live tick/candle close corrects it.
+                    EvaluateDailyPmAndBb(aggregated[^1].Close);
                 }
 
                 if (aggregated.Count > 0)
