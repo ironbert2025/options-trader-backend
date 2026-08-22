@@ -1325,6 +1325,22 @@
                 ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
                 ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
                 ctx.stroke();
+
+                // "D" label — right edge, BELOW the line when price is currently above it, ABOVE
+                // the line when price is currently below it (i.e. always on the far side from
+                // price, out of the candles' way) — per explicit request.
+                if (allCandles.length > 0) {
+                  const lastPrice = allCandles[allCandles.length - 1].close;
+                  const priceAbove = lastPrice > self._price;
+                  ctx.fillStyle = '#ffeb3b';
+                  ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textAlign = 'right';
+                  ctx.textBaseline = priceAbove ? 'top' : 'bottom';
+                  const labelY = y * scope.verticalPixelRatio + (priceAbove ? 2 : -2) * scope.verticalPixelRatio;
+                  ctx.fillText('D', scope.bitmapSize.width - 4 * scope.horizontalPixelRatio, labelY);
+                  ctx.textAlign = 'left';
+                  ctx.textBaseline = 'middle';
+                }
               });
             }
           };
