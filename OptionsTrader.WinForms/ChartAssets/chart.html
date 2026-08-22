@@ -1933,6 +1933,34 @@
     forceRepaint();
   }
 
+  // "D.PM" — 1h panel only, sits after "PM"/"BB"/"Δ" in the same bottom-left row (see
+  // ChartPanel.EvaluateDailyPmAndBb). SMA20 slope of the DAILY chart (today, using the live price
+  // as today's still-forming close, vs 2 closed days ago) — a separate, slower-timeframe signal
+  // from the hourly "PM" already shown on this same panel, not a replacement for it. Same
+  // replace-not-accumulate pattern as the others.
+  function updateDailyPuntoMedio(bullish) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'dailyPm');
+    textLabelsPrimitive._labels.push({
+      id: 'dailyPm', text: 'D.PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
+      fontSize: 14, offsetX: 84 // clears "PM" + "BB" + "Δ" (offsets 0/28/56) at the same fixed 14px font size
+    });
+    forceRepaint();
+  }
+
+  // "BB" (Daily) — 1h panel only, sits after "D.PM". Always shown (unlike the hourly "BB", which
+  // only appears while actively widening) — green while the DAILY Bollinger(20,2) bands are open
+  // (both moving outward, today live vs yesterday's closed bar), red while closed/contracting.
+  function updateDailyBb(open) {
+    if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
+    textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'dailyBb');
+    textLabelsPrimitive._labels.push({
+      id: 'dailyBb', text: 'BB', color: open ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
+      fontSize: 14, offsetX: 126 // clears "D.PM" (wider label than PM/BB/Δ, needs more room)
+    });
+    forceRepaint();
+  }
+
   // "1er Rebote: 90%" — 1h panel only, bottom-right, yellow. Shown while SMA20 and SMA40 are both
   // Techo and SMA20 hasn't been touched/resolved yet (see ChartPanel.EvaluateFirstReboundLabel).
   // Same replace-not-accumulate pattern as updatePuntoMedio.

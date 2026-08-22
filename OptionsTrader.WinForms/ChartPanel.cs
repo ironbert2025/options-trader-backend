@@ -1844,6 +1844,94 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"updatePuntoMedio({(bullish ? "true" : "false")}, {(large ? "true" : "false")});");
     }
 
+    // ==================================================================================
+    // "D.PM" / "BB" (Daily) — 1h panel only, per explicit request. Same idea as PM/BB above but
+    // computed from the DAILY chart (the same SMA20/Bollinger the "Daily" toggle button shows),
+    // not this panel's own hourly candles. Managed entirely in memory here — no dedicated Daily
+    // ChartPanel exists (see GetLastDailyCandles's own comment) — by aggregating
+    // HourlyCandleStore's persisted history the same way GetDailyBollingerDirection does, except
+    // TODAY's still-forming bar is included with the live price instead of dropped, since that's
+    // the whole point of "today vs N days ago".
+    //
+    // Recomputed only when an hourly candle on THIS panel closes (see Streamer_OnNewCandle's
+    // Hourly15 branch) — not on every tick — since it re-reads HourlyCandleStore from disk each
+    // time; per explicit request, daily-timeframe data doesn't need tick-level freshness anyway.
+    // ==================================================================================
+
+    private void EvaluateDailyPmAndBb(decimal livePrice)
+    {
+        if (_mode != ChartPanelMode.Hourly15) return;
+
+        var hourly = HourlyCandleStore.Load(_symbol);
+        var daily = CandleAggregation.AggregateToDaily(hourly);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        var closes = daily.Where(d => d.Date < today).Select(d => d.Candle.Close).ToList();
+        closes.Add(livePrice); // today's still-forming bar, using the live price as its close
+
+        var lastIdx = closes.Count - 1;
+
+        // D.PM: today's SMA20 (live) vs SMA20 from 2 closed days ago.
+        var smaToday = DailySma(closes, VolatilityBollingerPeriod, lastIdx);
+        var smaTwoDaysAgo = DailySma(closes, VolatilityBollingerPeriod, lastIdx - 2);
+        if (smaToday != null && smaTwoDaysAgo != null && smaToday != smaTwoDaysAgo)
+        {
+            var pmBullish = smaToday > smaTwoDaysAgo;
+            BeginInvoke(async () => await MarkDailyPuntoMedioAsync(pmBullish));
+        }
+
+        // BB (Daily): today's Bollinger(20,2) (live) vs yesterday's closed bands — "open" only when
+        // BOTH bands moved outward (upper up AND lower down), same "genuine expansion" bar as the
+        // hourly/15m widening check elsewhere in this file.
+        var bandsToday = DailyBollingerBandsAt(closes, VolatilityBollingerPeriod, lastIdx);
+        var bandsYesterday = DailyBollingerBandsAt(closes, VolatilityBollingerPeriod, lastIdx - 1);
+        if (bandsToday != null && bandsYesterday != null)
+        {
+            var open = bandsToday.Value.Upper > bandsYesterday.Value.Upper && bandsToday.Value.Lower < bandsYesterday.Value.Lower;
+            BeginInvoke(async () => await MarkDailyBbAsync(open));
+        }
+    }
+
+    private static decimal? DailySma(List<decimal> closes, int period, int endIndex)
+    {
+        if (endIndex < period - 1 || endIndex >= closes.Count) return null;
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += closes[i];
+        return sum / period;
+    }
+
+    private static (decimal Upper, decimal Lower)? DailyBollingerBandsAt(List<decimal> closes, int period, int endIndex)
+    {
+        if (endIndex < period - 1 || endIndex >= closes.Count) return null;
+
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += closes[i];
+        var mean = sum / period;
+
+        decimal sqSum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+        {
+            var d = closes[i] - mean;
+            sqSum += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / period));
+
+        return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
+    }
+
+    private async Task MarkDailyPuntoMedioAsync(bool bullish)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateDailyPuntoMedio({(bullish ? "true" : "false")});");
+    }
+
+    private async Task MarkDailyBbAsync(bool open)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateDailyBb({(open ? "true" : "false")});");
+    }
+
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
     // a trend line is meant to keep projecting forward. Falls back to p1 if the 2 points share
     // the same time (shouldn't happen — chart.html requires 2 distinct clicks).
@@ -2360,6 +2448,7 @@ public class ChartPanel : Panel
                 if (_mode == ChartPanelMode.Hourly15)
                 {
                     _closedCandles.Add(_liveBucket);
+                    EvaluateDailyPmAndBb(candle.Close); // "D.PM"/"BB" — recomputed once per hourly close, see method comment
 
                     // At market open, the first live tick of the day always looks like "a new
                     // bucket" compared to whatever _liveBucket was seeded with from history
