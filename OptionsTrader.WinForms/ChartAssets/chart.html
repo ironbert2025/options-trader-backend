@@ -1732,10 +1732,14 @@
                   // Same idea, bottom-LEFT — used for "PM" (Punto Medio / SMA20 slope), moved out
                   // here so it doesn't sit on top of "1er Rebote: 90%" (fixedBottomRight below).
                   // Optional offsetX (in un-scaled px) lets a second label — "BB" — sit right next
-                  // to "PM" instead of on top of it.
+                  // to "PM" instead of on top of it. Optional offsetY (positive = further UP, since
+                  // this is measured from the bottom) stacks a second ROW above the first — used by
+                  // "D.PM"/"BB" (Daily), which sit directly above the hourly "PM"/"BB" instead of
+                  // fighting them for horizontal room on a narrow panel.
                   if (l.fixedBottomLeft) {
                     ctx.textAlign = 'left';
-                    ctx.fillText(l.text, (10 + (l.offsetX || 0)) * scope.horizontalPixelRatio, scope.bitmapSize.height - 16 * scope.verticalPixelRatio);
+                    ctx.fillText(l.text, (10 + (l.offsetX || 0)) * scope.horizontalPixelRatio,
+                      scope.bitmapSize.height - (16 + (l.offsetY || 0)) * scope.verticalPixelRatio);
                     return;
                   }
 
@@ -1933,30 +1937,31 @@
     forceRepaint();
   }
 
-  // "D.PM" — 1h panel only, sits after "PM"/"BB"/"Δ" in the same bottom-left row (see
-  // ChartPanel.EvaluateDailyPmAndBb). SMA20 slope of the DAILY chart (today, using the live price
+  // "D.PM" — 1h panel only, sits directly ABOVE "PM" (same X, a row higher via offsetY) — see
+  // ChartPanel.EvaluateDailyPmAndBb. SMA20 slope of the DAILY chart (today, using the live price
   // as today's still-forming close, vs 2 closed days ago) — a separate, slower-timeframe signal
-  // from the hourly "PM" already shown on this same panel, not a replacement for it. Same
-  // replace-not-accumulate pattern as the others.
+  // from the hourly "PM" right below it, not a replacement for it. Same replace-not-accumulate
+  // pattern as the others.
   function updateDailyPuntoMedio(bullish) {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'dailyPm');
     textLabelsPrimitive._labels.push({
       id: 'dailyPm', text: 'D.PM', color: bullish ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
-      fontSize: 14, offsetX: 84 // clears "PM" + "BB" + "Δ" (offsets 0/28/56) at the same fixed 14px font size
+      fontSize: 14, offsetY: 20 // one row above "PM" (offsetX 0, same column)
     });
     forceRepaint();
   }
 
-  // "BB" (Daily) — 1h panel only, sits after "D.PM". Always shown (unlike the hourly "BB", which
-  // only appears while actively widening) — green while the DAILY Bollinger(20,2) bands are open
-  // (both moving outward, today live vs yesterday's closed bar), red while closed/contracting.
+  // "BB" (Daily) — 1h panel only, sits next to "D.PM" (same row, one row above the hourly "BB").
+  // Always shown (unlike the hourly "BB", which only appears while actively widening) — green
+  // while the DAILY Bollinger(20,2) bands are open (both moving outward, today live vs
+  // yesterday's closed bar), red while closed/contracting.
   function updateDailyBb(open) {
     if (!textLabelsAttached) { candleSeries.attachPrimitive(textLabelsPrimitive); textLabelsAttached = true; }
     textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'dailyBb');
     textLabelsPrimitive._labels.push({
       id: 'dailyBb', text: 'BB', color: open ? '#4caf50' : '#ef5350', bold: true, fixedBottomLeft: true,
-      fontSize: 14, offsetX: 126 // clears "D.PM" (wider label than PM/BB/Δ, needs more room)
+      fontSize: 14, offsetX: 50, offsetY: 20 // clears "D.PM" (wider than PM/BB/Δ), same row
     });
     forceRepaint();
   }
