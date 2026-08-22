@@ -1879,14 +1879,19 @@ public class ChartPanel : Panel
             BeginInvoke(async () => await MarkDailyPuntoMedioAsync(pmBullish));
         }
 
-        // BB (Daily): today's Bollinger(20,2) (live) vs yesterday's closed bands — "open" only when
-        // BOTH bands moved outward (upper up AND lower down), same "genuine expansion" bar as the
-        // hourly/15m widening check elsewhere in this file.
+        // BB (Daily): today's Bollinger(20,2) (live) vs yesterday's closed bands — "open" when the
+        // TOTAL width (upper - lower) is bigger than yesterday's, same "genuine expansion" test
+        // ArmVolatilityOpeningWatch/EvaluateBollingerWideningLabel already use elsewhere in this
+        // file. Requiring BOTH bands to individually move outward on the SAME single-day delta (the
+        // original version here) was stricter than that convention and false-negatived whenever
+        // only one side moved while the total width still grew.
         var bandsToday = DailyBollingerBandsAt(closes, VolatilityBollingerPeriod, lastIdx);
         var bandsYesterday = DailyBollingerBandsAt(closes, VolatilityBollingerPeriod, lastIdx - 1);
         if (bandsToday != null && bandsYesterday != null)
         {
-            var open = bandsToday.Value.Upper > bandsYesterday.Value.Upper && bandsToday.Value.Lower < bandsYesterday.Value.Lower;
+            var widthToday = bandsToday.Value.Upper - bandsToday.Value.Lower;
+            var widthYesterday = bandsYesterday.Value.Upper - bandsYesterday.Value.Lower;
+            var open = widthToday > widthYesterday;
             BeginInvoke(async () => await MarkDailyBbAsync(open));
         }
     }
