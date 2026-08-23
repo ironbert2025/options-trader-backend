@@ -1203,7 +1203,10 @@ public class SimulatorForm : Form
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
         _ = _fullChart.MarkStrikeAsync(strike);
 
-        // White spot-price line at the moment of entry — panel 3 only, bounded to that one candle.
+        // White spot-price line at the moment of entry — panels 2 and 3, bounded to that one
+        // candle, mirroring the live app (MultiChartForm.MarkEntrySpotOnOvernightChartAsync —
+        // originally panel 3 only, panel 2 added later; the simulator hadn't been kept in sync).
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice);
         _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
@@ -1280,7 +1283,8 @@ public class SimulatorForm : Form
         row.ReadOnly = true;
         _openSimTrades.Remove(trade);
 
-        // White spot-price line at the moment of close — same marker as the entry one.
+        // White spot-price line at the moment of close — same marker as the entry one, panels 2 and 3.
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice);
         _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
