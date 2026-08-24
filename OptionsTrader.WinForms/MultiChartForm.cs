@@ -594,6 +594,28 @@ public class MultiChartForm : Form
                 BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
                 _ = SendTLineSignalTelegramPushAsync(message);
             };
+
+            // "Cruce de vela con PM" — log-only, per explicit request: written directly to the
+            // per-symbol events .md with the combined 3-panel screenshot, never crossLog, never
+            // Telegram. BeginInvoke — fires from Streamer_OnNewCandle's background (WebSocket)
+            // thread, and CaptureCombinedChartImageAsync touches CoreWebView2 (same threading bug
+            // class as AutoZonePush, already fixed elsewhere in this file).
+            rthPanel.OnPmCrossEvent += caption =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(async () =>
+                {
+                    using var combined = await CaptureCombinedChartImageAsync();
+                    if (combined == null) return;
+
+                    var folder = @"C:\OptionsTraderPush";
+                    Directory.CreateDirectory(folder);
+                    var path = Path.Combine(folder, $"{_symbol}_PMCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                    combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+                    EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+                });
+            };
         }
 
         // Demand Zone rebote (15m RTH+Overnight panel) — self-contained in ChartPanel (pushes its

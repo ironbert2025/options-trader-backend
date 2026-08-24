@@ -1845,6 +1845,36 @@ public class ChartPanel : Panel
     }
 
     // ==================================================================================
+    // "Cruce de vela con PM" — 15m RTH panel only, per explicit request. Fires when a just-closed
+    // candle's Open sits on one side of the SMA20(15m) ("PM") and its Close on the other, in the
+    // SAME direction PM is currently tilting (green/alcista "PM" label: crossing upward only;
+    // red/bajista: crossing downward only) — i.e. the candle itself crossed through the PM line,
+    // not just touched it. Log-only: written directly to the per-symbol events .md
+    // (EventLogMarkdownWriter, via MultiChartForm so it can attach the combined 3-panel
+    // screenshot) — never Telegram, never crossLog, per explicit request.
+    // ==================================================================================
+
+    public event Action<string>? OnPmCrossEvent;
+
+    private void EvaluatePmCross(CandleData justClosed)
+    {
+        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
+        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (smaNow == null || smaEarlier == null || smaNow == smaEarlier) return; // no clear PM tilt yet
+
+        var pmBullish = smaNow > smaEarlier;
+        var crossed = pmBullish
+            ? justClosed.Open < smaNow.Value && justClosed.Close > smaNow.Value
+            : justClosed.Open > smaNow.Value && justClosed.Close < smaNow.Value;
+        if (!crossed) return;
+
+        var direction = pmBullish ? "alza" : "baja";
+        var caption =
+            $"Cruce de vela con PM ({direction}) — Open {justClosed.Open:F2} → Close {justClosed.Close:F2} (PM {smaNow.Value:F2})";
+        BeginInvoke(() => OnPmCrossEvent?.Invoke(caption));
+    }
+
+    // ==================================================================================
     // "D.PM" / "BB" (Daily) — 1h panel only, per explicit request. Same idea as PM/BB above but
     // computed from the DAILY chart (the same SMA20/Bollinger the "Daily" toggle button shows),
     // not this panel's own hourly candles. Managed entirely in memory here — no dedicated Daily
@@ -2549,6 +2579,7 @@ public class ChartPanel : Panel
                 {
                     _closedCandles.Add(_liveBucket);
                     EvaluateTLineSignal(_liveBucket);
+                    EvaluatePmCross(_liveBucket);
                 }
 
                 _liveBucketIndex = index;
