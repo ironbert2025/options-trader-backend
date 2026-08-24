@@ -22,6 +22,16 @@ public class SimulatedChartPanel : Panel
     private WebView2 _webView = null!;
     private TaskCompletionSource? _readyTcs;
 
+    // CargarHastaPasoAsync is called fire-and-forget (SimulatorForm never awaits it) on every ◀/▶,
+    // "+1 Min", and "Ir a hora" click — a rapid sequence of clicks can have an OLDER call still
+    // awaiting (e.g. _readyTcs, or the loadHistory script call itself) when a NEWER one is issued,
+    // and if that older call happens to finish LAST, it clobbers the chart with stale/smaller data
+    // — reported as "jumped to 12:30 but the chart only filled to 11am" and "+1 Min then rendered
+    // a much bigger jump than 1 minute" (a stale earlier full-day or different-time render winning
+    // the race). Each call captures its own generation number and bails out at every await point
+    // once a newer call has started, instead of letting a stale one apply its (older) result.
+    private int _renderGeneration;
+
     public SimulatedChartPanel(string title, ChartPanelMode mode)
     {
         _mode = mode;
@@ -131,7 +141,10 @@ public class SimulatedChartPanel : Panel
     // ones — see ChartPanel.LoadHistoryAsync) so the simulator reads the same as a real chart.
     public async Task CargarHastaPasoAsync(List<CandleData> candles, int visibleDays)
     {
+        var myGeneration = ++_renderGeneration;
+
         if (_readyTcs != null) await _readyTcs.Task;
+        if (myGeneration != _renderGeneration) return; // superseded while waiting for the WebView to be ready
         if (_webView.CoreWebView2 == null || candles.Count == 0) return;
 
         if (!_visibleDaysSet)
@@ -139,11 +152,14 @@ public class SimulatedChartPanel : Panel
             await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
             _visibleDaysSet = true;
         }
+        if (myGeneration != _renderGeneration) return;
         await RunScriptAsync("loadHistory", candles);
+        if (myGeneration != _renderGeneration) return; // a newer step/jump landed while this one was still sending
 
         if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full || _mode == ChartPanelMode.Fifteen_RTH)
             EvaluateNewlyClosedCandles(candles);
 
+        if (myGeneration != _renderGeneration) return;
         await DrawPrevDayCloseAsync(candles);
     }
 

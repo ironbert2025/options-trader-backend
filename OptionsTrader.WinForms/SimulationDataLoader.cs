@@ -85,6 +85,7 @@ internal static class SimulationDataLoader
         if (putFile  != null) ReadQuotesInto(putFile,  symbol, OptionType.Put,  byTime);
 
         var prices = LoadUnderlyingTicks(symbol, date);
+        FillRecordingGapsWithSyntheticSteps(byTime);
 
         var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
         var steps = new List<SimulationStep>();
@@ -251,6 +252,54 @@ internal static class SimulationDataLoader
             best = price;
         }
         return best ?? ticks[0].Price;
+    }
+
+    // Real polling cadence, per explicit request: every 6s until 11:00 AM ET, then every 60s the
+    // rest of RTH (Form1.PollAsync's own _throttledAfter11 switch — see Form1.cs). Whenever two
+    // consecutive REAL options-chain snapshots (from Trades\Iv) are further apart than that cadence
+    // allows (a genuine recording gap — the app wasn't polling for that stretch, not just normal
+    // per-day timing noise), this fills the gap with SYNTHETIC steps at the expected cadence so
+    // "Ir a hora"/"+1 Min"/Play advance through it the same way they would have in a real run,
+    // instead of jumping the whole gap in one step (see StepOneMinute's own gap-logging fallback,
+    // which now only fires for gaps THIS couldn't fill — e.g. before any real snapshot exists yet).
+    //
+    // A synthetic step's Quotes are the LAST real snapshot carried forward frozen (no real options
+    // data exists to show otherwise — the underlying price still moves via ticks, only the chain
+    // stays stale until the next real snapshot) — no visual "stale" marker, per explicit request.
+    // Never fills before the FIRST real snapshot of the day (nothing to carry forward yet) — that
+    // edge case is left alone, same as it worked before this change.
+    private static readonly TimeOnly ThrottleTime = new(11, 0);
+    private static readonly TimeSpan FastCadence = TimeSpan.FromSeconds(6);
+    private static readonly TimeSpan SlowCadence = TimeSpan.FromMinutes(1);
+    // Real polls jitter a bit around the nominal cadence — only treat a gap as a genuine recording
+    // gap once it's comfortably past what jitter alone could explain.
+    private static readonly TimeSpan GapTolerance = TimeSpan.FromSeconds(20);
+
+    private static void FillRecordingGapsWithSyntheticSteps(SortedDictionary<TimeOnly, List<OptionQuoteDto>> byTime)
+    {
+        var realTimes = byTime.Keys.ToList(); // SortedDictionary — already ascending
+        if (realTimes.Count < 2) return;
+
+        var synthetic = new List<(TimeOnly Time, List<OptionQuoteDto> Quotes)>();
+
+        for (int i = 0; i < realTimes.Count - 1; i++)
+        {
+            var from = realTimes[i];
+            var to = realTimes[i + 1];
+            var expectedCadence = from < ThrottleTime ? FastCadence : SlowCadence;
+            if (to - from <= expectedCadence + GapTolerance) continue; // normal jitter, not a gap
+
+            var frozenQuotes = byTime[from]; // last real snapshot, carried forward unchanged
+            var t = from.Add(expectedCadence);
+            while (t < to.Add(-GapTolerance)) // stop short of `to` so we don't crowd the next real step
+            {
+                synthetic.Add((t, frozenQuotes));
+                t = t.Add((t < ThrottleTime) ? FastCadence : SlowCadence);
+            }
+        }
+
+        foreach (var (time, quotes) in synthetic)
+            byTime[time] = quotes; // TimeOnly keys are unique by construction (built off real gaps) — no overwrite risk
     }
 
     private static void ReadQuotesInto(string path, string symbol, OptionType type, SortedDictionary<TimeOnly, List<OptionQuoteDto>> byTime)

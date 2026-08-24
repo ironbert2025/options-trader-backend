@@ -575,6 +575,16 @@ public class SimulatorForm : Form
             if (diff < closestDiff) { closestDiff = diff; closestIndex = i; }
         }
 
+        // Same "recording gap" case StepOneMinute logs — if the closest available step is far from
+        // the requested hour:minute (a real hole in the recorded data, not just polling
+        // granularity), say so instead of silently landing somewhere unexpected.
+        if (closestDiff > TimeSpan.FromMinutes(10))
+        {
+            LogSimEvent(
+                $"[Hueco de datos] No hay registros cerca de {hour:D2}:{minute:D2} — el paso disponible más cercano es " +
+                $"{EasternTime(_steps[closestIndex].Time):HH:mm:ss} ({closestDiff.TotalMinutes:F0} min de diferencia).");
+        }
+
         _currentIndex = closestIndex;
         RenderCurrentStep();
     }
@@ -922,6 +932,20 @@ public class SimulatorForm : Form
         {
             if (_currentIndex + 1 >= _steps.Count) return;
             targetIndex = _currentIndex + 1;
+
+            // This isn't just "granularity below 1/min" — it's a genuine RECORDING GAP (the app
+            // wasn't polling/running for a real stretch of the session, e.g. crashed or was
+            // closed), so the next available step can be hours later instead of ~1 minute. Without
+            // this, one "+1 Min" click silently jumps the whole gap with no indication anything
+            // unusual happened — looked exactly like a bug report ("clicked +1 Min and the whole
+            // day filled in"). Log it so it reads as a known data limitation instead.
+            var gap = _steps[targetIndex].Time - _steps[_currentIndex].Time;
+            if (gap > TimeSpan.FromMinutes(5))
+            {
+                LogSimEvent(
+                    $"[Hueco de datos] Sin registros entre {EasternTime(_steps[_currentIndex].Time):HH:mm:ss} y " +
+                    $"{EasternTime(_steps[targetIndex].Time):HH:mm:ss} ({gap.TotalMinutes:F0} min) — avanzando al siguiente paso disponible.");
+            }
         }
 
         for (int i = _currentIndex + 1; i < targetIndex; i++)
