@@ -318,6 +318,29 @@ public class MultiChartForm : Form
             ScrollBars = ScrollBars.Vertical,
             Font       = new Font("Segoe UI", 9F)
         };
+        // Enter on the last line stamps it with the current time (e.g. "9:34 Lo que escribí"),
+        // copies that stamped line to the clipboard, and starts a fresh empty line for the next
+        // note — per explicit request. Shift+Enter still inserts a plain newline (multi-line notes
+        // before stamping). Only ever operates on the LAST line, since that's where typing/Enter
+        // naturally happens; earlier lines are left alone.
+        txtChartText.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode != Keys.Enter || e.Shift) return;
+            e.SuppressKeyPress = true;
+            e.Handled = true;
+
+            var lines = txtChartText.Text.Split('\n');
+            var lastIndex = lines.Length - 1;
+            var lastLine = lines[lastIndex].TrimEnd('\r');
+            if (string.IsNullOrWhiteSpace(lastLine)) return; // nothing typed on this line yet
+
+            var stamped = $"{DateTime.Now:H:mm} {lastLine}";
+            lines[lastIndex] = stamped;
+
+            txtChartText.Text = string.Join(Environment.NewLine, lines) + Environment.NewLine;
+            Clipboard.SetText(stamped);
+            txtChartText.SelectionStart = txtChartText.Text.Length;
+        };
 
         var btnText = new Button
         {
