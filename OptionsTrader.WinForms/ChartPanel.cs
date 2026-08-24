@@ -1245,15 +1245,23 @@ public class ChartPanel : Panel
         });
     }
 
-    // Continuous premarket counterpart to ValidatePisoTechoAgainstOpen — that one only checks ONCE,
-    // against the actual 9:30 RTH open. This runs on every premarket tick instead (same tick that
-    // feeds the blue premarket line), so a Techo the live price already trades above (or a Piso it
-    // already trades below) gets invalidated the moment that happens, instead of waiting for the
-    // open. Safe to call repeatedly — InvalidateIfBrokenByOpen is a no-op per period once its
-    // result is already null, and by the time the real 9:30 open candle arrives
-    // ValidatePisoTechoAgainstOpen just finds nothing left to invalidate for whichever periods
-    // already got caught here.
-    private void ValidatePisoTechoAgainstLivePrice(decimal livePrice)
+    // Continuous counterpart to ValidatePisoTechoAgainstOpen — that one only checks ONCE, against
+    // the actual 9:30 RTH open. This runs on every live tick instead, so a Techo the live price
+    // already trades above (or a Piso it already trades below) gets invalidated the moment that
+    // happens, instead of only at the open. Safe to call repeatedly — InvalidateIfBrokenByOpen is a
+    // no-op per period once its result is already null.
+    //
+    // Public (not just called internally for THIS panel's own premarket ticks) so MultiChartForm
+    // can also call it on the HOURLY (1h) panel specifically with panel 2's (Fifteen_RTH) own RTH
+    // price — per explicit request, panel 2's RTH price action is allowed to continuously
+    // invalidate a level all through the session (previously only the 9:30 open snapshot did),
+    // but panel 3 (RTH+Overnight) must never be able to, since its price includes overnight/
+    // extended-hours moves unrelated to the regular session. The SMA these levels are actually
+    // about is always panel 1's own 1h SMA (_closedCandles below) regardless of which panel's
+    // price is being checked — calling this on panel 2's own instance instead would silently
+    // compute a 15m SMA instead of the real 1h one, which is why MultiChartForm routes panel 2's
+    // price THROUGH the hourly panel's own instance rather than calling this on rthPanel directly.
+    public void ValidatePisoTechoAgainstLivePrice(decimal livePrice)
     {
         InvalidateIfBrokenByOpen(20, ref s_pisoTechoResult20, livePrice);
         InvalidateIfBrokenByOpen(40, ref s_pisoTechoResult40, livePrice);

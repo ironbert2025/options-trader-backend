@@ -736,6 +736,22 @@ public class MultiChartForm : Form
                 _ = SendPisoTechoTelegramPushAsync(caption);
             };
         }
+
+        // Continuous RTH Piso/Techo invalidation, per explicit request: only panel 2's (Fifteen_RTH)
+        // own RTH price action may invalidate a level all through the session (previously only the
+        // 9:30 open snapshot did) — never panel 3's (RTH+Overnight includes overnight/extended-
+        // hours moves that have nothing to do with the regular session). rthPanel.OnLiveTick fires
+        // for every raw tick regardless of session, so it's filtered to RTH hours here before being
+        // routed into hourlyPanel's own instance — the SMA these levels are about is always panel
+        // 1's own 1h SMA, so the check must run THERE, not on rthPanel's own (15m) candles.
+        if (hourlyPanel != null && rthPanel != null)
+        {
+            rthPanel.OnLiveTick += (eastern, price) =>
+            {
+                if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)) return;
+                hourlyPanel.ValidatePisoTechoAgainstLivePrice(price);
+            };
+        }
         if (rthPanel != null)
         {
             rthPanel.OnVolatilityOpeningEvent += message =>
