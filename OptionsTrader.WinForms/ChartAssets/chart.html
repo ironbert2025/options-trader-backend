@@ -1214,7 +1214,12 @@
   // line at that price (there's normally at most one, but this stays correct even if two happen
   // to coincide, e.g. a manual H-Line drawn at the same price as the auto prev-day high/low).
   function removeHLine(price) {
-    hLinePrimitive._segments = hLinePrimitive._segments.filter(s => s.price !== price);
+    // Tolerance instead of strict equality — the incoming `price` round-tripped through a C#
+    // decimal (Math.Round-ish precision), while a manually-clicked H-Line's stored price came
+    // straight from a pixel->price conversion with many more floating-point digits. Confirmed
+    // live: deleting a manually-drawn H-Line on one panel left it undeleted on the other 2,
+    // because `s.price !== price` never matched despite both being "the same" price visually.
+    hLinePrimitive._segments = hLinePrimitive._segments.filter(s => Math.abs(s.price - price) >= 0.005);
     forceRepaint();
   }
 
@@ -1821,7 +1826,7 @@
                   // the last candle's price happens to be.
                   if (l.fixedTop) {
                     ctx.textAlign = 'center';
-                    ctx.fillText(l.text, scope.bitmapSize.width / 2, 70 * scope.verticalPixelRatio);
+                    ctx.fillText(l.text, scope.bitmapSize.width / 2, (70 - (l.offsetY || 0)) * scope.verticalPixelRatio);
                     ctx.textAlign = 'left';
                     return;
                   }
@@ -2020,7 +2025,8 @@
     textLabelsPrimitive._labels = textLabelsPrimitive._labels.filter(l => l.id !== 'spotOutsideBB');
     if (show) {
       textLabelsPrimitive._labels.push({
-        id: 'spotOutsideBB', text: 'Spot fuera de BB', color: '#ff0000', bold: true, fixedTop: true
+        id: 'spotOutsideBB', text: 'Spot fuera de BB', color: '#ff0000', bold: true, fixedTop: true,
+        offsetY: 45 // higher up than the default fixedTop position — was sitting right on top of the upper Bollinger band
       });
     }
     forceRepaint();
