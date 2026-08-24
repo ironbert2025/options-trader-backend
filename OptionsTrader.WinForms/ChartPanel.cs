@@ -2222,6 +2222,17 @@ public class ChartPanel : Panel
             var visibleDays = _mode == ChartPanelMode.Hourly15 ? 7 : 3;
             await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
 
+            // Panel 2 (15m RTH) only, per explicit request: shows a fixed 50 bars initially
+            // (instead of the calendar-day zoom above) — whether the chart is opened premarket or
+            // already mid-RTH — then a fixed sliding window of 50 bars keeps following new candles
+            // as they form live, same width throughout, no jarring resize between the two. See
+            // configureRthSlideWindow/configureInitialBarCount in chart.html.
+            if (_mode == ChartPanelMode.Fifteen_RTH)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureInitialBarCount(50);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureRthSlideWindow(50);");
+            }
+
             // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
             // 1h panel shows the full 10 days; the two 15m panels show the last 3 days.
             var requestDays = _mode == ChartPanelMode.Hourly15 ? 10 : 3;

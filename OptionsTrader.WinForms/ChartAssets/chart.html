@@ -108,6 +108,34 @@
   let visibleDays = null;
   function configureVisibleDays(days) { visibleDays = days; }
 
+  // 15m RTH panel only, per explicit request: once today's RTH session has actually started, keep
+  // a FIXED-width sliding window of the last N bars (26 today's candles + 10 of context, by
+  // default 36) instead of a calendar-day window — so by market close exactly today's 26 candles
+  // plus the last 10 of the prior session are visible, with no per-tick "tight fit" recompute (the
+  // earlier attempt at this kept the window's own SIZE constant instead of shrinking it toward
+  // "just today's candles so far", which is what caused that version's extreme zoom-in early in
+  // the day — reverted). Before today's first RTH bar exists, this stays inactive and the panel's
+  // normal visibleDays zoom applies, so a manual pre-market pan/zoom is left completely alone.
+  let rthSlideWindowBars = null;
+  function configureRthSlideWindow(bars) { rthSlideWindowBars = bars; }
+
+  // Panel 2's INITIAL zoom, before today's RTH session starts (computeRthSlideRange returns null
+  // until then) — a fixed bar count instead of the calendar-day window other panels use, per
+  // explicit request. Once RTH starts, rthSlideWindowBars above takes over.
+  let initialBarCount = null;
+  function configureInitialBarCount(bars) { initialBarCount = bars; }
+
+  function computeRthSlideRange(series) {
+    if (!rthSlideWindowBars || series.length === 0) return null;
+    const last = series[series.length - 1];
+    const lastDay = dayStartOf(last.time);
+    const todayStarted = series.some(c => dayStartOf(c.time) === lastDay && isRthTime(c.time));
+    if (!todayStarted) return null;
+    const to = series.length - 1;
+    const from = Math.max(0, to - (rthSlideWindowBars - 1));
+    return { from, to };
+  }
+
   // Tracks whether the user has manually changed the visible range (pan OR zoom) since we last
   // set it ourselves — once true, we stop touching their view entirely, forever (for this chart
   // instance). Comparing against "is the right edge still near now" isn't enough on its own: a
@@ -135,9 +163,24 @@
   // stale indices — logical positions that meant something for the ~1500-bar hourly array but not
   // for the much shorter daily one — and that bad price range stuck visually, since nothing forces
   // a second autoscale pass afterward.
-  function computeVisibleRange() {
+  // isInitialLoad: true only for the very FIRST range applied to a freshly-opened chart — always
+  // prefers initialBarCount (50) over the RTH slide window, even if RTH has already started by the
+  // time the Live Chart is opened, per explicit request ("deben ser 50 velas cuando hago live
+  // chart [aunque sea] en premarket [o ya en RTH]"). Every later reapply (new candle forming live)
+  // passes false, letting the 36-bar slide window take over from there once RTH is under way.
+  function computeVisibleRange(isInitialLoad) {
     const series = displaySeries();
-    if (!visibleDays || series.length === 0) return null;
+    if (series.length === 0) return null;
+    if (!isInitialLoad && rthSlideWindowBars) {
+      const slideRange = computeRthSlideRange(series);
+      if (slideRange) return slideRange;
+    }
+    if (initialBarCount) {
+      const to = series.length - 1;
+      const from = Math.max(0, to - (initialBarCount - 1));
+      return { from, to };
+    }
+    if (!visibleDays) return null;
     const days = [...new Set(series.map(c => dayStartOf(c.time)))].sort((a, b) => a - b);
     if (days.length === 0) return null;
     const cutoffIdx = Math.max(0, days.length - visibleDays);
@@ -155,8 +198,8 @@
     };
   }
 
-  function applyVisibleRange() {
-    const range = computeVisibleRange();
+  function applyVisibleRange(isInitialLoad) {
+    const range = computeVisibleRange(isInitialLoad);
     if (!range) return;
     lastAppliedRange = range;
     chart.timeScale().setVisibleLogicalRange(range);
@@ -165,8 +208,8 @@
   // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
   // the user hasn't manually panned/zoomed since the last time we set it — see userHasInteracted.
   function reapplyVisibleRangeIfLive() {
-    if (!visibleDays || userHasInteracted) return;
-    applyVisibleRange();
+    if ((!visibleDays && !rthSlideWindowBars && !initialBarCount) || userHasInteracted) return;
+    applyVisibleRange(false);
   }
 
   // ---- DZ/SZ (Demand Zone / Supply Zone) partial lines ----
@@ -3014,7 +3057,7 @@
     allCandles = candles.slice().sort((a, b) => a.time - b.time);
     renderCandles();
     if (!historyLoadedOnce) {
-      if (visibleDays) applyVisibleRange(); else chart.timeScale().fitContent();
+      if (rthSlideWindowBars || initialBarCount || visibleDays) applyVisibleRange(true); else chart.timeScale().fitContent();
       historyLoadedOnce = true;
     } else {
       reapplyVisibleRangeIfLive();
