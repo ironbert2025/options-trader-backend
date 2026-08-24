@@ -2092,7 +2092,18 @@ public class ChartPanel : Panel
         if (byDate.Count == 0) return;
 
         var prevDate = byDate.Max(x => x.Date);
-        var lastBar = byDate.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
+        var prevDayBars = byDate.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).ToList();
+
+        // "Yesterday's close" must mean the actual 4:00 PM RTH close, not whichever candle happens
+        // to be chronologically last — on the RTH+Overnight panel (the only one where `candles`
+        // includes anything past 16:00), the literal last bar of the day is an overnight tick, and
+        // after-hours drift can put it well away from the real close (confirmed live: panel 3
+        // showing a different "C" price than panels 1/2, which only ever see RTH bars). Panels 1/2
+        // are unaffected by this filter since every one of their bars is already <= 16:00 anyway.
+        // Candle.Time is Eastern-wall-clock digits disguised as UTC (see FakeUtcEpochSeconds) — its
+        // own TimeOfDay is directly comparable, no EasternZone conversion needed here.
+        var rthBars = prevDayBars.Where(x => x.Candle.Time.TimeOfDay <= new TimeSpan(16, 0, 0)).ToList();
+        var lastBar = (rthBars.Count > 0 ? rthBars : prevDayBars)[^1].Candle;
 
         var timeArg  = FakeUtcEpochSeconds(lastBar.Time);
         var priceStr = lastBar.Close.ToString(System.Globalization.CultureInfo.InvariantCulture);
