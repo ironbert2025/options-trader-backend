@@ -29,6 +29,12 @@ public class MultiChartForm : Form
 
     private TextBox? _crossLog;
 
+    // Every "Daily" window currently open for this symbol — kept so the live spot price (relayed
+    // from hourlyPanel.OnLiveTick below) can be forwarded into each one's blue "current price"
+    // line, per explicit request. Removed on FormClosed so a closed window's WebView2 never gets
+    // touched again.
+    private readonly List<DailyChartForm> _openDailyCharts = new();
+
     // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
     // GetQuoteSnapshot) — clicking Strike forwards into Form1.TriggerQuoteStrikeClick, which runs
     // the exact same click handler Form1's own grid would (same currently-selected trade mode).
@@ -243,7 +249,10 @@ public class MultiChartForm : Form
         btnDaily.Click += (s, e) =>
         {
             var dailyCandles = ChartPanel.GetLastDailyCandles(_symbol, 250); // enough for SMA100/200 to have data
-            new DailyChartForm(_symbol, dailyCandles).Show();
+            var dailyForm = new DailyChartForm(_symbol, dailyCandles);
+            _openDailyCharts.Add(dailyForm);
+            dailyForm.FormClosed += (s2, e2) => _openDailyCharts.Remove(dailyForm);
+            dailyForm.Show();
         };
 
         // Dashed vertical lines separating the 7 hourly candles of each trading day (last 4 lines
@@ -497,6 +506,27 @@ public class MultiChartForm : Form
             {
                 if (lblLiveTick.IsDisposed || !lblLiveTick.IsHandleCreated) return;
                 lblLiveTick.BeginInvoke(() => lblLiveTick.Text = $"{eastern:HH:mm:ss}  {price:F2}");
+            };
+        }
+
+        // Blue "current price" line on any open "Daily" window(s) — today's live spot, whether
+        // premarket or RTH, per explicit request. hourlyPanel's OnLiveTick fires for every raw
+        // 1-minute tick regardless of session (same source lblLiveTick above uses via
+        // overnightPanel — either panel would do, this one just reads more naturally paired with
+        // the Daily button that lives on the 1h panel's own toolbar).
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnLiveTick += (eastern, price) =>
+            {
+                // BeginInvoke — this fires from Streamer_OnNewCandle's background (WebSocket)
+                // thread, and UpdateLivePrice touches CoreWebView2 (same threading bug class as
+                // AutoZonePush, already fixed elsewhere in this file).
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    foreach (var dailyForm in _openDailyCharts.ToList())
+                        _ = dailyForm.UpdateLivePrice(price);
+                });
             };
         }
 
