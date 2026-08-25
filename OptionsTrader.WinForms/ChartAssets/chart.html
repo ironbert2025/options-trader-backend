@@ -1339,7 +1339,19 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
-                const xRaw = ts.timeToCoordinate(self._time);
+                // Same snap-to-nearest-real-candle fallback HLinePrimitive uses — falling back to
+                // x=0 (the left edge, potentially several days back) whenever self._time doesn't
+                // land on an exact candle made the line appear anchored on the wrong day entirely
+                // instead of at/near yesterday's actual close, confirmed live (NFLX, premarket).
+                let snappedTime = self._time;
+                if (ts.timeToCoordinate(snappedTime) == null && allCandles.length > 0) {
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= self._time) { floor = allCandles[i].time; break; }
+                  }
+                  snappedTime = floor ?? allCandles[0].time;
+                }
+                const xRaw = ts.timeToCoordinate(snappedTime);
                 const x = xRaw == null ? 0 : xRaw;
                 const y = candleSeries.priceToCoordinate(self._price);
                 if (y == null) return;
@@ -1387,7 +1399,16 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
-                const xRaw = ts.timeToCoordinate(self._time);
+                // Same snap-to-nearest-real-candle fallback as PrevDayCloseLinePrimitive above.
+                let snappedTime = self._time;
+                if (ts.timeToCoordinate(snappedTime) == null && allCandles.length > 0) {
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= self._time) { floor = allCandles[i].time; break; }
+                  }
+                  snappedTime = floor ?? allCandles[0].time;
+                }
+                const xRaw = ts.timeToCoordinate(snappedTime);
                 const x = xRaw == null ? 0 : xRaw;
                 const y = candleSeries.priceToCoordinate(self._price);
                 if (y == null) return;
