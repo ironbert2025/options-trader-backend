@@ -517,7 +517,21 @@
     const tolerance = 6;
     for (let i = hLinePrimitive._segments.length - 1; i >= 0; i--) {
       const seg = hLinePrimitive._segments[i];
-      const x = ts.timeToCoordinate(seg.time);
+      // Same snap-to-nearest-real-candle fallback HLinePrimitive.draw() uses — without it, the
+      // auto-drawn prev-day High/Low lines (whose time comes from 1-minute-granularity C# data,
+      // essentially never landing on an exact candle boundary) render fine but can never be
+      // click-selected here, since timeToCoordinate returns null for their raw time and this loop
+      // just skips them — making them impossible to Delete. Manually-drawn H-Lines are unaffected
+      // (their time is always an exact candle's own, captured from the click itself).
+      let snappedTime = seg.time;
+      if (ts.timeToCoordinate(snappedTime) == null && allCandles.length > 0) {
+        let floor = null;
+        for (let j = allCandles.length - 1; j >= 0; j--) {
+          if (allCandles[j].time <= seg.time) { floor = allCandles[j].time; break; }
+        }
+        snappedTime = floor ?? allCandles[0].time;
+      }
+      const x = ts.timeToCoordinate(snappedTime);
       const y = candleSeries.priceToCoordinate(seg.price);
       if (x == null || y == null) continue;
       if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
@@ -931,6 +945,12 @@
         rectanglesPrimitive._preview = null;
         rectPending = null;
         forceRepaint();
+        // Single-shot per arm — completing one rectangle (2nd click) disarms the tool instead of
+        // staying armed for another, per explicit request. Same pattern as T-Line.
+        rectArmed = false;
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'rect_placed' });
+        }
       }
     }
 
@@ -943,10 +963,14 @@
         grayRectPrimitive._preview = null;
         grayRectPending = null;
         forceRepaint();
+        // Single-shot per arm — completing one rectangle (2nd click) disarms the tool instead of
+        // staying armed for another, per explicit request. Same pattern as the sky-blue rect tool.
+        grayRectArmed = false;
         // Persisted per-symbol by C# (RectGrisStore) so it reappears at the same point after
         // closing and reopening the app — see ChartPanel.CoreWebView2_WebMessageReceived.
         if (window.chrome && window.chrome.webview) {
           window.chrome.webview.postMessage({ type: 'rect_add', t1: rect.t1, p1: rect.p1, t2: rect.t2, p2: rect.p2 });
+          window.chrome.webview.postMessage({ type: 'rectgris_placed' });
         }
       }
     }

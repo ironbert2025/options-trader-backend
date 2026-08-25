@@ -186,6 +186,9 @@ public class MultiChartForm : Form
             var on = await hourlyPanel.ToggleRectGrisModeAsync();
             btnRectGris.BackColor = on ? Color.LightGray : SystemColors.Control;
         };
+        // chart.html auto-disarms this tool itself once the 2nd click completes a rectangle — per
+        // explicit request, reset the button color to match. Same pattern as the sky-blue btnRect.
+        if (hourlyPanel != null) hourlyPanel.OnRectGrisPlacedEvent += () => btnRectGris.BackColor = SystemColors.Control;
 
         // Single-click vertical arrows: green points up, red points down, tip at the click point.
         // Click the shaft to select (yellow dashed overlay), Delete removes it.
@@ -565,6 +568,10 @@ public class MultiChartForm : Form
             var on = await overnightPanel.ToggleRectModeAsync();
             btnRect.BackColor = on ? Color.LightSkyBlue : SystemColors.Control;
         };
+        // chart.html auto-disarms the rect tool itself once the 2nd click completes one — per
+        // explicit request, reset the button color to match instead of staying armed-looking.
+        // Same pattern as btnTLine/btnRthTLine's OnTLinePlacedEvent.
+        if (overnightPanel != null) overnightPanel.OnRectPlacedEvent += () => btnRect.BackColor = SystemColors.Control;
         btnClear.Click += async (s, e) =>
         {
             if (overnightPanel == null) return;

@@ -390,6 +390,15 @@ public class ChartPanel : Panel
     // corresponding button's color back to normal.
     public event Action? OnTLinePlacedEvent;
 
+    // Fires when a rectangle's 2nd click completes it — chart.html auto-disarms itself at that
+    // point (single-shot per press), so MultiChartForm listens for this to reset the "Rect"
+    // button's color back to normal. Same pattern as OnTLinePlacedEvent.
+    public event Action? OnRectPlacedEvent;
+
+    // Same idea, for the OTHER "Rect" button (gray filled rectangle, panel 1) — a separate tool
+    // with its own arm/disarm state in chart.html (grayRectArmed), so it needs its own event.
+    public event Action? OnRectGrisPlacedEvent;
+
     // Toggles H-Line drawing mode on/off. While on, every click draws a new red horizontal line
     // from the click point to the right edge of the chart. Same toggle pattern as DZ/SZ.
     public async Task<bool> ToggleHLineModeAsync()
@@ -724,6 +733,20 @@ public class ChartPanel : Panel
                     // completes it — this just tells C# so the corresponding button's color
                     // resets (see MultiChartForm's btnTLine/btnRthTLine wiring).
                     OnTLinePlacedEvent?.Invoke();
+                    break;
+                }
+                case "rect_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment a rectangle's 2nd
+                    // click completes it — this just tells C# so the "Rect" button's color resets
+                    // (see MultiChartForm's btnRect wiring).
+                    OnRectPlacedEvent?.Invoke();
+                    break;
+                }
+                case "rectgris_placed":
+                {
+                    // Single-shot counterpart for the gray rect tool — see OnRectGrisPlacedEvent.
+                    OnRectGrisPlacedEvent?.Invoke();
                     break;
                 }
                 case "text_placed":
