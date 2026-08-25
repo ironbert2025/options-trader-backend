@@ -624,8 +624,16 @@ public class MultiChartForm : Form
             hourlyPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
-                _ = SendTLineSignalTelegramPushAsync(message);
+                // BeginInvoke — fires from Streamer_OnNewCandle's background (WebSocket) thread,
+                // and SendTLineSignalTelegramPushAsync touches CoreWebView2 via
+                // CaptureCombinedChartImageAsync (same threading bug class as AutoZonePush,
+                // already fixed elsewhere in this file) — was previously called OUTSIDE the
+                // BeginInvoke below, which only protected the crossLog line.
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+                    _ = SendTLineSignalTelegramPushAsync(message);
+                });
             };
 
             // Daily-candle bounce off SMA20 — purely informational, log only (no Telegram, no
@@ -644,8 +652,12 @@ public class MultiChartForm : Form
             rthPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
-                _ = SendTLineSignalTelegramPushAsync(message);
+                // BeginInvoke — same threading fix as hourlyPanel.OnTLineSignalEvent above.
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+                    _ = SendTLineSignalTelegramPushAsync(message);
+                });
             };
 
             // "Cruce de vela con PM" — log-only, per explicit request: written directly to the
@@ -720,11 +732,15 @@ public class MultiChartForm : Form
             hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
             {
                 var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
-                rthPanel.ArmVolatilityOpeningWatch(bullish);
+                rthPanel.ArmVolatilityOpeningWatch(bullish); // plain state/event, no CoreWebView2 — safe off the UI thread
 
                 if (IsDisposed) return;
-                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
-                _ = SendPisoTechoTelegramPushAsync(caption);
+                // BeginInvoke — same threading fix as OnTLineSignalEvent above.
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}");
+                    _ = SendPisoTechoTelegramPushAsync(caption);
+                });
             };
         }
         else if (hourlyPanel != null)
@@ -732,8 +748,11 @@ public class MultiChartForm : Form
             hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
-                _ = SendPisoTechoTelegramPushAsync(caption);
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}");
+                    _ = SendPisoTechoTelegramPushAsync(caption);
+                });
             };
         }
 
@@ -779,8 +798,12 @@ public class MultiChartForm : Form
             hourlyPanel.OnBollingerOpeningEvent += caption =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  [1h] {caption}{Environment.NewLine}"));
-                _ = SaveBollingerOpeningSnapshotAsync(caption);
+                // BeginInvoke — same threading fix as OnTLineSignalEvent above (SaveBollingerOpeningSnapshotAsync also touches CoreWebView2).
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  [1h] {caption}{Environment.NewLine}");
+                    _ = SaveBollingerOpeningSnapshotAsync(caption);
+                });
             };
         }
         if (rthPanel != null)
@@ -788,8 +811,11 @@ public class MultiChartForm : Form
             rthPanel.OnBollingerOpeningEvent += caption =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  [15m RTH] {caption}{Environment.NewLine}"));
-                _ = SaveBollingerOpeningSnapshotAsync(caption);
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  [15m RTH] {caption}{Environment.NewLine}");
+                    _ = SaveBollingerOpeningSnapshotAsync(caption);
+                });
             };
         }
 
