@@ -325,6 +325,17 @@ public class ChartPanel : Panel
     // build the combined 3-chart trade snapshot in MultiChartForm.
     public async Task<Bitmap> CaptureImageAsync()
     {
+        // Force a repaint and give WebView2's compositor a moment to actually commit the frame
+        // before capturing — confirmed live: the combined-snapshot push fired right after this
+        // panel's own candle-close redraw (updateLastCandle/resetToNewDayCandle) came back BLANK
+        // (no candles at all) while the sibling panels, captured a beat later in the same loop,
+        // came out fine. ExecuteScriptAsync resolving only means the JS call ran, not that the
+        // browser has painted the result yet — capturing immediately after can catch a stale/blank
+        // frame from before the redraw. A single forced repaint + short delay is cheap insurance;
+        // every event this feeds (Telegram pushes, events .md) can tolerate a few extra ms.
+        await _webView.CoreWebView2.ExecuteScriptAsync("forceRepaint();");
+        await Task.Delay(80);
+
         using var stream = new MemoryStream();
         await _webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
         stream.Position = 0;
