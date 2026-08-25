@@ -1898,21 +1898,37 @@ public class ChartPanel : Panel
 
     public event Action<string>? OnPmCrossEvent;
 
-    private void EvaluatePmCross(CandleData justClosed)
+    // Tracks which side of the current PM(15m) value the live spot was on as of the LAST tick —
+    // null until the first tick that has a valid PM to compare against. Reset at the start of each
+    // new RTH session (see Streamer_OnNewCandle's Fifteen_RTH day-reset branch) so a stale side
+    // from a previous day can never be compared against today's price.
+    private bool? _pmCrossLastSide; // true = spot above PM, false = spot below PM
+
+    // Live (tick-by-tick) counterpart — fires the EXACT moment the spot price crosses through the
+    // current PM(15m) value, not just once a candle closes above/below it (the original version,
+    // replaced per explicit request: "necesito que sea en el momento en que lo cruza... no que la
+    // vela cierra por encima"). Only fires in the direction PM is currently tilting (spot crossing
+    // UPWARD while PM is alcista, DOWNWARD while bajista) — a cross the "wrong" way just updates
+    // the tracked side silently, no event.
+    private void EvaluatePmCross(decimal livePrice)
     {
         var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
         var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
-        if (smaNow == null || smaEarlier == null || smaNow == smaEarlier) return; // no clear PM tilt yet
+        if (smaNow == null) { _pmCrossLastSide = null; return; } // no PM yet — nothing to track against
+
+        var side = livePrice > smaNow.Value;
+        var previousSide = _pmCrossLastSide;
+        _pmCrossLastSide = side;
+
+        if (previousSide == null || previousSide == side) return; // first tick, or no crossing this tick
+        if (smaEarlier == null || smaNow == smaEarlier) return; // no clear PM tilt yet — can't judge direction
 
         var pmBullish = smaNow > smaEarlier;
-        var crossed = pmBullish
-            ? justClosed.Open < smaNow.Value && justClosed.Close > smaNow.Value
-            : justClosed.Open > smaNow.Value && justClosed.Close < smaNow.Value;
-        if (!crossed) return;
+        var crossedUpward = side; // side==true means spot is now ABOVE PM, i.e. just crossed upward
+        if (crossedUpward != pmBullish) return; // crossed the "wrong" way relative to PM's current tilt
 
         var direction = pmBullish ? "alza" : "baja";
-        var caption =
-            $"Cruce de vela con PM ({direction}) — Open {justClosed.Open:F2} → Close {justClosed.Close:F2} (PM {smaNow.Value:F2})";
+        var caption = $"Cruce de Spot con PM ({direction}) — Spot {livePrice:F2} = PM {smaNow.Value:F2}";
         BeginInvoke(() => OnPmCrossEvent?.Invoke(caption));
     }
 
@@ -2569,6 +2585,7 @@ public class ChartPanel : Panel
                     _liveBucketIndex = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
                     _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
                     var freshBucket = _liveBucket;
+                    _pmCrossLastSide = null; // new session — don't compare today's first tick against yesterday's last known side
                     FinalizePreMarketLineAtOpen(candle.Open, eastern);
                     BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                     return;
@@ -2632,7 +2649,6 @@ public class ChartPanel : Panel
                 {
                     _closedCandles.Add(_liveBucket);
                     EvaluateTLineSignal(_liveBucket);
-                    EvaluatePmCross(_liveBucket);
                 }
 
                 _liveBucketIndex = index;
@@ -2656,6 +2672,7 @@ public class ChartPanel : Panel
             EvaluateVolatilityOpening(candle.Close);
             EvaluateBollingerWideningLabel(candle.Close);
             EvaluateSpotOutsideBollinger(candle.Close);
+            EvaluatePmCross(candle.Close);
         }
         else if (_mode == ChartPanelMode.Hourly15)
         {
@@ -2751,6 +2768,7 @@ public class ChartPanel : Panel
             EvaluateVolatilityOpening(price);
             EvaluateBollingerWideningLabel(price);
             EvaluateSpotOutsideBollinger(price);
+            EvaluatePmCross(price);
         }
         else if (_mode == ChartPanelMode.Hourly15)
         {
