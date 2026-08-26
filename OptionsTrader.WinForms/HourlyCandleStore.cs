@@ -19,6 +19,8 @@ internal static class HourlyCandleStore
 
     private static string PathFor(string symbol) => Path.Combine(OutputFolder, $"{symbol}_Hourly1h.csv");
 
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
     public static List<CandleData> Load(string symbol)
     {
         var path = PathFor(symbol);
@@ -38,9 +40,21 @@ internal static class HourlyCandleStore
                 if (!decimal.TryParse(parts[3], NumberStyles.Any, CultureInfo.InvariantCulture, out var low)) continue;
                 if (!decimal.TryParse(parts[4], NumberStyles.Any, CultureInfo.InvariantCulture, out var close)) continue;
 
+                var utcTime = DateTime.SpecifyKind(time, DateTimeKind.Utc);
+
+                // This store is meant to be RTH-only (see class comment — it backs the Hourly15
+                // panel, always rthOnly=true), but a handful of after-hours bars ended up saved
+                // here at some point (likely an old backfill run, from before this filter existed
+                // — confirmed live, TSLA 08-25 had bars up to 20:00 ET). Filtering defensively on
+                // every read means it's self-healing regardless of how anything already on disk
+                // got contaminated, instead of only cleaning up whatever ReplaceDates happens to
+                // re-touch — "RTH es RTH siempre", per explicit request.
+                var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+                if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)) continue;
+
                 result.Add(new CandleData
                 {
-                    Time  = DateTime.SpecifyKind(time, DateTimeKind.Utc),
+                    Time  = utcTime,
                     Open  = open,
                     High  = high,
                     Low   = low,
