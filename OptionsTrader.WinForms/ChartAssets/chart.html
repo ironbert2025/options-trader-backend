@@ -643,6 +643,22 @@
     return -1;
   }
 
+  // Returns the index of the diagonal Arrow whose shaft is within a few pixels of (px,py), or -1.
+  // Same distToSegment helper as T-Line above, using logicalToCoordinate (not timeToCoordinate)
+  // to match how ArrowPrimitive itself draws — arrows can extend past the last/first candle.
+  function findArrowByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = arrowPrimitive._arrows.length - 1; i >= 0; i--) {
+      const a = arrowPrimitive._arrows[i];
+      const x1 = ts.logicalToCoordinate(a.l1), x2 = ts.logicalToCoordinate(a.l2);
+      const y1 = candleSeries.priceToCoordinate(a.p1), y2 = candleSeries.priceToCoordinate(a.p2);
+      if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+      if (distToSegment(px, py, x1, y1, x2, y2) <= tolerance) return i;
+    }
+    return -1;
+  }
+
   // Returns the index of the H-Line whose horizontal segment (click point -> right edge) is
   // within a few pixels of (px,py), or -1. Same distToSegment helper as gray rect/T-Line above.
   function findHLineByClick(px, py) {
@@ -816,6 +832,15 @@
       return;
     }
 
+    // Diagonal Arrow: session-only (not persisted anywhere), nothing to report to C# — just
+    // remove it locally, same as click-text below.
+    const diagArrowIdx = arrowPrimitive._arrows.findIndex(a => a.selected);
+    if (diagArrowIdx !== -1) {
+      arrowPrimitive._arrows.splice(diagArrowIdx, 1);
+      forceRepaint();
+      return;
+    }
+
     // Click-text: session-only, nothing to report to C# — just remove it locally.
     const textIdx = clickTextPrimitive._labels.findIndex(l => l.selected);
     if (textIdx !== -1) {
@@ -889,12 +914,29 @@
         arrowPending = { logical: logicalX, price: arrowPrice };
       } else {
         const red = arrowPending.price > arrowPrice; // 1st click above (higher price than) 2nd -> red
-        arrowPrimitive._arrows.push({ l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: arrowPrice, red });
+        arrowPrimitive._arrows.push({ l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: arrowPrice, red, selected: false });
         arrowPrimitive._preview = null;
         arrowPending = null;
         forceRepaint();
       }
       return;
+    }
+
+    // Diagonal Arrow border-click selection — handled here, BEFORE the clickTime/price guard
+    // below, same reason as the arrow-drawing block above: an arrow can extend past the last/
+    // first candle into empty space where coordinateToTime returns null.
+    if (arrowPrimitive._arrows.length > 0) {
+      const hitIdx = findArrowByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        arrowPrimitive._arrows.forEach((a, i) => { a.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadArrowSelection = arrowPrimitive._arrows.some(a => a.selected);
+      if (hadArrowSelection) {
+        arrowPrimitive._arrows.forEach(a => { a.selected = false; });
+        forceRepaint();
+      }
     }
 
     // Stk line click selection — handled here, BEFORE the clickTime/price guard below, same
@@ -1876,6 +1918,17 @@
                   ctx.lineTo(X2 - headLen * Math.cos(angle + headAngle), Y2 - headLen * Math.sin(angle + headAngle));
                   ctx.closePath();
                   ctx.fill();
+
+                  if (a.selected) {
+                    ctx.strokeStyle = '#ffeb3b'; // yellow overlay = selected, ready to delete
+                    ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([4 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(X1, Y1);
+                    ctx.lineTo(X2, Y2);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                  }
                 };
                 self._arrows.forEach(a => drawArrow(a, 1));
                 if (self._preview) drawArrow(self._preview, 0.6);
