@@ -489,6 +489,43 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredHLine({time}, {priceStr});");
     }
 
+    // Draws a T-Line on THIS panel AND persists it under this panel's own TLineStore tag ("1h"/
+    // "RTH") — called when a T-Line is drawn on the corresponding DailyChartForm tab ("Hora" ->
+    // this panel in Hourly15 mode, "15 Min" -> this panel in RTH mode), per explicit request that
+    // those replicate onto the live chart (one-way: Daily -> live only, and it should survive the
+    // live chart being closed/reopened on its own, unlike AddMirroredHLineAsync above which is
+    // visual-only since H-Lines aren't stored per-panel).
+    public async Task AddMirroredTLineAsync(long t1, decimal p1, long t2, decimal p2)
+    {
+        TLineStore.Append(_symbol, TLineModeTag, t1, p1, t2, p2);
+        // Same "Potencial CT al Alza/Baja" hint a directly-drawn T-Line gets (see the "tline" case
+        // in CoreWebView2_WebMessageReceived) — without this, EvaluateTLineSignal would still fire
+        // the eventual breakout correctly (it reloads TLineStore fresh every candle close), but the
+        // on-screen hint that tells the user the analysis is "armed" never appeared.
+        UpdateTLineHint(p1, p2);
+        if (_webView.CoreWebView2 == null) return;
+        var p1Str = p1.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var p2Str = p2.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
+    }
+
+    // Removes a mirrored T-Line — called when the ORIGINATING T-Line (drawn on DailyChartForm's
+    // "Hora"/"15 Min" tab) gets deleted there, so the live chart's copy and its TLineStore entry
+    // don't outlive it.
+    public async Task RemoveMirroredTLineAsync(long t1, decimal p1, long t2, decimal p2)
+    {
+        TLineStore.Remove(_symbol, TLineModeTag, t1, p1, t2, p2);
+        // Same disarm a directly-deleted T-Line gets (see the "tline_delete" case in
+        // CoreWebView2_WebMessageReceived) — clears the "Potencial CT" hint and stops
+        // EvaluateTLineSignal from ever firing for this now-gone line.
+        _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync("setTLineHint('');");
+        var p1Str = p1.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var p2Str = p2.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
+    }
+
     // Draws/updates this panel's All-Time High reference line — called on chart open (loaded from
     // AllTimeHighStore) and again on the other 2 panels when the 1h panel persists a new one at the
     // close (see OnAllTimeHighUpdatedEvent).

@@ -2332,6 +2332,44 @@ public partial class Form1 : Form
         simulatorForm.Show();
     }
 
+    // Opens the standalone Daily/Hora/15 Min chart window (same DailyChartForm MultiChartForm's
+    // own "Daily" button opens) for the currently selected ticker, without needing a live chart
+    // window open first — per explicit request. Needs _historyClient for its REST history fetches
+    // (the "15 Min" tab) and live streaming for the day's still-forming daily/hourly candles, so
+    // it goes through the same EnsureLiveFeedReadyAsync gate as BtnLiveChart_Click.
+    private async void BtnDaily_Click(object? sender, EventArgs e)
+    {
+        if (_selectedTicker == null)
+        {
+            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var symbol = _selectedTicker.Symbol;
+        var dailyCandles = ChartPanel.GetLastDailyCandles(symbol, 250); // enough for SMA100/200 to have data
+        var dailyForm = new DailyChartForm(symbol, dailyCandles, _historyClient!);
+        dailyForm.Show();
+    }
+
     // Same disk-only pattern as BtnSimulator_Click — the 4-ETF (SPY/QQQ/IWM/DIA) replay window
     // needs no Schwab creds or live feed, so it can open independently of everything else.
     private void BtnFourEtfSimulator_Click(object? sender, EventArgs e)

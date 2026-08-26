@@ -46,6 +46,18 @@
     },
   });
 
+  // timeScale().timeToCoordinate(t) can THROW (not just return null) for a time that doesn't land
+  // on a loaded bar/business-day boundary — confirmed live (AAPL, Daily tab: a stale saved Rect's
+  // time crashed inside the library's own convertHorzItemToInternal). Every custom primitive's
+  // draw() below calls this every animation frame, so ANY one of them throwing uncaught silently
+  // wedges the whole chart's rendering (candles keep drawing via a separate path, but SMA lines,
+  // Bollinger, and every primitive attached AFTER the throwing one in the pane stop painting) —
+  // this single wrapper replaces every direct safeTimeToCoordinate(ts, ...) call in the file so one bad
+  // time can never take the rest of the chart down with it.
+  function safeTimeToCoordinate(ts, t) {
+    try { return ts.timeToCoordinate(t); } catch { return null; }
+  }
+
   // Keeps the current price roughly centered vertically: instead of Lightweight Charts' default
   // autoscale (which just fits min/max of the visible candles), force a price range symmetric
   // around the LAST close — same margin above and below it, sized to whichever side needs more
@@ -244,8 +256,8 @@
                 for (let i = 0; i + 1 < self._segments.length; i += 2) {
                   const demand = self._segments[i];
                   const supply = self._segments[i + 1];
-                  const xd = ts.timeToCoordinate(demand.time);
-                  const xs = ts.timeToCoordinate(supply.time);
+                  const xd = safeTimeToCoordinate(ts, demand.time);
+                  const xs = safeTimeToCoordinate(ts, supply.time);
                   const yd = candleSeries.priceToCoordinate(demand.price);
                   const ys = candleSeries.priceToCoordinate(supply.price);
                   if (xd == null || xs == null || yd == null || ys == null) continue;
@@ -260,7 +272,7 @@
                 }
 
                 self._segments.forEach(seg => {
-                  const x = ts.timeToCoordinate(seg.time);
+                  const x = safeTimeToCoordinate(ts, seg.time);
                   const y = candleSeries.priceToCoordinate(seg.price);
                   if (x == null || y == null) return;
                   ctx.strokeStyle = seg.color;
@@ -357,9 +369,30 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
+                // Snap each corner's time to the nearest real candle at/before it before asking
+                // timeToCoordinate — an exact-but-stale t1/t2 (e.g. saved on a different timeframe
+                // tab, or just not landing on a loaded bar) makes the library throw internally
+                // instead of returning null, which — since this runs every animation frame via
+                // self._rects.forEach — permanently wedges the WHOLE chart's rendering (candles
+                // keep drawing via a different path, but SMA/Bollinger/other primitives stop).
+                // Same fallback PrevDayCloseLinePrimitive/DailyPmLinePrimitive/HLine already use.
+                // timeToCoordinate can THROW (not just return null) for a time that doesn't land
+                // on a loaded bar — wrapped in try/catch, not just an == null check, for that reason.
+                const safeX = (t) => {
+                  try {
+                    const x = safeTimeToCoordinate(ts, t);
+                    if (x != null) return x;
+                  } catch { /* fall through to snap */ }
+                  if (allCandles.length === 0) return null;
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= t) { floor = allCandles[i].time; break; }
+                  }
+                  try { return safeTimeToCoordinate(ts, floor ?? allCandles[0].time); } catch { return null; }
+                };
                 const drawRect = (r, alpha, selected) => {
-                  const x1 = ts.timeToCoordinate(r.t1);
-                  const x2 = ts.timeToCoordinate(r.t2);
+                  const x1 = safeX(r.t1);
+                  const x2 = safeX(r.t2);
                   const y1 = candleSeries.priceToCoordinate(r.p1);
                   const y2 = candleSeries.priceToCoordinate(r.p2);
                   if (x1 == null || x2 == null || y1 == null || y2 == null) return;
@@ -367,8 +400,79 @@
                   const right = Math.max(x1, x2) * scope.horizontalPixelRatio;
                   const top    = Math.min(y1, y2) * scope.verticalPixelRatio;
                   const bottom = Math.max(y1, y2) * scope.verticalPixelRatio;
-                  ctx.fillStyle = `rgba(135, 206, 235, ${alpha})`; // sky blue
+                  ctx.fillStyle = `rgba(150, 150, 150, ${alpha})`; // gray
                   ctx.fillRect(left, top, right - left, bottom - top);
+                  if (selected) {
+                    ctx.strokeStyle = '#ffeb3b'; // yellow outline = selected, ready to delete
+                    ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                    ctx.strokeRect(left, top, right - left, bottom - top);
+                  }
+                };
+                self._rects.forEach(r => drawRect(r, 0.35, r.selected));
+                if (self._preview) drawRect(self._preview, 0.18, false); // lighter while still dragging
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  // ---- Color Rect tool (Daily tab): same 2-click rectangle as the gray Rect above, but filled
+  // red or green depending on drag direction — red if the 1st click is ABOVE (higher price than)
+  // the 2nd (drawn top-to-bottom), green otherwise (bottom-to-top) — same convention the Arrow
+  // tool already uses (see ArrowPrimitive), for consistency. Color is derived from p1 vs p2 at
+  // draw time, not stored separately. ----
+
+  class ColorRectPrimitive {
+    constructor() { this._rects = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                // Same safe-snap wrapper as the gray Rect above — timeToCoordinate can throw for a
+                // stale/off-bar time, which would otherwise wedge the whole chart's rendering.
+                const safeX = (t) => {
+                  try {
+                    const x = safeTimeToCoordinate(ts, t);
+                    if (x != null) return x;
+                  } catch { /* fall through to snap */ }
+                  if (allCandles.length === 0) return null;
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= t) { floor = allCandles[i].time; break; }
+                  }
+                  try { return safeTimeToCoordinate(ts, floor ?? allCandles[0].time); } catch { return null; }
+                };
+                const drawRect = (r, alpha, selected) => {
+                  const x1 = safeX(r.t1);
+                  const x2 = safeX(r.t2);
+                  const y1 = candleSeries.priceToCoordinate(r.p1);
+                  const y2 = candleSeries.priceToCoordinate(r.p2);
+                  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+                  const left  = Math.min(x1, x2) * scope.horizontalPixelRatio;
+                  const right = Math.max(x1, x2) * scope.horizontalPixelRatio;
+                  const top    = Math.min(y1, y2) * scope.verticalPixelRatio;
+                  const bottom = Math.max(y1, y2) * scope.verticalPixelRatio;
+                  const red = r.p1 > r.p2; // 1st click above 2nd -> red, otherwise green
+                  // Green lightened further (was a muted teal that barely read against the dark
+                  // background) — per explicit request, higher alpha too so the fill itself reads
+                  // as light green instead of just a brighter dark green.
+                  ctx.fillStyle = red ? `rgba(239, 83, 80, ${alpha})` : `rgba(180, 245, 195, ${alpha * 1.7})`;
+                  ctx.fillRect(left, top, right - left, bottom - top);
+                  // Dark same-hue border, per explicit request — always visible (not just when
+                  // selected), so the rect reads clearly against the candles/background.
+                  ctx.strokeStyle = red ? '#8b0000' : '#0b5e1f'; // dark red / dark green
+                  ctx.lineWidth = 1.5 * scope.horizontalPixelRatio;
+                  ctx.strokeRect(left, top, right - left, bottom - top);
                   if (selected) {
                     ctx.strokeStyle = '#ffeb3b'; // yellow outline = selected, ready to delete
                     ctx.lineWidth = 2 * scope.horizontalPixelRatio;
@@ -399,6 +503,19 @@
     return rectArmed;
   }
 
+  const colorRectPrimitive = new ColorRectPrimitive();
+  let colorRectAttached = false;
+  let colorRectArmed = false;
+  let colorRectPending = null; // { time, price } of the first click of the current rectangle
+
+  // Same single-shot-per-arm toggle as the gray Rect tool above — 2nd click draws and disarms.
+  function toggleColorRect() {
+    if (!colorRectAttached) { candleSeries.attachPrimitive(colorRectPrimitive); colorRectAttached = true; }
+    colorRectArmed = !colorRectArmed;
+    colorRectPending = null;
+    return colorRectArmed;
+  }
+
   // ---- Gray Rect tool (1h panel): filled gray rectangle marking sideways/consolidation ranges
   // around price+SMAs. Same 2-click draw as the sky-blue Rect above, but each rectangle can also
   // be SELECTED by clicking its border (works whether or not the tool is currently armed) and
@@ -418,9 +535,24 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
+                // Same safe-snap wrapper as RectanglesPrimitive above — timeToCoordinate can throw
+                // (not just return null) for a stale/off-bar time, which would otherwise wedge the
+                // whole chart's rendering every animation frame.
+                const safeX = (t) => {
+                  try {
+                    const x = safeTimeToCoordinate(ts, t);
+                    if (x != null) return x;
+                  } catch { /* fall through to snap */ }
+                  if (allCandles.length === 0) return null;
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= t) { floor = allCandles[i].time; break; }
+                  }
+                  try { return safeTimeToCoordinate(ts, floor ?? allCandles[0].time); } catch { return null; }
+                };
                 const drawRect = (r, alpha, selected) => {
-                  const x1 = ts.timeToCoordinate(r.t1);
-                  const x2 = ts.timeToCoordinate(r.t2);
+                  const x1 = safeX(r.t1);
+                  const x2 = safeX(r.t2);
                   const y1 = candleSeries.priceToCoordinate(r.p1);
                   const y2 = candleSeries.priceToCoordinate(r.p2);
                   if (x1 == null || x2 == null || y1 == null || y2 == null) return;
@@ -478,7 +610,7 @@
     const tolerance = 6;
     for (let i = rects.length - 1; i >= 0; i--) {
       const r = rects[i];
-      const x1 = ts.timeToCoordinate(r.t1), x2 = ts.timeToCoordinate(r.t2);
+      const x1 = safeTimeToCoordinate(ts, r.t1), x2 = safeTimeToCoordinate(ts, r.t2);
       const y1 = candleSeries.priceToCoordinate(r.p1), y2 = candleSeries.priceToCoordinate(r.p2);
       if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
       const left = Math.min(x1, x2), right = Math.max(x1, x2);
@@ -494,6 +626,7 @@
 
   function findGrayRectByBorderClick(px, py) { return findRectBorderIndex(grayRectPrimitive._rects, px, py); }
   function findBlueRectByBorderClick(px, py) { return findRectBorderIndex(rectanglesPrimitive._rects, px, py); }
+  function findColorRectByBorderClick(px, py) { return findRectBorderIndex(colorRectPrimitive._rects, px, py); }
 
   // Returns the index of the T-Line whose segment is within a few pixels of (px,py), or -1.
   // Same distToSegment helper as the gray rect border check above.
@@ -502,7 +635,7 @@
     const tolerance = 6;
     for (let i = tLinePrimitive._lines.length - 1; i >= 0; i--) {
       const l = tLinePrimitive._lines[i];
-      const x1 = ts.timeToCoordinate(l.t1), x2 = ts.timeToCoordinate(l.t2);
+      const x1 = safeTimeToCoordinate(ts, l.t1), x2 = safeTimeToCoordinate(ts, l.t2);
       const y1 = candleSeries.priceToCoordinate(l.p1), y2 = candleSeries.priceToCoordinate(l.p2);
       if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
       if (distToSegment(px, py, x1, y1, x2, y2) <= tolerance) return i;
@@ -524,14 +657,14 @@
       // just skips them — making them impossible to Delete. Manually-drawn H-Lines are unaffected
       // (their time is always an exact candle's own, captured from the click itself).
       let snappedTime = seg.time;
-      if (ts.timeToCoordinate(snappedTime) == null && allCandles.length > 0) {
+      if (safeTimeToCoordinate(ts, snappedTime) == null && allCandles.length > 0) {
         let floor = null;
         for (let j = allCandles.length - 1; j >= 0; j--) {
           if (allCandles[j].time <= seg.time) { floor = allCandles[j].time; break; }
         }
         snappedTime = floor ?? allCandles[0].time;
       }
-      const x = ts.timeToCoordinate(snappedTime);
+      const x = safeTimeToCoordinate(ts, snappedTime);
       const y = candleSeries.priceToCoordinate(seg.price);
       if (x == null || y == null) continue;
       if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
@@ -546,7 +679,7 @@
     const tolerance = 6;
     for (let i = zoneLinesPrimitive._segments.length - 1; i >= 0; i--) {
       const seg = zoneLinesPrimitive._segments[i];
-      const x = ts.timeToCoordinate(seg.time);
+      const x = safeTimeToCoordinate(ts, seg.time);
       const y = candleSeries.priceToCoordinate(seg.price);
       if (x == null || y == null) continue;
       if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
@@ -573,8 +706,26 @@
 
     const blueRectIdx = rectanglesPrimitive._rects.findIndex(r => r.selected);
     if (blueRectIdx !== -1) {
+      const removedRect = rectanglesPrimitive._rects[blueRectIdx];
       rectanglesPrimitive._rects.splice(blueRectIdx, 1);
       forceRepaint();
+      // Persisted by C# (RectStore) — see DailyChartForm.cs. "bluerect_*" instead of "rect_*" so
+      // it can't collide with the GRAY rect tool's own existing "rect_add" message.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'bluerect_delete', t1: removedRect.t1, p1: removedRect.p1, t2: removedRect.t2, p2: removedRect.p2 });
+      }
+      return;
+    }
+
+    const colorRectIdx = colorRectPrimitive._rects.findIndex(r => r.selected);
+    if (colorRectIdx !== -1) {
+      const removedRect = colorRectPrimitive._rects[colorRectIdx];
+      colorRectPrimitive._rects.splice(colorRectIdx, 1);
+      forceRepaint();
+      // Persisted by C# (RectStore, tag "DailyColor") — see DailyChartForm.cs.
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'colorrect_delete', t1: removedRect.t1, p1: removedRect.p1, t2: removedRect.t2, p2: removedRect.p2 });
+      }
       return;
     }
 
@@ -809,6 +960,21 @@
       }
     }
 
+    // Color Rect border-click selection (Daily tab) — same idea as gray/sky-blue rect above.
+    if (colorRectPrimitive._rects.length > 0) {
+      const hitIdx = findColorRectByBorderClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        colorRectPrimitive._rects.forEach((r, i) => { r.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadColorSelection = colorRectPrimitive._rects.some(r => r.selected);
+      if (hadColorSelection) {
+        colorRectPrimitive._rects.forEach(r => { r.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // T-Line click selection (1h panel) — same idea as the gray rect above: clicking near an
     // existing line selects it (Delete key removes it), regardless of whether T-Line drawing is
     // currently armed.
@@ -950,6 +1116,28 @@
         rectArmed = false;
         if (window.chrome && window.chrome.webview) {
           window.chrome.webview.postMessage({ type: 'rect_placed' });
+          // Persisted by C# (RectStore) — see DailyChartForm.cs.
+          const addedRect = rectanglesPrimitive._rects[rectanglesPrimitive._rects.length - 1];
+          window.chrome.webview.postMessage({ type: 'bluerect_add', t1: addedRect.t1, p1: addedRect.p1, t2: addedRect.t2, p2: addedRect.p2 });
+        }
+      }
+    }
+
+    if (colorRectArmed) {
+      if (!colorRectPending) {
+        colorRectPending = { time: clickTime, price };
+      } else {
+        colorRectPrimitive._rects.push({ t1: colorRectPending.time, p1: colorRectPending.price, t2: clickTime, p2: price, selected: false });
+        colorRectPrimitive._preview = null;
+        colorRectPending = null;
+        forceRepaint();
+        // Single-shot per arm, same pattern as the gray Rect tool.
+        colorRectArmed = false;
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'colorrect_placed' });
+          // Persisted by C# (RectStore, tag "DailyColor") — see DailyChartForm.cs.
+          const addedRect = colorRectPrimitive._rects[colorRectPrimitive._rects.length - 1];
+          window.chrome.webview.postMessage({ type: 'colorrect_add', t1: addedRect.t1, p1: addedRect.p1, t2: addedRect.t2, p2: addedRect.p2 });
         }
       }
     }
@@ -1067,6 +1255,16 @@
       }
     }
 
+    if (!colorRectArmed || !colorRectPending) {
+      if (colorRectPrimitive._preview) { colorRectPrimitive._preview = null; forceRepaint(); }
+    } else if (param.point && param.time !== undefined) {
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price != null) {
+        colorRectPrimitive._preview = { t1: colorRectPending.time, p1: colorRectPending.price, t2: param.time, p2: price };
+        forceRepaint();
+      }
+    }
+
     if (!tLineArmed || !tLinePending) {
       if (tLinePrimitive._preview) { tLinePrimitive._preview = null; forceRepaint(); }
     } else if (param.point && param.time !== undefined) {
@@ -1108,9 +1306,25 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
+                // Same safe-snap wrapper as RectanglesPrimitive/GrayRectPrimitive — timeToCoordinate
+                // can throw (not just return null) for a stale/off-bar time, which wedges the whole
+                // chart's rendering every animation frame (candles keep drawing via a different
+                // path, but SMA/Bollinger/other primitives stop).
+                const safeX = (t) => {
+                  try {
+                    const x = safeTimeToCoordinate(ts, t);
+                    if (x != null) return x;
+                  } catch { /* fall through to snap */ }
+                  if (allCandles.length === 0) return null;
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= t) { floor = allCandles[i].time; break; }
+                  }
+                  try { return safeTimeToCoordinate(ts, floor ?? allCandles[0].time); } catch { return null; }
+                };
                 const drawLine = (l, alpha) => {
-                  const x1 = ts.timeToCoordinate(l.t1);
-                  const x2 = ts.timeToCoordinate(l.t2);
+                  const x1 = safeX(l.t1);
+                  const x2 = safeX(l.t2);
                   const y1 = candleSeries.priceToCoordinate(l.p1);
                   const y2 = candleSeries.priceToCoordinate(l.p2);
                   if (x1 == null || x2 == null || y1 == null || y2 == null) return;
@@ -1186,14 +1400,14 @@
                   // Snap to the nearest REAL candle at/before the target instead — same fallback
                   // PisoTechoRefLinePrimitive already uses.
                   let snappedTime = seg.time;
-                  if (ts.timeToCoordinate(snappedTime) == null && allCandles.length > 0) {
+                  if (safeTimeToCoordinate(ts, snappedTime) == null && allCandles.length > 0) {
                     let floor = null;
                     for (let i = allCandles.length - 1; i >= 0; i--) {
                       if (allCandles[i].time <= seg.time) { floor = allCandles[i].time; break; }
                     }
                     snappedTime = floor ?? allCandles[0].time;
                   }
-                  const x = ts.timeToCoordinate(snappedTime);
+                  const x = safeTimeToCoordinate(ts, snappedTime);
                   const y = candleSeries.priceToCoordinate(seg.price);
                   if (x == null || y == null) return;
                   ctx.strokeStyle = '#ef5350'; // red
@@ -1344,14 +1558,14 @@
                 // land on an exact candle made the line appear anchored on the wrong day entirely
                 // instead of at/near yesterday's actual close, confirmed live (NFLX, premarket).
                 let snappedTime = self._time;
-                if (ts.timeToCoordinate(snappedTime) == null && allCandles.length > 0) {
+                if (safeTimeToCoordinate(ts, snappedTime) == null && allCandles.length > 0) {
                   let floor = null;
                   for (let i = allCandles.length - 1; i >= 0; i--) {
                     if (allCandles[i].time <= self._time) { floor = allCandles[i].time; break; }
                   }
                   snappedTime = floor ?? allCandles[0].time;
                 }
-                const xRaw = ts.timeToCoordinate(snappedTime);
+                const xRaw = safeTimeToCoordinate(ts, snappedTime);
                 const x = xRaw == null ? 0 : xRaw;
                 const y = candleSeries.priceToCoordinate(self._price);
                 if (y == null) return;
@@ -1401,14 +1615,14 @@
                 const ts = self._chart.timeScale();
                 // Same snap-to-nearest-real-candle fallback as PrevDayCloseLinePrimitive above.
                 let snappedTime = self._time;
-                if (ts.timeToCoordinate(snappedTime) == null && allCandles.length > 0) {
+                if (safeTimeToCoordinate(ts, snappedTime) == null && allCandles.length > 0) {
                   let floor = null;
                   for (let i = allCandles.length - 1; i >= 0; i--) {
                     if (allCandles[i].time <= self._time) { floor = allCandles[i].time; break; }
                   }
                   snappedTime = floor ?? allCandles[0].time;
                 }
-                const xRaw = ts.timeToCoordinate(snappedTime);
+                const xRaw = safeTimeToCoordinate(ts, snappedTime);
                 const x = xRaw == null ? 0 : xRaw;
                 const y = candleSeries.priceToCoordinate(self._price);
                 if (y == null) return;
@@ -1482,7 +1696,7 @@
                 const ts = self._chart.timeScale();
                 const barSpacing = ts.options().barSpacing; // CSS px per bar, current zoom level
                 self._lines.forEach(l => {
-                  const centerXRaw = ts.timeToCoordinate(l.time);
+                  const centerXRaw = safeTimeToCoordinate(ts, l.time);
                   if (centerXRaw == null) return; // candle scrolled out of the loaded range
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (y == null) return;
@@ -1560,7 +1774,7 @@
                 const ts = self._chart.timeScale();
                 const y = candleSeries.priceToCoordinate(self._price);
                 if (y == null) return;
-                const xRaw = ts.timeToCoordinate(allCandles[allCandles.length - 1].time);
+                const xRaw = safeTimeToCoordinate(ts, allCandles[allCandles.length - 1].time);
                 const x = xRaw == null ? 0 : xRaw;
                 ctx.strokeStyle = '#2196f3'; // blue
                 ctx.lineWidth = 2 * scope.horizontalPixelRatio;
@@ -1706,7 +1920,7 @@
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
                 self._arrows.forEach(a => {
-                  const x = ts.timeToCoordinate(a.time);
+                  const x = safeTimeToCoordinate(ts, a.time);
                   const yTip = candleSeries.priceToCoordinate(a.price);
                   if (x == null || yTip == null) return;
 
@@ -1774,7 +1988,7 @@
   // chart.subscribeClick's param.point). Returns null if either coordinate is off-screen.
   function verticalArrowEndpoints(a) {
     const ts = chart.timeScale();
-    const x = ts.timeToCoordinate(a.time);
+    const x = safeTimeToCoordinate(ts, a.time);
     const yTip = candleSeries.priceToCoordinate(a.price);
     if (x == null || yTip == null) return null;
     const yTail = a.up ? yTip + VERTICAL_ARROW_LENGTH : yTip - VERTICAL_ARROW_LENGTH;
@@ -1906,7 +2120,7 @@
                     return;
                   }
 
-                  const x = ts.timeToCoordinate(l.time);
+                  const x = safeTimeToCoordinate(ts, l.time);
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (x == null || y == null) return;
                   if (l.above) {
@@ -1958,7 +2172,12 @@
                 self._entries.forEach(({ period, text }) => {
                   const pt = smaLastPoint[period];
                   if (!pt) return;
-                  const x = ts.timeToCoordinate(pt.time);
+                  // timeToCoordinate can THROW (not just return null) for an off-bar time — and
+                  // since this primitive typically attaches before the drawing-tool primitives
+                  // (Rect/T-Line etc.), an uncaught throw here every animation frame silently kept
+                  // THOSE from ever painting too, even though their own data was added correctly.
+                  let x;
+                  try { x = safeTimeToCoordinate(ts, pt.time); } catch { x = null; }
                   const y = candleSeries.priceToCoordinate(pt.value);
                   if (x == null || y == null) return;
                   ctx.fillText(text, x * scope.horizontalPixelRatio + 4, y * scope.verticalPixelRatio);
@@ -2158,7 +2377,7 @@
                   const y = candleSeries.priceToCoordinate(l.price);
                   // xRaw is null once the entry candle scrolls out of the loaded range (e.g. a
                   // multi-day context) — start from the left edge instead of skipping the line.
-                  const xRaw = ts.timeToCoordinate(l.time);
+                  const xRaw = safeTimeToCoordinate(ts, l.time);
                   const x = xRaw == null ? 0 : xRaw;
                   if (y == null) return;
                   ctx.strokeStyle = '#00c853'; // green
@@ -2236,7 +2455,7 @@
     const tolerance = 6;
     for (let i = strikeLinesPrimitive._lines.length - 1; i >= 0; i--) {
       const l = strikeLinesPrimitive._lines[i];
-      const xRaw = ts.timeToCoordinate(l.time);
+      const xRaw = safeTimeToCoordinate(ts, l.time);
       const x = xRaw == null ? 0 : xRaw;
       const y = candleSeries.priceToCoordinate(l.price);
       if (y == null) continue;
@@ -2373,7 +2592,7 @@
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
                 self._labels.forEach(l => {
-                  const x = ts.timeToCoordinate(l.time);
+                  const x = safeTimeToCoordinate(ts, l.time);
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (x == null || y == null) return;
 
@@ -2434,7 +2653,7 @@
     const approxCharsPerLine = Math.max(1, Math.floor(ClickTextMaxWidthCss / 7));
     for (let i = clickTextPrimitive._labels.length - 1; i >= 0; i--) {
       const l = clickTextPrimitive._labels[i];
-      const x = ts.timeToCoordinate(l.time);
+      const x = safeTimeToCoordinate(ts, l.time);
       const y = candleSeries.priceToCoordinate(l.price);
       if (x == null || y == null) continue;
       const words = l.text.split(/\s+/).filter(w => w.length > 0);
@@ -2494,7 +2713,7 @@
                 self._lines.forEach(l => {
                   if (allCandles.length === 0) return;
                   const snappedStart = snapStart(l.time) ?? allCandles[allCandles.length - 1].time;
-                  const xCss = ts.timeToCoordinate(snappedStart);
+                  const xCss = safeTimeToCoordinate(ts, snappedStart);
                   if (xCss == null) return;
                   const x = xCss * scope.horizontalPixelRatio;
                   const x2Bitmap = scope.bitmapSize.width;
@@ -2557,7 +2776,7 @@
     const tolerance = 6;
     for (let i = pisoTechoRefLinePrimitive._lines.length - 1; i >= 0; i--) {
       const l = pisoTechoRefLinePrimitive._lines[i];
-      const xRaw = ts.timeToCoordinate(l.time);
+      const xRaw = safeTimeToCoordinate(ts, l.time);
       const x = xRaw == null ? 0 : xRaw;
       const y = candleSeries.priceToCoordinate(l.price);
       if (y == null) continue;
@@ -2747,8 +2966,8 @@
                 const ts = self._chart.timeScale();
                 const drawOne = (segment) => {
                   if (!segment) return;
-                  const x1Raw = ts.timeToCoordinate(segment.prev.time);
-                  const x2Raw = ts.timeToCoordinate(segment.curr.time);
+                  const x1Raw = safeTimeToCoordinate(ts, segment.prev.time);
+                  const x2Raw = safeTimeToCoordinate(ts, segment.curr.time);
                   if (x1Raw == null || x2Raw == null) return;
                   const y1 = candleSeries.priceToCoordinate(segment.prev.price);
                   const y2 = candleSeries.priceToCoordinate(segment.curr.price);
@@ -2857,13 +3076,13 @@
                 const ts = self._chart.timeScale();
                 ctx.fillStyle = 'rgba(150, 150, 150, 0.18)';
                 self._bands.forEach(b => {
-                  const x1 = ts.timeToCoordinate(b.from);
+                  const x1 = safeTimeToCoordinate(ts, b.from);
                   if (x1 == null) return;
                   // b.to can be a still-future time (the in-progress overnight band's end, before
                   // any candle at/after that point exists) — timeToCoordinate returns null for
                   // anything outside the currently visible range, so clip to the chart's right
                   // edge instead of silently skipping the whole band (same pattern H-Line uses).
-                  const x2 = ts.timeToCoordinate(b.to);
+                  const x2 = safeTimeToCoordinate(ts, b.to);
                   const leftPx  = x1 * scope.horizontalPixelRatio;
                   const rightPx = x2 == null ? scope.bitmapSize.width : x2 * scope.horizontalPixelRatio;
                   const left  = Math.min(leftPx, rightPx);
@@ -2906,7 +3125,7 @@
                 ctx.lineWidth = 1 * scope.horizontalPixelRatio;
                 ctx.setLineDash([4 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
                 self._times.forEach(t => {
-                  const x = ts.timeToCoordinate(t);
+                  const x = safeTimeToCoordinate(ts, t);
                   if (x == null) return;
                   ctx.beginPath();
                   ctx.moveTo(x * scope.horizontalPixelRatio, 0);
@@ -3051,6 +3270,22 @@
   function loadRectGris(rects) {
     if (!grayRectAttached) { candleSeries.attachPrimitive(grayRectPrimitive); grayRectAttached = true; }
     grayRectPrimitive._rects = (rects || []).map(r => ({ t1: r.t1, p1: r.p1, t2: r.t2, p2: r.p2, selected: false }));
+    forceRepaint();
+  }
+
+  // Seeds blue-rectangle drawings persisted from a previous session — DailyChartForm's "Daily"
+  // tab only (see RectStore.cs). Same replace-the-whole-set convention as loadTLines.
+  function loadRects(rects) {
+    if (!rectAttached) { candleSeries.attachPrimitive(rectanglesPrimitive); rectAttached = true; }
+    rectanglesPrimitive._rects = (rects || []).map(r => ({ t1: r.t1, p1: r.p1, t2: r.t2, p2: r.p2, selected: false }));
+    forceRepaint();
+  }
+
+  // Seeds Color Rect drawings persisted from a previous session (Daily tab — see RectStore.cs,
+  // tag "DailyColor"). Color is re-derived from p1 vs p2 at draw time, nothing extra to seed.
+  function loadColorRects(rects) {
+    if (!colorRectAttached) { candleSeries.attachPrimitive(colorRectPrimitive); colorRectAttached = true; }
+    colorRectPrimitive._rects = (rects || []).map(r => ({ t1: r.t1, p1: r.p1, t2: r.t2, p2: r.p2, selected: false }));
     forceRepaint();
   }
 

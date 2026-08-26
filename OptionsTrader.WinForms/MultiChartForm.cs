@@ -255,6 +255,18 @@ public class MultiChartForm : Form
             var dailyForm = new DailyChartForm(_symbol, dailyCandles, _historyClient);
             _openDailyCharts.Add(dailyForm);
             dailyForm.FormClosed += (s2, e2) => _openDailyCharts.Remove(dailyForm);
+            // T-Lines drawn on the "Hora"/"15 Min" tabs replicate onto the corresponding live
+            // panel (1h/RTH) and persist there too — per explicit request, one-way only.
+            dailyForm.OnTLineDrawnEvent += (tag, t1, p1, t2, p2) =>
+            {
+                if (tag == "DailyHora") { if (hourlyPanel != null) _ = hourlyPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }
+                else if (tag == "Daily15Min") { if (rthPanel != null) _ = rthPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }
+            };
+            dailyForm.OnTLineDeletedEvent += (tag, t1, p1, t2, p2) =>
+            {
+                if (tag == "DailyHora") { if (hourlyPanel != null) _ = hourlyPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
+                else if (tag == "Daily15Min") { if (rthPanel != null) _ = rthPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
+            };
             dailyForm.Show();
         };
 

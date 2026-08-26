@@ -85,6 +85,7 @@ partial class Form1
         btnFourEtfCharts = new Button();
         btnHubHost = new Button();
         btnSimulator = new Button();
+        btnDaily = new Button();
         btnFourEtfSimulator = new Button();
         btnTimeframeViewer = new Button();
         btnStartPolling = new Button();
@@ -217,6 +218,7 @@ partial class Form1
         tabQuotes.Controls.Add(btnFetchQuotes);
         tabQuotes.Controls.Add(btnLiveChart);
         tabQuotes.Controls.Add(btnSimulator);
+        tabQuotes.Controls.Add(btnDaily);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -786,6 +788,15 @@ partial class Form1
         btnSimulator.TabIndex = 5;
         btnSimulator.Text = "Simulador";
         btnSimulator.Click += BtnSimulator_Click;
+        //
+        // btnDaily
+        //
+        btnDaily.Location = new Point(1020, 64);
+        btnDaily.Name = "btnDaily";
+        btnDaily.Size = new Size(90, 25);
+        btnDaily.TabIndex = 12;
+        btnDaily.Text = "Daily";
+        btnDaily.Click += BtnDaily_Click;
         //
         // btnFourEtfSimulator (moved to Settings tab)
         //
@@ -1772,6 +1783,7 @@ partial class Form1
     private Button btnFourEtfCharts;
     private Button btnHubHost;
     private Button btnSimulator;
+    private Button btnDaily;
     private Button btnFourEtfSimulator;
     private Button btnTimeframeViewer;
     private Button btnStartPolling;
