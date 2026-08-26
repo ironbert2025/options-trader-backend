@@ -255,18 +255,7 @@ public class MultiChartForm : Form
             var dailyForm = new DailyChartForm(_symbol, dailyCandles, _historyClient);
             _openDailyCharts.Add(dailyForm);
             dailyForm.FormClosed += (s2, e2) => _openDailyCharts.Remove(dailyForm);
-            // T-Lines drawn on the "Hora"/"15 Min" tabs replicate onto the corresponding live
-            // panel (1h/RTH) and persist there too — per explicit request, one-way only.
-            dailyForm.OnTLineDrawnEvent += (tag, t1, p1, t2, p2) =>
-            {
-                if (tag == "DailyHora") { if (hourlyPanel != null) _ = hourlyPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }
-                else if (tag == "Daily15Min") { if (rthPanel != null) _ = rthPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }
-            };
-            dailyForm.OnTLineDeletedEvent += (tag, t1, p1, t2, p2) =>
-            {
-                if (tag == "DailyHora") { if (hourlyPanel != null) _ = hourlyPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
-                else if (tag == "Daily15Min") { if (rthPanel != null) _ = rthPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
-            };
+            AttachDailyMirroring(dailyForm);
             dailyForm.Show();
         };
 
@@ -1364,6 +1353,45 @@ public class MultiChartForm : Form
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
         // subscribing, and disposing them) — not this window.
+    }
+
+    // T-Lines drawn on a DailyChartForm's "Hora"/"15 Min" tabs replicate onto this window's
+    // corresponding live panel (1h/RTH) and persist there too — per explicit request, one-way
+    // only. Public (not just wired for THIS window's own "Daily" button, see the constructor)
+    // so Form1's own "Daily" button — which opens a DailyChartForm with no MultiChartForm
+    // involved at all — can wire the same mirroring onto an already-open (or later-opened) live
+    // chart for the same symbol; see Form1.BtnDaily_Click/BtnLiveChart_Click.
+    public void AttachDailyMirroring(DailyChartForm dailyForm)
+    {
+        // Backfill: T-Lines already drawn on the Daily form BEFORE this live chart existed (the
+        // common case — Form1's own "Daily" button needs no live chart open at all) wouldn't
+        // otherwise appear, since each panel's own LoadSavedTLinesAsync only reads its own "1h"/
+        // "RTH" tag, never "DailyHora"/"Daily15Min". Skips anything already mirrored, so calling
+        // this again later (e.g. the live chart gets closed and reopened) doesn't duplicate rows.
+        BackfillMirroredTLines("DailyHora", "1h", _hourlyPanel);
+        BackfillMirroredTLines("Daily15Min", "RTH", _rthPanel);
+
+        dailyForm.OnTLineDrawnEvent += (tag, t1, p1, t2, p2) =>
+        {
+            if (tag == "DailyHora") { if (_hourlyPanel != null) _ = _hourlyPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }
+            else if (tag == "Daily15Min") { if (_rthPanel != null) _ = _rthPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }
+        };
+        dailyForm.OnTLineDeletedEvent += (tag, t1, p1, t2, p2) =>
+        {
+            if (tag == "DailyHora") { if (_hourlyPanel != null) _ = _hourlyPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
+            else if (tag == "Daily15Min") { if (_rthPanel != null) _ = _rthPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
+        };
+    }
+
+    private void BackfillMirroredTLines(string dailyTag, string liveTag, ChartPanel? panel)
+    {
+        if (panel == null) return;
+        var dailyLines = TLineStore.Load(_symbol, dailyTag);
+        if (dailyLines.Count == 0) return;
+        var alreadyMirrored = new HashSet<(long T1, decimal P1, long T2, decimal P2)>(TLineStore.Load(_symbol, liveTag));
+        foreach (var line in dailyLines)
+            if (!alreadyMirrored.Contains(line))
+                _ = panel.AddMirroredTLineAsync(line.T1, line.P1, line.T2, line.P2);
     }
 
     // Feeds a fresh spot price (from Form1's ~6s options-chain polling, not the streaming feed)

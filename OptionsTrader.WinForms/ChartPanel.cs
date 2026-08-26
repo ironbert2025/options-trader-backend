@@ -718,9 +718,24 @@ public class ChartPanel : Panel
 
     // Reloads this panel's own saved T-Lines (TLineModeTag-scoped) on chart open — shared by
     // Hourly15 and Fifteen_RTH, each fully independent from the other now.
+    // "DailyHora" (for the 1h panel) / "Daily15Min" (for the RTH panel) — T-Lines drawn on
+    // DailyChartForm's corresponding tab. Merged in here (not just relayed live via
+    // MultiChartForm.AttachDailyMirroring) so this panel picks them up correctly regardless of
+    // which window — this live chart or the standalone Daily one — happened to open first; relying
+    // purely on the live-relay path raced against this very load (WebView2 init timing isn't
+    // deterministic enough to guarantee AttachDailyMirroring's backfill runs before this executes).
+    private string DailyTLineTag => _mode == ChartPanelMode.Hourly15 ? "DailyHora" : "Daily15Min";
+
     private async Task LoadSavedTLinesAsync()
     {
         var savedLines = TLineStore.Load(_symbol, TLineModeTag);
+        var dailyLines = TLineStore.Load(_symbol, DailyTLineTag);
+        foreach (var line in dailyLines)
+        {
+            if (savedLines.Contains(line)) continue;
+            TLineStore.Append(_symbol, TLineModeTag, line.T1, line.P1, line.T2, line.P2);
+            savedLines.Add(line);
+        }
         if (savedLines.Count == 0) return;
 
         var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));

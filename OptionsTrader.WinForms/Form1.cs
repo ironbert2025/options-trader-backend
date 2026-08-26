@@ -63,6 +63,13 @@ public partial class Form1 : Form
     private SchwabStreamerClient? _historyClient;
     private ICandleFeed? _liveFeed;
     private readonly Dictionary<string, MultiChartForm> _liveChartForms = new();
+
+    // DailyChartForm windows opened from THIS form's own "Daily" button (below "Simulador") —
+    // unlike MultiChartForm's own "Daily" button, these have no live chart involved at all, so
+    // T-Line mirroring (MultiChartForm.AttachDailyMirroring) has to be wired up manually here,
+    // in whichever order the two windows happen to get opened (see BtnDaily_Click/
+    // BtnLiveChart_Click below).
+    private readonly Dictionary<string, List<DailyChartForm>> _openDailyChartsBySymbol = new();
     private FourEtfChartsForm? _fourEtfChartsForm;
     private TimeframeViewerForm? _timeframeViewerForm;
 
@@ -2206,6 +2213,13 @@ public partial class Form1 : Form
         var multiChartForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!, this);
         multiChartForm.FormClosed += (s, e2) => _liveChartForms.Remove(symbol);
         _liveChartForms[symbol] = multiChartForm;
+
+        // Wire T-Line mirroring onto any DailyChartForm(s) already open for this symbol (opened
+        // via THIS form's own "Daily" button, before this live chart existed) — see BtnDaily_Click.
+        if (_openDailyChartsBySymbol.TryGetValue(symbol, out var openDailyForms))
+            foreach (var dailyForm in openDailyForms.Where(f => !f.IsDisposed))
+                multiChartForm.AttachDailyMirroring(dailyForm);
+
         multiChartForm.Show();
     }
 
@@ -2367,6 +2381,16 @@ public partial class Form1 : Form
         var symbol = _selectedTicker.Symbol;
         var dailyCandles = ChartPanel.GetLastDailyCandles(symbol, 250); // enough for SMA100/200 to have data
         var dailyForm = new DailyChartForm(symbol, dailyCandles, _historyClient!);
+
+        if (!_openDailyChartsBySymbol.TryGetValue(symbol, out var list)) _openDailyChartsBySymbol[symbol] = list = new List<DailyChartForm>();
+        list.Add(dailyForm);
+        dailyForm.FormClosed += (s2, e2) => list.Remove(dailyForm);
+
+        // A live chart for this symbol may already be open — wire T-Line mirroring onto it right
+        // away. If one opens LATER instead, BtnLiveChart_Click wires it at that point.
+        if (_liveChartForms.TryGetValue(symbol, out var liveChart) && !liveChart.IsDisposed)
+            liveChart.AttachDailyMirroring(dailyForm);
+
         dailyForm.Show();
     }
 
