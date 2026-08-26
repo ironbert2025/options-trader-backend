@@ -252,7 +252,7 @@ public class MultiChartForm : Form
         btnDaily.Click += (s, e) =>
         {
             var dailyCandles = ChartPanel.GetLastDailyCandles(_symbol, 250); // enough for SMA100/200 to have data
-            var dailyForm = new DailyChartForm(_symbol, dailyCandles);
+            var dailyForm = new DailyChartForm(_symbol, dailyCandles, _historyClient);
             _openDailyCharts.Add(dailyForm);
             dailyForm.FormClosed += (s2, e2) => _openDailyCharts.Remove(dailyForm);
             dailyForm.Show();

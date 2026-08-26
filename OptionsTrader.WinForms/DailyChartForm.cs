@@ -1,5 +1,6 @@
 using Microsoft.Web.WebView2.WinForms;
 using OptionsTrader.Application.DTOs.Streaming;
+using OptionsTrader.Infrastructure.Schwab;
 
 namespace OptionsTrader.WinForms;
 
@@ -16,51 +17,41 @@ namespace OptionsTrader.WinForms;
 public class DailyChartForm : Form
 {
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
+    private readonly WebView2 _hourlyWebView = new() { Dock = DockStyle.Fill };
+    private readonly WebView2 _fifteenWebView = new() { Dock = DockStyle.Fill };
     private readonly string _symbol;
     private readonly List<CandleData> _dailyCandles;
+    private readonly SchwabStreamerClient _historyClient;
 
-    public DailyChartForm(string symbol, List<CandleData> dailyCandles)
+    public DailyChartForm(string symbol, List<CandleData> dailyCandles, SchwabStreamerClient historyClient)
     {
         _symbol = symbol;
         _dailyCandles = dailyCandles;
+        _historyClient = historyClient;
 
         Text          = $"{symbol} — Daily";
         Width         = 900;
         Height        = 600;
         StartPosition = FormStartPosition.CenterScreen;
 
-        Controls.Add(_webView);
+        var tabControl = new TabControl { Dock = DockStyle.Fill };
+        var tabDaily = new TabPage("Daily");
+        var tabHora = new TabPage("Hora");
+        var tab15Min = new TabPage("15 Min");
+        tabDaily.Controls.Add(_webView);
+        tabHora.Controls.Add(_hourlyWebView);
+        tab15Min.Controls.Add(_fifteenWebView);
+        tabControl.TabPages.Add(tabDaily);
+        tabControl.TabPages.Add(tabHora);
+        tabControl.TabPages.Add(tab15Min);
+
+        Controls.Add(tabControl);
         Load += async (s, e) => await InitAsync();
     }
 
     private async Task InitAsync()
     {
-        await _webView.EnsureCoreWebView2Async();
-
-        var chartPath = Path.Combine(AppContext.BaseDirectory, "ChartAssets", "chart.html");
-        var navDone = new TaskCompletionSource();
-        _webView.CoreWebView2.NavigationCompleted += (s, args) =>
-        {
-            if (args.IsSuccess) navDone.TrySetResult();
-        };
-
-        // Same cache-busting query string ChartPanel.LoadHistoryAsync uses — forces a fresh read
-        // of chart.html instead of a stale cached copy from an earlier window this session.
-        var chartUri = new Uri(chartPath).AbsoluteUri + $"?v={File.GetLastWriteTimeUtc(chartPath).Ticks}";
-        _webView.CoreWebView2.Navigate(chartUri);
-        await navDone.Task;
-
-        await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
-        await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
-
-        // Each daily bar IS one "day" by construction, so "50 days" of visible window is exactly
-        // the 50 bars passed in — same configureVisibleDays/applyVisibleRange machinery the live
-        // panels already use, no separate logic needed here.
-        await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({_dailyCandles.Count});");
-
-        var json = ChartPanel.ToChartJsonPublic(_dailyCandles);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"loadHistory({json});");
-
+        await InitChartTabAsync(_webView, _dailyCandles, _dailyCandles.Count);
         await EvaluatePisoTechoAsync();
 
         // Blue "current price" line, per explicit request — same primitive the 1h/15m RTH panels'
@@ -68,6 +59,53 @@ public class DailyChartForm : Form
         // Armed here unconditionally; MultiChartForm feeds it the live spot via UpdateLivePrice as
         // ticks arrive (see OnLiveTick relay) — before the first tick lands, it just stays hidden.
         await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+
+        // "Hora"/"15 Min" tabs — same chart (candles + SMA20/40/100/200 + Bollinger), just at
+        // those two timeframes instead of Daily, per explicit request. "Hora" reuses the same
+        // persisted hourly history GetLastDailyCandles itself aggregates from (HourlyCandleStore) —
+        // no extra fetch needed. "15 Min" has no persisted store, so it's a fresh REST history
+        // fetch + RTH-only aggregation, same call ChartPanel.LoadHistoryAsync makes for its own
+        // 15m RTH panel.
+        var hourlyCandles = HourlyCandleStore.Load(_symbol);
+        await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20, showSmas: false);
+
+        // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day (same
+        // constraint ChartPanel.LoadHistoryAsync works around) — request 10 (the closest valid
+        // value at/above 8) so there's enough loaded for the 8-day initial zoom.
+        var history = await _historyClient.GetHistoricalCandlesAsync(_symbol, 10);
+        var filtered = CandleAggregation.FilterSession(history, rthOnly: true);
+        var fifteenCandles = CandleAggregation.AggregateToInterval(filtered, 15, rthOnly: true);
+        await InitChartTabAsync(_fifteenWebView, fifteenCandles, 8, showSmas: false);
+    }
+
+    // Shared setup for each tab's own WebView2 — navigate to chart.html, configure Bollinger (and
+    // optionally SMAs — "Hora"/"15 Min" show Bollinger only, per explicit request; Daily keeps
+    // both), load the given candle history. visibleDays is a day COUNT for Hora/15 Min (matches the
+    // live panels' own convention: configureVisibleDays groups by calendar day regardless of candle
+    // interval) but simply equals the bar count for Daily, where each bar IS one day.
+    private static async Task InitChartTabAsync(WebView2 webView, List<CandleData> candles, int visibleDays, bool showSmas = true)
+    {
+        await webView.EnsureCoreWebView2Async();
+
+        var chartPath = Path.Combine(AppContext.BaseDirectory, "ChartAssets", "chart.html");
+        var navDone = new TaskCompletionSource();
+        webView.CoreWebView2.NavigationCompleted += (s, args) =>
+        {
+            if (args.IsSuccess) navDone.TrySetResult();
+        };
+
+        // Same cache-busting query string ChartPanel.LoadHistoryAsync uses — forces a fresh read
+        // of chart.html instead of a stale cached copy from an earlier window this session.
+        var chartUri = new Uri(chartPath).AbsoluteUri + $"?v={File.GetLastWriteTimeUtc(chartPath).Ticks}";
+        webView.CoreWebView2.Navigate(chartUri);
+        await navDone.Task;
+
+        if (showSmas) await webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
+        await webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+        await webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
+
+        var json = ChartPanel.ToChartJsonPublic(candles);
+        await webView.CoreWebView2.ExecuteScriptAsync($"loadHistory({json});");
     }
 
     // Ported from ChartPanel.EvaluatePisoTechoPair/EvaluateSingleSmaPisoTecho — SAME criterion
