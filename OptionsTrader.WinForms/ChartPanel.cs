@@ -1739,11 +1739,24 @@ public class ChartPanel : Panel
     // WebView2 (see MultiChartForm's Daily button). Toggling Daily in-place on the live 1h panel's
     // own WebView2 hit an unresolved rendering bug (candles stayed invisible until a manual
     // scroll); a brand-new page load doesn't carry over whatever state that bug depended on.
+    // Merges DailyCandleStore (real daily bars from Yahoo, years of depth — see
+    // scripts/backfill_daily.js) with HourlyCandleStore's own daily aggregation (fewer days —
+    // capped at 1500 hourly rows — but includes today's still-forming bar and whatever the app
+    // itself has collected live, which Yahoo's daily bar for "today" won't reflect intraday).
+    // The hourly-aggregated version wins for any day both cover, so the most recent days are
+    // always as fresh as the live 1h panel itself; DailyCandleStore just fills in the depth SMA200
+    // needs beyond what 1500 hourly rows (~214 trading days) can hold on its own.
     public static List<CandleData> GetLastDailyCandles(string symbol, int count)
     {
         var hourly = HourlyCandleStore.Load(symbol);
-        var daily = CandleAggregation.AggregateToDaily(hourly);
-        return daily.Select(d => d.Candle).TakeLast(count).ToList();
+        var fromHourly = CandleAggregation.AggregateToDaily(hourly).Select(d => d.Candle).ToList();
+        var hourlyDates = fromHourly.Select(c => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))).ToHashSet();
+
+        var fromDailyStore = DailyCandleStore.Load(symbol)
+            .Where(c => !hourlyDates.Contains(DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))));
+
+        var merged = fromDailyStore.Concat(fromHourly).OrderBy(c => c.Time).ToList();
+        return merged.TakeLast(count).ToList();
     }
 
     // Fires on every premarket tick (Hourly15 panel only — see Streamer_OnNewCandle) with the
