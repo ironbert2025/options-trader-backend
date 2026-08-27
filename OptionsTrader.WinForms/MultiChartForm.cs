@@ -1711,14 +1711,20 @@ public class MultiChartForm : Form
         if (_hourlyPanel == null || _rthPanel == null || _overnightPanel == null) return null;
 
         var panels = new[] { _hourlyPanel, _rthPanel, _overnightPanel };
-        var images = new Bitmap[panels.Length];
+        var images = new Bitmap?[panels.Length];
         try
         {
             for (int i = 0; i < panels.Length; i++)
                 images[i] = await panels[i].CaptureImageAsync();
 
-            var width  = images.Sum(img => img.Width) + PanelGap * (images.Length - 1);
-            var height = images.Max(img => img.Height);
+            // A panel's own capture can time out (see ChartPanel.CaptureImageAsync — a minimized/
+            // non-composited window) instead of throwing — bail out the same way the "any panel
+            // isn't ready" case at the top of this method already does, rather than crashing on a
+            // null Bitmap a few lines down.
+            if (images.Any(img => img == null)) return null;
+
+            var width  = images.Sum(img => img!.Width) + PanelGap * (images.Length - 1);
+            var height = images.Max(img => img!.Height);
             var combined = new Bitmap(width, height);
             using (var g = Graphics.FromImage(combined))
             using (var labelFont = new Font("Segoe UI", 11f, FontStyle.Bold))
@@ -1728,7 +1734,7 @@ public class MultiChartForm : Form
                 var x = 0;
                 for (int i = 0; i < images.Length; i++)
                 {
-                    var img = images[i];
+                    var img = images[i]!;
                     g.DrawImage(img, x, 0);
 
                     var labelSize = g.MeasureString(PanelLabels[i], labelFont);

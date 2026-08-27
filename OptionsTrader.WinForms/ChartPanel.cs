@@ -320,10 +320,23 @@ public class ChartPanel : Panel
         _ => mode.ToString()
     };
 
+    private const string CaptureExceptionLogPath = @"C:\OptionsData\EventLog\handler_exceptions.log";
+    private static readonly object CaptureExceptionLogLock = new();
+
     // Renders this panel's actual chart content via the WebView2 engine itself — NOT a screen
-    // capture — so it works even if the window is minimized, occluded, or off-screen. Used to
-    // build the combined 3-chart trade snapshot in MultiChartForm.
-    public async Task<Bitmap> CaptureImageAsync()
+    // capture. Used to build the combined 3-chart trade snapshot in MultiChartForm.
+    //
+    // CapturePreviewAsync can hang indefinitely (not throw — just never resolve) when the WinForms
+    // window is minimized or otherwise not actually composited — Windows suspends rendering for
+    // non-visible windows, and the WebView2 compositor never produces a frame to capture. Confirmed
+    // live: the market-close snapshot fired on time (16:00 ET) but the resulting PNG didn't land on
+    // disk until ~19:45, the exact same fire-and-forget Task just sitting there the whole time no
+    // one noticed. Wrapped in a timeout so a hung capture times out and gets logged instead of
+    // silently blocking whatever awaited this (a Telegram push, an Open/Close snapshot, an events
+    // .md write) for hours with zero trace of why.
+    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(15);
+
+    public async Task<Bitmap?> CaptureImageAsync()
     {
         // Force a repaint and give WebView2's compositor a moment to actually commit the frame
         // before capturing — confirmed live: the combined-snapshot push fired right after this
@@ -336,10 +349,40 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync("forceRepaint();");
         await Task.Delay(80);
 
+        var captureTask = CapturePreviewBitmapAsync();
+        var completed = await Task.WhenAny(captureTask, Task.Delay(CaptureTimeout));
+        if (completed != captureTask)
+        {
+            LogCaptureException(new TimeoutException(
+                $"CapturePreviewAsync did not resolve within {CaptureTimeout.TotalSeconds}s — window likely minimized/not composited."));
+            return null;
+        }
+        return await captureTask;
+    }
+
+    private async Task<Bitmap> CapturePreviewBitmapAsync()
+    {
         using var stream = new MemoryStream();
         await _webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
         stream.Position = 0;
         return new Bitmap(stream);
+    }
+
+    private void LogCaptureException(Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(CaptureExceptionLogPath)!);
+            lock (CaptureExceptionLogLock)
+            {
+                File.AppendAllText(CaptureExceptionLogPath,
+                    $"[{DateTime.Now:O}] ChartPanel.CaptureImageAsync symbol={_symbol} mode={_mode}{Environment.NewLine}{ex}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Best-effort logging — never let a logging failure cascade.
+        }
     }
 
     private void InitializeWebView()
