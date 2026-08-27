@@ -747,6 +747,18 @@ public class ChartPanel : Panel
     // TLineStore file so they're fully independent instead of sharing one.
     private string TLineModeTag => _mode == ChartPanelMode.Hourly15 ? "1h" : "RTH";
 
+    // Today's 9:30 AM ET (RTH session open), as the same "ET digits disguised as UTC" fake epoch
+    // every other reference line's anchor uses — see PreMarketLinePrimitive in chart.html, which
+    // needs a FIXED anchor instead of "whatever candle is currently last" to stop the blue
+    // pre-market price line from drifting rightward through the RTH session.
+    private long GetTodaySessionOpenFakeEpoch()
+    {
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).Date;
+        var sessionOpenEastern = todayEastern.AddHours(9).AddMinutes(30);
+        var sessionOpenUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionOpenEastern, DateTimeKind.Unspecified), EasternZone);
+        return FakeUtcEpochSeconds(sessionOpenUtc);
+    }
+
     // Sets the "Potencial CT al Alza/Baja" hint right after a T-Line finishes drawing — direction
     // comes from how the line itself was drawn (technical-analysis convention: a descending line
     // acts as resistance, so breaking it is a bullish signal; an ascending line acts as support,
@@ -2452,15 +2464,18 @@ public class ChartPanel : Panel
             }
 
             // Pre-market blue line (1h and 15m RTH panels): only if the chart is opened before
-            // 9:30 AM ET that day — anchors at whatever candle is currently the last one loaded
-            // (yesterday's close) and tracks live price until the market opens, then freezes (see
-            // Streamer_OnNewCandle). Not persisted; a later re-open restarts the whole thing.
+            // 9:30 AM ET that day — anchored at today's actual session-open time (NOT "whatever
+            // candle is currently last", which kept dragging the line rightward through RTH as new
+            // candles formed — confirmed live, TSLA) and tracks live price until the market opens,
+            // then freezes (see Streamer_OnNewCandle). Not persisted; a later re-open restarts the
+            // whole thing.
             if (_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15)
             {
                 var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
+                var sessionOpenArg = GetTodaySessionOpenFakeEpoch();
                 if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0))
                 {
-                    await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({sessionOpenArg});");
                 }
                 else if (s_preMarketLineState.TryGetValue($"{_symbol}_{_mode}", out var savedLine)
                          && savedLine.Date == DateOnly.FromDateTime(nowEastern))
@@ -2473,7 +2488,7 @@ public class ChartPanel : Panel
                         BollingerDirection.Below => "'below'",
                         _ => "null"
                     };
-                    await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({sessionOpenArg});");
                     await _webView.CoreWebView2.ExecuteScriptAsync(
                         $"updatePreMarketLine({savedLine.Price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {savedExposedArg});");
                 }

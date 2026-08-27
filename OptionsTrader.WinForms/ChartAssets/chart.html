@@ -1828,7 +1828,7 @@
   // startPreMarketLine() call replaces it entirely. ----
 
   class PreMarketLinePrimitive {
-    constructor() { this._armed = false; this._price = null; this._exposed = null; this._chart = null; } // _exposed: null | 'above' | 'below'
+    constructor() { this._armed = false; this._price = null; this._exposed = null; this._time = null; this._chart = null; } // _exposed: null | 'above' | 'below'
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1843,7 +1843,20 @@
                 const ts = self._chart.timeScale();
                 const y = candleSeries.priceToCoordinate(self._price);
                 if (y == null) return;
-                const xRaw = safeTimeToCoordinate(ts, allCandles[allCandles.length - 1].time);
+                // Anchored to the session's actual open time (self._time, set once by
+                // startPreMarketLine) instead of "whatever candle is currently last" — the latter
+                // kept dragging this line's left edge rightward all through RTH as new candles
+                // formed, even though the price itself had already frozen at 9:30. Same
+                // snap-to-nearest-real-candle fallback DailyPmLinePrimitive uses.
+                let snappedTime = self._time ?? allCandles[allCandles.length - 1].time;
+                if (safeTimeToCoordinate(ts, snappedTime) == null) {
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= snappedTime) { floor = allCandles[i].time; break; }
+                  }
+                  snappedTime = floor ?? allCandles[0].time;
+                }
+                const xRaw = safeTimeToCoordinate(ts, snappedTime);
                 const x = xRaw == null ? 0 : xRaw;
                 ctx.strokeStyle = '#2196f3'; // blue
                 ctx.lineWidth = 2 * scope.horizontalPixelRatio;
@@ -1881,10 +1894,16 @@
   let preMarketLineAttached = false;
 
   // Called once, right when the chart opens, only if it's before 9:30 AM ET that day.
-  function startPreMarketLine() {
+  // anchorTime (optional, same "ET digits disguised as UTC" epoch every other reference line
+  // uses) is today's actual session-open time — pins the line's left edge there instead of
+  // wherever the last-loaded candle happens to be, so it doesn't drift right through RTH. Falls
+  // back to the old (buggy) "last candle" behavior if omitted, so any caller not yet updated to
+  // pass it doesn't just silently stop drawing the line.
+  function startPreMarketLine(anchorTime) {
     if (!preMarketLineAttached) { candleSeries.attachPrimitive(preMarketLinePrimitive); preMarketLineAttached = true; }
     preMarketLinePrimitive._armed = true;
     preMarketLinePrimitive._price = null;
+    preMarketLinePrimitive._time = anchorTime ?? null;
     forceRepaint();
   }
 
