@@ -949,6 +949,16 @@ public class ChartPanel : Panel
                     OnHLineDrawnEvent?.Invoke(hAddTime, hAddPrice);
                     break;
                 }
+                case "smawatch_delete":
+                {
+                    // Deleted via the 👁 marker's Delete key on THIS panel's own chart — disarm the
+                    // same way the toolbar button does, and let MultiChartForm know so it can reset
+                    // that button's highlight.
+                    var smaWatchPeriod = root.GetProperty("period").GetInt32();
+                    _ = SetSmaCrossWatchAsync(smaWatchPeriod, false);
+                    OnSmaWatchChangedEvent?.Invoke(smaWatchPeriod, false);
+                    break;
+                }
             }
         }
         catch
@@ -2167,6 +2177,10 @@ public class ChartPanel : Panel
     // OnTLineSignalEvent/OnPisoTechoWatchEvent.
     public event Action<string>? OnSmaCrossEvent;
 
+    // Fired when a watch is armed/disarmed on THIS panel's own chart (the 👁 marker's Delete key)
+    // — MultiChartForm listens so its own SMA20/40/100/200 toolbar buttons stay in sync.
+    public event Action<int, bool>? OnSmaWatchChangedEvent;
+
     // Called by MultiChartForm when a watch is armed/disarmed from DailyChartForm (or loaded from
     // SmaDailyWatchStore at panel open). Arming (re-)baselines from scratch — even a period that
     // already fired once can fire again if re-armed after being removed.
@@ -2185,6 +2199,25 @@ public class ChartPanel : Panel
             _smaWatchLastSide.Remove(period);
             _smaWatchFiredFor.Remove(period);
         }
+    }
+
+    // Arms/disarms a watch directly from THIS panel's own toolbar (MultiChartForm's SMA20/40/
+    // 100/200 buttons, per explicit request — same feature as DailyChartForm's own buttons, now
+    // also reachable without opening that window) — persists via SmaDailyWatchStore (same store
+    // both windows share) and refreshes the 👁 marker on this panel's own chart.
+    public async Task SetSmaCrossWatchAsync(int period, bool armed)
+    {
+        if (armed) SmaDailyWatchStore.Add(_symbol, period);
+        else SmaDailyWatchStore.Remove(_symbol, period);
+        SetSmaCrossWatch(period, armed);
+        await RefreshSmaWatchMarkersAsync();
+    }
+
+    private async Task RefreshSmaWatchMarkersAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var periods = SmaDailyWatchStore.Load(_symbol);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"loadSmaWatches({JsonSerializer.Serialize(periods)});");
     }
 
     private void EvaluateSmaCrossWatches(decimal livePrice)
@@ -2594,6 +2627,7 @@ public class ChartPanel : Panel
                 if (aggregated.Count > 0)
                 {
                     await RunScriptAsync("loadHistory", aggregated);
+                    if (_mode == ChartPanelMode.Hourly15) await RefreshSmaWatchMarkersAsync();
                     // Seed the live aggregator with the last historical bucket so the first live
                     // tick extends it correctly instead of starting a spurious new one.
                     var last = aggregated[^1];

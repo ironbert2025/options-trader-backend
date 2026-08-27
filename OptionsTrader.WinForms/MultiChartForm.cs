@@ -35,6 +35,10 @@ public class MultiChartForm : Form
     // touched again.
     private readonly List<DailyChartForm> _openDailyCharts = new();
 
+    // SMA20/40/100/200 "SMA Watch" toolbar buttons (panel 1) — a field (not a constructor-local)
+    // so AttachDailyMirroring can also keep them in sync when armed/disarmed from a DailyChartForm.
+    private readonly Dictionary<int, Button> _smaWatchButtons = new();
+
     // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
     // GetQuoteSnapshot) — clicking Strike forwards into Form1.TriggerQuoteStrikeClick, which runs
     // the exact same click handler Form1's own grid would (same currently-selected trade mode).
@@ -277,6 +281,49 @@ public class MultiChartForm : Form
             if (rthPanel != null) await rthPanel.SetAllTimeHighVisibleAsync(chkAth.Checked);
             if (overnightPanel != null) await overnightPanel.SetAllTimeHighVisibleAsync(chkAth.Checked);
         };
+
+        // "SMA Watch" — arm/disarm a live-price-cross watch on SMA20/40/100/200 (Daily-timeframe,
+        // same as DailyChartForm's own buttons — this panel does the actual monitoring regardless
+        // of which window armed it) directly from the live chart, without needing the Daily popup
+        // window open, per explicit request. See ChartPanel.SetSmaCrossWatchAsync.
+        {
+            var armedNow = SmaDailyWatchStore.Load(_symbol).ToHashSet();
+            int smaX = 0;
+            foreach (var period in new[] { 20, 40, 100, 200 })
+            {
+                var btn = new Button
+                {
+                    Text = $"SMA{period}",
+                    Location = new Point(smaX, 104),
+                    Size = new Size(60, 24),
+                    BackColor = armedNow.Contains(period) ? Color.LightYellow : SystemColors.Control
+                };
+                smaX += 66;
+                _smaWatchButtons[period] = btn;
+                btn.Click += async (s, e) =>
+                {
+                    if (hourlyPanel == null) return;
+                    var armed = btn.BackColor != Color.LightYellow;
+                    await hourlyPanel.SetSmaCrossWatchAsync(period, armed);
+                    btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
+                };
+                crossHost.Controls.Add(btn);
+            }
+        }
+        // Deleting the 👁 marker (Delete key) on the chart itself disarms it too — keep this
+        // toolbar's own button color in sync when that happens.
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnSmaWatchChangedEvent += (period, armed) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    if (_smaWatchButtons.TryGetValue(period, out var btn))
+                        btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
+                });
+            };
+        }
 
         crossHost.Controls.Add(btnTLine);
         crossHost.Controls.Add(btnHourlyClear);
@@ -1399,7 +1446,13 @@ public class MultiChartForm : Form
         // SMA cross watch (Daily tab only) — the 1h panel already loads whatever's persisted in
         // SmaDailyWatchStore at its OWN init (see LoadHistoryAsync), independent of this window;
         // this just keeps it in sync with LIVE toggles while both happen to be open together.
-        dailyForm.OnSmaWatchChangedEvent += (period, armed) => _hourlyPanel?.SetSmaCrossWatch(period, armed);
+        dailyForm.OnSmaWatchChangedEvent += (period, armed) =>
+        {
+            if (IsDisposed) return;
+            _ = _hourlyPanel?.SetSmaCrossWatchAsync(period, armed);
+            if (_smaWatchButtons.TryGetValue(period, out var btn))
+                btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
+        };
     }
 
     private void BackfillMirroredTLines(string dailyTag, string liveTag, ChartPanel? panel)
