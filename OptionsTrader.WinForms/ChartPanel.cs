@@ -2080,6 +2080,85 @@ public class ChartPanel : Panel
         return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
     }
 
+    // ==================================================================================
+    // SMA cross watch (Daily) — armed from DailyChartForm's "SMA Watch" buttons (see
+    // SmaDailyWatchStore.cs), monitored here for as long as this (1h) panel stays open. Fires
+    // once per arm the moment the live price crosses from one side of that SMA to the other —
+    // "cruce", not just getting close — same one-shot-per-watch convention as EvaluateTLineSignal
+    // (_tLineSignalFiredFor). Independent of whether DailyChartForm itself is currently open; only
+    // the live 1h panel needs to be, per explicit request.
+    // ==================================================================================
+
+    private readonly HashSet<int> _smaWatchPeriods = new();
+    private readonly Dictionary<int, bool> _smaWatchLastSide = new(); // period -> true(above)/false(below)
+    private readonly HashSet<int> _smaWatchHasBaseline = new();
+    private readonly HashSet<int> _smaWatchFiredFor = new();
+
+    // Fires (caption) when a watched SMA gets crossed — MultiChartForm relays this to Telegram
+    // (with the usual 3-panel screenshot) and appends it to EventLogStore, same pattern as
+    // OnTLineSignalEvent/OnPisoTechoWatchEvent.
+    public event Action<string>? OnSmaCrossEvent;
+
+    // Called by MultiChartForm when a watch is armed/disarmed from DailyChartForm (or loaded from
+    // SmaDailyWatchStore at panel open). Arming (re-)baselines from scratch — even a period that
+    // already fired once can fire again if re-armed after being removed.
+    public void SetSmaCrossWatch(int period, bool armed)
+    {
+        if (armed)
+        {
+            _smaWatchPeriods.Add(period);
+            _smaWatchHasBaseline.Remove(period);
+            _smaWatchFiredFor.Remove(period);
+        }
+        else
+        {
+            _smaWatchPeriods.Remove(period);
+            _smaWatchHasBaseline.Remove(period);
+            _smaWatchLastSide.Remove(period);
+            _smaWatchFiredFor.Remove(period);
+        }
+    }
+
+    private void EvaluateSmaCrossWatches(decimal livePrice)
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _smaWatchPeriods.Count == 0) return;
+
+        var hourly = HourlyCandleStore.Load(_symbol);
+        var daily = CandleAggregation.AggregateToDaily(hourly);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        var closes = daily.Where(d => d.Date < today).Select(d => d.Candle.Close).ToList();
+        closes.Add(livePrice); // today's still-forming bar, using the live price as its close
+        var lastIdx = closes.Count - 1;
+
+        foreach (var period in _smaWatchPeriods)
+        {
+            if (_smaWatchFiredFor.Contains(period)) continue;
+
+            var sma = DailySma(closes, period, lastIdx);
+            if (sma == null) continue; // not enough daily history yet for this period
+
+            var above = livePrice > sma.Value;
+            if (!_smaWatchHasBaseline.Contains(period))
+            {
+                // First evaluation after arming — just record which side we started on, no fire
+                // (there's no "previous side" yet to have crossed FROM).
+                _smaWatchHasBaseline.Add(period);
+                _smaWatchLastSide[period] = above;
+                continue;
+            }
+
+            if (_smaWatchLastSide[period] == above) continue; // same side — no cross yet
+            _smaWatchLastSide[period] = above;
+
+            _smaWatchFiredFor.Add(period);
+            var direction = above ? "al alza" : "a la baja";
+            var caption = $"{_symbol} cruzó SMA{period} (Diario) {direction} — spot {livePrice:F2}, SMA{period} {sma.Value:F2}";
+            var eventDirection = above ? "Alza" : "Baja";
+            EventLogStore.Append(_symbol, "Daily", "SmaCross", eventDirection, caption, livePrice, $"SMA{period}={sma.Value:F2}");
+            OnSmaCrossEvent?.Invoke(caption);
+        }
+    }
+
     // Fires (smaValue) every time EvaluateDailyPmAndBb recomputes the Daily SMA20 (1h panel only) —
     // MultiChartForm relays this to all 3 panels (MarkDailyPmLineAsync), same "sibling relay"
     // pattern as the mirrored H-Lines, so the solid yellow "PM" reference line shows on every
@@ -2433,6 +2512,12 @@ public class ChartPanel : Panel
                     // shows immediately on open regardless of market hours, even if it's slightly
                     // stale until the first real live tick/candle close corrects it.
                     EvaluateDailyPmAndBb(aggregated[^1].Close);
+
+                    // "SMA Watch" — replay whatever was armed in a previous session (via
+                    // DailyChartForm, possibly with that window closed since) so monitoring
+                    // resumes as soon as this live panel opens, per explicit request.
+                    foreach (var period in SmaDailyWatchStore.Load(_symbol))
+                        SetSmaCrossWatch(period, true);
                 }
 
                 if (aggregated.Count > 0)
@@ -2743,6 +2828,7 @@ public class ChartPanel : Panel
         {
             EvaluatePisoTechoGapLive(candle.Close);
             EvaluateBollingerWideningLabel(candle.Close);
+            EvaluateSmaCrossWatches(candle.Close);
         }
     }
 
@@ -2839,6 +2925,7 @@ public class ChartPanel : Panel
         {
             EvaluatePisoTechoGapLive(price);
             EvaluateBollingerWideningLabel(price);
+            EvaluateSmaCrossWatches(price);
         }
     }
 

@@ -644,6 +644,20 @@ public class MultiChartForm : Form
                 });
             };
 
+            // SMA cross watch (Daily) — armed from DailyChartForm's "SMA Watch" buttons. Event
+            // log already appended inside ChartPanel.EvaluateSmaCrossWatches itself (same as
+            // EvaluateTLineSignal does for its own signal); this just handles the Telegram push.
+            // BeginInvoke — same threading fix as hourlyPanel.OnTLineSignalEvent above.
+            hourlyPanel.OnSmaCrossEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog(crossLog, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+                    _ = SendSmaCrossTelegramPushAsync(message);
+                });
+            };
+
             // Daily-candle bounce off SMA20 — purely informational, log only (no Telegram, no
             // automatic action; the user checks this window in the morning and acts manually).
             hourlyPanel.OnDailyBounceEvent += message =>
@@ -1381,6 +1395,11 @@ public class MultiChartForm : Form
             if (tag == "DailyHora") { if (_hourlyPanel != null) _ = _hourlyPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
             else if (tag == "Daily15Min") { if (_rthPanel != null) _ = _rthPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
         };
+
+        // SMA cross watch (Daily tab only) — the 1h panel already loads whatever's persisted in
+        // SmaDailyWatchStore at its OWN init (see LoadHistoryAsync), independent of this window;
+        // this just keeps it in sync with LIVE toggles while both happen to be open together.
+        dailyForm.OnSmaWatchChangedEvent += (period, armed) => _hourlyPanel?.SetSmaCrossWatch(period, armed);
     }
 
     private void BackfillMirroredTLines(string dailyTag, string liveTag, ChartPanel? panel)
@@ -1519,6 +1538,46 @@ public class MultiChartForm : Form
         {
             // Best-effort — never let a Telegram failure affect the chart/detection logic, but no
             // longer silent: mirrored into crossLog same as every other push failure.
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined 3-chart snapshot to Telegram for a Daily SMA cross watch — same pattern
+    // as SendTLineSignalTelegramPushAsync above.
+    private async Task SendSmaCrossTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_SmaCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SmaCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
             LogTelegramPushFailure(ex.Message);
         }
     }

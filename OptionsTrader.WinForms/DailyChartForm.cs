@@ -18,6 +18,7 @@ namespace OptionsTrader.WinForms;
 // candles instead of hourly ones, with no live streaming/toggle involved at all.
 public class DailyChartForm : Form
 {
+    private Dictionary<int, Button> _smaWatchButtons = new();
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
     private readonly WebView2 _hourlyWebView = new() { Dock = DockStyle.Fill };
     private readonly WebView2 _fifteenWebView = new() { Dock = DockStyle.Fill };
@@ -98,6 +99,32 @@ public class DailyChartForm : Form
         OnColorRectPlacedEvent += () => btnColorRect.BackColor = SystemColors.Control;
         OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
 
+        // "SMA Watch" — Daily tab only. Unlike Rect/T-Line these aren't 2-click drawing tools:
+        // clicking one directly toggles whether that SMA's live-price cross is being watched (see
+        // SmaDailyWatchStore.cs + ChartPanel.EvaluateSmaCrossWatches, which does the actual
+        // monitoring/Telegram push/event log — this window is just where you arm/disarm it and see
+        // the marker). Stays armed until explicitly removed (this button again, or Delete on the
+        // chart marker), independent of whether this window or the live chart is currently open.
+        var smaWatchButtons = new Dictionary<int, Button>();
+        int x = 216;
+        foreach (var period in new[] { 20, 40, 100, 200 })
+        {
+            var btn = new Button { Text = $"SMA{period}", Location = new Point(x, 2), Size = new Size(60, 24) };
+            x += 66;
+            smaWatchButtons[period] = btn;
+            btn.Click += (s, e) =>
+            {
+                var armed = SmaDailyWatchStore.Load(_symbol).Contains(period);
+                if (armed) SmaDailyWatchStore.Remove(_symbol, period);
+                else SmaDailyWatchStore.Add(_symbol, period);
+                btn.BackColor = armed ? SystemColors.Control : Color.LightYellow;
+                OnSmaWatchChangedEvent?.Invoke(period, !armed);
+                RefreshSmaWatchMarkersAsync();
+            };
+            toolbar.Controls.Add(btn);
+        }
+        _smaWatchButtons = smaWatchButtons;
+
         Controls.Add(tabControl);
         Controls.Add(toolbar);
         Load += async (s, e) => await InitAsync();
@@ -116,6 +143,19 @@ public class DailyChartForm : Form
     public event Action<string, long, decimal, long, decimal>? OnTLineDrawnEvent;
     public event Action<string, long, decimal, long, decimal>? OnTLineDeletedEvent;
 
+    // Fired when an "SMA Watch" toolbar button (or the chart marker's Delete) arms/disarms
+    // monitoring for that period — MultiChartForm relays this to the live 1h panel
+    // (ChartPanel.SetSmaCrossWatchAsync), which does the actual cross detection. Persisted by
+    // SmaDailyWatchStore regardless of whether anything is listening at the moment.
+    public event Action<int, bool>? OnSmaWatchChangedEvent;
+
+    private async void RefreshSmaWatchMarkersAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var periods = SmaDailyWatchStore.Load(_symbol);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"loadSmaWatches({JsonSerializer.Serialize(periods)});");
+    }
+
     private async Task InitAsync()
     {
         await InitChartTabAsync(_webView, _dailyCandles, _dailyCandles.Count);
@@ -126,6 +166,14 @@ public class DailyChartForm : Form
         // Armed here unconditionally; MultiChartForm feeds it the live spot via UpdateLivePrice as
         // ticks arrive (see OnLiveTick relay) — before the first tick lands, it just stays hidden.
         await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+
+        // "SMA Watch" persistence — replay whatever's currently armed (button highlight + chart
+        // marker), then listen for deletions via the chart marker's Delete key.
+        var armedSmaWatches = SmaDailyWatchStore.Load(_symbol);
+        foreach (var period in armedSmaWatches)
+            if (_smaWatchButtons.TryGetValue(period, out var btn)) btn.BackColor = Color.LightYellow;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"loadSmaWatches({JsonSerializer.Serialize(armedSmaWatches)});");
+        _webView.CoreWebView2.WebMessageReceived += (s, e) => HandleSmaWatchMessage(e);
 
         // "Rect" tool persistence (RectStore, tag "Daily") — replay whatever was drawn in a
         // previous session, then listen for new/deleted ones from now on.
@@ -217,6 +265,27 @@ public class DailyChartForm : Form
             var p2 = root.GetProperty("p2").GetDecimal();
             if (type == "colorrect_add") RectStore.Append(_symbol, "DailyColor", t1, p1, t2, p2);
             else RectStore.Remove(_symbol, "DailyColor", t1, p1, t2, p2);
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
+    }
+
+    // Deleting the chart marker (Delete key on it) disarms the watch — same effect as clicking
+    // its toolbar button again, just reachable from the chart itself.
+    private void HandleSmaWatchMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeEl) || typeEl.GetString() != "smawatch_delete") return;
+
+            var period = root.GetProperty("period").GetInt32();
+            SmaDailyWatchStore.Remove(_symbol, period);
+            if (_smaWatchButtons.TryGetValue(period, out var btn)) btn.BackColor = SystemColors.Control;
+            OnSmaWatchChangedEvent?.Invoke(period, false);
         }
         catch
         {
