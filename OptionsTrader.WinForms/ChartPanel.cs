@@ -1349,6 +1349,12 @@ public class ChartPanel : Panel
 
         result = null;
         s_pisoTechoWatches.RemoveAll(w => w.Period == period);
+        // Visually hiding the label on "broken" is disabled per explicit request — the Piso/Techo
+        // label should stay on screen for the whole RTH session even after price crosses it. All
+        // the internal state above still updates normally (result cleared, watch removed, rebound
+        // tracking below still fires) — only the JS call that hides the on-chart text is skipped.
+        // Re-enable by uncommenting.
+        /*
         // BeginInvoke — this can run from Streamer_OnNewCandle's background (WebSocket) thread
         // (via ValidatePisoTechoAgainstLivePrice, the continuous premarket check), and a direct
         // ExecuteScriptAsync call from that thread silently fails, same threading bug the PM
@@ -1356,6 +1362,7 @@ public class ChartPanel : Panel
         // invalidation.
         if (IsHandleCreated)
             BeginInvoke(async () => await (_webView.CoreWebView2?.ExecuteScriptAsync($"removePisoTechoLabel({period});") ?? Task.CompletedTask));
+        */
         OnPisoTechoLevelRemovedEvent?.Invoke(period);
         if (period == 20 || period == 40) EvaluateFirstReboundLabel();
     }
