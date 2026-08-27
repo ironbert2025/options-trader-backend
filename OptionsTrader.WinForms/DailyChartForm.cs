@@ -200,6 +200,13 @@ public class DailyChartForm : Form
         await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20, showSmas: false);
         await LoadAndWireTLinesAsync(_hourlyWebView, "DailyHora");
 
+        // Blue "current price" line, per explicit request — same primitive as the Daily tab's own,
+        // but anchored at today's actual session-open time (9:30 AM ET) instead of "today's still-
+        // forming bar", matching the live 1h panel's own convention (ChartPanel.
+        // GetTodaySessionOpenFakeEpoch) since this tab shows real hourly bars, not one-bar-per-day.
+        // Fed the live spot the same way as the Daily tab's line — see UpdateLivePrice.
+        await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync($"startPreMarketLine({GetTodaySessionOpenFakeEpoch()});");
+
         // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day (same
         // constraint ChartPanel.LoadHistoryAsync works around) — request 10 (the closest valid
         // value at/above 8) so there's enough loaded for the 8-day initial zoom.
@@ -411,8 +418,23 @@ public class DailyChartForm : Form
     // window is closed/disposed.
     public async Task UpdateLivePrice(decimal price)
     {
-        if (IsDisposed || _webView.CoreWebView2 == null) return;
-        await _webView.CoreWebView2.ExecuteScriptAsync(
-            $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, null);");
+        if (IsDisposed) return;
+        var priceArg = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (_webView.CoreWebView2 != null)
+            await _webView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
+        if (_hourlyWebView.CoreWebView2 != null)
+            await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
+    }
+
+    // Today's 9:30 AM ET (RTH session open), same "ET digits disguised as UTC" fake epoch every
+    // other reference line's anchor uses — see ChartPanel.GetTodaySessionOpenFakeEpoch, which this
+    // mirrors exactly for the Hora tab's own blue price line.
+    private long GetTodaySessionOpenFakeEpoch()
+    {
+        var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, eastern).Date;
+        var sessionOpenEastern = todayEastern.AddHours(9).AddMinutes(30);
+        var sessionOpenUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionOpenEastern, DateTimeKind.Unspecified), eastern);
+        return ChartPanel.FakeUtcEpochSeconds(sessionOpenUtc);
     }
 }
