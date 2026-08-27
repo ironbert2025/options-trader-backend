@@ -197,7 +197,7 @@ public class DailyChartForm : Form
         // fetch + RTH-only aggregation, same call ChartPanel.LoadHistoryAsync makes for its own
         // 15m RTH panel.
         var hourlyCandles = HourlyCandleStore.Load(_symbol);
-        await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20, showSmas: false);
+        await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20);
         await LoadAndWireTLinesAsync(_hourlyWebView, "DailyHora");
 
         // Blue "current price" line, per explicit request — same primitive as the Daily tab's own,
@@ -333,7 +333,7 @@ public class DailyChartForm : Form
     }
 
     // Shared setup for each tab's own WebView2 — navigate to chart.html, configure Bollinger (and
-    // optionally SMAs — "Hora"/"15 Min" show Bollinger only, per explicit request; Daily keeps
+    // optionally SMAs — "15 Min" shows Bollinger only, per explicit request; Daily and Hora show
     // both), load the given candle history. visibleDays is a day COUNT for Hora/15 Min (matches the
     // live panels' own convention: configureVisibleDays groups by calendar day regardless of candle
     // interval) but simply equals the bar count for Daily, where each bar IS one day.
