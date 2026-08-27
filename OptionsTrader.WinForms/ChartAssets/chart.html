@@ -972,6 +972,27 @@
       }
     }
 
+    // H-Line click selection — handled here, BEFORE the clickTime/price guard below, same reason
+    // as Stk/Arrow above: an H-Line draws from its anchor all the way to the right edge (including
+    // the auto-drawn prev-day Hi/Lo lines — markPrevDayHiLo), so a large part of its clickable
+    // length sits in truly empty space where coordinateToTime returns null, especially on panel 3
+    // (RTH+Overnight)'s sparser gray-band regions — the guard used to swallow those clicks before
+    // ever reaching the hit test further down, making those lines impossible to select there.
+    // findHLineByClick only needs the raw pixel coordinates, not clickTime/price.
+    if (hLinePrimitive._segments.length > 0) {
+      const hitIdx = findHLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        hLinePrimitive._segments.forEach((s, i) => { s.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadHLineSelection = hLinePrimitive._segments.some(s => s.selected);
+      if (hadHLineSelection) {
+        hLinePrimitive._segments.forEach(s => { s.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // param.time is only set when the click lands exactly on a rendered bar — during the
     // overnight/pre-market session (15m RTH+Overnight panel) real data is sparse, so large
     // stretches of the gray band have no bar under the cursor and param.time comes back
@@ -1043,22 +1064,6 @@
       const hadLineSelection = tLinePrimitive._lines.some(l => l.selected);
       if (hadLineSelection) {
         tLinePrimitive._lines.forEach(l => { l.selected = false; });
-        forceRepaint();
-      }
-    }
-
-    // H-Line click selection — same idea as gray rect/T-Line above: clicking near an existing
-    // line selects it (Delete key removes it), regardless of whether H-Line drawing is armed.
-    if (hLinePrimitive._segments.length > 0) {
-      const hitIdx = findHLineByClick(param.point.x, param.point.y);
-      if (hitIdx !== -1) {
-        hLinePrimitive._segments.forEach((s, i) => { s.selected = i === hitIdx; });
-        forceRepaint();
-        return;
-      }
-      const hadHLineSelection = hLinePrimitive._segments.some(s => s.selected);
-      if (hadHLineSelection) {
-        hLinePrimitive._segments.forEach(s => { s.selected = false; });
         forceRepaint();
       }
     }
