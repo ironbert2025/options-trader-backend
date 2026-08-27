@@ -1923,6 +1923,11 @@ public class ChartPanel : Panel
         BeginInvoke(async () => await MarkBollingerWideningAsync(true, bullish));
         BeginInvoke(() => OnBollingerWideningLevelEvent?.Invoke(true, bullish));
 
+        // "Abriendo Bollinger con Volatilidad" event/log/Telegram — disabled per explicit request
+        // (prescindiendo de este análisis por ahora). The "BB" chart label and the "Expuesto en 3
+        // charts" banner (CheckPmBbAlignment, fed by OnBollingerWideningLevelEvent above) are NOT
+        // affected — only this specific logged/pushed event stops firing. Re-enable by uncommenting.
+        /*
         if (!_bbOpeningLogged)
         {
             _bbOpeningLogged = true;
@@ -1936,6 +1941,7 @@ public class ChartPanel : Panel
             // OnBollingerOpeningEvent wiring / SaveBollingerOpeningSnapshotAsync.
             BeginInvoke(() => OnBollingerOpeningEvent?.Invoke(caption));
         }
+        */
 
         // "Δ" — distance from the live price to whichever band is closer, next to "BB". Only while
         // the price is still actually BETWEEN the two bands (bands widening but not broken out yet)
