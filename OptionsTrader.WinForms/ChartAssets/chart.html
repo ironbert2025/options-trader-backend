@@ -121,13 +121,19 @@
   function configureVisibleDays(days) { visibleDays = days; }
 
   // 15m RTH panel only, per explicit request: once today's RTH session has actually started, keep
-  // a FIXED-width sliding window of the last N bars (26 today's candles + 10 of context, by
-  // default 36) instead of a calendar-day window — so by market close exactly today's 26 candles
-  // plus the last 10 of the prior session are visible, with no per-tick "tight fit" recompute (the
-  // earlier attempt at this kept the window's own SIZE constant instead of shrinking it toward
-  // "just today's candles so far", which is what caused that version's extreme zoom-in early in
-  // the day — reverted). Before today's first RTH bar exists, this stays inactive and the panel's
-  // normal visibleDays zoom applies, so a manual pre-market pan/zoom is left completely alone.
+  // a window whose LEFT edge is FIXED (today's first RTH bar, minus a bit of yesterday's context)
+  // while the RIGHT edge grows with each new candle — so the frame doesn't slide as the day goes,
+  // it just gradually reveals more of today until, by market close, exactly today's 26 candles
+  // plus the configured amount of yesterday's context are visible (matching a manually-adjusted
+  // end-of-day view). A pure trailing fixed-width window (the previous version here) kept
+  // re-including MORE of yesterday relative to today early in the session and less as the day
+  // wore on, changing composition every tick instead of just filling in left-to-right — confirmed
+  // live (NFLX) looking visibly different mid-session vs. the same chart manually fit at end of
+  // day. An even earlier attempt before that (reverted) re-fit tightly to "just today's candles
+  // so far" every tick, which was worse — a handful of candles stretched to fill the whole pane,
+  // extreme zoom-in early in the day. Before today's first RTH bar exists, this stays inactive and
+  // the panel's normal visibleDays zoom applies, so a manual pre-market pan/zoom is left alone.
+  const RTH_BARS_PER_DAY = 26; // 9:30-16:00 ET in 15-minute bars — fixed regardless of how busy the session was
   let rthSlideWindowBars = null;
   function configureRthSlideWindow(bars) { rthSlideWindowBars = bars; }
 
@@ -141,10 +147,11 @@
     if (!rthSlideWindowBars || series.length === 0) return null;
     const last = series[series.length - 1];
     const lastDay = dayStartOf(last.time);
-    const todayStarted = series.some(c => dayStartOf(c.time) === lastDay && isRthTime(c.time));
-    if (!todayStarted) return null;
+    const todayStartIdx = series.findIndex(c => dayStartOf(c.time) === lastDay && isRthTime(c.time));
+    if (todayStartIdx === -1) return null; // today's RTH session hasn't started yet
+    const contextBars = Math.max(0, rthSlideWindowBars - RTH_BARS_PER_DAY);
+    const from = Math.max(0, todayStartIdx - contextBars);
     const to = series.length - 1;
-    const from = Math.max(0, to - (rthSlideWindowBars - 1));
     return { from, to };
   }
 
