@@ -3014,12 +3014,16 @@
   const smaColors = { 20: '#f5a623', 40: '#ef5350', 100: '#26a69a', 200: '#a259ff' };
   const smaWidths = { 20: 1, 40: 1, 100: 2, 200: 2 };
 
-  function configureSmas(periods) {
+  // dashed (default false — 1h panel keeps its existing solid lines) draws them dashed instead,
+  // per explicit request for the 15m RTH panel, so its own SMA20/40/100/200 overlay reads as a
+  // secondary reference distinct from that panel's own primary indicators (Bollinger/PM).
+  function configureSmas(periods, dashed) {
     periods.forEach(p => {
       if (!smaSeries[p]) {
         smaSeries[p] = chart.addLineSeries({
           color: smaColors[p] || '#888888',
           lineWidth: smaWidths[p] || 1,
+          lineStyle: dashed ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid,
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false, // no dot on the SMA line when hovering

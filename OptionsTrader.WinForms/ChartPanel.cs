@@ -2461,7 +2461,7 @@ public class ChartPanel : Panel
             _webView.CoreWebView2.Navigate(chartUri);
             await navDone.Task;
 
-            // SMA 20/40/100/200 overlay — only on the 1h panel for now.
+            // SMA 20/40/100/200 overlay — 1h panel (solid).
             if (_mode == ChartPanelMode.Hourly15)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
@@ -2500,6 +2500,10 @@ public class ChartPanel : Panel
             // can be deleted from ANY of the 3 panels, not just 1h/RTH+Overnight.
             if (_mode == ChartPanelMode.Fifteen_RTH)
             {
+                // SMA 20/40/100/200 overlay — dashed here, to read as a secondary reference distinct
+                // from this panel's own primary indicators (Bollinger/PM), per explicit request.
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200], true);");
+
                 // Middle band (SMA20) drawn solid here (vs dashed on the 1h panel), per explicit request.
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2, true);");
 

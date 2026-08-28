@@ -2077,7 +2077,11 @@ public partial class Form1 : Form
         // request; this tab is a separate TwoPanelChartsControl Form1 never fed a live trade-open
         // marker into before (only the popup Live Chart window got one, above).
         if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+        {
+            if (decimal.TryParse(strike, out var strikeValForChartsTab))
+                await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
+        }
 
         _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
 
@@ -3020,7 +3024,11 @@ public partial class Form1 : Form
         // Same white spot-price line on the Charts tab's own panel 2 (15m RTH), per explicit
         // request — see the matching call in TriggerQuoteStrikeClick's entry-open flow.
         if (_lastSpotPrice > 0 && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+        {
+            if (tag is { EntrySpotPrice: > 0 } && decimal.TryParse(strike, out var strikeForDeltaChartsTab))
+                await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDeltaChartsTab);
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
+        }
 
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
         // and the Telegram push below, instead of each capturing its own copy.

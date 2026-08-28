@@ -97,6 +97,20 @@ public class TwoPanelChartsControl : UserControl
         if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price);
     }
 
+    // Green "Stk=xxx" line at trade open — panel 2 (15m RTH) only, same pattern as
+    // MarkEntrySpotOnRthChartAsync above.
+    public async Task MarkStrikeOnRthChartAsync(decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkStrikeAsync(strike);
+    }
+
+    // "ΔS=value" label at trade close — panel 2 (15m RTH) only, same pattern as
+    // MarkEntrySpotOnRthChartAsync above.
+    public async Task MarkDeltaSOnRthChartAsync(decimal entrySpot, decimal closeSpot, decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkDeltaSAsync(entrySpot, closeSpot, strike);
+    }
+
     // Small event log fed by panel 1/2 events — MultiChartForm's own panel-3/combined-screenshot
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.

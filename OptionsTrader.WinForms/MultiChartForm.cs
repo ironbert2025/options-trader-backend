@@ -639,14 +639,21 @@ public class MultiChartForm : Form
     // auto-closes at 4pm ET because it expires today.
     public Task MarkExpiredOnRthChartAsync() => _rthPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
 
-    // "ΔS=value" label at trade close — panel 3 (15m RTH+Overnight) only, per explicit request.
-    public Task MarkDeltaSOnOvernightChartAsync(decimal entrySpot, decimal closeSpot, decimal strike) =>
-        _overnightPanel?.MarkDeltaSAsync(entrySpot, closeSpot, strike) ?? Task.CompletedTask;
+    // "ΔS=value" label at trade close — panels 2 (15m RTH) and 3 (15m RTH+Overnight). Originally
+    // panel 3 only; panel 2 added per explicit request.
+    public async Task MarkDeltaSOnOvernightChartAsync(decimal entrySpot, decimal closeSpot, decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkDeltaSAsync(entrySpot, closeSpot, strike);
+        if (_overnightPanel != null) await _overnightPanel.MarkDeltaSAsync(entrySpot, closeSpot, strike);
+    }
 
-    // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, per explicit request. Fired when a
-    // trade (demo or real) opens.
-    public Task MarkStrikeOnOvernightChartAsync(decimal strike) =>
-        _overnightPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask;
+    // Green "Stk=xxx" line — panels 2 (15m RTH) and 3 (15m RTH+Overnight). Fired when a trade
+    // (demo or real) opens. Originally panel 3 only; panel 2 added per explicit request.
+    public async Task MarkStrikeOnOvernightChartAsync(decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkStrikeAsync(strike);
+        if (_overnightPanel != null) await _overnightPanel.MarkStrikeAsync(strike);
+    }
 
     // White spot-price line — panels 2 (15m RTH) and 3 (15m RTH+Overnight), same marker the
     // Simulator already draws on trade open/close. Fired at both. Originally panel 3 only; panel 2
