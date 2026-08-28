@@ -1238,13 +1238,25 @@ public partial class Form1 : Form
                 (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
             }
 
-            // Live options grid mirrored on the Live Chart window (MultiChartForm) — fires every
-            // poll cycle so that grid stays in sync with this one without polling on its own. Fired
-            // LAST (moved 2026-08-21 from right after _lastAllQuotes/_lastSpotPrice above) so that
-            // by the time MultiChartForm's handler reads GetQuoteSnapshot/GetQuoteSnapshotNext, the
-            // "next" chain fields are already this same cycle's fresh values instead of the
-            // previous cycle's — otherwise the "Próxima" tab was always exactly one poll behind.
-            OnQuotesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
+            // Live options grid mirrored on the Live Chart window (MultiChartForm) AND the Charts
+            // tab (TwoPanelChartsControl) — fires every poll cycle so those grids stay in sync with
+            // this one without polling on their own. Fired LAST (moved 2026-08-21 from right after
+            // _lastAllQuotes/_lastSpotPrice above) so that by the time a handler reads
+            // GetQuoteSnapshot/GetQuoteSnapshotNext, the "next" chain fields are already this same
+            // cycle's fresh values instead of the previous cycle's — otherwise the "Próxima" tab
+            // was always exactly one poll behind.
+            //
+            // Invoked per-subscriber with its own try/catch instead of a single direct
+            // ?.Invoke(...) — a plain multicast invoke stops calling LATER subscribers the moment
+            // an EARLIER one throws (confirmed live: NFLX's Charts-tab options grid silently never
+            // refreshed — a stale/disposed subscriber elsewhere in the invocation list, registered
+            // before it, was throwing every single poll cycle and killing the rest of that cycle's
+            // invocation, with no exception ever surfacing anywhere to explain why).
+            foreach (var handler in (OnQuotesUpdatedEvent?.GetInvocationList() ?? Array.Empty<Delegate>()))
+            {
+                try { ((Action<string>)handler)(_selectedTicker.Symbol); }
+                catch (Exception ex) { LogLine($"{DateTime.Now:HH:mm:ss} [OnQuotesUpdatedEvent] Subscriber threw: {ex.Message}", Color.OrangeRed); }
+            }
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
