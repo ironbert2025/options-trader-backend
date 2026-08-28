@@ -21,6 +21,7 @@ partial class Form1
         lblEarningsRemaining = new ToolStripStatusLabel();
         tabControl = new TabControl();
         tabQuotes = new TabPage();
+        tabCharts = new TabPage();
         grpLogger = new GroupBox();
         rtbLogger = new RichTextBox();
         grpTrades = new GroupBox();
@@ -201,6 +202,7 @@ partial class Form1
         // tabControl
         // 
         tabControl.Controls.Add(tabQuotes);
+        tabControl.Controls.Add(tabCharts);
         tabControl.Controls.Add(tabSettings);
         tabControl.Dock = DockStyle.Fill;
         tabControl.Location = new Point(0, 0);
@@ -233,6 +235,15 @@ partial class Form1
         tabQuotes.Size = new Size(1016, 572);
         tabQuotes.TabIndex = 1;
         tabQuotes.Text = "Options Quotes";
+        //
+        // tabCharts
+        //
+        tabCharts.Location = new Point(4, 24);
+        tabCharts.Name = "tabCharts";
+        tabCharts.Padding = new Padding(8);
+        tabCharts.Size = new Size(1016, 572);
+        tabCharts.TabIndex = 2;
+        tabCharts.Text = "Charts";
         // 
         // grpLogger
         // 
@@ -1694,6 +1705,7 @@ partial class Form1
     private ToolStripStatusLabel lblEarningsDate;
     private ToolStripStatusLabel lblEarningsRemaining;
     private TabControl tabControl;
+    private TabPage tabCharts;
     private TabPage tabQuotes;
     private TabPage tabSettings;
     private DataGridView dgvQuotes;

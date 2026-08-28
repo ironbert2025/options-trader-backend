@@ -101,6 +101,7 @@ public partial class Form1 : Form
     public Form1()
     {
         InitializeComponent();
+        SetupChartsTab();
         FormClosing += async (s, e) =>
         {
             _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose();
@@ -2221,6 +2222,131 @@ public partial class Form1 : Form
                 multiChartForm.AttachDailyMirroring(dailyForm);
 
         multiChartForm.Show();
+    }
+
+    // ==================================================================================
+    // "Charts" tab — panel 1 (1h) + panel 2 (15m RTH) embedded directly in the main form,
+    // instead of a separate Live Chart popup window, per explicit request ("estamos pasando la
+    // funcionalidad de live chart para main form... por ahora si copias algo de alla para aca, no
+    // importa, luego eliminaremos la logica de alla"). Reuses MultiChartForm UNCHANGED (embedded
+    // as a child control, TopLevel=false) instead of re-implementing its panel 1/2 wiring here —
+    // panel 3 (RTH+Overnight) and the options/trades grids that come along with it are hidden
+    // post-construction rather than removed from MultiChartForm itself, so that class keeps
+    // working exactly as before for its own popup window callers.
+    // ==================================================================================
+    private MultiChartForm? _chartsTabForm;
+    private Button? _btnChartsConnect;
+    private Panel? _chartsHost;
+
+    // Top-docked strip for the Connect/Disconnect button (always visible, own row — never
+    // overlapped by the charts) + a separate Fill-docked host panel dedicated to the embedded
+    // MultiChartForm, added once here and left in place — toggling only shows/hides/creates-
+    // disposes the chart form inside it, never touches the button's own row.
+    //
+    // Auto-connects (silently, no click needed) the moment the "Charts" tab is first selected
+    // AND a ticker is already chosen — per explicit request ("quiero ver los controles... desde
+    // el inicio"): the panels + their full toolbars should already be there, not gated behind a
+    // manual click. The button stays as a manual Connect (if no ticker was selected yet when the
+    // tab was first opened) / Disconnect (per explicit request, "necesito poder detenerlo").
+    private void SetupChartsTab()
+    {
+        var toolbarStrip = new Panel { Dock = DockStyle.Top, Height = 40 };
+        var btn = new Button { Text = "Connect", Location = new Point(8, 6), Size = new Size(100, 28) };
+        btn.Click += (s, e) => _ = ConnectChartsTabAsync();
+        toolbarStrip.Controls.Add(btn);
+        _btnChartsConnect = btn;
+
+        var host = new Panel { Dock = DockStyle.Fill };
+        _chartsHost = host;
+
+        tabCharts.Controls.Add(host);
+        tabCharts.Controls.Add(toolbarStrip);
+
+        tabControl.SelectedIndexChanged += (s, e) =>
+        {
+            if (tabControl.SelectedTab == tabCharts && _chartsTabForm == null && _selectedTicker != null)
+                _ = ConnectChartsTabAsync();
+        };
+    }
+
+    private async Task ConnectChartsTabAsync()
+    {
+        // Already connected — a manual click here means "Disconnect": tear down and go back to
+        // the button (auto-connect above only fires while _chartsTabForm is still null).
+        if (_chartsTabForm != null)
+        {
+            _chartsHost!.Controls.Remove(_chartsTabForm);
+            _chartsTabForm.Dispose();
+            _chartsTabForm = null;
+            _btnChartsConnect!.Text = "Connect";
+            return;
+        }
+
+        if (_selectedTicker == null)
+        {
+            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        try
+        {
+            var symbol = _selectedTicker.Symbol;
+            var chartsForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!, this);
+            HideThirdPanelAndSideGrids(chartsForm);
+
+            chartsForm.TopLevel = false;
+            chartsForm.FormBorderStyle = FormBorderStyle.None;
+            chartsForm.Dock = DockStyle.Fill;
+            _chartsTabForm = chartsForm;
+            _chartsHost!.Controls.Add(chartsForm);
+            chartsForm.Show();
+
+            _btnChartsConnect!.Text = "Disconnect";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not open the embedded charts:\n\n{ex}",
+                "Charts Tab Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // Collapses panel 3's toolbar/chart column (index 2 of the two 3-column TableLayoutPanels) and
+    // hides the right-side options grid + bottom trades grid — everything MultiChartForm builds
+    // around panel 3, none of which this embedded 2-panel view needs. Purely visual: panel 3's
+    // ChartPanel instance still gets created and wired inside MultiChartForm (untouched), it's
+    // just never shown here. The live options grid (Dock=Right — mirrored from Form1's own
+    // Quotes tab, same data/click-to-trade wiring) stays visible, per explicit request; only the
+    // bottom trades-mirror grid (Dock=Bottom) is hidden along with panel 3.
+    private static void HideThirdPanelAndSideGrids(MultiChartForm form)
+    {
+        foreach (var layoutPanel in form.Controls.OfType<TableLayoutPanel>().Where(t => t.ColumnCount == 3))
+        {
+            layoutPanel.ColumnStyles[2].SizeType = SizeType.Absolute;
+            layoutPanel.ColumnStyles[2].Width = 0;
+            var control = layoutPanel.GetControlFromPosition(2, 0);
+            if (control != null) control.Visible = false;
+        }
+        foreach (var panel in form.Controls.OfType<Panel>().Where(p => p.Dock == DockStyle.Bottom))
+            panel.Visible = false;
     }
 
     // Opens the single "1h Charts — SPY/QQQ/DIA/IWM" window (no per-ticker selection needed —
