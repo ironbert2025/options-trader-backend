@@ -1863,6 +1863,11 @@ public class ChartPanel : Panel
 
     private void EvaluateVolatilityOpening(decimal livePrice)
     {
+        // "Abriendo la Volatilidad" disabled per explicit request — not used for now. Left commented
+        // (not deleted) so it can be re-enabled later; same pattern as EvaluateBollingerWideningLabel's
+        // own EventLogStore/Telegram block below.
+        return;
+        /*
         if ((!_volatilityOpeningArmedUpper && !_volatilityOpeningArmedLower) || _volatilityOpeningFired) return;
 
         var current = BollingerBandsAt(_closedCandles.Count - 1);
@@ -1894,6 +1899,7 @@ public class ChartPanel : Panel
         BeginInvoke(async () => await SendChartToTelegramAsync(caption));
         EventLogStore.Append(_symbol, "15Min", "VolatilityOpening", direction, caption, livePrice,
             $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
+        */
     }
 
     // "BB" label — 1h and 15m RTH panels, next to "PM". Purely visual, continuous (re-evaluated on
