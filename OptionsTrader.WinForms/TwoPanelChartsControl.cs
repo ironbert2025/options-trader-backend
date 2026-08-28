@@ -87,12 +87,12 @@ public class TwoPanelChartsControl : UserControl
     public string Symbol => _symbol;
 
     // Set by MultiChartForm right after constructing this control, when it hosts it alongside its
-    // own panel 3 — that window sends its OWN Piso/Techo Telegram push (with the full 3-panel
-    // image, see MultiChartForm.SendPisoTechoTelegramPushAsync) so this control's own 2-panel-only
-    // push (below) must stay silent there to avoid sending the event to Telegram twice. Left false
-    // (push enabled) when this control runs standalone on Form1's Charts tab, per explicit request
-    // that the popup keep working exactly as it did before this control existed.
-    public bool SuppressOwnPisoTechoTelegramPush { get; set; }
+    // own panel 3 — that window sends its OWN Telegram pushes / event-log screenshots (with the
+    // full 3-panel image: Piso/Techo, T-Line Signal, SMA Cross, PM Cross) so this control's own
+    // 2-panel-only versions (below) must stay silent there to avoid sending each event twice. Left
+    // false (pushes enabled) when this control runs standalone on Form1's Charts tab, per explicit
+    // request that the popup keep working exactly as it did before this control existed.
+    public bool SuppressOwnTelegramPushes { get; set; }
 
     // White entry-spot line above the candle when a trade opens/closes — panel 2 (15m RTH) only,
     // per explicit request that the Charts tab's own panel 2 show it too (previously this only
@@ -256,7 +256,7 @@ public class TwoPanelChartsControl : UserControl
                 BeginInvoke(() =>
                 {
                     AppendLog($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}");
-                    if (!SuppressOwnPisoTechoTelegramPush) _ = SendPisoTechoTelegramPushAsync(caption);
+                    if (!SuppressOwnTelegramPushes) _ = SendPisoTechoTelegramPushAsync(caption);
                 });
             };
 
@@ -293,6 +293,84 @@ public class TwoPanelChartsControl : UserControl
             // fast (e.g. plenty of HourlyCandleStore data already cached locally). Catch up
             // immediately in that case.
             hourlyPanel.ReplayPisoTechoLevels();
+
+            // T-Line + SMA20 breakout (panel 1) — pushes the combined snapshot, same as a trade
+            // close. Same standalone reasoning as the Piso/Techo wiring above: only worked in the
+            // popup before, since only MultiChartForm subscribed to it.
+            hourlyPanel.OnTLineSignalEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    AppendLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+                    if (!SuppressOwnTelegramPushes) _ = SendTLineSignalTelegramPushAsync(message);
+                });
+            };
+
+            // SMA cross watch (Daily) — armed from DailyChartForm's "SMA Watch" buttons. Event log
+            // already appended inside ChartPanel.EvaluateSmaCrossWatches itself; this just handles
+            // crossLog + the Telegram push.
+            hourlyPanel.OnSmaCrossEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    AppendLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+                    if (!SuppressOwnTelegramPushes) _ = SendSmaCrossTelegramPushAsync(message);
+                });
+            };
+
+            // Daily-candle bounce off SMA20 — purely informational, log only (no Telegram). Safe to
+            // leave unconditional (no image/Telegram involved), so no SuppressOwnTelegramPushes
+            // check needed — the popup no longer double-subscribes to this one.
+            hourlyPanel.OnDailyBounceEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => AppendLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+            };
+        }
+
+        if (rthPanel != null)
+        {
+            // Panel 2's own T-Lines are independent from panel 1's — same breakout signal,
+            // evaluated against panel 2's own SMA20/candles, logged/pushed identically.
+            rthPanel.OnTLineSignalEvent += message =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    AppendLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+                    if (!SuppressOwnTelegramPushes) _ = SendTLineSignalTelegramPushAsync(message);
+                });
+            };
+
+            // "Cruce de vela con PM" — log-only into the per-symbol events .md with a combined
+            // snapshot, never crossLog, never Telegram (per explicit request).
+            rthPanel.OnPmCrossEvent += caption =>
+            {
+                if (IsDisposed || SuppressOwnTelegramPushes) return;
+                BeginInvoke(async () =>
+                {
+                    string? path = null;
+                    try
+                    {
+                        using var combined = await CaptureCombinedChartImageAsync();
+                        if (combined != null)
+                        {
+                            var folder = @"C:\OptionsTraderPush";
+                            Directory.CreateDirectory(folder);
+                            path = Path.Combine(folder, $"{_symbol}_PMCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                        }
+                    }
+                    catch
+                    {
+                        path = null; // best-effort — the event still gets logged below without an image
+                    }
+
+                    EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+                });
+            };
         }
 
         // T-Line / H-Line drawing tools for the 1h panel (column 0). T-Line and H-Line share the
@@ -1260,6 +1338,87 @@ public class TwoPanelChartsControl : UserControl
     {
         if (IsDisposed) return;
         BeginInvoke(() => AppendLog($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
+    }
+
+    // Pushes the combined (panel 1 + 2) snapshot for a T-Line + SMA20 breakout signal — same
+    // best-effort pattern as SendPisoTechoTelegramPushAsync above (MultiChartForm's own copy pushes
+    // the full 3-panel image instead, when it hosts this control — see SuppressOwnTelegramPushes).
+    private async Task SendTLineSignalTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_TLineSignal_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "TLineSignal", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined (panel 1 + 2) snapshot for a Daily SMA cross watch — same pattern as
+    // SendTLineSignalTelegramPushAsync above.
+    private async Task SendSmaCrossTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_SmaCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SmaCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
     }
 
     private static readonly string[] PanelLabels = { "1 Hour", "15Min RTH" };

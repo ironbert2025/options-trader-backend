@@ -70,7 +70,7 @@ public class MultiChartForm : Form
         _twoPanelControl = new TwoPanelChartsControl(symbol, historyClient, liveFeed, form1) { Dock = DockStyle.Fill };
         // This window sends its own Piso/Techo Telegram push below (3-panel image) — see
         // SendPisoTechoTelegramPushAsync — so the control's own 2-panel-only push must stay silent.
-        _twoPanelControl.SuppressOwnPisoTechoTelegramPush = true;
+        _twoPanelControl.SuppressOwnTelegramPushes = true;
         var hourlyPanel = _twoPanelControl.HourlyPanel;
         var rthPanel = _twoPanelControl.RthPanel;
 
@@ -289,67 +289,43 @@ public class MultiChartForm : Form
         panel3Host.Controls.Add(panel3ChartHost);
         panel3Host.Controls.Add(toolsHost);
 
+        // T-Line Signal, SMA Cross, Daily Bounce (panel 1) and T-Line Signal, PM Cross (panel 2) —
+        // crossLog/log-only handling moved into TwoPanelChartsControl's own constructor (same
+        // standalone reasoning as the Piso/Techo wiring there), so it also works when the Charts
+        // tab runs without this popup at all. This window keeps ONLY its own Telegram pushes below,
+        // each with the full 3-panel image — TwoPanelChartsControl's own 2-panel pushes stay silent
+        // here via SuppressOwnTelegramPushes (set true right after constructing _twoPanelControl
+        // above). PM Cross has no separate Telegram push to keep (it's log+screenshot only) — its
+        // own copy inside TwoPanelChartsControl already no-ops here for the same reason.
         if (hourlyPanel != null)
         {
-            // T-Line + SMA20 breakout — pushes the combined 3-chart image, same as a trade close.
             hourlyPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                // BeginInvoke — fires from Streamer_OnNewCandle's background (WebSocket) thread,
-                // and SendTLineSignalTelegramPushAsync touches CoreWebView2 via
-                // CaptureCombinedChartImageAsync (same threading bug class as AutoZonePush,
-                // already fixed elsewhere in this file) — was previously called OUTSIDE the
-                // BeginInvoke below, which only protected the crossLog line.
-                BeginInvoke(() =>
-                {
-                    AppendCrossLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
-                    _ = SendTLineSignalTelegramPushAsync(message);
-                });
+                BeginInvoke(() => _ = SendTLineSignalTelegramPushAsync(message));
             };
 
-            // SMA cross watch (Daily) — armed from DailyChartForm's "SMA Watch" buttons. Event
-            // log already appended inside ChartPanel.EvaluateSmaCrossWatches itself (same as
-            // EvaluateTLineSignal does for its own signal); this just handles the Telegram push.
-            // BeginInvoke — same threading fix as hourlyPanel.OnTLineSignalEvent above.
             hourlyPanel.OnSmaCrossEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() =>
-                {
-                    AppendCrossLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
-                    _ = SendSmaCrossTelegramPushAsync(message);
-                });
-            };
-
-            // Daily-candle bounce off SMA20 — purely informational, log only (no Telegram, no
-            // automatic action; the user checks this window in the morning and acts manually).
-            hourlyPanel.OnDailyBounceEvent += message =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() => AppendCrossLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => _ = SendSmaCrossTelegramPushAsync(message));
             };
         }
 
         if (rthPanel != null)
         {
-            // Panel 2's own T-Lines are independent from panel 1's — same breakout signal,
-            // evaluated against panel 2's own SMA20/candles, logged/pushed identically.
             rthPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                // BeginInvoke — same threading fix as hourlyPanel.OnTLineSignalEvent above.
-                BeginInvoke(() =>
-                {
-                    AppendCrossLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
-                    _ = SendTLineSignalTelegramPushAsync(message);
-                });
+                BeginInvoke(() => _ = SendTLineSignalTelegramPushAsync(message));
             };
 
             // "Cruce de vela con PM" — log-only, per explicit request: written directly to the
             // per-symbol events .md with the combined 3-panel screenshot, never crossLog, never
-            // Telegram. BeginInvoke — fires from Streamer_OnNewCandle's background (WebSocket)
-            // thread, and CaptureCombinedChartImageAsync touches CoreWebView2 (same threading bug
-            // class as AutoZonePush, already fixed elsewhere in this file).
+            // Telegram. Kept fully here (not split like the events above) since TwoPanelChartsControl's
+            // own copy is a single unified action, not a separate "log vs Telegram" pair — its copy
+            // already no-ops when hosted by this window (SuppressOwnTelegramPushes), so this is the
+            // only place it runs, same as before this control existed.
             rthPanel.OnPmCrossEvent += caption =>
             {
                 if (IsDisposed) return;
