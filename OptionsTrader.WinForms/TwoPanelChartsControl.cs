@@ -86,6 +86,14 @@ public class TwoPanelChartsControl : UserControl
     // it a strike/entry-spot marker — see MarkEntrySpotOnRthChartAsync below.
     public string Symbol => _symbol;
 
+    // Set by MultiChartForm right after constructing this control, when it hosts it alongside its
+    // own panel 3 — that window sends its OWN Piso/Techo Telegram push (with the full 3-panel
+    // image, see MultiChartForm.SendPisoTechoTelegramPushAsync) so this control's own 2-panel-only
+    // push (below) must stay silent there to avoid sending the event to Telegram twice. Left false
+    // (push enabled) when this control runs standalone on Form1's Charts tab, per explicit request
+    // that the popup keep working exactly as it did before this control existed.
+    public bool SuppressOwnPisoTechoTelegramPush { get; set; }
+
     // White entry-spot line above the candle when a trade opens/closes — panel 2 (15m RTH) only,
     // per explicit request that the Charts tab's own panel 2 show it too (previously this only
     // ever reached the popup Live Chart window's rthPanel, via MultiChartForm.
@@ -248,7 +256,7 @@ public class TwoPanelChartsControl : UserControl
                 BeginInvoke(() =>
                 {
                     AppendLog($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}");
-                    _ = SendPisoTechoTelegramPushAsync(caption);
+                    if (!SuppressOwnPisoTechoTelegramPush) _ = SendPisoTechoTelegramPushAsync(caption);
                 });
             };
 

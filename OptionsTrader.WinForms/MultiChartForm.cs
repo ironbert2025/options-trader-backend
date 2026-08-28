@@ -68,6 +68,9 @@ public class MultiChartForm : Form
         // TwoPanelChartsControl. hourlyPanel/rthPanel aliases kept below so the rest of this
         // constructor (largely unchanged) can keep referring to them exactly as before.
         _twoPanelControl = new TwoPanelChartsControl(symbol, historyClient, liveFeed, form1) { Dock = DockStyle.Fill };
+        // This window sends its own Piso/Techo Telegram push below (3-panel image) — see
+        // SendPisoTechoTelegramPushAsync — so the control's own 2-panel-only push must stay silent.
+        _twoPanelControl.SuppressOwnPisoTechoTelegramPush = true;
         var hourlyPanel = _twoPanelControl.HourlyPanel;
         var rthPanel = _twoPanelControl.RthPanel;
 
@@ -413,11 +416,24 @@ public class MultiChartForm : Form
             };
         }
 
-        // "Abriendo la Volatilidad" (arming panel 2's watch) + crossLog/Telegram for the 1h panel's
-        // own Piso/Techo Cruce/Rebote — now wired inside TwoPanelChartsControl itself (see its
-        // constructor) so it also works when the Charts tab runs standalone, with no MultiChartForm
-        // popup at all. Nothing left for this window to add here: panel 3 (overnightPanel) has no
-        // equivalent watch of its own for this specific event.
+        // "Abriendo la Volatilidad" (arming panel 2's watch) + crossLog for the 1h panel's own
+        // Piso/Techo Cruce/Rebote — wired inside TwoPanelChartsControl itself (see its constructor)
+        // so it also works when the Charts tab runs standalone, with no MultiChartForm popup at
+        // all; crossLog goes through the SAME textbox instance either way (AppendCrossLog delegates
+        // into _twoPanelControl.AppendLog), so it must not be duplicated here.
+        //
+        // Telegram push is the one exception kept here rather than moved: the popup's version needs
+        // the full 3-panel combined image (this window's own CaptureCombinedChartImageAsync), while
+        // TwoPanelChartsControl's own push (used when the Charts tab runs standalone) only has
+        // panel 1+2 to work with — per explicit request, the popup keeps working exactly as before.
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => _ = SendPisoTechoTelegramPushAsync(caption));
+            };
+        }
 
         // "Abriendo Bollinger con Volatilidad" — logs the exact moment "BB" starts showing on
         // EITHER panel (1h or 15m RTH), already persisted to EventLogStore by ChartPanel itself
@@ -783,6 +799,49 @@ public class MultiChartForm : Form
         {
             // Best-effort, same as every other snapshot/push in this file — never let this affect
             // the analysis that just fired.
+        }
+    }
+
+    // Pushes the combined 3-chart snapshot for a Piso/Techo Cruce/Rebote resolution — additional to
+    // ChartPanel's own single-panel push (SendChartToTelegramAsync, fired from the 1h panel itself
+    // for the SAME event), per explicit request. Kept here (not moved into TwoPanelChartsControl's
+    // own copy) so the popup keeps pushing the full 3-panel image exactly as before — see the
+    // comment on the OnPisoTechoResolvedEvent subscription above.
+    private async Task SendPisoTechoTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_PisoTecho_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "PisoTechoCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
         }
     }
 
