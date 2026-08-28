@@ -380,12 +380,20 @@ public partial class Form1 : Form
 
     private async Task CaptureOpenCloseSnapshotsAsync(string tag)
     {
-        foreach (var (symbol, chartForm) in _liveChartForms.ToList())
-        {
-            if (chartForm.IsDisposed) continue;
+        // Popup Live Chart windows (3 panels) take priority; the Charts tab's own 2-panel combined
+        // image (panel 1 + 2) is used only as a fallback for a symbol with no popup open, per
+        // explicit request — same priority as SaveTradeChartSnapshotAsync's trade Entry/Close.
+        var sources = _liveChartForms
+            .Where(kv => !kv.Value.IsDisposed)
+            .ToDictionary(kv => kv.Key, kv => (Func<Task<Bitmap?>>)(() => kv.Value.CaptureCombinedChartImageAsync()));
 
+        if (_chartsTabForm != null && !sources.ContainsKey(_chartsTabForm.Symbol))
+            sources[_chartsTabForm.Symbol] = () => _chartsTabForm.CaptureCombinedChartImageAsync();
+
+        foreach (var (symbol, captureAsync) in sources)
+        {
             // CaptureCombinedChartImageAsync has no catch of its own — a transient WebView2 issue
-            // on any one of the 3 panels (e.g. mid-recovery from a crash, see 4fdaa72) throws
+            // on any one of the panels (e.g. mid-recovery from a crash, see 4fdaa72) throws
             // straight through it. One retry after a short delay covers exactly that case (the
             // panel is usually back by then); if it still fails, log it instead of swallowing
             // silently — confirmed live: IWM/DIA's Close snapshot went missing one day with zero
@@ -394,7 +402,7 @@ public partial class Form1 : Form
             {
                 try
                 {
-                    using var combined = await chartForm.CaptureCombinedChartImageAsync();
+                    using var combined = await captureAsync();
                     if (combined == null) break;
 
                     var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
@@ -3073,9 +3081,18 @@ public partial class Form1 : Form
     {
         try
         {
-            if (!_liveChartForms.TryGetValue(symbol, out var chartForm) || chartForm.IsDisposed) return null;
+            Bitmap? combined;
+            // Popup Live Chart window (3 panels) takes priority when open; the Charts tab's own
+            // 2-panel combined image (panel 1 + 2) is only used as a fallback when no popup exists
+            // for this symbol, per explicit request.
+            if (_liveChartForms.TryGetValue(symbol, out var chartForm) && !chartForm.IsDisposed)
+                combined = await chartForm.CaptureCombinedChartImageAsync();
+            else if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+                combined = await _chartsTabForm.CaptureCombinedChartImageAsync();
+            else
+                return null;
 
-            using var combined = await chartForm.CaptureCombinedChartImageAsync();
+            using var _ = combined;
             if (combined == null) return null;
 
             var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);

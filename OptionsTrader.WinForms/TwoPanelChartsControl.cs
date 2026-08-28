@@ -1113,4 +1113,54 @@ public class TwoPanelChartsControl : UserControl
         _hourlyPanel?.FeedPollingPrice(price, utcTime);
         _rthPanel?.FeedPollingPrice(price, utcTime);
     }
+
+    private static readonly string[] PanelLabels = { "1 Hour", "15Min RTH" };
+    private const int PanelGap = 4;
+    private static readonly Color PanelGapColor = Color.Black;
+    private static readonly Color PanelLabelColor = Color.White;
+
+    // Same combined-image logic as MultiChartForm.CaptureCombinedChartImageAsync, but for just
+    // this control's own 2 panels — used as the trade Entry/Close (and market Open/Close) chart
+    // snapshot whenever no popup Live Chart window is open for this symbol, per explicit request.
+    public async Task<Bitmap?> CaptureCombinedChartImageAsync()
+    {
+        if (_hourlyPanel == null || _rthPanel == null) return null;
+
+        var panels = new[] { _hourlyPanel, _rthPanel };
+        var images = new Bitmap?[panels.Length];
+        try
+        {
+            for (int i = 0; i < panels.Length; i++)
+                images[i] = await panels[i].CaptureImageAsync();
+
+            if (images.Any(img => img == null)) return null;
+
+            var width = images.Sum(img => img!.Width) + PanelGap * (images.Length - 1);
+            var height = images.Max(img => img!.Height);
+            var combined = new Bitmap(width, height);
+            using (var g = Graphics.FromImage(combined))
+            using (var labelFont = new Font("Segoe UI", 11f, FontStyle.Bold))
+            using (var labelBrush = new SolidBrush(PanelLabelColor))
+            {
+                g.Clear(PanelGapColor);
+                var x = 0;
+                for (int i = 0; i < images.Length; i++)
+                {
+                    var img = images[i]!;
+                    g.DrawImage(img, x, 0);
+
+                    var labelSize = g.MeasureString(PanelLabels[i], labelFont);
+                    var labelX = x + (img.Width - labelSize.Width) / 2f;
+                    g.DrawString(PanelLabels[i], labelFont, labelBrush, labelX, 8f);
+
+                    x += img.Width + PanelGap;
+                }
+            }
+            return combined;
+        }
+        finally
+        {
+            foreach (var img in images) img?.Dispose();
+        }
+    }
 }
