@@ -2392,34 +2392,20 @@ public class ChartPanel : Panel
     // H-Lines above, this is a plain always-shown reference (no "already broken" check, no
     // premarket-timing deferral) — a built-in price line (see markPrevDayClose in chart.html), so
     // it's safe to call once per chart open with no extra state to track.
-    private async Task DrawPrevDayCloseAsync(List<CandleData> candles)
+    //
+    // Called with NO arguments on all 3 panels now — chart.html computes the anchor itself
+    // directly from allCandles (findPrevDayLastCandle, RTH-filtered via isRthTime so the 15m
+    // RTH+Overnight panel's overnight ticks don't count), which can never disagree with what's
+    // actually rendered there. Every version of "anchored on the wrong candle" bug so far (a
+    // phantom extra bucket at the 4pm boundary, HourlyCandleStore contamination, a stale "last
+    // loaded candle" used as today before today's first tick landed, etc.) was really some panel's
+    // own aggregation quietly drifting from what C# computed separately — removing the second
+    // source of truth removes the whole bug class at once instead of chasing each new way it could
+    // drift.
+    private async Task DrawPrevDayCloseAsync()
     {
-        if (candles.Count == 0 || _webView.CoreWebView2 == null) return;
-
-        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
-        var byDate = candles
-            .Select(c => (Candle: c, Date: DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))))
-            .Where(x => x.Date < today)
-            .ToList();
-        if (byDate.Count == 0) return;
-
-        var prevDate = byDate.Max(x => x.Date);
-        var prevDayBars = byDate.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).ToList();
-
-        // "Yesterday's close" must mean the actual 4:00 PM RTH close, not whichever candle happens
-        // to be chronologically last — on the RTH+Overnight panel (the only one where `candles`
-        // includes anything past 16:00), the literal last bar of the day is an overnight tick, and
-        // after-hours drift can put it well away from the real close (confirmed live: panel 3
-        // showing a different "C" price than panels 1/2, which only ever see RTH bars). Panels 1/2
-        // are unaffected by this filter since every one of their bars is already <= 16:00 anyway.
-        // Candle.Time is Eastern-wall-clock digits disguised as UTC (see FakeUtcEpochSeconds) — its
-        // own TimeOfDay is directly comparable, no EasternZone conversion needed here.
-        var rthBars = prevDayBars.Where(x => x.Candle.Time.TimeOfDay <= new TimeSpan(16, 0, 0)).ToList();
-        var lastBar = (rthBars.Count > 0 ? rthBars : prevDayBars)[^1].Candle;
-
-        var timeArg  = FakeUtcEpochSeconds(lastBar.Time);
-        var priceStr = lastBar.Close.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPrevDayClose({timeArg}, {priceStr});");
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("markPrevDayClose();");
     }
 
     // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is
@@ -2706,7 +2692,7 @@ public class ChartPanel : Panel
                     }
 
                     await EvaluatePrevDayHiLoAsync(aggregated);
-                    await DrawPrevDayCloseAsync(aggregated);
+                    await DrawPrevDayCloseAsync();
                     await ReplayPersistedEntryMarkersAsync();
                 }
             }

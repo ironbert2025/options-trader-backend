@@ -1747,10 +1747,49 @@
     forceRepaint();
   }
 
+  // Finds the last candle of the most recent PRIOR day directly from allCandles — the same array
+  // actually rendered — instead of C# separately computing which candle that is and sending a
+  // time to match against. Two different aggregation paths (1h vs 15m RTH, each with their own
+  // history-fetch/bucketing quirks) trying to agree on "the same" candle kept drifting apart in
+  // various ways (a phantom extra bucket at the 4pm boundary, HourlyCandleStore contamination,
+  // etc.) — every one of those was a symptom of the SAME root issue: two sources of truth for
+  // what "yesterday's last candle" even is. This has exactly one now.
+  function findPrevDayLastCandle() {
+    if (allCandles.length === 0) return null;
+    // The REAL current day (not "the day of the last loaded candle") — before today's first RTH/
+    // premarket tick has landed, the last candle in allCandles still belongs to yesterday, which
+    // made this land on the day BEFORE that (confirmed live: showing Wednesday's close instead of
+    // Thursday's, premarket Friday). nowAsFakeUtcSeconds() is already in the same disguised-UTC
+    // scheme candle.time/dayStartOf use, so it compares directly.
+    const today = dayStartOf(nowAsFakeUtcSeconds());
+    // isRthTime filters out overnight/after-hours ticks — a no-op for the 1h/15m RTH panels (every
+    // candle there already IS RTH), but required on the 15m RTH+Overnight panel, where the
+    // literal last candle of the prior day is often an overnight tick, not the real 4pm close
+    // (confirmed live, AAPL: panel 3 anchored on the wrong point vs. panels 1/2 without this).
+    for (let i = allCandles.length - 1; i >= 0; i--) {
+      if (dayStartOf(allCandles[i].time) < today && isRthTime(allCandles[i].time)) return allCandles[i];
+    }
+    return null; // only today loaded so far — nothing prior to anchor on yet
+  }
+
+  // time/price are now OPTIONAL. Omitted (1h/15m RTH panels — see ChartPanel.DrawPrevDayCloseAsync):
+  // computed here from allCandles itself (findPrevDayLastCandle) every time this is called, so it
+  // can never disagree with what's actually rendered — every "yesterday's close anchored on the
+  // wrong candle" bug so far was really two different sources of truth (C#'s aggregation vs. this
+  // chart's own allCandles) disagreeing in some new way. Explicit (15m RTH+Overnight panel only):
+  // that panel's allCandles legitimately extends past 16:00 (overnight/after-hours ticks), where
+  // "the last candle of the prior day" is NOT the real RTH close — C# still has to single that out.
   function markPrevDayClose(time, price) {
+    let anchorTime = time, anchorPrice = price;
+    if (anchorTime == null || anchorPrice == null) {
+      const c = findPrevDayLastCandle();
+      if (!c) return;
+      anchorTime = c.time;
+      anchorPrice = c.close;
+    }
     if (!prevDayCloseLineAttached) { candleSeries.attachPrimitive(prevDayCloseLinePrimitive); prevDayCloseLineAttached = true; }
-    prevDayCloseLinePrimitive._time = time;
-    prevDayCloseLinePrimitive._price = price;
+    prevDayCloseLinePrimitive._time = anchorTime;
+    prevDayCloseLinePrimitive._price = anchorPrice;
     forceRepaint();
   }
 

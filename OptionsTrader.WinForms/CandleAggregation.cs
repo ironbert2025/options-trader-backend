@@ -19,11 +19,20 @@ internal static class CandleAggregation
         var rthStart = new TimeSpan(9, 30, 0);
         var rthEnd   = new TimeSpan(16, 0, 0);
 
+        // Upper bound is EXCLUSIVE — a candle labeled exactly 16:00:00 ET represents the minute
+        // starting AT close ([16:00, 16:01)), not the closing minute itself ([15:59, 16:00), whose
+        // own Close is already the true 4pm print). Letting the boundary instant through used to
+        // create a genuine extra bucket past the last real one when aggregating (its own near-
+        // duplicate "close", 1 bucket later) — confirmed live (NVDA/AAPL 1h; AAPL 15m RTH), and it
+        // wrecked the prev-day-close reference line's anchor both times, in 2 different ways
+        // (HourlyRthBucketOf's eastern.Hour slotting, and AggregateToInterval's continuous
+        // elapsed-minutes bucketing) — fixing it here at the source covers every bucketing scheme
+        // built on top of this filter instead of patching each one separately.
         return candles
             .Where(c =>
             {
                 var eastern = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
-                return eastern.TimeOfDay >= rthStart && eastern.TimeOfDay <= rthEnd;
+                return eastern.TimeOfDay >= rthStart && eastern.TimeOfDay < rthEnd;
             })
             .ToList();
     }
