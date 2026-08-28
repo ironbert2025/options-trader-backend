@@ -102,6 +102,12 @@ public class TwoPanelChartsControl : UserControl
     public Button TextButton { get; }
     public TextBox ChartTextTextBox { get; }
 
+    // Diagonal "Arrow" tool (line + arrowhead, red/green by drag direction) — per explicit
+    // request, arms panel 1 AND panel 2 together (this control's own click handler below); public
+    // so MultiChartForm can attach an additional handler onto the same button to also arm panel 3,
+    // same split-button convention as HLineButton/TextButton above.
+    public Button ArrowButton { get; }
+
     // Fired after this control's own T-Line/H-Line-style "Text" tool disarms itself on whichever
     // of panel 1/2 didn't place the text — MultiChartForm subscribes to also disarm panel 3.
     public event Action<ChartPanel?>? OnTextPlaced;
@@ -442,6 +448,12 @@ public class TwoPanelChartsControl : UserControl
             Location = new Point(198, 4),
             Size     = new Size(60, 24)
         };
+        ArrowButton = new Button
+        {
+            Text     = "Arrow",
+            Location = new Point(264, 4),
+            Size     = new Size(60, 24)
+        };
         btnRthTLine.Click += async (s, e) =>
         {
             if (rthPanel == null) return;
@@ -466,6 +478,7 @@ public class TwoPanelChartsControl : UserControl
             btnRthTLine.BackColor = SystemColors.Control;
             HLineButton.BackColor = SystemColors.Control;
             TextButton.BackColor = SystemColors.Control;
+            ArrowButton.BackColor = SystemColors.Control;
         };
         // Panel-1/2 half of the shared Text arm/disarm — see TextButton's XML-ish comment above and
         // MultiChartForm's own extra Click handler for the panel-3 half.
@@ -493,6 +506,18 @@ public class TwoPanelChartsControl : UserControl
         if (rthPanel != null) rthPanel.OnTextPlacedEvent += () => DisarmTextModeInternal(rthPanel);
         _disarmTextModeInternal = DisarmTextModeInternal;
 
+        // Panel-1/2 half of the shared diagonal Arrow arm/disarm — same "stays armed until pressed
+        // again" toggle as DZ/SZ (no auto-disarm-on-placement, so no reset wiring needed beyond the
+        // toggle's own return value). MultiChartForm attaches an extra Click handler onto this same
+        // button to also arm panel 3, same split-button convention as HLineButton/TextButton.
+        ArrowButton.Click += async (s, e) =>
+        {
+            bool on = false;
+            if (hourlyPanel != null) on = await hourlyPanel.ToggleArrowModeAsync();
+            if (rthPanel != null) on = await rthPanel.ToggleArrowModeAsync();
+            ArrowButton.BackColor = on ? Color.LightYellow : SystemColors.Control;
+        };
+
         // Brings every "Live Charts — <Symbol>" window to the front, across ALL running ticker
         // instances (each is a separate OS process) — not just this one's own windows. Uses raw
         // Win32 window enumeration (CrossProcessWindowHelper) since a normal BringToFront() can't
@@ -519,6 +544,7 @@ public class TwoPanelChartsControl : UserControl
         rthToolsHost.Controls.Add(HLineButton);
         rthToolsHost.Controls.Add(btnRthClear);
         rthToolsHost.Controls.Add(TextButton);
+        rthToolsHost.Controls.Add(ArrowButton);
         rthToolsHost.Controls.Add(btnBringAllForward);
         rthToolsHost.Controls.Add(chkBollingerEdges);
         toolbar.Controls.Add(rthToolsHost, 1, 0);

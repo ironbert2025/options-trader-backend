@@ -184,15 +184,6 @@ public class MultiChartForm : Form
             Size     = new Size(70, 24)
         };
 
-        // Draws a line + arrowhead between 2 clicks — red if the 1st click is above the 2nd,
-        // green otherwise. Same toggle pattern as the rest.
-        var btnArrow = new Button
-        {
-            Text     = "Arrow",
-            Location = new Point(76, 30),
-            Size     = new Size(70, 24)
-        };
-
         // Stops the auto-push-on-every-closed-candle Telegram loop that starts automatically once
         // a Demand/Supply zone rebote confirms (see ChartPanel.OnAutoZonePushTickEvent) — this is
         // the ONLY way to stop it; a future rebote (a different zone) re-arms it again.
@@ -257,7 +248,7 @@ public class MultiChartForm : Form
             await overnightPanel.ClearDrawingsAsync();
             btnDzSz.BackColor = SystemColors.Control;
             btnRect.BackColor = SystemColors.Control;
-            btnArrow.BackColor = SystemColors.Control;
+            _twoPanelControl.ArrowButton.BackColor = SystemColors.Control;
             _twoPanelControl.HLineButton.BackColor = SystemColors.Control;
         };
         btn5Min.Click += async (s, e) =>
@@ -266,16 +257,15 @@ public class MultiChartForm : Form
             var is5Min = await overnightPanel.ToggleIntervalAsync();
             btn5Min.BackColor = is5Min ? Color.LightBlue : SystemColors.Control;
         };
-        // Single Arrow button (over panel 3, same convention as H-Line/Text) arms drawing on ALL
-        // 3 panels at once — used to be overnightPanel-only. No mirroring: each panel only draws
-        // where it was itself clicked, same as Text.
-        btnArrow.Click += async (s, e) =>
+        // Panel-3 half of the shared diagonal Arrow arm/disarm — TwoPanelChartsControl's own Click
+        // handler (attached first) toggles panel 1/2; this extra handler on the SAME button also
+        // toggles panel 3, same "sequential toggle → last result wins the button color" behavior
+        // as HLineButton/TextButton above (panel 3 was toggled last there too).
+        _twoPanelControl.ArrowButton.Click += async (s, e) =>
         {
-            bool on = false;
-            if (hourlyPanel != null) on = await hourlyPanel.ToggleArrowModeAsync();
-            if (rthPanel != null) on = await rthPanel.ToggleArrowModeAsync();
-            if (overnightPanel != null) on = await overnightPanel.ToggleArrowModeAsync();
-            btnArrow.BackColor = on ? Color.LightYellow : SystemColors.Control;
+            if (overnightPanel == null) return;
+            var on = await overnightPanel.ToggleArrowModeAsync();
+            _twoPanelControl.ArrowButton.BackColor = on ? Color.LightYellow : SystemColors.Control;
         };
         btnStopPush.Click += (s, e) => overnightPanel?.StopAutoZonePush();
 
@@ -284,7 +274,6 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(chkAws);
         toolsHost.Controls.Add(btnClear);
         toolsHost.Controls.Add(btn5Min);
-        toolsHost.Controls.Add(btnArrow);
         toolsHost.Controls.Add(btnStopPush);
         toolsHost.Controls.Add(chkTelegramEvents);
         toolsHost.Controls.Add(lblLiveTick);
