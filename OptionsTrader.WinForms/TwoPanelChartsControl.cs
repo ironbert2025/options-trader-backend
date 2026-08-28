@@ -158,19 +158,19 @@ public class TwoPanelChartsControl : UserControl
 
         Dock = DockStyle.Fill;
 
-        // Toolbar strip on top — 2-column layout matching the 2 chart panels below, 1:1 ratio
-        // (same relative weight the 1h/15m RTH columns had in MultiChartForm's original 2:2:3).
-        var toolbar = new TableLayoutPanel
+        // Toolbar strip on top — single row spanning the full width above both chart panels
+        // (previously split into a 2-column layout, one column of controls per panel; consolidated
+        // into one row per explicit request, now that T-Line arms both panels at once and the two
+        // per-panel Clear buttons are gone — deletion is via the Delete key on a selected drawing).
+        var toolbar = new FlowLayoutPanel
         {
             Dock        = DockStyle.Top,
-            Height      = 88,
-            ColumnCount = 2,
-            RowCount    = 1,
-            Padding     = new Padding(6, 4, 6, 0)
+            Height      = 32,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents  = false,
+            AutoScroll    = false,
+            Padding     = new Padding(4, 1, 4, 0)
         };
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-        toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         var layout = new TableLayoutPanel
         {
@@ -373,40 +373,29 @@ public class TwoPanelChartsControl : UserControl
             };
         }
 
-        // T-Line / H-Line drawing tools for the 1h panel (column 0). T-Line and H-Line share the
-        // top row (side by side); Clear/Rect sit below, arrows + Daily on the third row.
-        var crossHost = new Panel { Dock = DockStyle.Fill };
-        var btnTLine = new Button
-        {
-            Text     = "T-Line",
-            Location = new Point(0, 2),
-            Size     = new Size(60, 24)
-        };
+        // Drawing tools + toggles for BOTH panels, consolidated into a single row above the charts
+        // (previously split into a 2-column layout, one per panel, each with its own Clear button).
+        // T-Line now arms BOTH panels at once with one button, same convention already used for
+        // H-Line/Text/Arrow below — per explicit request. Both per-panel Clear buttons are gone
+        // entirely: deleting a drawing is via the Delete key on a selected item now, not a bulk
+        // clear (ClearDrawingsAsync is no longer called from here).
+        var btnTLine = new Button { Text = "T-Line", Size = new Size(60, 24) };
         btnTLine.Click += async (s, e) =>
         {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleTLineModeAsync();
+            bool on = false;
+            if (hourlyPanel != null) on = await hourlyPanel.ToggleTLineModeAsync();
+            if (rthPanel != null) on = await rthPanel.ToggleTLineModeAsync();
             btnTLine.BackColor = on ? Color.Orange : SystemColors.Control;
         };
         // Completing a T-Line (2nd click) auto-disarms itself in chart.html — reset the button
         // color here so it doesn't stay highlighted after the fact.
         if (hourlyPanel != null) hourlyPanel.OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
+        if (rthPanel != null) rthPanel.OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
 
-        var btnHourlyClear = new Button
-        {
-            Text     = "Clear",
-            Location = new Point(0, 30),
-            Size     = new Size(60, 24)
-        };
-
-        // Filled gray rectangle marking sideways/consolidation ranges around price+SMAs. Click
-        // its border to select (yellow outline), then press Delete to remove just that one.
-        var btnRectGris = new Button
-        {
-            Text     = "Rect",
-            Location = new Point(66, 30),
-            Size     = new Size(60, 24)
-        };
+        // Filled gray rectangle marking sideways/consolidation ranges around price+SMAs (panel 1
+        // only, unchanged). Click its border to select (yellow outline), then press Delete to
+        // remove just that one.
+        var btnRectGris = new Button { Text = "Rect", Size = new Size(60, 24) };
         btnRectGris.Click += async (s, e) =>
         {
             if (hourlyPanel == null) return;
@@ -417,20 +406,10 @@ public class TwoPanelChartsControl : UserControl
         // explicit request, reset the button color to match. Same pattern as the sky-blue btnRect.
         if (hourlyPanel != null) hourlyPanel.OnRectGrisPlacedEvent += () => btnRectGris.BackColor = SystemColors.Control;
 
-        // Single-click vertical arrows: green points up, red points down, tip at the click point.
-        // Click the shaft to select (yellow dashed overlay), Delete removes it.
-        var btnFlechaVerde = new Button
-        {
-            Text     = "↑ Verde",
-            Location = new Point(0, 56),
-            Size     = new Size(60, 24)
-        };
-        var btnFlechaRoja = new Button
-        {
-            Text     = "↓ Roja",
-            Location = new Point(66, 56),
-            Size     = new Size(60, 24)
-        };
+        // Single-click vertical arrows (panel 1 only, unchanged): green points up, red points down,
+        // tip at the click point. Click the shaft to select (yellow dashed overlay), Delete removes it.
+        var btnFlechaVerde = new Button { Text = "↑ Verde", Size = new Size(60, 24) };
+        var btnFlechaRoja = new Button { Text = "↓ Roja", Size = new Size(60, 24) };
         btnFlechaVerde.Click += async (s, e) =>
         {
             if (hourlyPanel == null) return;
@@ -454,24 +433,9 @@ public class TwoPanelChartsControl : UserControl
             };
         }
 
-        btnHourlyClear.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            await hourlyPanel.ClearDrawingsAsync();
-            btnTLine.BackColor = SystemColors.Control;
-            btnRectGris.BackColor = SystemColors.Control;
-            btnFlechaVerde.BackColor = SystemColors.Control;
-            btnFlechaRoja.BackColor = SystemColors.Control;
-        };
-
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
         // days of persisted hourly history) and plain Hourly candles.
-        var btnDaily = new Button
-        {
-            Text     = "Daily",
-            Location = new Point(132, 56),
-            Size     = new Size(70, 24)
-        };
+        var btnDaily = new Button { Text = "Daily", Size = new Size(70, 24) };
         // Opens a separate window with its own fresh WebView2 instead of toggling in place on
         // this panel's own chart — see DailyChartForm's own comment for why (an unresolved
         // rendering bug in the in-place toggle: correct data/axis range, but candles stayed
@@ -488,7 +452,7 @@ public class TwoPanelChartsControl : UserControl
 
         // Dashed vertical lines separating the 7 hourly candles of each trading day (last 4 lines
         // = last 5 days; today's candles sit unbounded to the right of the most recent one).
-        var chkDayDividers = new CheckBox { Text = "Día", Location = new Point(208, 60), AutoSize = true, Checked = true };
+        var chkDayDividers = new CheckBox { Text = "Día", AutoSize = true, Checked = true, Margin = new Padding(6, 4, 3, 3) };
         chkDayDividers.CheckedChanged += async (s, e) =>
         {
             if (hourlyPanel == null) return;
@@ -498,96 +462,21 @@ public class TwoPanelChartsControl : UserControl
         // Shows/hides the ATH reference line — drawn on all 3 panels (panel 3 lives on
         // MultiChartForm, which attaches its own additional CheckedChanged handler onto this same
         // checkbox — see MultiChartForm's constructor).
-        AthCheckBox = new CheckBox { Text = "ATH", Location = new Point(208, 78), AutoSize = true, Checked = true };
+        AthCheckBox = new CheckBox { Text = "ATH", AutoSize = true, Checked = true, Margin = new Padding(3, 4, 3, 3) };
         AthCheckBox.CheckedChanged += async (s, e) =>
         {
             if (hourlyPanel != null) await hourlyPanel.SetAllTimeHighVisibleAsync(AthCheckBox.Checked);
             if (rthPanel != null) await rthPanel.SetAllTimeHighVisibleAsync(AthCheckBox.Checked);
         };
 
-        // "SMA Watch" — arm/disarm a live-price-cross watch on SMA20/40/100/200 (Daily-timeframe,
-        // same as DailyChartForm's own buttons — this panel does the actual monitoring regardless
-        // of which window armed it) directly from the live chart, without needing the Daily popup
-        // window open, per explicit request. See ChartPanel.SetSmaCrossWatchAsync.
-        {
-            var armedNow = SmaDailyWatchStore.Load(_symbol).ToHashSet();
-            int smaX = 0;
-            foreach (var period in new[] { 20, 40, 100, 200 })
-            {
-                var btn = new Button
-                {
-                    Text = $"SMA{period}",
-                    Location = new Point(smaX, 104),
-                    Size = new Size(60, 24),
-                    BackColor = armedNow.Contains(period) ? Color.LightYellow : SystemColors.Control
-                };
-                smaX += 66;
-                _smaWatchButtons[period] = btn;
-                btn.Click += async (s, e) =>
-                {
-                    if (hourlyPanel == null) return;
-                    var armed = btn.BackColor != Color.LightYellow;
-                    await hourlyPanel.SetSmaCrossWatchAsync(period, armed);
-                    btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
-                };
-                crossHost.Controls.Add(btn);
-            }
-        }
-        // Deleting the 👁 marker (Delete key) on the chart itself disarms it too — keep this
-        // toolbar's own button color in sync when that happens.
-        if (hourlyPanel != null)
-        {
-            hourlyPanel.OnSmaWatchChangedEvent += (period, armed) =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() =>
-                {
-                    if (_smaWatchButtons.TryGetValue(period, out var btn))
-                        btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
-                });
-            };
-        }
-
-        crossHost.Controls.Add(btnTLine);
-        crossHost.Controls.Add(btnHourlyClear);
-        crossHost.Controls.Add(btnRectGris);
-        crossHost.Controls.Add(btnFlechaVerde);
-        crossHost.Controls.Add(btnFlechaRoja);
-        crossHost.Controls.Add(btnDaily);
-        crossHost.Controls.Add(chkDayDividers);
-        crossHost.Controls.Add(AthCheckBox);
-        toolbar.Controls.Add(crossHost, 0, 0);
-
-        // T-Line drawing tool for the 15m RTH panel (column 1) — no persistence like the 1h
-        // panel's T-Line, just draw + Clear for this session.
-        var rthToolsHost = new Panel { Dock = DockStyle.Fill };
-        var btnRthTLine = new Button
-        {
-            Text     = "T-Line",
-            Location = new Point(0, 4),
-            Size     = new Size(60, 24)
-        };
-        HLineButton = new Button
-        {
-            Text     = "H-Line",
-            Location = new Point(66, 4),
-            Size     = new Size(60, 24)
-        };
-        var btnRthClear = new Button
-        {
-            Text     = "Clear",
-            Location = new Point(132, 4),
-            Size     = new Size(60, 24)
-        };
-        // Single "Text" button (above the 15m RTH panel, same convention as H-Line) arms
-        // text-placement mode on all 3 panels at once — no mirroring, each panel only places text
-        // where IT was clicked. Reads the Windows clipboard fresh each time this button is pressed.
-        // Source text for the "Text" tool below — declared here (used by TextButton.Click) but only
-        // actually added to the layout further down.
+        // Single "Text" button arms text-placement mode on all panels at once — no mirroring, each
+        // panel only places text where IT was clicked. Reads the Windows clipboard fresh each time
+        // this button is pressed. Source text for the "Text" tool below — declared here (used by
+        // TextButton.Click) but only actually added to the layout further down.
         ChartTextTextBox = new TextBox
         {
-            Dock       = DockStyle.Bottom,
-            Height     = 80,
+            Dock       = DockStyle.Top,
+            Height     = 28,
             Multiline  = true,
             ScrollBars = ScrollBars.Vertical,
             Font       = new Font("Segoe UI", 9F)
@@ -616,25 +505,10 @@ public class TwoPanelChartsControl : UserControl
             ChartTextTextBox.SelectionStart = ChartTextTextBox.Text.Length;
         };
 
-        TextButton = new Button
-        {
-            Text     = "Text",
-            Location = new Point(198, 4),
-            Size     = new Size(60, 24)
-        };
-        ArrowButton = new Button
-        {
-            Text     = "Arrow",
-            Location = new Point(264, 4),
-            Size     = new Size(60, 24)
-        };
-        btnRthTLine.Click += async (s, e) =>
-        {
-            if (rthPanel == null) return;
-            var on = await rthPanel.ToggleTLineModeAsync();
-            btnRthTLine.BackColor = on ? Color.Orange : SystemColors.Control;
-        };
-        if (rthPanel != null) rthPanel.OnTLinePlacedEvent += () => btnRthTLine.BackColor = SystemColors.Control;
+        HLineButton = new Button { Text = "H-Line", Size = new Size(60, 24) };
+        TextButton = new Button { Text = "Text", Size = new Size(60, 24) };
+        ArrowButton = new Button { Text = "Arrow", Size = new Size(60, 24) };
+
         // Panel-1/2 half of the shared H-Line arm/disarm — MultiChartForm attaches its own extra
         // Click handler onto this same button to also toggle panel 3 (see its constructor), same
         // "sequential toggle → last result wins the button color" behavior as before the split.
@@ -644,15 +518,6 @@ public class TwoPanelChartsControl : UserControl
             if (hourlyPanel != null) on = await hourlyPanel.ToggleHLineModeAsync();
             if (rthPanel != null) on = await rthPanel.ToggleHLineModeAsync();
             HLineButton.BackColor = on ? Color.LightSalmon : SystemColors.Control;
-        };
-        btnRthClear.Click += async (s, e) =>
-        {
-            if (rthPanel == null) return;
-            await rthPanel.ClearDrawingsAsync();
-            btnRthTLine.BackColor = SystemColors.Control;
-            HLineButton.BackColor = SystemColors.Control;
-            TextButton.BackColor = SystemColors.Control;
-            ArrowButton.BackColor = SystemColors.Control;
         };
         // Panel-1/2 half of the shared Text arm/disarm — see TextButton's XML-ish comment above and
         // MultiChartForm's own extra Click handler for the panel-3 half.
@@ -696,32 +561,82 @@ public class TwoPanelChartsControl : UserControl
         // instances (each is a separate OS process) — not just this one's own windows. Uses raw
         // Win32 window enumeration (CrossProcessWindowHelper) since a normal BringToFront() can't
         // reach windows owned by another process.
-        var btnBringAllForward = new Button
-        {
-            Text     = "Traer todas",
-            Location = new Point(0, 30),
-            Size     = new Size(126, 24)
-        };
+        var btnBringAllForward = new Button { Text = "Traer todas", Size = new Size(90, 24) };
         btnBringAllForward.Click += (s, e) =>
             CrossProcessWindowHelper.BringAllToFront("Live Charts — ");
 
         // Shows/hides the white Bollinger-band edge markers on this panel — checked by default
         // (matches the always-on behavior before this toggle existed).
-        var chkBollingerEdges = new CheckBox { Text = "BB edges", Location = new Point(132, 34), AutoSize = true, Checked = true };
+        var chkBollingerEdges = new CheckBox { Text = "BB edges", AutoSize = true, Checked = true, Margin = new Padding(3, 4, 3, 3) };
         chkBollingerEdges.CheckedChanged += async (s, e) =>
         {
             if (rthPanel == null) return;
             await rthPanel.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
         };
 
-        rthToolsHost.Controls.Add(btnRthTLine);
-        rthToolsHost.Controls.Add(HLineButton);
-        rthToolsHost.Controls.Add(btnRthClear);
-        rthToolsHost.Controls.Add(TextButton);
-        rthToolsHost.Controls.Add(ArrowButton);
-        rthToolsHost.Controls.Add(btnBringAllForward);
-        rthToolsHost.Controls.Add(chkBollingerEdges);
-        toolbar.Controls.Add(rthToolsHost, 1, 0);
+        // "SMA Watch" — arm/disarm a live-price-cross watch on SMA20/40/100/200 (Daily-timeframe,
+        // same as DailyChartForm's own buttons — this panel does the actual monitoring regardless
+        // of which window armed it) directly from the live chart, without needing the Daily popup
+        // window open, per explicit request. See ChartPanel.SetSmaCrossWatchAsync.
+        var armedNow = SmaDailyWatchStore.Load(_symbol).ToHashSet();
+        foreach (var period in new[] { 20, 40, 100, 200 })
+        {
+            var btn = new Button
+            {
+                Text = $"SMA{period}",
+                Size = new Size(60, 24),
+                BackColor = armedNow.Contains(period) ? Color.LightYellow : SystemColors.Control
+            };
+            _smaWatchButtons[period] = btn;
+            btn.Click += async (s, e) =>
+            {
+                if (hourlyPanel == null) return;
+                var armed = btn.BackColor != Color.LightYellow;
+                await hourlyPanel.SetSmaCrossWatchAsync(period, armed);
+                btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
+            };
+        }
+        // Deleting the 👁 marker (Delete key) on the chart itself disarms it too — keep this
+        // toolbar's own button color in sync when that happens.
+        if (hourlyPanel != null)
+        {
+            hourlyPanel.OnSmaWatchChangedEvent += (period, armed) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    if (_smaWatchButtons.TryGetValue(period, out var btn))
+                        btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
+                });
+            };
+        }
+
+        toolbar.Controls.Add(btnTLine);
+        toolbar.Controls.Add(btnRectGris);
+        toolbar.Controls.Add(btnFlechaVerde);
+        toolbar.Controls.Add(btnFlechaRoja);
+        toolbar.Controls.Add(btnDaily);
+        toolbar.Controls.Add(chkDayDividers);
+        toolbar.Controls.Add(AthCheckBox);
+        toolbar.Controls.Add(HLineButton);
+        toolbar.Controls.Add(TextButton);
+        toolbar.Controls.Add(ArrowButton);
+        toolbar.Controls.Add(btnBringAllForward);
+        toolbar.Controls.Add(chkBollingerEdges);
+        // Order in a FlowLayoutPanel follows Controls.Add call order — SMA Watch buttons added last
+        // so they land at the end of the row.
+        foreach (var period in new[] { 20, 40, 100, 200 })
+            toolbar.Controls.Add(_smaWatchButtons[period]);
+
+        // Wraps the toolbar row + its Text-tool note box together so their relative order (toolbar
+        // above, note box below) is unambiguous regardless of Controls.Add order — Dock=Fill always
+        // takes whatever space is left after the Dock=Top sibling reserves its own Height, so this
+        // works out the same either way. Sits directly above the charts (which are unaffected by
+        // any of this, per explicit request to leave them where they are).
+        var topStrip = new Panel { Dock = DockStyle.Top, Height = toolbar.Height + ChartTextTextBox.Height };
+        ChartTextTextBox.Dock = DockStyle.Fill;
+        topStrip.Controls.Add(ChartTextTextBox);
+        topStrip.Controls.Add(toolbar);
 
         // Small event log below the charts — logs Cross-SMA cruce/rebote detections (so the
         // Telegram-push feature can be sanity-checked without digging through Telegram itself).
@@ -1173,7 +1088,7 @@ public class TwoPanelChartsControl : UserControl
         HandleCreated += (s, e) => RefreshTradesGrid();
 
         Controls.Add(layout);
-        Controls.Add(toolbar);
+        Controls.Add(topStrip);
         Controls.Add(tradesGridHost);
         Controls.Add(_crossLog);
         Controls.Add(optionsGridHost);

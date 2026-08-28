@@ -2289,9 +2289,13 @@ public partial class Form1 : Form
     private void SetupChartsTab()
     {
         var toolbarStrip = new Panel { Dock = DockStyle.Top, Height = 40 };
+        // Docked-Right host panel (not a fixed Location on the strip itself) so the button stays
+        // pinned to the far right edge regardless of the tab's width, per explicit request.
+        var btnHost = new Panel { Dock = DockStyle.Right, Width = 116 };
         var btn = new Button { Text = "Connect", Location = new Point(8, 6), Size = new Size(100, 28) };
         btn.Click += (s, e) => _ = ConnectChartsTabAsync();
-        toolbarStrip.Controls.Add(btn);
+        btnHost.Controls.Add(btn);
+        toolbarStrip.Controls.Add(btnHost);
         _btnChartsConnect = btn;
 
         var host = new Panel { Dock = DockStyle.Fill };
