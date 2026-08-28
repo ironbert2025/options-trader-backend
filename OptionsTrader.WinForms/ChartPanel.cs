@@ -37,6 +37,13 @@ public class ChartPanel : Panel
     // day (the WebView/ChartPanel itself gets fully disposed and recreated on each open) — see
     // EvaluatePisoTechoOnce, called from LoadHistoryAsync's Hourly15 branch.
     private static bool s_pisoTechoAnalyzed;
+    // The ET calendar date s_pisoTechoAnalyzed/s_pisoTechoResult* were last computed for — without
+    // this, "only the first time this process's lifetime" meant a process left running across a
+    // day boundary (this app isn't necessarily restarted daily) kept showing a PRIOR day's frozen
+    // Piso/Techo determination forever, never re-evaluating against the new day's actual premarket
+    // state — confirmed live, AAPL: SMA200 still marked "Techo" from a previous session even though
+    // today's premarket price had already opened above it. See EvaluatePisoTechoOnce.
+    private static DateOnly? s_pisoTechoAnalyzedDate;
     // One independent result PER SMA (not per pair) — within the (20,40) pair, 20 and 40 can each
     // independently say "Piso", "Techo", or null. This matters when price opens BETWEEN the two:
     // e.g. bearish alignment (20 < 40) with 20 < price < 40 means 40 still hasn't been broken
@@ -1250,12 +1257,18 @@ public class ChartPanel : Panel
     // needed from here.
     private async Task EvaluatePisoTechoOnce()
     {
-        // Compute only the very first time (this app instance, this process's lifetime); every
-        // later call (chart closed and reopened the same day) just redraws whatever was already
-        // decided, without re-analyzing.
-        if (!s_pisoTechoAnalyzed)
+        // Compute once per ET calendar day (not just once per process lifetime — see
+        // s_pisoTechoAnalyzedDate's own comment); every later call for the SAME day (chart closed
+        // and reopened) just redraws whatever was already decided, without re-analyzing.
+        var todayEastern = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        if (!s_pisoTechoAnalyzed || s_pisoTechoAnalyzedDate != todayEastern)
         {
             s_pisoTechoAnalyzed = true;
+            s_pisoTechoAnalyzedDate = todayEastern;
+            // New day — also let today's actual RTH open re-validate from scratch (see
+            // ValidatePisoTechoAgainstOpen's own once-per-day guard) instead of staying permanently
+            // skipped because some PRIOR day's open already flipped it.
+            s_pisoTechoOpenValidated = false;
 
             var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
             if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0)) // only meaningful pre-market
