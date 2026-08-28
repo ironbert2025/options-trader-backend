@@ -244,6 +244,14 @@ public partial class Form1 : Form
             _liveFeedReadyTask = null;
             LogLine($"{DateTime.Now:HH:mm:ss} [Hub] No se pudo inicializar streaming al arrancar: {ex.Message}", Color.OrangeRed);
         }
+
+        // Start the 30-min token keep-alive right away, not just once "Start Polling" is clicked
+        // (StartTokenKeepAlive's OWN call site inside BeginPolling) — per explicit request: the
+        // token needs to stay fresh through premarket even if polling never gets started that
+        // early, since a manual "Fetch Quotes" or anything else querying options could still hit a
+        // stale one in the meantime. Safe to call again later from BeginPolling too — it's a no-op
+        // if the timer is already running (see its own guard).
+        if (IsPrimaryTickerInstance()) StartTokenKeepAlive();
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
