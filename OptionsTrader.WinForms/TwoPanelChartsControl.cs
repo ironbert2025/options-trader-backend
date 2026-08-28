@@ -82,6 +82,21 @@ public class TwoPanelChartsControl : UserControl
     public ChartPanel? HourlyPanel => _hourlyPanel;
     public ChartPanel? RthPanel => _rthPanel;
 
+    // So Form1 can check this control is actually showing the trade's own symbol before feeding
+    // it a strike/entry-spot marker — see MarkEntrySpotOnRthChartAsync below.
+    public string Symbol => _symbol;
+
+    // White entry-spot line above the candle when a trade opens/closes — panel 2 (15m RTH) only,
+    // per explicit request that the Charts tab's own panel 2 show it too (previously this only
+    // ever reached the popup Live Chart window's rthPanel, via MultiChartForm.
+    // MarkEntrySpotOnOvernightChartAsync — the Charts tab has no equivalent since it's a whole
+    // separate MultiChartForm-less control Form1 never fed this into). Same underlying primitive/
+    // persistence (OpenTradesStore) as the popup, just reached through this control directly.
+    public async Task MarkEntrySpotOnRthChartAsync(decimal price)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price);
+    }
+
     // Small event log fed by panel 1/2 events — MultiChartForm's own panel-3/combined-screenshot
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.

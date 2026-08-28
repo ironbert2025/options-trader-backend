@@ -2073,6 +2073,12 @@ public partial class Form1 : Form
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
+        // Same white entry-spot line on the Charts tab's own panel 2 (15m RTH) — per explicit
+        // request; this tab is a separate TwoPanelChartsControl Form1 never fed a live trade-open
+        // marker into before (only the popup Live Chart window got one, above).
+        if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
+
         _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
 
         OnTradesUpdatedEvent?.Invoke(symbol);
@@ -3010,6 +3016,11 @@ public partial class Form1 : Form
             await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
+
+        // Same white spot-price line on the Charts tab's own panel 2 (15m RTH), per explicit
+        // request — see the matching call in TriggerQuoteStrikeClick's entry-open flow.
+        if (_lastSpotPrice > 0 && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
 
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
         // and the Telegram push below, instead of each capturing its own copy.
