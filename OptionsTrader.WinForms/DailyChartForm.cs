@@ -215,6 +215,11 @@ public class DailyChartForm : Form
         var fifteenCandles = CandleAggregation.AggregateToInterval(filtered, 15, rthOnly: true);
         await InitChartTabAsync(_fifteenWebView, fifteenCandles, 8, showSmas: false);
         await LoadAndWireTLinesAsync(_fifteenWebView, "Daily15Min");
+
+        // Blue "current price" line, per explicit request — same session-open anchor as the Hora
+        // tab's own line (ChartPanel.GetTodaySessionOpenFakeEpoch convention), since this tab also
+        // shows real (15-minute) intraday bars, not one bar per day. Fed by UpdateLivePrice below.
+        await _fifteenWebView.CoreWebView2!.ExecuteScriptAsync($"startPreMarketLine({GetTodaySessionOpenFakeEpoch()});");
     }
 
     // "T-Line" tool persistence (TLineStore) for one of the Hora/15 Min tabs — replay whatever was
@@ -424,6 +429,8 @@ public class DailyChartForm : Form
             await _webView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
         if (_hourlyWebView.CoreWebView2 != null)
             await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
+        if (_fifteenWebView.CoreWebView2 != null)
+            await _fifteenWebView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
     }
 
     // Today's 9:30 AM ET (RTH session open), same "ET digits disguised as UTC" fake epoch every
