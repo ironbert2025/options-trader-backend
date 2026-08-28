@@ -213,7 +213,7 @@ public class DailyChartForm : Form
         var history = await _historyClient.GetHistoricalCandlesAsync(_symbol, 10);
         var filtered = CandleAggregation.FilterSession(history, rthOnly: true);
         var fifteenCandles = CandleAggregation.AggregateToInterval(filtered, 15, rthOnly: true);
-        await InitChartTabAsync(_fifteenWebView, fifteenCandles, 8, showSmas: false);
+        await InitChartTabAsync(_fifteenWebView, fifteenCandles, 8, showSmas: false, bollingerMiddleSolid: true);
         await LoadAndWireTLinesAsync(_fifteenWebView, "Daily15Min");
 
         // Blue "current price" line, per explicit request — same session-open anchor as the Hora
@@ -342,7 +342,7 @@ public class DailyChartForm : Form
     // both), load the given candle history. visibleDays is a day COUNT for Hora/15 Min (matches the
     // live panels' own convention: configureVisibleDays groups by calendar day regardless of candle
     // interval) but simply equals the bar count for Daily, where each bar IS one day.
-    private static async Task InitChartTabAsync(WebView2 webView, List<CandleData> candles, int visibleDays, bool showSmas = true)
+    private static async Task InitChartTabAsync(WebView2 webView, List<CandleData> candles, int visibleDays, bool showSmas = true, bool bollingerMiddleSolid = false)
     {
         await webView.EnsureCoreWebView2Async();
 
@@ -360,7 +360,10 @@ public class DailyChartForm : Form
         await navDone.Task;
 
         if (showSmas) await webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
-        await webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+        // "15 Min" solid — same "PM" (Punto Medio / SMA20) convention the live 15m RTH panel uses
+        // (ChartPanel: "Middle band (SMA20) drawn solid here, vs dashed on the 1h panel"), per
+        // explicit request; Daily/Hora keep it dashed (their default SMA20 line already covers it).
+        await webView.CoreWebView2.ExecuteScriptAsync($"configureBollinger(20, 2, {(bollingerMiddleSolid ? "true" : "false")});");
         await webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
 
         var json = ChartPanel.ToChartJsonPublic(candles);
