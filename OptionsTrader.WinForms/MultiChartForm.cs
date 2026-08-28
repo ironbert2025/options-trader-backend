@@ -739,13 +739,27 @@ public class MultiChartForm : Form
                 if (IsDisposed) return;
                 BeginInvoke(async () =>
                 {
-                    using var combined = await CaptureCombinedChartImageAsync();
-                    if (combined == null) return;
-
-                    var folder = @"C:\OptionsTraderPush";
-                    Directory.CreateDirectory(folder);
-                    var path = Path.Combine(folder, $"{_symbol}_PMCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
-                    combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                    // The screenshot is a nice-to-have, not the event itself — a failed/timed-out
+                    // capture (e.g. a minimized window, see ChartPanel.CaptureImageAsync's timeout)
+                    // used to silently drop the WHOLE event here, with zero trace anywhere that a
+                    // PM cross even happened. Always log the text; only skip the image if capture
+                    // failed, same "never silently swallow" fix applied elsewhere this session.
+                    string? path = null;
+                    try
+                    {
+                        using var combined = await CaptureCombinedChartImageAsync();
+                        if (combined != null)
+                        {
+                            var folder = @"C:\OptionsTraderPush";
+                            Directory.CreateDirectory(folder);
+                            path = Path.Combine(folder, $"{_symbol}_PMCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                        }
+                    }
+                    catch
+                    {
+                        path = null; // best-effort — the event still gets logged below without an image
+                    }
 
                     EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
                 });

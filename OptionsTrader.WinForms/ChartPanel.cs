@@ -2047,6 +2047,12 @@ public class ChartPanel : Panel
     // from a previous day can never be compared against today's price.
     private bool? _pmCrossLastSide; // true = spot above PM, false = spot below PM
 
+    // Only the FIRST cross of the RTH session logs — per explicit request, confirmed live (AAPL):
+    // price hovering right at the PM value whipsaws _pmCrossLastSide back and forth on ticks that
+    // barely move (e.g. 313.00/312.99/313.00), logging the "same" cross dozens of times in one
+    // session. Reset alongside _pmCrossLastSide at the day boundary above.
+    private bool _pmCrossFiredToday;
+
     // Live (tick-by-tick) counterpart — fires the EXACT moment the spot price crosses through the
     // current PM(15m) value, not just once a candle closes above/below it (the original version,
     // replaced per explicit request: "necesito que sea en el momento en que lo cruza... no que la
@@ -2055,6 +2061,8 @@ public class ChartPanel : Panel
     // the tracked side silently, no event.
     private void EvaluatePmCross(decimal livePrice)
     {
+        if (_pmCrossFiredToday) return;
+
         var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
         var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
         if (smaNow == null) { _pmCrossLastSide = null; return; } // no PM yet — nothing to track against
@@ -2070,6 +2078,7 @@ public class ChartPanel : Panel
         var crossedUpward = side; // side==true means spot is now ABOVE PM, i.e. just crossed upward
         if (crossedUpward != pmBullish) return; // crossed the "wrong" way relative to PM's current tilt
 
+        _pmCrossFiredToday = true;
         var direction = pmBullish ? "alza" : "baja";
         var caption = $"Cruce de Spot con PM ({direction}) — Spot {livePrice:F2} = PM {smaNow.Value:F2}";
         BeginInvoke(() => OnPmCrossEvent?.Invoke(caption));
@@ -2841,6 +2850,7 @@ public class ChartPanel : Panel
                     _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
                     var freshBucket = _liveBucket;
                     _pmCrossLastSide = null; // new session — don't compare today's first tick against yesterday's last known side
+                    _pmCrossFiredToday = false;
                     FinalizePreMarketLineAtOpen(candle.Open, eastern);
                     BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                     return;
