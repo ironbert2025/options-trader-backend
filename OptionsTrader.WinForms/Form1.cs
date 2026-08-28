@@ -2228,13 +2228,13 @@ public partial class Form1 : Form
     // "Charts" tab — panel 1 (1h) + panel 2 (15m RTH) embedded directly in the main form,
     // instead of a separate Live Chart popup window, per explicit request ("estamos pasando la
     // funcionalidad de live chart para main form... por ahora si copias algo de alla para aca, no
-    // importa, luego eliminaremos la logica de alla"). Reuses MultiChartForm UNCHANGED (embedded
-    // as a child control, TopLevel=false) instead of re-implementing its panel 1/2 wiring here —
-    // panel 3 (RTH+Overnight) and the options/trades grids that come along with it are hidden
-    // post-construction rather than removed from MultiChartForm itself, so that class keeps
-    // working exactly as before for its own popup window callers.
+    // importa, luego eliminaremos la logica de alla"). Constructs TwoPanelChartsControl directly —
+    // a real UserControl, not a nested Form — so keyboard input (e.g. Delete on a selected T-Line)
+    // reaches its WebView2 controls correctly, which the previous "embed a whole MultiChartForm
+    // with TopLevel=false" hack could not do. No panel 3/side grids ever exist here at all, so
+    // there's nothing to hide post-construction anymore.
     // ==================================================================================
-    private MultiChartForm? _chartsTabForm;
+    private TwoPanelChartsControl? _chartsTabForm;
     private Button? _btnChartsConnect;
     private Panel? _chartsHost;
 
@@ -2310,15 +2310,12 @@ public partial class Form1 : Form
         try
         {
             var symbol = _selectedTicker.Symbol;
-            var chartsForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!, this);
-            HideThirdPanelAndSideGrids(chartsForm);
-
-            chartsForm.TopLevel = false;
-            chartsForm.FormBorderStyle = FormBorderStyle.None;
-            chartsForm.Dock = DockStyle.Fill;
-            _chartsTabForm = chartsForm;
-            _chartsHost!.Controls.Add(chartsForm);
-            chartsForm.Show();
+            var chartsControl = new TwoPanelChartsControl(symbol, _historyClient!, _liveFeed!, this)
+            {
+                Dock = DockStyle.Fill
+            };
+            _chartsTabForm = chartsControl;
+            _chartsHost!.Controls.Add(chartsControl);
 
             _btnChartsConnect!.Text = "Disconnect";
         }
@@ -2327,26 +2324,6 @@ public partial class Form1 : Form
             MessageBox.Show($"Could not open the embedded charts:\n\n{ex}",
                 "Charts Tab Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-    }
-
-    // Collapses panel 3's toolbar/chart column (index 2 of the two 3-column TableLayoutPanels) and
-    // hides the right-side options grid + bottom trades grid — everything MultiChartForm builds
-    // around panel 3, none of which this embedded 2-panel view needs. Purely visual: panel 3's
-    // ChartPanel instance still gets created and wired inside MultiChartForm (untouched), it's
-    // just never shown here. The live options grid (Dock=Right — mirrored from Form1's own
-    // Quotes tab, same data/click-to-trade wiring) stays visible, per explicit request; only the
-    // bottom trades-mirror grid (Dock=Bottom) is hidden along with panel 3.
-    private static void HideThirdPanelAndSideGrids(MultiChartForm form)
-    {
-        foreach (var layoutPanel in form.Controls.OfType<TableLayoutPanel>().Where(t => t.ColumnCount == 3))
-        {
-            layoutPanel.ColumnStyles[2].SizeType = SizeType.Absolute;
-            layoutPanel.ColumnStyles[2].Width = 0;
-            var control = layoutPanel.GetControlFromPosition(2, 0);
-            if (control != null) control.Visible = false;
-        }
-        foreach (var panel in form.Controls.OfType<Panel>().Where(p => p.Dock == DockStyle.Bottom))
-            panel.Visible = false;
     }
 
     // Opens the single "1h Charts — SPY/QQQ/DIA/IWM" window (no per-ticker selection needed —
