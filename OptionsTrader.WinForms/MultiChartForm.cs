@@ -413,44 +413,11 @@ public class MultiChartForm : Form
             };
         }
 
-        // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA
-        // period), arm the 15m RTH panel's Bollinger-widening watch in the direction the
-        // resolution implies price is now headed. Cruce en Techo (breaks up through resistance)
-        // and Rebote en Piso (bounces up off support) are both bullish/CALL (upper band). Cruce
-        // en Piso (breaks down through support) and Rebote en Techo (rejected down off
-        // resistance) are both bearish/PUT (lower band) — see
-        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening. caption already carries
-        // the "evaluando Abriendo la Volatilidad (Alza/Baja)" suffix (ChartPanel.
-        // AppendVolatilityArmSuffix) — baked in at the source instead of appended here, so it can't
-        // be silently dropped for any resolution path (close-based, live gap-cross, etc).
-        if (hourlyPanel != null && rthPanel != null)
-        {
-            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
-            {
-                var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
-                rthPanel.ArmVolatilityOpeningWatch(bullish); // plain state/event, no CoreWebView2 — safe off the UI thread
-
-                if (IsDisposed) return;
-                // BeginInvoke — same threading fix as OnTLineSignalEvent above.
-                BeginInvoke(() =>
-                {
-                    AppendCrossLog($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}");
-                    _ = SendPisoTechoTelegramPushAsync(caption);
-                });
-            };
-        }
-        else if (hourlyPanel != null)
-        {
-            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() =>
-                {
-                    AppendCrossLog($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}");
-                    _ = SendPisoTechoTelegramPushAsync(caption);
-                });
-            };
-        }
+        // "Abriendo la Volatilidad" (arming panel 2's watch) + crossLog/Telegram for the 1h panel's
+        // own Piso/Techo Cruce/Rebote — now wired inside TwoPanelChartsControl itself (see its
+        // constructor) so it also works when the Charts tab runs standalone, with no MultiChartForm
+        // popup at all. Nothing left for this window to add here: panel 3 (overnightPanel) has no
+        // equivalent watch of its own for this specific event.
 
         // "Abriendo Bollinger con Volatilidad" — logs the exact moment "BB" starts showing on
         // EITHER panel (1h or 15m RTH), already persisted to EventLogStore by ChartPanel itself
@@ -483,11 +450,11 @@ public class MultiChartForm : Form
             };
         }
 
-        // Piso/Techo reference line: mirrors each armed SMA's pre-market level onto BOTH the 15m
-        // RTH and RTH+Overnight panels (dashed, same color as that SMA on the 1h panel) — visual
-        // reference for "how far price could go and bounce" without needing the 1h panel open.
-        // Removed automatically if the market-open gap later invalidates that SMA.
-        if (hourlyPanel != null)
+        // Piso/Techo reference line + Daily PM: mirrors onto panel 3 (RTH+Overnight) only —
+        // TwoPanelChartsControl's own constructor already mirrors the same events onto panel 2
+        // (rthPanel), so this window only ever needs to add panel 3's edge on top, same split
+        // pattern as the Stk-line/H-Line/ATH mirroring mesh below.
+        if (hourlyPanel != null && overnightPanel != null)
         {
             hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
             {
@@ -499,41 +466,38 @@ public class MultiChartForm : Form
                 {
                     var sessionStart = GetTodaySessionStartFakeEpoch();
                     var sessionEnd   = GetTodaySessionEndFakeEpoch();
-                    if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
-                    if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
+                    _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
                 });
             };
 
             // Daily "PM" (SMA20) solid yellow reference line — computed on the 1h panel only
-            // (EvaluateDailyPmAndBb), relayed to all 3 so it shows everywhere, same anchor
-            // (yesterday's last close, extending through today) the red dashed prev-day-close line
-            // uses, per explicit request ("igual que la línea roja... hasta el final").
+            // (EvaluateDailyPmAndBb), relayed to panel 3 here (panel 1/2 already handled inside
+            // TwoPanelChartsControl), same anchor (yesterday's last close, extending through today)
+            // the red dashed prev-day-close line uses, per explicit request ("igual que la línea
+            // roja... hasta el final").
             hourlyPanel.OnDailyPmValueEvent += price =>
             {
                 if (IsDisposed) return;
                 BeginInvoke(() =>
                 {
                     var sessionStart = GetTodaySessionStartFakeEpoch();
-                    _ = hourlyPanel.MarkDailyPmLineAsync(price, sessionStart);
-                    if (rthPanel != null) _ = rthPanel.MarkDailyPmLineAsync(price, sessionStart);
-                    if (overnightPanel != null) _ = overnightPanel.MarkDailyPmLineAsync(price, sessionStart);
+                    _ = overnightPanel.MarkDailyPmLineAsync(price, sessionStart);
                 });
             };
 
             hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() =>
-                {
-                    if (rthPanel != null) _ = rthPanel.RemovePisoTechoRefLineAsync(period);
-                    if (overnightPanel != null) _ = overnightPanel.RemovePisoTechoRefLineAsync(period);
-                });
+                BeginInvoke(() => _ = overnightPanel.RemovePisoTechoRefLineAsync(period));
             };
 
             // Race fix: hourlyPanel's HandleCreated (added to the layout earlier in this
             // constructor) can fire EvaluatePisoTechoOnce — and this very event — before the
             // subscription above ever runs, especially when its history loads fast (e.g. plenty of
             // HourlyCandleStore data already cached locally). Catch up immediately in that case.
+            // TwoPanelChartsControl's own constructor already did this once for panel 1/2's sake;
+            // calling it again here is harmless (idempotent re-draws) and ensures panel 3 catches
+            // up too, even though its subscription above runs strictly after that first replay.
             hourlyPanel.ReplayPisoTechoLevels();
         }
 
@@ -819,44 +783,6 @@ public class MultiChartForm : Form
         {
             // Best-effort, same as every other snapshot/push in this file — never let this affect
             // the analysis that just fired.
-        }
-    }
-
-    private async Task SendPisoTechoTelegramPushAsync(string caption)
-    {
-        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
-        try
-        {
-            var (botToken, chatId) = TelegramSettingsStore.Load();
-            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
-            {
-                LogTelegramPushFailure("Bot Token o Chat ID vacío");
-                return;
-            }
-
-            using var combined = await CaptureCombinedChartImageAsync();
-            if (combined == null)
-            {
-                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
-                return;
-            }
-
-            var folder = @"C:\OptionsTraderPush";
-            Directory.CreateDirectory(folder);
-            var path = Path.Combine(folder, $"{_symbol}_PisoTecho_{DateTime.Now:yyyyMMdd_HHmmss}.png");
-            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-
-            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
-            if (ok && messageId.HasValue)
-                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "PisoTechoCross", DateTime.Now));
-            if (ok)
-                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
-            else
-                LogTelegramPushFailure(detail);
-        }
-        catch (Exception ex)
-        {
-            LogTelegramPushFailure(ex.Message);
         }
     }
 

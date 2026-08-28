@@ -228,6 +228,65 @@ public class TwoPanelChartsControl : UserControl
             };
         }
 
+        // Piso/Techo Cruce/Rebote (panel 1) — arms panel 2's "Abriendo la Volatilidad" watch,
+        // writes to this control's own crossLog, pushes the combined snapshot to Telegram, and
+        // mirrors the reference line/daily PM onto panel 2. Lives here (not just in MultiChartForm)
+        // for the same standalone reason as the mirroring mesh above — confirmed live: opening the
+        // Charts tab without a popup Live Chart window meant these events had zero subscribers, so
+        // panel 2's volatility watch never armed and nothing reached crossLog/Telegram there.
+        // MultiChartForm still subscribes to the SAME hourlyPanel events (via HourlyPanel) to also
+        // mirror onto its own panel 3 (overnightPanel) — this control's handlers below only ever
+        // touch panel 1/2, so no double crossLog/Telegram firing when MultiChartForm hosts this.
+        if (hourlyPanel != null && rthPanel != null)
+        {
+            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
+            {
+                var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
+                rthPanel.ArmVolatilityOpeningWatch(bullish); // plain state/event, no CoreWebView2 — safe off the UI thread
+
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    AppendLog($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}");
+                    _ = SendPisoTechoTelegramPushAsync(caption);
+                });
+            };
+
+            hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    var sessionStart = GetTodaySessionStartFakeEpoch();
+                    var sessionEnd   = GetTodaySessionEndFakeEpoch();
+                    _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
+                });
+            };
+
+            hourlyPanel.OnDailyPmValueEvent += price =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    var sessionStart = GetTodaySessionStartFakeEpoch();
+                    _ = hourlyPanel.MarkDailyPmLineAsync(price, sessionStart);
+                    _ = rthPanel.MarkDailyPmLineAsync(price, sessionStart);
+                });
+            };
+
+            hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => _ = rthPanel.RemovePisoTechoRefLineAsync(period));
+            };
+
+            // Race fix: hourlyPanel's HandleCreated can fire EvaluatePisoTechoOnce — and this very
+            // event — before the subscriptions above ever run, especially when its history loads
+            // fast (e.g. plenty of HourlyCandleStore data already cached locally). Catch up
+            // immediately in that case.
+            hourlyPanel.ReplayPisoTechoLevels();
+        }
+
         // T-Line / H-Line drawing tools for the 1h panel (column 0). T-Line and H-Line share the
         // top row (side by side); Clear/Rect sit below, arrows + Daily on the third row.
         var crossHost = new Panel { Dock = DockStyle.Fill };
@@ -1112,6 +1171,87 @@ public class TwoPanelChartsControl : UserControl
     {
         _hourlyPanel?.FeedPollingPrice(price, utcTime);
         _rthPanel?.FeedPollingPrice(price, utcTime);
+    }
+
+    // Yesterday's last hourly candle (its close) — the Piso/Techo reference line's real anchor, same
+    // as MultiChartForm's own copy of this helper (kept separate rather than shared, since this
+    // control doesn't otherwise depend on MultiChartForm). Falls back to today 4:00 AM ET if no
+    // prior-day history is on disk yet (shouldn't normally happen).
+    private long GetTodaySessionStartFakeEpoch()
+    {
+        var hourly = HourlyCandleStore.Load(_symbol);
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).Date;
+        var prior = hourly
+            .Select(c => (Candle: c, Date: TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone).Date))
+            .Where(x => x.Date < todayEastern)
+            .ToList();
+
+        if (prior.Count > 0)
+        {
+            var prevDate = prior.Max(x => x.Date);
+            var lastBar = prior.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
+            return ChartPanel.FakeUtcEpochSeconds(lastBar.Time);
+        }
+
+        var fallbackEastern = todayEastern.AddHours(4);
+        var fallbackUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(fallbackEastern, DateTimeKind.Unspecified), EasternZone);
+        return ChartPanel.FakeUtcEpochSeconds(fallbackUtc);
+    }
+
+    // RTH session close (16:00 ET, today) — so the Piso/Techo reference line stops there instead of
+    // running off to the chart's own right edge.
+    private static long GetTodaySessionEndFakeEpoch()
+    {
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).Date;
+        var sessionEndEastern = todayEastern.AddHours(16);
+        var sessionEndUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionEndEastern, DateTimeKind.Unspecified), EasternZone);
+        return ChartPanel.FakeUtcEpochSeconds(sessionEndUtc);
+    }
+
+    // Pushes the combined (panel 1 + 2) snapshot for a Piso/Techo Cruce/Rebote resolution — same
+    // best-effort pattern as every other Telegram push in this app (MultiChartForm's own copies).
+    private async Task SendPisoTechoTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_PisoTecho_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "PisoTechoCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    private void LogTelegramPushFailure(string detail)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() => AppendLog($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
     }
 
     private static readonly string[] PanelLabels = { "1 Hour", "15Min RTH" };
