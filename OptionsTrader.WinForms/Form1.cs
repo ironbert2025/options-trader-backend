@@ -636,6 +636,36 @@ public partial class Form1 : Form
         return entry?.AwsEnabled ?? true;
     }
 
+    // Per-ticker polling cadence (seconds), default 6 — per explicit request, so certain symbols
+    // can be polled more/less often than others instead of the one-size-fits-all fixed interval.
+    // Same persistence pattern as AWS/Telegram above (tickers.json).
+    internal static void SetPollingIntervalFor(string symbol, int seconds)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { PollingIntervalSeconds = seconds };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static int GetPollingIntervalFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.PollingIntervalSeconds ?? 6;
+    }
+
+    // Applies a just-changed polling interval to the LIVE timer immediately, if it's currently
+    // running for this same symbol — no need to disconnect/reconnect. Skipped while the 11 AM
+    // throttle is active (that fixed 60s override takes priority; the new value still persists and
+    // takes effect on the next natural StartPollingTimer, e.g. tomorrow's session).
+    internal void ApplyLivePollingInterval(string symbol, int seconds)
+    {
+        if (_pollingTimer == null || _selectedTicker?.Symbol != symbol || _throttledAfter11) return;
+        _pollingTimer.Interval = Math.Max(1, seconds) * 1000;
+    }
+
     private void TickerButton_Click(object? sender, EventArgs e)
     {
         if (sender is not Button clicked) return;
@@ -1123,10 +1153,13 @@ public partial class Form1 : Form
 
     private void StartPollingTimer()
     {
-        // Fetch immediately then every 6 seconds
+        // Fetch immediately then every N seconds — per-symbol, configurable (default 6), see
+        // GetPollingIntervalFor/SetPollingIntervalFor. The 11 AM throttle below still always drops
+        // to a fixed 60s regardless of this base interval.
         _ = FetchAndUpdateQuotesAsync();
 
-        _pollingTimer = new System.Windows.Forms.Timer { Interval = 6000 };
+        var intervalSeconds = _selectedTicker != null ? GetPollingIntervalFor(_selectedTicker.Symbol) : 6;
+        _pollingTimer = new System.Windows.Forms.Timer { Interval = Math.Max(1, intervalSeconds) * 1000 };
         _pollingTimer.Tick += async (s, e) =>
         {
             if (!MarketHours.IsOpen)

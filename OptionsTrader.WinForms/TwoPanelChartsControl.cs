@@ -632,6 +632,29 @@ public class TwoPanelChartsControl : UserControl
         };
         chkTelegram.CheckedChanged += (s, e) => Form1.SetTelegramEnabledFor(_symbol, chkTelegram.Checked);
 
+        // Polling interval (seconds) — per-symbol, default 6, per explicit request to give some
+        // tickers more/less granularity than others. NumericUpDown is a textbox with built-in +/-
+        // buttons, matching what was asked for. Persists immediately on change and, if this symbol
+        // is the one Form1 is actively polling right now, updates that live timer's Interval too
+        // (no reconnect needed) — see Form1.SetPollingIntervalFor/ApplyLivePollingInterval. Also
+        // drives the Charts tab's own update cadence, since it just mirrors Form1's own poll cycle
+        // (OnQuotesUpdatedEvent), not a separate timer.
+        var lblPollingInterval = new Label { Text = "Poll(s)", AutoSize = true, Margin = new Padding(12, 6, 2, 3) };
+        var numPollingInterval = new NumericUpDown
+        {
+            Minimum = 1,
+            Maximum = 60,
+            Value   = Math.Clamp(Form1.GetPollingIntervalFor(_symbol), 1, 60),
+            Width   = 50,
+            Margin  = new Padding(2, 3, 3, 3)
+        };
+        numPollingInterval.ValueChanged += (s, e) =>
+        {
+            var seconds = (int)numPollingInterval.Value;
+            Form1.SetPollingIntervalFor(_symbol, seconds);
+            _form1.ApplyLivePollingInterval(_symbol, seconds);
+        };
+
         // Panel 1 group, per explicit request/order: Rect, ↑Verde, ↓Roja, Daily, Día, ATH.
         toolbarLeft.Controls.Add(btnRectGris);
         toolbarLeft.Controls.Add(btnFlechaVerde);
@@ -648,6 +671,8 @@ public class TwoPanelChartsControl : UserControl
         toolbarRight.Controls.Add(chkBollingerEdges);
         toolbarRightRow2.Controls.Add(chkAws);
         toolbarRightRow2.Controls.Add(chkTelegram);
+        toolbarRightRow2.Controls.Add(lblPollingInterval);
+        toolbarRightRow2.Controls.Add(numPollingInterval);
 
         // Wraps the toolbar row + its Text-tool note box together so their relative order (toolbar
         // ChartTextTextBox does NOT live here — it already has its own home further down
