@@ -622,8 +622,7 @@ public class TwoPanelChartsControl : UserControl
         // Temporary/diagnostic for now.
         _crossLog = new TextBox
         {
-            Dock       = DockStyle.Bottom,
-            Height     = 90,
+            Dock       = DockStyle.Fill,
             Multiline  = true,
             ReadOnly   = true,
             ScrollBars = ScrollBars.Vertical,
@@ -869,7 +868,9 @@ public class TwoPanelChartsControl : UserControl
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         };
 
-        var optionsGridHost = new Panel { Dock = DockStyle.Right, Width = 345, Padding = new Padding(6, 0, 6, 6) };
+        // No top/bottom padding, per explicit request — reach all the way up to the tab strip and
+        // down to the trades grid, with no gap on either side.
+        var optionsGridHost = new Panel { Dock = DockStyle.Right, Width = 345, Padding = new Padding(6, 0, 6, 0) };
 
         // ExpDate above the grid — same resolved value (handles "0DTE"/weekday shorthand etc.) as
         // everywhere else this ticker's expiration is shown.
@@ -892,8 +893,10 @@ public class TwoPanelChartsControl : UserControl
             Font      = new Font("Segoe UI", 9F, FontStyle.Regular),
             ForeColor = Color.Gray
         };
+        // Grid fills the rest of this column — the Text-tool note box (ChartTextTextBox) moved out
+        // of here entirely, per explicit request: it now sits next to the crossLog, below the
+        // trades grid (see bottomSection further down), not stacked inside the options column.
         optionsGridHost.Controls.Add(tabOptions);
-        optionsGridHost.Controls.Add(ChartTextTextBox);
         optionsGridHost.Controls.Add(lblExpDateNext);
         optionsGridHost.Controls.Add(lblExpDate);
 
@@ -982,11 +985,11 @@ public class TwoPanelChartsControl : UserControl
         _dgvTrades.Columns.AddRange(
             new DataGridViewTextBoxColumn { Name = "colTradeTimeLive",       HeaderText = "Time",        Width = 60, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradeTypeLive",       HeaderText = "Type",        Width = 45, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeStrikeLive",     HeaderText = "StrikePrice", Width = 65, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeBidLive",       HeaderText = "Bid",          Width = 45, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeAskLive",       HeaderText = "Ask",          Width = 45, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeContractsLive", HeaderText = "Contracts",    Width = 60, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeEntryPriceLive",HeaderText = "EntryPrice",   Width = 65, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeStrikeLive",     HeaderText = "Strike",       Width = 65, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeBidLive",       HeaderText = "Bid",          Width = 38, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeAskLive",       HeaderText = "Ask",          Width = 38, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeContractsLive", HeaderText = "Conts",        Width = 60, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeEntryPriceLive",HeaderText = "Entry",        Width = 65, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradeCBidLive",      HeaderText = "C_Bid",        Width = 50, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradeTBidLive",      HeaderText = "T_Bid",        Width = 50, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradePnLLive",       HeaderText = "PnL",          Width = 55, ReadOnly = true },
@@ -1016,7 +1019,7 @@ public class TwoPanelChartsControl : UserControl
             _form1.TriggerTradeCloseClick(_symbol, e.RowIndex);
         };
 
-        var tradesGridHost = new Panel { Dock = DockStyle.Bottom, Height = 90, Padding = new Padding(6, 0, 6, 6) };
+        var tradesGridHost = new Panel { Dock = DockStyle.Top, Height = 90, Padding = new Padding(6, 0, 6, 6) };
         tradesGridHost.Controls.Add(_dgvTrades);
 
         // Full rebuild every refresh (values + per-cell colors copied straight from Form1's own
@@ -1066,11 +1069,32 @@ public class TwoPanelChartsControl : UserControl
         Disposed += (s, e) => _form1.OnTradesUpdatedEvent -= OnForm1TradesUpdated;
         HandleCreated += (s, e) => RefreshTradesGrid();
 
+        // logRow: crossLog (Fill — keeps the SAME effective width it always had, since that used to
+        // just be "whatever's left after optionsGridHost's column", now made explicit) + the
+        // Text-tool note box sitting beside it, sized to match optionsGridHost's own width so it
+        // lands directly under that column — per explicit request ("deja el textbox al lado del
+        // log"). bottomSection stacks the trades grid above this row, as ONE single Bottom-docked
+        // unit so there's no ambiguity about width — it's simply full width, full stop.
+        var logRow = new Panel { Dock = DockStyle.Fill };
+        ChartTextTextBox.Dock = DockStyle.Right;
+        ChartTextTextBox.Width = optionsGridHost.Width;
+        logRow.Controls.Add(_crossLog);
+        logRow.Controls.Add(ChartTextTextBox);
+
+        var bottomSection = new Panel { Dock = DockStyle.Bottom, Height = tradesGridHost.Height + 90 };
+        bottomSection.Controls.Add(logRow);
+        bottomSection.Controls.Add(tradesGridHost);
+
+        // optionsGridHost (Dock=Right) added BEFORE bottomSection — WinForms docks same-generation
+        // siblings in reverse Controls.Add order (the later-added control claims its edge first), so
+        // bottomSection reserves a full-width strip across the BOTTOM first, and optionsGridHost's
+        // Right-docked column only fills whatever's left above that — extending the trades grid
+        // (and now the log/note row) under where the options panel used to just sit empty, per
+        // explicit request ("ver el grid hasta donde cubre la parte roja").
         Controls.Add(layout);
         Controls.Add(topStrip);
-        Controls.Add(tradesGridHost);
-        Controls.Add(_crossLog);
         Controls.Add(optionsGridHost);
+        Controls.Add(bottomSection);
     }
 
     // Kept so MultiChartForm's own OnTextPlacedEvent handler for panel 3 can also drive this
