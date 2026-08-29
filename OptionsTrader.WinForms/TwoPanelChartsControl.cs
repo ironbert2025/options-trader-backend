@@ -128,10 +128,6 @@ public class TwoPanelChartsControl : UserControl
     // (unchanged): removed on FormClosed so a closed window's WebView2 never gets touched again.
     private readonly List<DailyChartForm> _openDailyCharts = new();
 
-    // SMA20/40/100/200 "SMA Watch" toolbar buttons (panel 1) — a field (not a constructor-local)
-    // so AttachDailyMirroring can also keep them in sync when armed/disarmed from a DailyChartForm.
-    private readonly Dictionary<int, Button> _smaWatchButtons = new();
-
     // Shared H-Line/Text toolbar controls (panel 2's toolbar) — public so MultiChartForm can wire
     // an additional handler that also toggles panel 3, matching original combined behavior.
     public CheckBox AthCheckBox { get; }
@@ -158,19 +154,41 @@ public class TwoPanelChartsControl : UserControl
 
         Dock = DockStyle.Fill;
 
-        // Toolbar strip on top — single row spanning the full width above both chart panels
-        // (previously split into a 2-column layout, one column of controls per panel; consolidated
-        // into one row per explicit request, now that T-Line arms both panels at once and the two
-        // per-panel Clear buttons are gone — deletion is via the Delete key on a selected drawing).
-        var toolbar = new FlowLayoutPanel
+        // Toolbar strip on top — 2-column layout (one group of controls per panel, each a single
+        // compact row), matching the panels below so each group sits directly above its own chart.
+        // Per explicit request: Rect/↑Verde/↓Roja/Daily/Día/ATH above panel 1, H-Line/T-Line/Text/
+        // Arrow/BB edges above panel 2 (T-Line still arms BOTH panels when clicked — it just sits
+        // visually in the panel 2 group), "Traer todas" removed entirely.
+        var toolbar = new TableLayoutPanel
         {
             Dock        = DockStyle.Top,
             Height      = 32,
+            ColumnCount = 2,
+            RowCount    = 1,
+            Padding     = new Padding(0)
+        };
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+
+        var toolbarLeft = new FlowLayoutPanel
+        {
+            Dock          = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents  = false,
             AutoScroll    = false,
-            Padding     = new Padding(4, 1, 4, 0)
+            Padding       = new Padding(4, 1, 4, 0)
         };
+        var toolbarRight = new FlowLayoutPanel
+        {
+            Dock          = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents  = false,
+            AutoScroll    = false,
+            Padding       = new Padding(4, 1, 4, 0)
+        };
+        toolbar.Controls.Add(toolbarLeft, 0, 0);
+        toolbar.Controls.Add(toolbarRight, 1, 0);
 
         var layout = new TableLayoutPanel
         {
@@ -557,14 +575,6 @@ public class TwoPanelChartsControl : UserControl
             ArrowButton.BackColor = on ? Color.LightYellow : SystemColors.Control;
         };
 
-        // Brings every "Live Charts — <Symbol>" window to the front, across ALL running ticker
-        // instances (each is a separate OS process) — not just this one's own windows. Uses raw
-        // Win32 window enumeration (CrossProcessWindowHelper) since a normal BringToFront() can't
-        // reach windows owned by another process.
-        var btnBringAllForward = new Button { Text = "Traer todas", Size = new Size(90, 24) };
-        btnBringAllForward.Click += (s, e) =>
-            CrossProcessWindowHelper.BringAllToFront("Live Charts — ");
-
         // Shows/hides the white Bollinger-band edge markers on this panel — checked by default
         // (matches the always-on behavior before this toggle existed).
         var chkBollingerEdges = new CheckBox { Text = "BB edges", AutoSize = true, Checked = true, Margin = new Padding(3, 4, 3, 3) };
@@ -574,68 +584,37 @@ public class TwoPanelChartsControl : UserControl
             await rthPanel.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
         };
 
-        // "SMA Watch" — arm/disarm a live-price-cross watch on SMA20/40/100/200 (Daily-timeframe,
-        // same as DailyChartForm's own buttons — this panel does the actual monitoring regardless
-        // of which window armed it) directly from the live chart, without needing the Daily popup
-        // window open, per explicit request. See ChartPanel.SetSmaCrossWatchAsync.
-        var armedNow = SmaDailyWatchStore.Load(_symbol).ToHashSet();
-        foreach (var period in new[] { 20, 40, 100, 200 })
-        {
-            var btn = new Button
-            {
-                Text = $"SMA{period}",
-                Size = new Size(60, 24),
-                BackColor = armedNow.Contains(period) ? Color.LightYellow : SystemColors.Control
-            };
-            _smaWatchButtons[period] = btn;
-            btn.Click += async (s, e) =>
-            {
-                if (hourlyPanel == null) return;
-                var armed = btn.BackColor != Color.LightYellow;
-                await hourlyPanel.SetSmaCrossWatchAsync(period, armed);
-                btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
-            };
-        }
-        // Deleting the 👁 marker (Delete key) on the chart itself disarms it too — keep this
-        // toolbar's own button color in sync when that happens.
-        if (hourlyPanel != null)
-        {
-            hourlyPanel.OnSmaWatchChangedEvent += (period, armed) =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() =>
-                {
-                    if (_smaWatchButtons.TryGetValue(period, out var btn))
-                        btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
-                });
-            };
-        }
+        // "SMA Watch" buttons removed from this toolbar entirely, per explicit request — arming is
+        // Daily-chart-only now (SmaDailyWatchStore + DailyChartForm's own buttons). The SMA the
+        // watch evaluates is the DAILY-timeframe SMA (see ChartPanel.EvaluateSmaCrossWatches), which
+        // is a different value than this panel's own hourly SMA line — having a button/marker here
+        // implied it was watching the hourly SMA, which was misleading. Arming from Daily still
+        // relays into the live 1h panel's detection (AttachDailyMirroring below), unchanged.
 
-        toolbar.Controls.Add(btnTLine);
-        toolbar.Controls.Add(btnRectGris);
-        toolbar.Controls.Add(btnFlechaVerde);
-        toolbar.Controls.Add(btnFlechaRoja);
-        toolbar.Controls.Add(btnDaily);
-        toolbar.Controls.Add(chkDayDividers);
-        toolbar.Controls.Add(AthCheckBox);
-        toolbar.Controls.Add(HLineButton);
-        toolbar.Controls.Add(TextButton);
-        toolbar.Controls.Add(ArrowButton);
-        toolbar.Controls.Add(btnBringAllForward);
-        toolbar.Controls.Add(chkBollingerEdges);
-        // Order in a FlowLayoutPanel follows Controls.Add call order — SMA Watch buttons added last
-        // so they land at the end of the row.
-        foreach (var period in new[] { 20, 40, 100, 200 })
-            toolbar.Controls.Add(_smaWatchButtons[period]);
+        // Panel 1 group, per explicit request/order: Rect, ↑Verde, ↓Roja, Daily, Día, ATH.
+        toolbarLeft.Controls.Add(btnRectGris);
+        toolbarLeft.Controls.Add(btnFlechaVerde);
+        toolbarLeft.Controls.Add(btnFlechaRoja);
+        toolbarLeft.Controls.Add(btnDaily);
+        toolbarLeft.Controls.Add(chkDayDividers);
+        toolbarLeft.Controls.Add(AthCheckBox);
+
+        // Panel 2 group, per explicit request/order: H-Line, T-Line, Text, Arrow, BB edges.
+        toolbarRight.Controls.Add(HLineButton);
+        toolbarRight.Controls.Add(btnTLine);
+        toolbarRight.Controls.Add(TextButton);
+        toolbarRight.Controls.Add(ArrowButton);
+        toolbarRight.Controls.Add(chkBollingerEdges);
 
         // Wraps the toolbar row + its Text-tool note box together so their relative order (toolbar
-        // above, note box below) is unambiguous regardless of Controls.Add order — Dock=Fill always
-        // takes whatever space is left after the Dock=Top sibling reserves its own Height, so this
-        // works out the same either way. Sits directly above the charts (which are unaffected by
-        // any of this, per explicit request to leave them where they are).
-        var topStrip = new Panel { Dock = DockStyle.Top, Height = toolbar.Height + ChartTextTextBox.Height };
-        ChartTextTextBox.Dock = DockStyle.Fill;
-        topStrip.Controls.Add(ChartTextTextBox);
+        // ChartTextTextBox does NOT live here — it already has its own home further down
+        // (optionsGridHost.Controls.Add(ChartTextTextBox), unchanged, Dock=Bottom/Height=80 next to
+        // the options grid). A control can only have one parent, so an earlier version of this
+        // method that also added it here silently lost that fight to the later re-add — but left
+        // its Dock mutated to Fill in the process, which is what actually shipped: a real bug
+        // (broke the options-grid area's own layout). Fixed by leaving ChartTextTextBox alone here
+        // entirely.
+        var topStrip = new Panel { Dock = DockStyle.Top, Height = toolbar.Height };
         topStrip.Controls.Add(toolbar);
 
         // Small event log below the charts — logs Cross-SMA cruce/rebote detections (so the
@@ -1140,15 +1119,15 @@ public class TwoPanelChartsControl : UserControl
             else if (tag == "Daily15Min") { if (_rthPanel != null) _ = _rthPanel.RemoveMirroredTLineAsync(t1, p1, t2, p2); }
         };
 
-        // SMA cross watch (Daily tab only) — the 1h panel already loads whatever's persisted in
-        // SmaDailyWatchStore at its OWN init (see LoadHistoryAsync), independent of this control;
-        // this just keeps it in sync with LIVE toggles while both happen to be open together.
+        // SMA cross watch (Daily tab only — no toolbar buttons or marker on this control's own
+        // panel 1 anymore, per explicit request) — the 1h panel already loads whatever's persisted
+        // in SmaDailyWatchStore at its OWN init (see LoadHistoryAsync), independent of this control;
+        // this just keeps its DETECTION in sync with LIVE toggles while both happen to be open
+        // together (no marker to keep in sync here anymore, just the arm/disarm relay).
         dailyForm.OnSmaWatchChangedEvent += (period, armed) =>
         {
             if (IsDisposed) return;
             _ = _hourlyPanel?.SetSmaCrossWatchAsync(period, armed);
-            if (_smaWatchButtons.TryGetValue(period, out var btn))
-                btn.BackColor = armed ? Color.LightYellow : SystemColors.Control;
         };
     }
 

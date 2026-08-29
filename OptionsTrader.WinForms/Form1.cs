@@ -2288,21 +2288,24 @@ public partial class Form1 : Form
     // tab was first opened) / Disconnect (per explicit request, "necesito poder detenerlo").
     private void SetupChartsTab()
     {
-        var toolbarStrip = new Panel { Dock = DockStyle.Top, Height = 40 };
-        // Docked-Right host panel (not a fixed Location on the strip itself) so the button stays
-        // pinned to the far right edge regardless of the tab's width, per explicit request.
-        var btnHost = new Panel { Dock = DockStyle.Right, Width = 116 };
-        var btn = new Button { Text = "Connect", Location = new Point(8, 6), Size = new Size(100, 28) };
-        btn.Click += (s, e) => _ = ConnectChartsTabAsync();
-        btnHost.Controls.Add(btn);
-        toolbarStrip.Controls.Add(btnHost);
-        _btnChartsConnect = btn;
-
         var host = new Panel { Dock = DockStyle.Fill };
         _chartsHost = host;
-
         tabCharts.Controls.Add(host);
-        tabCharts.Controls.Add(toolbarStrip);
+
+        // No dedicated Top-docked strip for this button anymore — that reserved its own band above
+        // the chart toolbar (Rect...BB edges), leaving a visible gap between the tab strip and the
+        // charts' own controls. Floats instead (no Dock, Anchor Top|Right, added AFTER host so it
+        // paints in front of it) directly over the top-right corner, letting the chart toolbar sit
+        // flush against the tab strip with nothing reserved above it, per explicit request.
+        var btn = new Button { Text = "Connect", Size = new Size(100, 28) };
+        btn.Click += (s, e) => _ = ConnectChartsTabAsync();
+        btn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        void RepositionChartsConnectButton() => btn.Location = new Point(tabCharts.ClientSize.Width - btn.Width - 8, 3);
+        RepositionChartsConnectButton();
+        tabCharts.Resize += (s, e) => RepositionChartsConnectButton();
+        tabCharts.Controls.Add(btn);
+        btn.BringToFront();
+        _btnChartsConnect = btn;
 
         tabControl.SelectedIndexChanged += (s, e) =>
         {
