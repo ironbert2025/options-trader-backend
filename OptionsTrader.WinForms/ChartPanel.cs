@@ -2565,21 +2565,22 @@ public class ChartPanel : Panel
                 }
             }
 
-            // Default zoom on open: 1h panel shows the last 7 days, the two 15m panels show the
-            // last 3 — full history is still loaded underneath for SMA/Bollinger, this only
-            // limits the initial visible window (user can still scroll/zoom out manually).
-            var visibleDays = _mode == ChartPanelMode.Hourly15 ? 7 : 3;
+            // Default zoom on open: 1h panel shows the last 10 days, the 15m RTH+Overnight panel
+            // shows the last 3 — full history is still loaded underneath for SMA/Bollinger, this
+            // only limits the initial visible window (user can still scroll/zoom out manually).
+            var visibleDays = _mode == ChartPanelMode.Hourly15 ? 10 : 3;
             await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
 
-            // Panel 2 (15m RTH) only, per explicit request: shows a fixed 50 bars initially
+            // Panel 2 (15m RTH) only, per explicit request: shows a fixed bar count initially
             // (instead of the calendar-day zoom above) — whether the chart is opened premarket or
-            // already mid-RTH — then a fixed sliding window of 50 bars keeps following new candles
-            // as they form live, same width throughout, no jarring resize between the two. See
-            // configureRthSlideWindow/configureInitialBarCount in chart.html.
+            // already mid-RTH — then a fixed sliding window of that same width keeps following new
+            // candles as they form live, no jarring resize between the two. 2.5 RTH trading days *
+            // 26 bars/day (6.5h session / 15min) = 65 bars. See configureRthSlideWindow/
+            // configureInitialBarCount in chart.html.
             if (_mode == ChartPanelMode.Fifteen_RTH)
             {
-                await _webView.CoreWebView2.ExecuteScriptAsync("configureInitialBarCount(50);");
-                await _webView.CoreWebView2.ExecuteScriptAsync("configureRthSlideWindow(50);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureInitialBarCount(65);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureRthSlideWindow(65);");
             }
 
             // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
