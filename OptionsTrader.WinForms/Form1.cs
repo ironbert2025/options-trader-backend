@@ -1176,6 +1176,7 @@ public partial class Form1 : Form
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
         lblExpDate.Text = $"ExpDate: {expDate:yyyy-MM-dd}";
         lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
+        if (_lblChartsPollingTime != null) _lblChartsPollingTime.Text = lblLastUpdate.Text;
 
         try
         {
@@ -2275,6 +2276,7 @@ public partial class Form1 : Form
     private TwoPanelChartsControl? _chartsTabForm;
     private Button? _btnChartsConnect;
     private Panel? _chartsHost;
+    private Label? _lblChartsPollingTime;
 
     // Top-docked strip for the Connect/Disconnect button (always visible, own row — never
     // overlapped by the charts) + a separate Fill-docked host panel dedicated to the embedded
@@ -2300,10 +2302,33 @@ public partial class Form1 : Form
         var btn = new Button { Text = "Connect", Size = new Size(100, 28) };
         btn.Click += (s, e) => _ = ConnectChartsTabAsync();
         btn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        void RepositionChartsConnectButton() => btn.Location = new Point(tabCharts.ClientSize.Width - btn.Width - 8, 3);
+
+        // Polling time, same format/style as this tab's own lblLastUpdate ("hh:mm:ss tt", bold
+        // DarkGoldenrod) — floats next to the Connect/Disconnect button (same Anchor/no-Dock
+        // convention as that button), per explicit request to see it here too. Updated wherever
+        // lblLastUpdate itself is (see StartPollingTimer/PollQuotesOnceAsync).
+        var lblPolling = new Label
+        {
+            AutoSize  = true,
+            Font      = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold),
+            ForeColor = Color.DarkGoldenrod,
+            Anchor    = AnchorStyles.Top | AnchorStyles.Right
+        };
+        _lblChartsPollingTime = lblPolling;
+
+        void RepositionChartsConnectButton()
+        {
+            btn.Location = new Point(tabCharts.ClientSize.Width - btn.Width - 8, 3);
+            lblPolling.Location = new Point(btn.Right - lblPolling.Width, btn.Bottom + 4);
+        }
         RepositionChartsConnectButton();
         tabCharts.Resize += (s, e) => RepositionChartsConnectButton();
+        // AutoSize means lblPolling.Width changes with its own text — reposition on every text
+        // change too, or a longer/shorter timestamp would drift away from (or overlap) the button.
+        lblPolling.TextChanged += (s, e) => RepositionChartsConnectButton();
+        tabCharts.Controls.Add(lblPolling);
         tabCharts.Controls.Add(btn);
+        lblPolling.BringToFront();
         btn.BringToFront();
         _btnChartsConnect = btn;
 
@@ -3482,6 +3507,7 @@ public partial class Form1 : Form
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
         lblExpDate.Text = $"ExpDate: {expDate:yyyy-MM-dd}";
         lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
+        if (_lblChartsPollingTime != null) _lblChartsPollingTime.Text = lblLastUpdate.Text;
 
         btnFetchQuotes.Enabled = false;
         dgvQuotes.Rows.Clear();

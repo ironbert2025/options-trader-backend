@@ -162,14 +162,15 @@ public class TwoPanelChartsControl : UserControl
         var toolbar = new TableLayoutPanel
         {
             Dock        = DockStyle.Top,
-            Height      = 32,
+            Height      = 64,
             ColumnCount = 2,
-            RowCount    = 1,
+            RowCount    = 2,
             Padding     = new Padding(0)
         };
         toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
         toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-        toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        toolbar.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
+        toolbar.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
 
         var toolbarLeft = new FlowLayoutPanel
         {
@@ -187,8 +188,21 @@ public class TwoPanelChartsControl : UserControl
             AutoScroll    = false,
             Padding       = new Padding(4, 1, 4, 0)
         };
+        // AWS/Telegram (panel 2 group) didn't fit alongside H-Line/T-Line/Text/Arrow/BB edges in
+        // toolbarRight's half-width column — same overflow/clipping issue the SMA Watch buttons had
+        // earlier. Given their own second row, aligned under panel 2's own column only (panel 1's
+        // row 1 cell stays empty — nothing was added there).
+        var toolbarRightRow2 = new FlowLayoutPanel
+        {
+            Dock          = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents  = false,
+            AutoScroll    = false,
+            Padding       = new Padding(4, 1, 4, 0)
+        };
         toolbar.Controls.Add(toolbarLeft, 0, 0);
         toolbar.Controls.Add(toolbarRight, 1, 0);
+        toolbar.Controls.Add(toolbarRightRow2, 1, 1);
 
         var layout = new TableLayoutPanel
         {
@@ -591,6 +605,33 @@ public class TwoPanelChartsControl : UserControl
         // implied it was watching the hourly SMA, which was misleading. Arming from Daily still
         // relays into the live 1h panel's detection (AttachDailyMirroring below), unchanged.
 
+        // AWS/Telegram per-ticker toggles — same controls/persistence as the popup Live Chart's own
+        // chkAws/chkTelegramEvents (MultiChartForm), just reachable here too, per explicit request.
+        // AWS checked: trade opens/closes POST to the API and upload their Entry/Close screenshots
+        // to S3; unchecked, both stay local-only (SaveTradeToApiAsync/UploadScreenshotAsync already
+        // treat "AWS off" the same way they treat an unreachable API — see Form1.cs). Telegram
+        // checked: the events this app is programmed to push (Piso/Techo, T-Line, Demand/Supply
+        // Zone, auto-push, etc.) actually get sent; unchecked, none of them do — trade open/close
+        // pushes are a separate, unrelated toggle-free path. Both read/write the SAME per-symbol
+        // store (tickers.json) the popup uses, so toggling here affects that ticker everywhere.
+        var chkAws = new CheckBox
+        {
+            Text     = "AWS",
+            AutoSize = true,
+            Checked  = Form1.IsAwsEnabledFor(_symbol),
+            Margin   = new Padding(12, 4, 3, 3)
+        };
+        chkAws.CheckedChanged += (s, e) => Form1.SetAwsEnabledFor(_symbol, chkAws.Checked);
+
+        var chkTelegram = new CheckBox
+        {
+            Text     = "Telegram",
+            AutoSize = true,
+            Checked  = Form1.IsTelegramEnabledFor(_symbol),
+            Margin   = new Padding(3, 4, 3, 3)
+        };
+        chkTelegram.CheckedChanged += (s, e) => Form1.SetTelegramEnabledFor(_symbol, chkTelegram.Checked);
+
         // Panel 1 group, per explicit request/order: Rect, ↑Verde, ↓Roja, Daily, Día, ATH.
         toolbarLeft.Controls.Add(btnRectGris);
         toolbarLeft.Controls.Add(btnFlechaVerde);
@@ -599,12 +640,14 @@ public class TwoPanelChartsControl : UserControl
         toolbarLeft.Controls.Add(chkDayDividers);
         toolbarLeft.Controls.Add(AthCheckBox);
 
-        // Panel 2 group, per explicit request/order: H-Line, T-Line, Text, Arrow, BB edges.
+        // Panel 2 group, per explicit request/order: H-Line, T-Line, Text, Arrow, BB edges, AWS, Telegram.
         toolbarRight.Controls.Add(HLineButton);
         toolbarRight.Controls.Add(btnTLine);
         toolbarRight.Controls.Add(TextButton);
         toolbarRight.Controls.Add(ArrowButton);
         toolbarRight.Controls.Add(chkBollingerEdges);
+        toolbarRightRow2.Controls.Add(chkAws);
+        toolbarRightRow2.Controls.Add(chkTelegram);
 
         // Wraps the toolbar row + its Text-tool note box together so their relative order (toolbar
         // ChartTextTextBox does NOT live here — it already has its own home further down
@@ -893,6 +936,11 @@ public class TwoPanelChartsControl : UserControl
             Font      = new Font("Segoe UI", 9F, FontStyle.Regular),
             ForeColor = Color.Gray
         };
+        // Polling time shown in Form1's own topStrip instead (next to Disconnect — see
+        // Form1.SetupChartsTab), not here: this options column's Dock=Top stacking already governs
+        // ExpDate/Next, and the requested position was next to the Connect/Disconnect button, not
+        // above the grid.
+
         // Grid fills the rest of this column — the Text-tool note box (ChartTextTextBox) moved out
         // of here entirely, per explicit request: it now sits next to the crossLog, below the
         // trades grid (see bottomSection further down), not stacked inside the options column.
