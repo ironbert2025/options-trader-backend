@@ -125,6 +125,25 @@ public class DailyChartForm : Form
         }
         _smaWatchButtons = smaWatchButtons;
 
+        // "D.PM" — controls whether the solid yellow Daily SMA20 reference line (ChartPanel.
+        // EvaluateDailyPmAndBb) is drawn on panel 1/2 (tab Charts) and panel 3 (popup), per explicit
+        // request. Persisted per symbol (tickers.json, same store as AWS/Telegram) — reflects the
+        // stored state on open, toggling both saves and fires OnDailyPmLineToggledEvent so whichever
+        // live panels are open react immediately instead of waiting for the next hourly close.
+        var chkDailyPmLine = new CheckBox
+        {
+            Text     = "D.PM",
+            Location = new Point(x, 6),
+            AutoSize = true,
+            Checked  = Form1.IsDailyPmLineEnabledFor(_symbol)
+        };
+        chkDailyPmLine.CheckedChanged += (s, e) =>
+        {
+            Form1.SetDailyPmLineEnabledFor(_symbol, chkDailyPmLine.Checked);
+            OnDailyPmLineToggledEvent?.Invoke(chkDailyPmLine.Checked);
+        };
+        toolbar.Controls.Add(chkDailyPmLine);
+
         Controls.Add(tabControl);
         Controls.Add(toolbar);
         Load += async (s, e) => await InitAsync();
@@ -148,6 +167,10 @@ public class DailyChartForm : Form
     // (ChartPanel.SetSmaCrossWatchAsync), which does the actual cross detection. Persisted by
     // SmaDailyWatchStore regardless of whether anything is listening at the moment.
     public event Action<int, bool>? OnSmaWatchChangedEvent;
+
+    // Fired when the "D.PM" checkbox toggles — TwoPanelChartsControl/MultiChartForm listen so
+    // whichever live panels are currently open show/hide the yellow Daily SMA20 line immediately.
+    public event Action<bool>? OnDailyPmLineToggledEvent;
 
     private async void RefreshSmaWatchMarkersAsync()
     {

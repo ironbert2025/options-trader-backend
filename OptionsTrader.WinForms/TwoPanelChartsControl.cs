@@ -309,8 +309,13 @@ public class TwoPanelChartsControl : UserControl
                 BeginInvoke(() =>
                 {
                     var sessionStart = GetTodaySessionStartFakeEpoch();
+                    var visible = Form1.IsDailyPmLineEnabledFor(_symbol);
                     _ = hourlyPanel.MarkDailyPmLineAsync(price, sessionStart);
                     _ = rthPanel.MarkDailyPmLineAsync(price, sessionStart);
+                    // Mark always updates the line's value even while hidden, so it's already
+                    // current the moment "D.PM" gets re-checked — only the draw itself is gated.
+                    _ = hourlyPanel.SetDailyPmLineVisibleAsync(visible);
+                    _ = rthPanel.SetDailyPmLineVisibleAsync(visible);
                 });
             };
 
@@ -1225,6 +1230,15 @@ public class TwoPanelChartsControl : UserControl
         {
             if (IsDisposed) return;
             _ = _hourlyPanel?.SetSmaCrossWatchAsync(period, armed);
+        };
+
+        // "D.PM" toggle — apply immediately to whichever of panel 1/2 are open, rather than waiting
+        // for the next hourly close to re-check the persisted flag.
+        dailyForm.OnDailyPmLineToggledEvent += visible =>
+        {
+            if (IsDisposed) return;
+            _ = _hourlyPanel?.SetDailyPmLineVisibleAsync(visible);
+            _ = _rthPanel?.SetDailyPmLineVisibleAsync(visible);
         };
     }
 

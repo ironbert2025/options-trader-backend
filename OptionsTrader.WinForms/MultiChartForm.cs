@@ -474,6 +474,7 @@ public class MultiChartForm : Form
                 {
                     var sessionStart = GetTodaySessionStartFakeEpoch();
                     _ = overnightPanel.MarkDailyPmLineAsync(price, sessionStart);
+                    _ = overnightPanel.SetDailyPmLineVisibleAsync(Form1.IsDailyPmLineEnabledFor(_symbol));
                 });
             };
 
@@ -578,7 +579,18 @@ public class MultiChartForm : Form
     // same mirroring onto an already-open (or later-opened) live chart for the same symbol; see
     // Form1.BtnDaily_Click/BtnLiveChart_Click. Just delegates to the panel 1/2 control, which owns
     // the actual mirroring logic (and the SMA-watch buttons it also keeps in sync).
-    public void AttachDailyMirroring(DailyChartForm dailyForm) => _twoPanelControl.AttachDailyMirroring(dailyForm);
+    public void AttachDailyMirroring(DailyChartForm dailyForm)
+    {
+        _twoPanelControl.AttachDailyMirroring(dailyForm);
+
+        // Panel 3 (overnightPanel) edge of the "D.PM" toggle — TwoPanelChartsControl's own copy
+        // above only ever touches panel 1/2, same split pattern as the Stk-line/H-Line mesh.
+        dailyForm.OnDailyPmLineToggledEvent += visible =>
+        {
+            if (IsDisposed) return;
+            _ = _overnightPanel?.SetDailyPmLineVisibleAsync(visible);
+        };
+    }
 
     // Feeds a fresh spot price (from Form1's ~6s options-chain polling, not the streaming feed)
     // into all 3 panels' currently-forming candle — used while LEVEL_ONE_EQUITIES is disabled, so

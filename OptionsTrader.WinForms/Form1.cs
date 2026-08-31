@@ -665,6 +665,26 @@ public partial class Form1 : Form
         return entry?.PollingIntervalSeconds ?? 6;
     }
 
+    // Per-ticker toggle: DailyChartForm's "D.PM" checkbox — controls whether the solid yellow
+    // Daily SMA20 reference line (ChartPanel.EvaluateDailyPmAndBb) gets drawn on panel 1/2 (tab
+    // Charts) and panel 3 (popup). Same persistence pattern as AWS/Telegram/polling interval above.
+    internal static void SetDailyPmLineEnabledFor(string symbol, bool enabled)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { DailyPmLineEnabled = enabled };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static bool IsDailyPmLineEnabledFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.DailyPmLineEnabled ?? true;
+    }
+
     // Applies a just-changed polling interval to the LIVE timer immediately, if it's currently
     // running for this same symbol — no need to disconnect/reconnect. Skipped while the 11 AM
     // throttle is active (that fixed 60s override takes priority; the new value still persists and

@@ -1694,7 +1694,7 @@
   // dashed, and no "C" label). Value comes from ChartPanel.EvaluateDailyPmAndBb (computed on the
   // 1h panel only) and is relayed to all 3 panels by MultiChartForm, same as the mirrored H-Lines.
   class DailyPmLinePrimitive {
-    constructor() { this._time = null; this._price = null; this._chart = null; }
+    constructor() { this._time = null; this._price = null; this._chart = null; this._visible = true; }
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1703,7 +1703,7 @@
         renderer() {
           return {
             draw(target) {
-              if (!self._chart || self._time == null || self._price == null) return;
+              if (!self._chart || !self._visible || self._time == null || self._price == null) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
@@ -1757,6 +1757,14 @@
     if (!dailyPmLineAttached) { candleSeries.attachPrimitive(dailyPmLinePrimitive); dailyPmLineAttached = true; }
     dailyPmLinePrimitive._time = time;
     dailyPmLinePrimitive._price = price;
+    forceRepaint();
+  }
+
+  // Toggles the line on/off without losing its last known time/price — a later markDailyPmLine
+  // call (next hourly close) still updates it normally regardless of visibility. Controlled from
+  // DailyChartForm's "D.PM" checkbox — see ChartPanel.SetDailyPmLineVisibleAsync.
+  function setDailyPmLineVisible(visible) {
+    dailyPmLinePrimitive._visible = visible;
     forceRepaint();
   }
 

@@ -2285,6 +2285,16 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyPmLine({anchorFakeEpoch}, {priceStr});");
     }
 
+    // Shows/hides the Daily "PM" (SMA20) solid yellow line — DailyChartForm's "D.PM" checkbox, per
+    // explicit request. Same show/hide-only convention as SetBollingerEdgeMarkersVisibleAsync — the
+    // underlying value keeps updating on every hourly close either way (EvaluateDailyPmAndBb),
+    // this only toggles the draw.
+    public async Task SetDailyPmLineVisibleAsync(bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setDailyPmLineVisible({(show ? "true" : "false")});");
+    }
+
     private async Task MarkDailyPuntoMedioAsync(bool bullish)
     {
         if (_webView.CoreWebView2 == null) return;
