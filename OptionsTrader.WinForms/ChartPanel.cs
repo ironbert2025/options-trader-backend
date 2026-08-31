@@ -2532,11 +2532,13 @@ public class ChartPanel : Panel
             // can be deleted from ANY of the 3 panels, not just 1h/RTH+Overnight.
             if (_mode == ChartPanelMode.Fifteen_RTH)
             {
-                // SMA 20/40/100/200 overlay — dashed here, to read as a secondary reference distinct
-                // from this panel's own primary indicators (Bollinger/PM), per explicit request.
-                await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200], true);");
+                // SMA 20/40/100/200 overlay REMOVED, per explicit request — this panel only shows
+                // its own BB (below) and the Piso/Techo dashed reference lines mirrored from panel 1
+                // (MarkPisoTechoRefLineAsync), not a full SMA overlay. That was a regression from an
+                // earlier session's change that added configureSmas(...) here; reverted.
 
-                // Middle band (SMA20) drawn solid here (vs dashed on the 1h panel), per explicit request.
+                // Middle band (SMA20) drawn solid here (vs dashed on the 1h panel) — this IS part of
+                // BB, stays.
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2, true);");
 
                 // White markers over the current upper/lower Bollinger band values, bounded to the
