@@ -205,6 +205,14 @@ public partial class Form1 : Form
 
     private async void Form1_Load(object? sender, EventArgs e)
     {
+        // API login bypassed, per explicit request — no POST /auth/login at startup, no Bearer
+        // token set on _apiHttpClient, app no longer exits if that call would have failed. Left
+        // commented (not deleted) so it can be re-enabled later. SaveTradeToApiAsync's own API
+        // send is disabled the same way (see its own comment) — its apiTradeId simply stays 0,
+        // which TradeHistoryStore.Add already treats as "assign a local negative id instead",
+        // the exact same fallback path already used when the API is unreachable or "AWS" is off.
+        lblStatusUser.Text = "User: (API bypass)";
+        /*
         try
         {
             var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/auth/login",
@@ -231,6 +239,7 @@ public partial class Form1 : Form
             MessageBox.Show($"Login failed: {ex.Message}", "Login Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Environment.Exit(0);
         }
+        */
 
         // Decide hub-vs-client (and become the token hub if we win the race) as soon as the app
         // opens, instead of waiting for the user to open a Live Chart window — token renewal
@@ -3283,6 +3292,14 @@ public partial class Form1 : Form
         var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
         var apiTradeId = 0;
 
+        // API send bypassed, per explicit request (same change as Form1_Load's login bypass — the
+        // API login was disabled there too, so this POST would just fail auth anyway). Left
+        // commented, not deleted. apiTradeId simply stays 0 below, which TradeHistoryStore.Add
+        // already treats as "assign a local negative id instead" — the same fallback this trade
+        // would take today if sendToApi were false (AWS checkbox off) or the API were unreachable,
+        // so CloseTradeInApiAsync/UploadScreenshotAsync (both gated on tradeId > 0) automatically
+        // stay local-only too, with zero changes needed there.
+        /*
         if (sendToApi)
         try
         {
@@ -3321,6 +3338,7 @@ public partial class Form1 : Form
         {
             this.Invoke(() => LogLine($"API Exception: {ex.Message}", Color.Red));
         }
+        */
 
         return TradeHistoryStore.Add(new TradeRecord(
             Id: apiTradeId, Symbol: symbol, OptionType: rowType, StrikePrice: decimal.Parse(strike),
