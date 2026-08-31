@@ -135,7 +135,8 @@ public class DailyChartForm : Form
             Text     = "D.PM",
             Location = new Point(x, 6),
             AutoSize = true,
-            Checked  = Form1.IsDailyPmLineEnabledFor(_symbol)
+            Checked  = Form1.IsDailyPmLineEnabledFor(_symbol),
+            ForeColor = Color.FromArgb(0xf5, 0xa6, 0x23) // matches chart.html's smaColors[20]
         };
         chkDailyPmLine.CheckedChanged += (s, e) =>
         {
@@ -147,6 +148,14 @@ public class DailyChartForm : Form
         // "D40"/"D100"/"D200" — same idea as "D.PM" above but for the other Daily SMA periods, and
         // tab-Charts-only (panel 1/2, never panel 3), per explicit request. Independent checkboxes
         // (not a radio group) even though normally only one of these (plus D.PM) is shown at once.
+        // Same smaColors map chart.html uses (kept in sync manually — no shared source between C#
+        // and JS for this), so each checkbox's label reads as "this SMA's own color" at a glance.
+        var smaColorsByPeriod = new Dictionary<int, Color>
+        {
+            [40]  = Color.FromArgb(0xef, 0x53, 0x50),
+            [100] = Color.FromArgb(0x26, 0xa6, 0x9a),
+            [200] = Color.FromArgb(0xa2, 0x59, 0xff)
+        };
         var xDailySma = x + chkDailyPmLine.PreferredSize.Width + 18;
         foreach (var period in new[] { 40, 100, 200 })
         {
@@ -155,7 +164,8 @@ public class DailyChartForm : Form
                 Text     = $"D{period}",
                 Location = new Point(xDailySma, 6),
                 AutoSize = true,
-                Checked  = Form1.GetDailySmaLinesEnabledFor(_symbol).Contains(period)
+                Checked  = Form1.GetDailySmaLinesEnabledFor(_symbol).Contains(period),
+                ForeColor = smaColorsByPeriod[period]
             };
             chk.CheckedChanged += (s, e) =>
             {
