@@ -685,6 +685,30 @@ public partial class Form1 : Form
         return entry?.DailyPmLineEnabled ?? true;
     }
 
+    // Per-ticker toggle: DailyChartForm's "D40"/"D100"/"D200" checkboxes — which Daily SMA periods
+    // (besides 20/D.PM, which has its own separate flag above) get the solid tab-Charts-only
+    // reference line. A list (not one bool per period) so it's easy to check/toggle a single period
+    // without touching the others.
+    internal static void SetDailySmaLineEnabledFor(string symbol, int period, bool enabled)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        var periods = new HashSet<int>(tickers[idx].DailySmaLinesEnabled ?? new List<int>());
+        if (enabled) periods.Add(period); else periods.Remove(period);
+
+        tickers[idx] = tickers[idx] with { DailySmaLinesEnabled = periods.ToList() };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static HashSet<int> GetDailySmaLinesEnabledFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return new HashSet<int>(entry?.DailySmaLinesEnabled ?? new List<int>());
+    }
+
     // Applies a just-changed polling interval to the LIVE timer immediately, if it's currently
     // running for this same symbol — no need to disconnect/reconnect. Skipped while the 11 AM
     // throttle is active (that fixed 60s override takes priority; the new value still persists and

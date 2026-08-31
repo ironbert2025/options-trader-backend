@@ -33,4 +33,7 @@ internal static class TickerSettingsStore
     }
 }
 
-internal record TickerEntry(string Symbol, string Low, string High, string ExpDate, bool TelegramEnabled = true, bool AwsEnabled = true, int PollingIntervalSeconds = 6, bool DailyPmLineEnabled = true);
+// DailySmaLinesEnabled: which Daily SMA periods (40/100/200) get the solid tab-Charts-only
+// reference line — null/empty means none (D.PM/period 20 has its own separate DailyPmLineEnabled
+// above and is unaffected by this list).
+internal record TickerEntry(string Symbol, string Low, string High, string ExpDate, bool TelegramEnabled = true, bool AwsEnabled = true, int PollingIntervalSeconds = 6, bool DailyPmLineEnabled = true, List<int>? DailySmaLinesEnabled = null);

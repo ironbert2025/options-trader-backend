@@ -2132,6 +2132,17 @@ public class ChartPanel : Panel
         if (smaToday != null)
             BeginInvoke(() => OnDailyPmValueEvent?.Invoke(smaToday.Value));
 
+        // Same Daily-timeframe SMA line as D.PM above, generalized to 40/100/200 — tab Charts only
+        // (panel 1/2), per explicit request. Kept as a separate event from OnDailyPmValueEvent
+        // (which stays 20-only, still drawn on all 3 panels via MarkDailyPmLineAsync) rather than
+        // merging them, so the existing D.PM/popup behavior can't regress.
+        foreach (var period in new[] { 40, 100, 200 })
+        {
+            var smaTodayN = DailySma(closes, period, lastIdx);
+            if (smaTodayN != null)
+                BeginInvoke(() => OnDailySmaLineValueEvent?.Invoke(period, smaTodayN.Value));
+        }
+
         // BB (Daily): today's Bollinger(20,2) (live) vs yesterday's closed bands — "open" when the
         // TOTAL width (upper - lower) is bigger than yesterday's, same "genuine expansion" test
         // ArmVolatilityOpeningWatch/EvaluateBollingerWideningLabel already use elsewhere in this
@@ -2293,6 +2304,27 @@ public class ChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync($"setDailyPmLineVisible({(show ? "true" : "false")});");
+    }
+
+    // Fires (period, smaValue) every time EvaluateDailyPmAndBb recomputes the Daily SMA40/100/200
+    // (1h panel only) — generalized counterpart to OnDailyPmValueEvent above, but tab-Charts-only
+    // (panel 1/2), per explicit request; unlike D.PM this is NOT relayed to panel 3.
+    public event Action<int, decimal>? OnDailySmaLineValueEvent;
+
+    // Same solid-line convention as MarkDailyPmLineAsync, colored to match that period's own SMA
+    // (chart.html's smaColors) instead of always yellow — normally only one of these (plus D.PM) is
+    // shown at a time, per explicit request.
+    public async Task MarkDailySmaLineAsync(int period, decimal price, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailySmaLine({period}, {anchorFakeEpoch}, {priceStr});");
+    }
+
+    public async Task SetDailySmaLineVisibleAsync(int period, bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setDailySmaLineVisible({period}, {(show ? "true" : "false")});");
     }
 
     private async Task MarkDailyPuntoMedioAsync(bool bullish)

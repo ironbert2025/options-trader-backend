@@ -144,6 +144,28 @@ public class DailyChartForm : Form
         };
         toolbar.Controls.Add(chkDailyPmLine);
 
+        // "D40"/"D100"/"D200" — same idea as "D.PM" above but for the other Daily SMA periods, and
+        // tab-Charts-only (panel 1/2, never panel 3), per explicit request. Independent checkboxes
+        // (not a radio group) even though normally only one of these (plus D.PM) is shown at once.
+        var xDailySma = x + chkDailyPmLine.PreferredSize.Width + 18;
+        foreach (var period in new[] { 40, 100, 200 })
+        {
+            var chk = new CheckBox
+            {
+                Text     = $"D{period}",
+                Location = new Point(xDailySma, 6),
+                AutoSize = true,
+                Checked  = Form1.GetDailySmaLinesEnabledFor(_symbol).Contains(period)
+            };
+            chk.CheckedChanged += (s, e) =>
+            {
+                Form1.SetDailySmaLineEnabledFor(_symbol, period, chk.Checked);
+                OnDailySmaLineToggledEvent?.Invoke(period, chk.Checked);
+            };
+            toolbar.Controls.Add(chk);
+            xDailySma += chk.PreferredSize.Width + 10;
+        }
+
         Controls.Add(tabControl);
         Controls.Add(toolbar);
         Load += async (s, e) => await InitAsync();
@@ -171,6 +193,10 @@ public class DailyChartForm : Form
     // Fired when the "D.PM" checkbox toggles — TwoPanelChartsControl/MultiChartForm listen so
     // whichever live panels are currently open show/hide the yellow Daily SMA20 line immediately.
     public event Action<bool>? OnDailyPmLineToggledEvent;
+
+    // Fired when a "D40"/"D100"/"D200" checkbox toggles — TwoPanelChartsControl listens (tab
+    // Charts only, panel 1/2 — never MultiChartForm/panel 3, per explicit request).
+    public event Action<int, bool>? OnDailySmaLineToggledEvent;
 
     private async void RefreshSmaWatchMarkersAsync()
     {

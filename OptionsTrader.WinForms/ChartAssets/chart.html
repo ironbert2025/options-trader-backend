@@ -1768,6 +1768,85 @@
     forceRepaint();
   }
 
+  // Generalized counterpart to DailyPmLinePrimitive above for the Daily SMA40/100/200 lines — tab
+  // Charts only (panel 1/2), per explicit request; D.PM (period 20, all 3 panels) is untouched and
+  // stays on its own separate primitive/functions above. One entry per period so more than one CAN
+  // be shown at once, though normally only one (plus D.PM) is armed — see
+  // ChartPanel.MarkDailySmaLineAsync/SetDailySmaLineVisibleAsync. Colored to match that period's
+  // own SMA line (smaColors) instead of a fixed color, so it reads as "the same SMA, just extended
+  // as a flat Daily reference" rather than a distinct indicator.
+  class DailySmaLinePrimitive {
+    constructor() { this._lines = {}; this._chart = null; } // period -> { time, price, visible }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                Object.keys(self._lines).forEach(periodKey => {
+                  const entry = self._lines[periodKey];
+                  if (!entry || !entry.visible || entry.time == null || entry.price == null) return;
+                  let snappedTime = entry.time;
+                  if (safeTimeToCoordinate(ts, snappedTime) == null && allCandles.length > 0) {
+                    let floor = null;
+                    for (let i = allCandles.length - 1; i >= 0; i--) {
+                      if (allCandles[i].time <= entry.time) { floor = allCandles[i].time; break; }
+                    }
+                    snappedTime = floor ?? allCandles[0].time;
+                  }
+                  const xRaw = safeTimeToCoordinate(ts, snappedTime);
+                  const x = xRaw == null ? 0 : xRaw;
+                  const y = candleSeries.priceToCoordinate(entry.price);
+                  if (y == null) return;
+                  const color = smaColors[periodKey] || '#888888';
+                  ctx.strokeStyle = color;
+                  ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+
+                  const lastPrice = allCandles.length > 0 ? allCandles[allCandles.length - 1].close : null;
+                  const priceAbove = lastPrice != null && lastPrice > entry.price;
+                  ctx.fillStyle = color;
+                  ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textAlign = 'right';
+                  ctx.textBaseline = priceAbove ? 'top' : 'bottom';
+                  const labelY = y * scope.verticalPixelRatio + (priceAbove ? 2 : -2) * scope.verticalPixelRatio;
+                  ctx.fillText(`D${periodKey}`, scope.bitmapSize.width - 4 * scope.horizontalPixelRatio, labelY);
+                  ctx.textAlign = 'left';
+                  ctx.textBaseline = 'middle';
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const dailySmaLinePrimitive = new DailySmaLinePrimitive();
+  let dailySmaLineAttached = false;
+
+  function markDailySmaLine(period, time, price) {
+    if (!dailySmaLineAttached) { candleSeries.attachPrimitive(dailySmaLinePrimitive); dailySmaLineAttached = true; }
+    const existing = dailySmaLinePrimitive._lines[period];
+    dailySmaLinePrimitive._lines[period] = { time, price, visible: existing ? existing.visible : false };
+    forceRepaint();
+  }
+
+  function setDailySmaLineVisible(period, visible) {
+    if (!dailySmaLinePrimitive._lines[period]) dailySmaLinePrimitive._lines[period] = { time: null, price: null, visible };
+    else dailySmaLinePrimitive._lines[period].visible = visible;
+    forceRepaint();
+  }
+
   // Finds the last candle of the most recent PRIOR day directly from allCandles — the same array
   // actually rendered — instead of C# separately computing which candle that is and sending a
   // time to match against. Two different aggregation paths (1h vs 15m RTH, each with their own

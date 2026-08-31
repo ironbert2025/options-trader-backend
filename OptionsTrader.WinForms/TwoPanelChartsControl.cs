@@ -319,6 +319,22 @@ public class TwoPanelChartsControl : UserControl
                 });
             };
 
+            // Daily SMA40/100/200 lines — same idea as D.PM above but tab-Charts-only (panel 1/2),
+            // per explicit request; MultiChartForm/panel 3 never subscribes to this event.
+            hourlyPanel.OnDailySmaLineValueEvent += (period, price) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    var sessionStart = GetTodaySessionStartFakeEpoch();
+                    var visible = Form1.GetDailySmaLinesEnabledFor(_symbol).Contains(period);
+                    _ = hourlyPanel.MarkDailySmaLineAsync(period, price, sessionStart);
+                    _ = rthPanel.MarkDailySmaLineAsync(period, price, sessionStart);
+                    _ = hourlyPanel.SetDailySmaLineVisibleAsync(period, visible);
+                    _ = rthPanel.SetDailySmaLineVisibleAsync(period, visible);
+                });
+            };
+
             hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
             {
                 if (IsDisposed) return;
@@ -1239,6 +1255,14 @@ public class TwoPanelChartsControl : UserControl
             if (IsDisposed) return;
             _ = _hourlyPanel?.SetDailyPmLineVisibleAsync(visible);
             _ = _rthPanel?.SetDailyPmLineVisibleAsync(visible);
+        };
+
+        // "D40"/"D100"/"D200" toggles — same immediate-apply idea, panel 1/2 only.
+        dailyForm.OnDailySmaLineToggledEvent += (period, visible) =>
+        {
+            if (IsDisposed) return;
+            _ = _hourlyPanel?.SetDailySmaLineVisibleAsync(period, visible);
+            _ = _rthPanel?.SetDailySmaLineVisibleAsync(period, visible);
         };
     }
 
