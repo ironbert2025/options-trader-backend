@@ -676,6 +676,26 @@ public class TwoPanelChartsControl : UserControl
             _form1.ApplyLivePollingInterval(_symbol, seconds);
         };
 
+        // Live "time — price" readout for panel 2's own WebSocket ticks, above panel 2's toolbar —
+        // same idea as MultiChartForm's own lblLiveTick (panel 3), per explicit request to have one
+        // here too, so a stalled/disconnected feed (no updates) is visible at a glance.
+        var lblRthLiveTick = new Label
+        {
+            Text      = string.Empty,
+            AutoSize  = true,
+            ForeColor = Color.DarkGoldenrod,
+            Font      = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold),
+            Margin    = new Padding(16, 6, 3, 3)
+        };
+        if (rthPanel != null)
+        {
+            rthPanel.OnLiveTick += (eastern, price) =>
+            {
+                if (IsDisposed || lblRthLiveTick.IsDisposed || !lblRthLiveTick.IsHandleCreated) return;
+                lblRthLiveTick.BeginInvoke(() => lblRthLiveTick.Text = $"{eastern:HH:mm:ss}  {price:F2}");
+            };
+        }
+
         // Panel 1 group, per explicit request/order: Rect, ↑Verde, ↓Roja, Daily, Día, ATH.
         toolbarLeft.Controls.Add(btnRectGris);
         toolbarLeft.Controls.Add(btnFlechaVerde);
@@ -694,6 +714,7 @@ public class TwoPanelChartsControl : UserControl
         toolbarRightRow2.Controls.Add(chkTelegram);
         toolbarRightRow2.Controls.Add(lblPollingInterval);
         toolbarRightRow2.Controls.Add(numPollingInterval);
+        toolbarRightRow2.Controls.Add(lblRthLiveTick);
 
         // Wraps the toolbar row + its Text-tool note box together so their relative order (toolbar
         // ChartTextTextBox does NOT live here — it already has its own home further down
