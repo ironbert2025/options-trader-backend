@@ -14,7 +14,7 @@ internal static class DailyTradeLogWriter
         try
         {
             Directory.CreateDirectory(VaultFolder);
-            var fileName = $"{DateTime.Now:yyyy_MM_dd}_{Environment.MachineName}.md";
+            var fileName = $"{DateTime.Now:yyyy_MM_dd}_{Environment.MachineName}_Trades.md";
             var path = Path.Combine(VaultFolder, fileName);
 
             var time = trade.EntryTime.ToString("HH:mm:ss");
