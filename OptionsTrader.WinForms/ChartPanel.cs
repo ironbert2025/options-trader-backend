@@ -3095,6 +3095,30 @@ public class ChartPanel : Panel
         if (!_headerShowsDisconnected) return;
         _headerShowsDisconnected = false;
         BeginInvoke(() => _header.Text = NormalHeaderText());
+        LogStreamerConnectionEvent("Reconnected");
+    }
+
+    // Same log file Form1's own polling-exception logging writes to (LogPollingException) — per
+    // explicit request, so a WebSocket disconnect/reconnect and a "Polling stopped due to error"
+    // can be timestamp-compared afterward to see whether they're actually correlated.
+    private static readonly string StreamerConnectionLogPath = @"C:\OptionsData\EventLog\polling_exceptions.log";
+    private static readonly object StreamerConnectionLogLock = new();
+
+    private void LogStreamerConnectionEvent(string eventText)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(StreamerConnectionLogPath)!);
+            lock (StreamerConnectionLogLock)
+            {
+                File.AppendAllText(StreamerConnectionLogPath,
+                    $"[{DateTime.Now:O}] ChartPanel symbol={_symbol} mode={_mode} — {eventText}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Best-effort logging — never let a logging failure cascade.
+        }
     }
 
     private void Streamer_OnDisconnected(string message)
@@ -3102,6 +3126,7 @@ public class ChartPanel : Panel
         if (_closing || !IsHandleCreated) return;
         _headerShowsDisconnected = true;
         BeginInvoke(() => _header.Text = $"{_symbol} — {ModeLabel(_mode)} — {message}");
+        LogStreamerConnectionEvent($"Disconnected — {message}");
     }
 
     // Serializes the payload as JSON and calls the given JS function with it — used for both

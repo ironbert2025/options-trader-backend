@@ -1371,7 +1371,33 @@ public partial class Form1 : Form
         catch (Exception ex)
         {
             StopPolling();
-            MessageBox.Show($"Polling stopped due to error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            // No popup, per explicit request — this used to block with a MessageBox, which just
+            // sat there unattended if nobody was looking at the screen. Logged to disk instead
+            // (with _isWebSocketHub/_isPolling state) so the exact time and surrounding state can
+            // be compared against the WebSocket's own disconnect/reconnect logging afterward, to
+            // see whether these two are actually correlated or just coincidental.
+            LogPollingException(ex);
+        }
+    }
+
+    private static readonly string PollingExceptionLogPath = @"C:\OptionsData\EventLog\polling_exceptions.log";
+    private static readonly object PollingExceptionLogLock = new();
+
+    private void LogPollingException(Exception ex)
+    {
+        try
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Polling] Stopped due to error: {ex.Message}", Color.Red);
+            Directory.CreateDirectory(Path.GetDirectoryName(PollingExceptionLogPath)!);
+            lock (PollingExceptionLogLock)
+            {
+                File.AppendAllText(PollingExceptionLogPath,
+                    $"[{DateTime.Now:O}] symbol={_selectedTicker?.Symbol} isWebSocketHub={_isWebSocketHub} isPolling={_isPolling}{Environment.NewLine}{ex}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Best-effort logging — never let a logging failure cascade.
         }
     }
 
