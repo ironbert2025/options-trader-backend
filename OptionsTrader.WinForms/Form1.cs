@@ -1190,6 +1190,40 @@ public partial class Form1 : Form
         _tokenKeepAliveTimer.Start();
     }
 
+    private static readonly string TokenKeepAliveLogPath = @"C:\OptionsData\EventLog\token_keepalive.log";
+    private static readonly object TokenKeepAliveLogLock = new();
+
+    // Diagnostic-only, per explicit request: logs WHICH branch of IsTokenAuthority() this instance
+    // is relying on at each keep-alive tick (and whether it actually came back true), since the
+    // symptom reported ("primary instance not renewing") has 3 different possible root causes —
+    // _isWebSocketHub never won the hub race, HubHostSettingsStore empty/unset, or this instance
+    // not being IsPrimaryTickerInstance() — and there was previously no way to tell which one it
+    // was without attaching a debugger.
+    private void LogTokenAuthorityState(bool isAuthority, DateTime? expiresAt)
+    {
+        try
+        {
+            var hubHost = HubHostSettingsStore.Load();
+            var isPrimaryTicker = IsPrimaryTickerInstance();
+            LogLine($"{DateTime.Now:HH:mm:ss} [Token] symbol={_selectedTicker?.Symbol} isAuthority={isAuthority} " +
+                     $"isWebSocketHub={_isWebSocketHub} hubHost='{hubHost}' isPrimaryTicker={isPrimaryTicker} " +
+                     $"currentExpiresAt={expiresAt:O}", isAuthority ? Color.DimGray : Color.Orange);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(TokenKeepAliveLogPath)!);
+            lock (TokenKeepAliveLogLock)
+            {
+                File.AppendAllText(TokenKeepAliveLogPath,
+                    $"[{DateTime.Now:O}] symbol={_selectedTicker?.Symbol} isAuthority={isAuthority} " +
+                    $"isWebSocketHub={_isWebSocketHub} hubHost='{hubHost}' isPrimaryTicker={isPrimaryTicker} " +
+                    $"currentExpiresAt={expiresAt:O}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Best-effort logging — never let a logging failure cascade.
+        }
+    }
+
     private async Task RenewAccessTokenIfNeededAsync()
     {
         try
@@ -1198,13 +1232,16 @@ public partial class Form1 : Form
             var tokens = SchwabTokenStore.Load();
             if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return;
 
+            var isAuthority = IsTokenAuthority();
+            LogTokenAuthorityState(isAuthority, tokens?.AccessTokenExpiresAt);
+
             await _schwabAuth.GetAccessTokenAsync(
                 creds.ApiKey, creds.ApiSecret,
                 tokens?.AccessToken ?? string.Empty,
                 tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
                 tokens?.RefreshToken ?? string.Empty,
                 OnSchwabTokenRenewed,
-                IsTokenAuthority(), ReloadTokenFromDisk);
+                isAuthority, ReloadTokenFromDisk);
         }
         catch (Exception ex)
         {
