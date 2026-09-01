@@ -356,7 +356,7 @@ public class TwoPanelChartsControl : UserControl
                 BeginInvoke(() =>
                 {
                     AppendLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
-                    if (!SuppressOwnTelegramPushes) _ = SendTLineSignalTelegramPushAsync(message);
+                    if (!SuppressOwnTelegramPushes) _ = SendTLineSignalTelegramPushAsync(message, "Hora");
                 });
             };
 
@@ -393,7 +393,7 @@ public class TwoPanelChartsControl : UserControl
                 BeginInvoke(() =>
                 {
                     AppendLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
-                    if (!SuppressOwnTelegramPushes) _ = SendTLineSignalTelegramPushAsync(message);
+                    if (!SuppressOwnTelegramPushes) _ = SendTLineSignalTelegramPushAsync(message, "15Min");
                 });
             };
 
@@ -1393,7 +1393,7 @@ public class TwoPanelChartsControl : UserControl
     // Pushes the combined (panel 1 + 2) snapshot for a T-Line + SMA20 breakout signal — same
     // best-effort pattern as SendPisoTechoTelegramPushAsync above (MultiChartForm's own copy pushes
     // the full 3-panel image instead, when it hosts this control — see SuppressOwnTelegramPushes).
-    private async Task SendTLineSignalTelegramPushAsync(string caption)
+    private async Task SendTLineSignalTelegramPushAsync(string caption, string timeframe)
     {
         if (!Form1.IsTelegramEnabledFor(_symbol)) return;
         try
@@ -1421,7 +1421,12 @@ public class TwoPanelChartsControl : UserControl
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "TLineSignal", DateTime.Now));
             if (ok)
+            {
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+                // General cross-symbol CT log (Date/Symbol/TimeFrame), per explicit request — see
+                // CtLogWriter's own comment for why this is separate from EventLogMarkdownWriter.
+                CtLogWriter.AppendEntry(_symbol, timeframe, caption, path);
+            }
             else
                 LogTelegramPushFailure(detail);
         }

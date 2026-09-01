@@ -302,7 +302,7 @@ public class MultiChartForm : Form
             hourlyPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => _ = SendTLineSignalTelegramPushAsync(message));
+                BeginInvoke(() => _ = SendTLineSignalTelegramPushAsync(message, "Hora"));
             };
 
             hourlyPanel.OnSmaCrossEvent += message =>
@@ -317,7 +317,7 @@ public class MultiChartForm : Form
             rthPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => _ = SendTLineSignalTelegramPushAsync(message));
+                BeginInvoke(() => _ = SendTLineSignalTelegramPushAsync(message, "15Min"));
             };
 
             // "Cruce de vela con PM" — log-only, per explicit request: written directly to the
@@ -683,7 +683,7 @@ public class MultiChartForm : Form
     // Pushes the combined 3-chart snapshot to Telegram for the T-Line+SMA20 breakout signal —
     // best-effort, same as every other Telegram push in this app: a failure here must never
     // affect the chart/detection logic itself.
-    private async Task SendTLineSignalTelegramPushAsync(string caption)
+    private async Task SendTLineSignalTelegramPushAsync(string caption, string timeframe)
     {
         if (!Form1.IsTelegramEnabledFor(_symbol)) return;
         try
@@ -711,7 +711,12 @@ public class MultiChartForm : Form
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "TLineSignal", DateTime.Now));
             if (ok)
+            {
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+                // General cross-symbol CT log (Date/Symbol/TimeFrame), per explicit request — see
+                // CtLogWriter's own comment for why this is separate from EventLogMarkdownWriter.
+                CtLogWriter.AppendEntry(_symbol, timeframe, caption, path);
+            }
             else
                 LogTelegramPushFailure(detail);
         }
