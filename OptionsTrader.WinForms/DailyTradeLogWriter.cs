@@ -19,8 +19,13 @@ internal static class DailyTradeLogWriter
 
             var time = trade.EntryTime.ToString("HH:mm:ss");
             var nl   = Environment.NewLine;
+            // Refuerzo note — see Form1.TryCreateReinforcementAsync/TradeHistoryStore.MarkReinforcement.
+            var reinforcementNote = trade.IsReinforcement
+                ? $"**Refuerzo**: resultado de combinar los trades #{trade.SourceTradeIds}{nl}{nl}"
+                : string.Empty;
             var entry =
                 $"### {trade.Symbol} ({trade.OptionType}, {time}){nl}{nl}" +
+                reinforcementNote +
                 $"**Open**{nl}![Open]({trade.EntryImageUrl}){nl}{nl}" +
                 $"**Close**{nl}![Close]({trade.CloseImageUrl}){nl}{nl}" +
                 $"**TradeLog**{nl}![TradeLog]({trade.TradeLogImageUrl}){nl}{nl}" +

@@ -13,9 +13,17 @@ namespace OptionsTrader.WinForms;
 // AccountHash/OccSymbol/Quantity are only set for REAL broker trades — that's what tells
 // CloseTradeRowAsync it needs to actually send a SELL_TO_CLOSE order, not just update the log.
 // ExitOrderId is the pending Trade-Target LIMIT exit (if any), cancelled before a manual close.
+// ReinforcementGroupId/IsReinforcementResult: Demo-only "Refuerzo" feature — a 2nd Demo trade at
+// the same (Type, Strike) as an already-open Demo trade creates a 3rd averaged row instead of a
+// normal one. All 3 rows share the same ReinforcementGroupId (the reinforcement row's own
+// TradeId); IsReinforcementResult is true only on that 3rd row. Closing ANY of the 3 (see
+// CloseTradeRowAsync) closes the whole group together at the same C_Bid. The two source rows
+// still receive normal live C_Bid/PnL updates from UpdateTradesPnL — only their color and
+// close-button behavior differ, per explicit request.
 file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false,
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
-    DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m);
+    DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m,
+    int? ReinforcementGroupId = null, bool IsReinforcementResult = false);
 
 public partial class Form1 : Form
 {
@@ -1609,6 +1617,10 @@ public partial class Form1 : Form
     // automático"), nothing more elaborate than a color.
     private static readonly Color AutomaticTradeRowColor = Color.Lavender;
 
+    // Distinct background for the 3 rows of a "Refuerzo" group (2 source Demo trades + the
+    // averaged result) — see TryCreateReinforcementAsync/CloseTradeRowAsync's group-close handling.
+    private static readonly Color ReinforcementRowColor = Color.Khaki;
+
     // Opens a demo trade in THIS Form1 instance's own Trades grid (dgvTrades) — used by
     // TimeframeViewerForm's "strike, spot" reply flow. Reuses the exact same RecordEntryAsync path
     // real/manual demo trades go through, so it gets live PnL updates from the normal polling loop
@@ -2043,7 +2055,8 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false, sendToApi: sendToApi, expDateOverride: expDateOverride);
+        var (_, newRow) = await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false, sendToApi: sendToApi, expDateOverride: expDateOverride);
+        await TryCreateReinforcementAsync(newRow, symbol, rowType, strike, suppressAutoClose: false, sendToApi, expDateOverride);
     }
 
     // Same as OpenSimulatedTrade, but with suppressAutoClose: true — no target% auto-close, the
@@ -2062,7 +2075,64 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true, sendToApi: sendToApi, expDateOverride: expDateOverride);
+        var (_, newRow) = await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true, sendToApi: sendToApi, expDateOverride: expDateOverride);
+        await TryCreateReinforcementAsync(newRow, symbol, rowType, strike, suppressAutoClose: true, sendToApi, expDateOverride);
+    }
+
+    // Demo-only "Refuerzo": if another Demo trade is already open at the same (Type, Strike) and
+    // isn't already part of a reinforcement group, average the two into a 3rd row (contracts sum,
+    // weighted-average entry price) instead of leaving two independent positions — per explicit
+    // request. A 3rd trade arriving at a strike that's already part of a group is left alone (no
+    // re-averaging), per explicit request ("se ignora por ahora"). The averaged row's target% is
+    // recalculated fresh from the averaged price (RecordEntryAsync always derives T_Bid from
+    // whatever "ask" it's given), and it flows through the exact same live-update/close machinery
+    // as any normal row — UpdateTradesPnL/CloseTradeRowAsync need no changes for it to work.
+    private async Task TryCreateReinforcementAsync(DataGridViewRow newRow, string symbol, string rowType,
+        string strike, bool suppressAutoClose, bool sendToApi, DateOnly? expDateOverride)
+    {
+        var sourceRow = dgvTrades.Rows.Cast<DataGridViewRow>()
+            .FirstOrDefault(r => r != newRow
+                && r.Tag is TradeRowTag { ReinforcementGroupId: null }
+                && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString())
+                && r.Cells["colTradeType"].Value?.ToString() == rowType
+                && r.Cells["colTradeStrike"].Value?.ToString() == strike);
+        if (sourceRow == null) return;
+        var sourceTradeId = (sourceRow.Tag as TradeRowTag)?.TradeId ?? 0;
+        var newTradeId    = (newRow.Tag as TradeRowTag)?.TradeId ?? 0;
+
+        int.TryParse(sourceRow.Cells["colTradeContracts"].Value?.ToString(), out var c1);
+        decimal.TryParse(sourceRow.Cells["colTradeEntryPrice"].Value?.ToString(), out var p1);
+        int.TryParse(newRow.Cells["colTradeContracts"].Value?.ToString(), out var c2);
+        decimal.TryParse(newRow.Cells["colTradeEntryPrice"].Value?.ToString(), out var p2);
+        if (c1 <= 0 || c2 <= 0) return;
+
+        var combinedContracts = c1 + c2;
+        var avgPrice = Math.Round((c1 * p1 + c2 * p2) / combinedContracts, 2);
+        decimal.TryParse(sourceRow.Cells["colTradeBid"].Value?.ToString(), out var bid);
+
+        var (reinforcementId, reinforcementRow) = await RecordEntryAsync(
+            symbol, rowType, strike, "0", bid, avgPrice, combinedContracts.ToString(), "Trade Refuerzo",
+            isDemo: true, suppressAutoClose: suppressAutoClose, sendToApi: sendToApi, expDateOverride: expDateOverride);
+
+        if (reinforcementRow.Tag is TradeRowTag rTag)
+            reinforcementRow.Tag = rTag with { ReinforcementGroupId = reinforcementId, IsReinforcementResult = true };
+        if (sourceRow.Tag is TradeRowTag sTag)
+            sourceRow.Tag = sTag with { ReinforcementGroupId = reinforcementId };
+        if (newRow.Tag is TradeRowTag nTag)
+            newRow.Tag = nTag with { ReinforcementGroupId = reinforcementId };
+
+        // Note in trade_history.json (and, via CloseTradeRowAsync -> DailyTradeLogWriter, the
+        // Obsidian .md log at close time) that this trade is a Refuerzo result, and which 2 trades
+        // it combines — the API send is bypassed right now (see SaveTradeToApiAsync), so this only
+        // ever reaches the local store, same as every other trade at the moment.
+        if (reinforcementId != 0)
+            TradeHistoryStore.MarkReinforcement(reinforcementId, $"{sourceTradeId},{newTradeId}");
+
+        sourceRow.DefaultCellStyle.BackColor        = ReinforcementRowColor;
+        newRow.DefaultCellStyle.BackColor           = ReinforcementRowColor;
+        reinforcementRow.DefaultCellStyle.BackColor = ReinforcementRowColor;
+
+        LogLine($"{DateTime.Now:HH:mm:ss} [Refuerzo] {symbol} {rowType} @ {strike}: {c1}@{p1:F2} + {c2}@{p2:F2} -> {combinedContracts}@{avgPrice:F2} (TradeId {reinforcementId})", Color.Khaki);
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType, OptionsGridColumns cols)
@@ -2976,6 +3046,21 @@ public partial class Form1 : Form
         if (e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
         if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return;
 
+        // Refuerzo group: clicking Close on ANY of the 3 linked rows (2 source + result) closes
+        // all 3 together, each at its own current C_Bid — since all 3 share the same underlying
+        // (Type, Strike) quote, that C_Bid is always the same value anyway. Per explicit request,
+        // the 3 rows can't be closed independently of each other.
+        if (row.Tag is TradeRowTag { ReinforcementGroupId: { } groupId })
+        {
+            var groupRows = dgvTrades.Rows.Cast<DataGridViewRow>()
+                .Where(r => r.Tag is TradeRowTag t && t.ReinforcementGroupId == groupId
+                    && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
+                .ToList();
+            foreach (var groupRow in groupRows)
+                await CloseTradeRowAsync(groupRow, "MANUAL");
+            return;
+        }
+
         await CloseTradeRowAsync(row, "MANUAL");
     }
 
@@ -3580,8 +3665,27 @@ public partial class Form1 : Form
         }
 
         // Fire target closes after iterating so the loop isn't re-entered mid-enumeration.
+        // Refuerzo groups: all 3 linked rows share the same (Type, Strike) quote, so they can all
+        // independently qualify for auto-close in the SAME pass — dedupe by group so the group only
+        // gets closed once (closing every still-open row in it), instead of once per qualifying row.
+        var closedReinforcementGroups = new HashSet<int>();
         foreach (var row in rowsToClose)
-            _ = CloseTradeRowAsync(row, "TARGET");
+        {
+            if (row.Tag is TradeRowTag { ReinforcementGroupId: { } groupId })
+            {
+                if (!closedReinforcementGroups.Add(groupId)) continue;
+                var groupRows = dgvTrades.Rows.Cast<DataGridViewRow>()
+                    .Where(r => r.Tag is TradeRowTag t && t.ReinforcementGroupId == groupId
+                        && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
+                    .ToList();
+                foreach (var groupRow in groupRows)
+                    _ = CloseTradeRowAsync(groupRow, "TARGET");
+            }
+            else
+            {
+                _ = CloseTradeRowAsync(row, "TARGET");
+            }
+        }
     }
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)

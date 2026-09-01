@@ -30,7 +30,12 @@ public record TradeRecord(
     // trade-detail view can show all 3 without depending on the API's /screenshots record.
     string? EntryImageUrl = null,
     string? CloseImageUrl = null,
-    string? TradeLogImageUrl = null);
+    string? TradeLogImageUrl = null,
+    // Set by Form1.TryCreateReinforcementAsync right after this record is created, via
+    // TradeHistoryStore.MarkReinforcement — never set at creation time (SaveTradeToApiAsync has no
+    // knowledge of the Refuerzo feature). SourceTradeIds is a comma-separated list, e.g. "31,32".
+    bool IsReinforcement = false,
+    string? SourceTradeIds = null);
 
 public enum TradeImageKind { Entry, Close, TradeLog }
 
@@ -107,6 +112,19 @@ internal static class TradeHistoryStore
                 TradeImageKind.TradeLog => trades[idx] with { TradeLogImageUrl = url },
                 _ => trades[idx]
             };
+        });
+    }
+
+    // Marks a trade as the averaged result of a "Refuerzo" (see Form1.TryCreateReinforcementAsync)
+    // — called right after Add for the reinforcement row's own record, since SaveTradeToApiAsync
+    // (Add's only caller) has no awareness of the feature. No-op if the id isn't found.
+    public static void MarkReinforcement(int id, string sourceTradeIds)
+    {
+        Mutate(trades =>
+        {
+            var idx = trades.FindIndex(t => t.Id == id);
+            if (idx < 0) return;
+            trades[idx] = trades[idx] with { IsReinforcement = true, SourceTradeIds = sourceTradeIds };
         });
     }
 
