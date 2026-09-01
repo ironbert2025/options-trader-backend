@@ -3277,7 +3277,15 @@ public partial class Form1 : Form
         if (tradeId > 0)
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
-        // Screenshot TradeLog (Trades + Logger section of the form)
+        // Screenshot TradeLog (Trades + Logger section of the form) — scroll the just-closed row
+        // into view first, per explicit request, so it's actually visible in the capture even if
+        // the grid was scrolled elsewhere when the trade closed (CaptureTradeLogScreenshot just
+        // renders whatever's currently on screen).
+        if (dgvTrades.Rows.Contains(row))
+        {
+            dgvTrades.CurrentCell = row.Cells[0];
+            row.Selected = false; // avoid the blue selection highlight masking the gray closed-row color
+        }
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
