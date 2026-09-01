@@ -3309,10 +3309,13 @@ public partial class Form1 : Form
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
-        // tradeId <= 0 means this trade never left the machine (see UploadScreenshotAsync) — no
-        // Telegram push for it either, same "fully local" signal.
-        if (tradeId > 0)
-            _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
+        // Was gated on tradeId > 0 ("this trade reached the API") — but SendTradeCloseTelegramPushAsync
+        // itself never actually uses tradeId (it only needs the image + bot token/chat id), and now
+        // that the API send is bypassed (see SaveTradeToApiAsync), EVERY trade gets a local negative
+        // id, so that gate was silently blocking this push for 100% of trades — an unintended side
+        // effect of the bypass, not something anyone actually wanted disabled. Fixed by dropping the
+        // gate entirely; the function's own checks (imagePath/bot token) still apply.
+        _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
         // Screenshot TradeLog (Trades + Logger section of the form) — scroll the just-closed row
         // into view first, per explicit request, so it's actually visible in the capture even if
