@@ -1136,7 +1136,24 @@ public class TwoPanelChartsControl : UserControl
         };
 
         var tradesGridHost = new Panel { Dock = DockStyle.Top, Height = 90, Padding = new Padding(6, 0, 6, 6) };
+
+        // Grid pinned to 90% of the host's own width (per explicit request) — Anchor instead of
+        // Dock=Fill so it stays put in the same top-left spot while leaving the remaining 10% as
+        // blank host background on the right. Host itself stays Dock=Top/full-width so bottomSection's
+        // logRow (Dock=Fill, added before this host) keeps reserving space below it exactly as before.
+        _dgvTrades.Dock = DockStyle.None;
+        _dgvTrades.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Bottom;
+        void ResizeTradesGrid()
+        {
+            var usableWidth  = tradesGridHost.ClientSize.Width - tradesGridHost.Padding.Left - tradesGridHost.Padding.Right;
+            var usableHeight = tradesGridHost.ClientSize.Height - tradesGridHost.Padding.Top - tradesGridHost.Padding.Bottom;
+            _dgvTrades.Location = new Point(tradesGridHost.Padding.Left, tradesGridHost.Padding.Top);
+            _dgvTrades.Width  = (int)(usableWidth * 0.9);
+            _dgvTrades.Height = usableHeight;
+        }
+        tradesGridHost.SizeChanged += (s, e) => ResizeTradesGrid();
         tradesGridHost.Controls.Add(_dgvTrades);
+        ResizeTradesGrid();
 
         // Full rebuild every refresh (values + per-cell colors copied straight from Form1's own
         // dgvTrades) — simplest way to stay pixel-identical to whatever coloring Form1 applies
