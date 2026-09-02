@@ -1634,7 +1634,14 @@ public partial class Form1 : Form
     // interleave — see DgvQuotes_CellClick.
     private bool _pendingTradeSendToApi = true;
 
-    internal void TriggerQuoteStrikeClick(string symbol, string rowType, string strikeText, bool sendToApi = true)
+    // Set by TriggerQuoteStrikeClick right before replaying DgvQuotes_CellClick, read-and-reset as
+    // the first thing that handler does (same pattern as _pendingTradeSendToApi) — lets a click
+    // coming from the Charts tab's own 2 radio buttons (Demo+Target / Real+Target, always WITH
+    // target) override the 4-way Options-Quotes-tab radios for that one click, without touching
+    // what a real click on Options Quotes itself does. null = no override (real click).
+    private bool? _chartsTabTradeOverride;
+
+    internal void TriggerQuoteStrikeClick(string symbol, string rowType, string strikeText, bool sendToApi = true, bool useRealTrade = false)
     {
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         for (int i = 0; i < dgvQuotes.Rows.Count; i++)
@@ -1643,6 +1650,7 @@ public partial class Form1 : Form
             if (row.Tag?.ToString() != rowType) continue;
             if (row.Cells["colStrikePrice"].Value?.ToString() != strikeText) continue;
             _pendingTradeSendToApi = sendToApi;
+            _chartsTabTradeOverride = useRealTrade;
             DgvQuotes_CellClick(this, new DataGridViewCellEventArgs(dgvQuotes.Columns["colStrikePrice"].Index, i));
             return;
         }
@@ -1652,10 +1660,11 @@ public partial class Form1 : Form
     // (dgvQuotesNext, next expiration — e.g. tomorrow for a daily ExpDate code). Unlike
     // TriggerQuoteStrikeClick, this doesn't replay Form1's own DgvQuotes_CellClick (dgvQuotesNext
     // has no click handler of its own on Form1 — its Strike column isn't even a button there) —
-    // instead it dispatches directly to the same four trade-open paths, using NextGridColumns and
-    // forcing expDateOverride to tomorrow's resolved date so the trade is persisted (and, for a
-    // REAL order, the OCC symbol built) against the correct expiration.
-    internal void TriggerQuoteStrikeClickNext(string symbol, string rowType, string strikeText, bool sendToApi = true)
+    // instead it dispatches directly, always WITH target (per the Charts tab's own 2-way
+    // Demo+Target/Real+Target radios — this is the only caller, dgvQuotesNext has no other click
+    // path), using NextGridColumns and forcing expDateOverride to tomorrow's resolved date so the
+    // trade is persisted (and, for a REAL order, the OCC symbol built) against the correct expiration.
+    internal void TriggerQuoteStrikeClickNext(string symbol, string rowType, string strikeText, bool sendToApi = true, bool useRealTrade = false)
     {
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         for (int i = 0; i < dgvQuotesNext.Rows.Count; i++)
@@ -1665,17 +1674,10 @@ public partial class Form1 : Form
             if (row.Cells["colStrikePriceNext"].Value?.ToString() != strikeText) continue;
             if (IsRowTradeBlocked(row, "colCallBidNext", "colPutBidNext")) return;
 
-            // Same mapping as DgvQuotes_CellClick: rbNoTrade → no target auto-close,
-            // rbNoTradeTarget → the one that DOES auto-close at target (named backwards, fixed
-            // 2026-08-03 — see DgvQuotes_CellClick's own comment).
             var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
-            if (rbNoTrade.Checked)
-                _ = OpenSimulatedTradeNoTargetFromRow(row, NextGridColumns, sendToApi, nextExpDate);
-            else if (rbTrade.Checked)
-                _ = PlaceRealTradeFromRowAsync(row, NextGridColumns, withTarget: false, sendToApi, nextExpDate);
-            else if (rbTradeTarget.Checked)
+            if (useRealTrade)
                 _ = PlaceRealTradeFromRowAsync(row, NextGridColumns, withTarget: true, sendToApi, nextExpDate);
-            else if (rbNoTradeTarget.Checked)
+            else
                 _ = OpenSimulatedTradeFromRow(row, NextGridColumns, sendToApi, nextExpDate);
             return;
         }
@@ -2105,9 +2107,22 @@ public partial class Form1 : Form
         // so it's always still true here, same as before this feature existed.
         var sendToApi = _pendingTradeSendToApi;
         _pendingTradeSendToApi = true;
+        var chartsOverride = _chartsTabTradeOverride;
+        _chartsTabTradeOverride = null;
 
         // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
         if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
+
+        // A click coming from the Charts tab's own Demo+Target/Real+Target radios always carries
+        // target — bypasses the 4-way Options-Quotes radios below entirely for this one click.
+        if (chartsOverride.HasValue)
+        {
+            if (chartsOverride.Value)
+                _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true, sendToApi);
+            else
+                OpenSimulatedTrade(e.RowIndex, sendToApi);
+            return;
+        }
 
         // rbNoTrade ("No Trade") runs free, no target auto-close; rbNoTradeTarget
         // ("No Trade-Target") is the one that auto-closes at target — swapped 2026-08-03, the

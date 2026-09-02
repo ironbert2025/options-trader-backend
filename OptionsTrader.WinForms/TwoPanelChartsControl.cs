@@ -76,6 +76,13 @@ public class TwoPanelChartsControl : UserControl
         SelectionMode = DataGridViewSelectionMode.FullRowSelect
     };
 
+    // Independent from Form1's own 4-way "Trade" radios (Options Quotes tab) — a strike clicked
+    // here always opens WITH target, per explicit request. Always starts on Demo+Target on connect
+    // (not persisted), separate instance per TwoPanelChartsControl (only one ever exists at a time).
+    private readonly RadioButton _rbChartsDemoTarget = new() { Text = "Demo-Target", Checked = true, AutoSize = true, ForeColor = Color.DarkOrange, Font = new Font("Segoe UI", 8F, FontStyle.Bold) };
+    private readonly RadioButton _rbChartsRealTarget  = new() { Text = "Real-Target", AutoSize = true, ForeColor = Color.Green, Font = new Font("Segoe UI", 8F) };
+    private bool _useRealTrade;
+
     private ChartPanel? _hourlyPanel;
     private ChartPanel? _rthPanel;
 
@@ -1072,7 +1079,7 @@ public class TwoPanelChartsControl : UserControl
             var rowType = row.Tag?.ToString();
             var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
             if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
-            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol));
+            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade);
         };
 
         // "Próxima" tab strike clicks — same idea as _dgvOptions.CellClick above, but forwards into
@@ -1085,7 +1092,7 @@ public class TwoPanelChartsControl : UserControl
             var rowType = row.Tag?.ToString();
             var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
             if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
-            _form1.TriggerQuoteStrikeClickNext(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol));
+            _form1.TriggerQuoteStrikeClickNext(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade);
         };
 
         _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
@@ -1150,9 +1157,27 @@ public class TwoPanelChartsControl : UserControl
             _dgvTrades.Location = new Point(tradesGridHost.Padding.Left, tradesGridHost.Padding.Top);
             _dgvTrades.Width  = (int)(usableWidth * 0.9);
             _dgvTrades.Height = usableHeight;
+
+            // Charts tab's own Demo-Target/Real-Target radios sit in the 10% freed up to the
+            // right of the grid — independent of Form1's 4-way "Trade" radios (Options Quotes tab).
+            var radiosX = _dgvTrades.Right + 6;
+            _rbChartsDemoTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 2);
+            _rbChartsRealTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 22);
         }
         tradesGridHost.SizeChanged += (s, e) => ResizeTradesGrid();
         tradesGridHost.Controls.Add(_dgvTrades);
+        tradesGridHost.Controls.Add(_rbChartsDemoTarget);
+        tradesGridHost.Controls.Add(_rbChartsRealTarget);
+        _rbChartsDemoTarget.CheckedChanged += (s, e) =>
+        {
+            _rbChartsDemoTarget.Font = new Font(_rbChartsDemoTarget.Font, _rbChartsDemoTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
+            if (_rbChartsDemoTarget.Checked) _useRealTrade = false;
+        };
+        _rbChartsRealTarget.CheckedChanged += (s, e) =>
+        {
+            _rbChartsRealTarget.Font = new Font(_rbChartsRealTarget.Font, _rbChartsRealTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
+            if (_rbChartsRealTarget.Checked) _useRealTrade = true;
+        };
         ResizeTradesGrid();
 
         // Full rebuild every refresh (values + per-cell colors copied straight from Form1's own
