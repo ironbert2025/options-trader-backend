@@ -754,6 +754,11 @@ public class ChartPanel : Panel
     // TLineStore file so they're fully independent instead of sharing one.
     private string TLineModeTag => _mode == ChartPanelMode.Hourly15 ? "1h" : "RTH";
 
+    // Same "Hora"/"15Min" convention EvaluateTLineSignal's own logPeriod and the Telegram-push
+    // timeframe param use — CtRecordStore records need to match up with EvaluateTLineSignal's own
+    // Resolve call, so this stays a single shared source instead of 3 separate inline ternaries.
+    private string CtTimeframeLabel => _mode == ChartPanelMode.Hourly15 ? "Hora" : "15Min";
+
     // Today's 9:30 AM ET (RTH session open), as the same "ET digits disguised as UTC" fake epoch
     // every other reference line's anchor uses — see PreMarketLinePrimitive in chart.html, which
     // needs a FIXED anchor instead of "whatever candle is currently last" to stop the blue
@@ -832,12 +837,21 @@ public class ChartPanel : Panel
                         // independently by EvaluateTLineSignal (see _tLineSignalFiredFor).
                         TLineStore.Append(_symbol, TLineModeTag, t1, p1, t2, p2);
                         UpdateTLineHint(p1, p2);
+                        // "Pendiente" CT record the moment the line is drawn — per explicit
+                        // request, this is what proves the analysis was actually armed, separate
+                        // from whether it later breaks or not (see EvaluateTLineSignal's own
+                        // CtRecordStore.Resolve call, which updates THIS same record in place).
+                        CtRecordStore.Add(_symbol, CtTimeframeLabel, t1, p1, t2, p2, DateTime.Now);
                     }
                     else
                     {
                         TLineStore.Remove(_symbol, TLineModeTag, t1, p1, t2, p2);
                         _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
+                        // Deleted before it ever resolved — marked, not removed, so the CT log
+                        // still shows the analysis was armed (per explicit request). No-op if it
+                        // already resolved (Resolve already moved it off "Pendiente").
+                        CtRecordStore.MarkDeletedUnresolved(_symbol, CtTimeframeLabel, t1, p1, t2, p2);
                     }
                     break;
                 }
@@ -1141,6 +1155,9 @@ public class ChartPanel : Panel
             var eventDirection = upBreakout ? "Alza" : "Baja";
             EventLogStore.Append(_symbol, logPeriod, "TLineBreakout", eventDirection, caption, justClosed.Close,
                 $"TLine={tLineValue:F2};SMA{TLineSmaPeriod}={sma20.Value:F2}");
+            // Updates the SAME "Pendiente" record CtRecordStore.Add created when this T-Line was
+            // first drawn — never appends a new row (see ChartPanel's own "tline" message case).
+            CtRecordStore.Resolve(_symbol, CtTimeframeLabel, t1, p1, t2, p2, eventDirection, DateTime.Now);
         }
     }
 

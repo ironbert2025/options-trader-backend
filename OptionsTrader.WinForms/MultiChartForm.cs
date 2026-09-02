@@ -713,9 +713,10 @@ public class MultiChartForm : Form
             if (ok)
             {
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
-                // General cross-symbol CT log (Date/Symbol/TimeFrame), per explicit request — see
-                // CtLogWriter's own comment for why this is separate from EventLogMarkdownWriter.
-                CtLogWriter.AppendEntry(_symbol, timeframe, caption, path);
+                // Attaches this screenshot to the CT record ChartPanel.EvaluateTLineSignal already
+                // resolved (Alza/Baja) — CtRecordStore.OnChanged triggers CtLogWriter to regenerate
+                // the global CT.md with the image now included.
+                CtRecordStore.SetImagePathForMostRecentResolved(_symbol, timeframe, path);
             }
             else
                 LogTelegramPushFailure(detail);

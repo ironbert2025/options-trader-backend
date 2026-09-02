@@ -220,6 +220,7 @@ public partial class Form1 : Form
         // which TradeHistoryStore.Add already treats as "assign a local negative id instead",
         // the exact same fallback path already used when the API is unreachable or "AWS" is off.
         lblStatusUser.Text = "User: (API bypass)";
+        CtLogWriter.WireUp(); // regenerates the CT.md whenever CtRecordStore changes, any symbol/panel
         /*
         try
         {
