@@ -717,6 +717,26 @@ public partial class Form1 : Form
         return new HashSet<int>(entry?.DailySmaLinesEnabled ?? new List<int>());
     }
 
+    // Per-ticker options-chain strike count (per side — see IMarketDataService.GetOptionsChainAsync
+    // and TickerEntry.StrikeCount's own comment). Per explicit request, tuned per symbol against
+    // its own average daily move instead of one fixed 40 for everyone.
+    internal static void SetStrikeCountFor(string symbol, int strikeCount)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { StrikeCount = strikeCount };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static int GetStrikeCountFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.StrikeCount ?? 40;
+    }
+
     // Applies a just-changed polling interval to the LIVE timer immediately, if it's currently
     // running for this same symbol — no need to disconnect/reconnect. Skipped while the 11 AM
     // throttle is active (that fixed 60s override takes priority; the new value still persists and
@@ -1326,7 +1346,8 @@ public partial class Form1 : Form
 
             // Single call covering today → nextExpDate, so both grids share one underlying (spot) snapshot.
             var fromDate  = DateOnly.FromDateTime(MarketHours.NowEst);
-            var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate)).ToList();
+            var strikeCount = GetStrikeCountFor(_selectedTicker.Symbol);
+            var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate, strikeCount)).ToList();
 
             var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();
             var allQuotesNext = fullChain.Where(q => q.ExpirationDate == nextExpDate).ToList();
