@@ -556,6 +556,21 @@ public class SimulatorForm : Form
         }
     }
 
+    // Shared by TryJumpToSelectedTime ("Ir a hora") and LoadSelectedDay (lands on 9:30 ET on load,
+    // per explicit request) — _steps are ~6s poll snapshots, not exactly on the minute, so
+    // "closest" (not "exact match") is what actually lands on the requested time.
+    private int FindClosestStepIndex(DateTime targetUtc, out TimeSpan closestDiff)
+    {
+        var closestIndex = 0;
+        closestDiff = TimeSpan.MaxValue;
+        for (int i = 0; i < _steps.Count; i++)
+        {
+            var diff = (_steps[i].Time - targetUtc).Duration();
+            if (diff < closestDiff) { closestDiff = diff; closestIndex = i; }
+        }
+        return closestIndex;
+    }
+
     // Jumps to whichever loaded step is closest to hour:minute on the currently loaded
     // _simDate — steps are ~6s poll snapshots, not exactly on the minute, so "closest" (not
     // "exact match") is what actually lands on the requested 15-min candle.
@@ -567,13 +582,7 @@ public class SimulatorForm : Form
         var targetEastern = _simDate.ToDateTime(new TimeOnly(hour, minute));
         var targetUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(targetEastern, DateTimeKind.Unspecified), EasternZone);
 
-        var closestIndex = 0;
-        var closestDiff = TimeSpan.MaxValue;
-        for (int i = 0; i < _steps.Count; i++)
-        {
-            var diff = (_steps[i].Time - targetUtc).Duration();
-            if (diff < closestDiff) { closestDiff = diff; closestIndex = i; }
-        }
+        var closestIndex = FindClosestStepIndex(targetUtc, out var closestDiff);
 
         // Same "recording gap" case StepOneMinute logs — if the closest available step is far from
         // the requested hour:minute (a real hole in the recorded data, not just polling
@@ -637,12 +646,39 @@ public class SimulatorForm : Form
         // two 15m panels) — see ChartPanel.LoadHistoryAsync's visibleDays.
         _hourlyCandles   = SimulationDataLoader.LoadHourlyCandlesWithContext(symbol, date);
         _intradayCandles = SimulationDataLoader.LoadUnderlyingCandlesWithContext(symbol, date, contextDays: 3);
-        _currentIndex = _steps.Count > 0 ? 0 : -1;
+
+        // Lands on the RTH open (9:30:00 ET) instead of index 0 (the day's first recorded step,
+        // which is often well before 9:30 — premarket ticks) per explicit request. Same
+        // closest-step search TryJumpToSelectedTime uses for "Ir a hora".
+        int? openGapWarningIndex = null;
+        TimeSpan openGapWarningDiff = default;
+        if (_steps.Count > 0)
+        {
+            var marketOpenEastern = date.ToDateTime(new TimeOnly(9, 30));
+            var marketOpenUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(marketOpenEastern, DateTimeKind.Unspecified), EasternZone);
+            var closestIndex = FindClosestStepIndex(marketOpenUtc, out var closestDiff);
+            _currentIndex = closestIndex;
+            if (closestDiff > TimeSpan.FromMinutes(10))
+            {
+                openGapWarningIndex = closestIndex;
+                openGapWarningDiff = closestDiff;
+            }
+        }
+        else
+        {
+            _currentIndex = -1;
+        }
 
         _dgvTrades.Rows.Clear();
         _openSimTrades.Clear();
 
         _txtEventLog.Clear();
+        if (openGapWarningIndex is { } gapIdx)
+        {
+            LogSimEvent(
+                $"[Hueco de datos] No hay registros cerca de 09:30 — el paso disponible más cercano es " +
+                $"{EasternTime(_steps[gapIdx].Time):HH:mm:ss} ({openGapWarningDiff.TotalMinutes:F0} min de diferencia).");
+        }
         EvaluateDailyBounce();
         EvaluatePisoTecho();
 
