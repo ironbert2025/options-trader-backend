@@ -1114,7 +1114,8 @@ public class TwoPanelChartsControl : UserControl
             new DataGridViewButtonColumn  { Name = "colTradeCloseLive",     HeaderText = "Close",        Width = 55, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
             new DataGridViewTextBoxColumn { Name = "colTradePnLMinLive",    HeaderText = "Min PnL%",     Width = 60, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradePnLMaxLive",    HeaderText = "Max PnL%",     Width = 60, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeMoneynessLive", HeaderText = "OTM/ITM",      Width = 55, ReadOnly = true });
+            new DataGridViewTextBoxColumn { Name = "colTradeMoneynessLive", HeaderText = "OTM/ITM",      Width = 55, ReadOnly = true },
+            new DataGridViewTextBoxColumn { Name = "colTradeDemoRealLive", HeaderText = "Demo/Real",    Width = 65, ReadOnly = true });
         foreach (DataGridViewColumn col in _dgvTrades.Columns)
             col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
@@ -1164,6 +1165,13 @@ public class TwoPanelChartsControl : UserControl
                         if (sourceRow.Cells[i].Style.Font != null)
                             mirrorRow.Cells[i].Style.Font = sourceRow.Cells[i].Style.Font;
                     }
+
+                    // colTradeDemoReal is a hidden carrier column on Form1's own grid (see Form1's
+                    // constructor) — copied in above like every other cell, but overridden here with
+                    // its own fixed color since Form1 never styles it (nothing shows it there).
+                    var demoRealCell = mirrorRow.Cells["colTradeDemoRealLive"];
+                    demoRealCell.Style.ForeColor = string.Equals(demoRealCell.Value?.ToString(), "Real", StringComparison.OrdinalIgnoreCase)
+                        ? Color.Green : Color.Orange;
                 }
                 if (scrollRowToRestore >= 0 && _dgvTrades.Rows.Count > 0)
                     _dgvTrades.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, _dgvTrades.Rows.Count - 1);

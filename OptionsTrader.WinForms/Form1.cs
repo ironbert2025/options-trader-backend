@@ -109,6 +109,11 @@ public partial class Form1 : Form
     public Form1()
     {
         InitializeComponent();
+        // Hidden carrier column — not shown on this grid, only exists so the Demo/Real flag rides
+        // along the normal cell-values copy that TwoPanelChartsControl's mirror grid already does
+        // (RefreshTradesGrid copies dgvTrades' cells positionally); the mirror is the only place
+        // this is actually shown, per explicit request ("solo en este trade grid").
+        dgvTrades.Columns.Add(new DataGridViewTextBoxColumn { Name = "colTradeDemoReal", HeaderText = "Demo/Real", Visible = false });
         SetupChartsTab();
         FormClosing += async (s, e) =>
         {
@@ -867,6 +872,7 @@ public partial class Form1 : Form
                 restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
                 restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
                 SetTradeTypeColor(restoredRow, t.OptionType);
+                restoredRow.Cells["colTradeDemoReal"].Value = t.IsDemo ? "Demo" : "Real";
 
                 // LogLine($"{DateTime.Now:HH:mm:ss} Restored open trade ({t.OptionType}) Strike: {t.StrikePrice}  Entry: {t.EntryPrice:F2}  Contracts: {t.Contracts}", Color.Cyan);
             }
@@ -2274,6 +2280,7 @@ public partial class Form1 : Form
         SetTradeTypeColor(newRow, rowType);
         if (decimal.TryParse(strike, out var strikeForMoneyness))
             SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
+        newRow.Cells["colTradeDemoReal"].Value = isDemo ? "Demo" : "Real";
 
         // Premium = riesgo máximo de la posición = precio de entrada * 100 (por contrato) *
         // cantidad de contratos. "ask" ya es el valor usado como EntryPrice acá mismo (ver
@@ -2309,7 +2316,8 @@ public partial class Form1 : Form
             ExpirationDate: expDate,
             Level:          level,
             PnlTarget:      targetPct.ToString("F0"),
-            EntrySpotPrice: _lastSpotPrice));
+            EntrySpotPrice: _lastSpotPrice,
+            IsDemo:         isDemo));
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
         // through here. Awaited (with a repaint delay) BEFORE the entry snapshot below, same
