@@ -8,7 +8,8 @@ namespace OptionsTrader.WinForms;
 // it never touches another symbol's CSV files. Safe to call repeatedly; idempotent per day+symbol.
 internal static class IvHistorialWriter
 {
-    private const string OutputFolder   = @"C:\OptionsData";
+    private const string OutputFolder   = @"C:\OptionsData\Trades\Iv";
+    private const string LogFolder      = @"C:\OptionsData\Logs";
     private const string MasterFileName = "IV_Historial_Apertura.csv";
     private const string Header = "Fecha,Simbolo,HoraSnapshot,SpotPrice,StrikeATM_Call,IV_Call_ATM,StrikeATM_Put,IV_Put_ATM,IV_ATM_Promedio";
 
@@ -33,10 +34,26 @@ internal static class IvHistorialWriter
             if (TryAppendSnapshot(symbol, ExpirationDateResolver.Resolve(expDateCode), today))
                 _confirmedToday.Add(key);
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort background job — a failure this cycle (e.g. file locked by another
-            // instance writing the same symbol) is silently retried on the next scheduler tick.
+            // instance/process) is retried on the next scheduler tick. Log it instead of staying
+            // silent, so a persistent failure is actually diagnosable instead of just "never wrote".
+            LogError(symbol, ex);
+        }
+    }
+
+    private static void LogError(string symbol, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(LogFolder);
+            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{symbol}] {ex.GetType().Name}: {ex.Message}{Environment.NewLine}";
+            File.AppendAllText(Path.Combine(LogFolder, "iv_historial_errors.log"), line);
+        }
+        catch
+        {
+            // Logging itself must never crash the scheduler.
         }
     }
 
@@ -63,16 +80,31 @@ internal static class IvHistorialWriter
 
     // Reads the earliest snapshot (poll cycle) within the 09:30-09:35 window and returns the
     // strike closest to the spot price from that snapshot (the ATM strike).
+    //
+    // CsvLogger keeps this exact file open all day with a StreamWriter (FileAccess.Write,
+    // FileShare.Read) while the polling session is running. File.ReadAllLines only requests
+    // FileShare.Read for itself, which isn't enough — Windows also requires the READER's share
+    // mode to explicitly tolerate the WRITER's already-open access, so it gets rejected with
+    // "used by another process" on every single attempt until CsvLogger closes the file (e.g. on
+    // Stop Polling), which is why this snapshot used to only succeed hours late. Opening
+    // explicitly with FileShare.ReadWrite fixes that.
     private static AtmRow? FindAtmRow(string csvPath)
     {
-        var lines = File.ReadAllLines(csvPath);
-        if (lines.Length < 2) return null;
+        List<string> lines;
+        using (var stream = new FileStream(csvPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var reader = new StreamReader(stream))
+        {
+            lines = new List<string>();
+            string? line;
+            while ((line = reader.ReadLine()) != null) lines.Add(line);
+        }
+        if (lines.Count < 2) return null;
 
         string? firstTimeInWindow = null;
         AtmRow? best = null;
         var bestDistance = decimal.MaxValue;
 
-        for (int i = 1; i < lines.Length; i++)
+        for (int i = 1; i < lines.Count; i++)
         {
             var parts = lines[i].Split(',');
             if (parts.Length < 12) continue;

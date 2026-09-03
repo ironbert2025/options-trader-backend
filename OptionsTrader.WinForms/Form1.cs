@@ -13,8 +13,17 @@ namespace OptionsTrader.WinForms;
 // AccountHash/OccSymbol/Quantity are only set for REAL broker trades — that's what tells
 // CloseTradeRowAsync it needs to actually send a SELL_TO_CLOSE order, not just update the log.
 // ExitOrderId is the pending Trade-Target LIMIT exit (if any), cancelled before a manual close.
+// ReinforcementGroupId/IsReinforcementResult: Demo-only "Refuerzo" feature — a 2nd Demo trade at
+// the same (Type, Strike) as an already-open Demo trade creates a 3rd averaged row instead of a
+// normal one. All 3 rows share the same ReinforcementGroupId (the reinforcement row's own
+// TradeId); IsReinforcementResult is true only on that 3rd row. Closing ANY of the 3 (see
+// CloseTradeRowAsync) closes the whole group together at the same C_Bid. The two source rows
+// still receive normal live C_Bid/PnL updates from UpdateTradesPnL — only their color and
+// close-button behavior differ, per explicit request.
 file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false,
-    string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null);
+    string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
+    DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m,
+    int? ReinforcementGroupId = null, bool IsReinforcementResult = false);
 
 public partial class Form1 : Form
 {
@@ -23,34 +32,97 @@ public partial class Form1 : Form
     private readonly HttpClient _apiHttpClient    = new();
     private const string ApiBaseUrl = "http://3.133.58.172:5000/api";
     private System.Windows.Forms.Timer? _pollingTimer;
+    private System.Windows.Forms.Timer? _tokenKeepAliveTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
     private System.Windows.Forms.Timer? _autoCaptureTimer;
+    private System.Windows.Forms.Timer? _marketSnapshotTimer;
+    private DateOnly? _openSnapshotDoneFor;
+    private DateOnly? _closeSnapshotDoneFor;
+    private DateOnly? _expiredTradesClosedFor;
+    private DateOnly? _wsForcedDisconnectDoneFor;
+
+    // True only for the one instance/process that actually won the hub race and owns the real
+    // Schwab streaming connection (SetUpLiveFeedAsync) — every other instance relays through it
+    // via CandleHubClient instead, so only the hub instance should ever force-disconnect it.
+    private bool _isWebSocketHub;
     private System.Windows.Forms.Timer? _ivHistorialTimer;
     private bool _isPolling;
     private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
     private bool _throttledAfter11;   // true once the 6s poll has downshifted to 1-minute after 11 AM
 
-    // Screen coordinates capture state
-    private TextBox? _coordsTarget1;
-    private TextBox? _coordsTarget2;
-    private int      _coordsClickCount;
-    private System.Windows.Forms.Timer? _coordsCaptureTimer;
-    // One row per Tickers-table symbol, rebuilt by LoadCoordsButtons() whenever tickers change.
-    private readonly Dictionary<string, (TextBox T1, TextBox T2)> _coordsTextboxes = new();
-    private readonly List<Button> _coordsButtons = new();
-
     private TickerEntry? _selectedTicker;
+
+    // Read-only peek at this instance's own ticker — used by TimeframeViewerForm to auto-select
+    // the matching symbol when it opens, instead of defaulting to the first one in the list.
+    public string? SelectedTickerSymbol => _selectedTicker?.Symbol;
+
+    // Live-chart streaming: Schwab allows only ONE streaming connection per account, but running
+    // one app instance per ticker means several PROCESSES need candle data at once. The first
+    // instance to bind LiveHubPort becomes the "hub" — it owns the real SchwabStreamerClient
+    // (WebSocket) and rebroadcasts every candle over that local port. Every other instance is a
+    // "client" — it connects to the hub via CandleHubClient instead of touching Schwab's socket
+    // itself. Either way, _historyClient still does its own REST history fetches directly (no
+    // per-account limit on that), and _liveFeed is whichever of the two is actually feeding ticks.
+    // No cross-instance failover: if the hub instance closes, clients just show "disconnected"
+    // until that instance (or another) is reopened.
+    private const int LiveHubPort = 51919;
+    private CandleHubServer? _candleHubServer;
+    private CandleHubClient? _candleHubClient;
+    private SchwabStreamerClient? _historyClient;
+    private ICandleFeed? _liveFeed;
+    private readonly Dictionary<string, MultiChartForm> _liveChartForms = new();
+
+    // DailyChartForm windows opened from THIS form's own "Daily" button (below "Simulador") —
+    // unlike MultiChartForm's own "Daily" button, these have no live chart involved at all, so
+    // T-Line mirroring (MultiChartForm.AttachDailyMirroring) has to be wired up manually here,
+    // in whichever order the two windows happen to get opened (see BtnDaily_Click/
+    // BtnLiveChart_Click below).
+    private readonly Dictionary<string, List<DailyChartForm>> _openDailyChartsBySymbol = new();
+    private FourEtfChartsForm? _fourEtfChartsForm;
+    private TimeframeViewerForm? _timeframeViewerForm;
+
     private decimal _lastSpotPrice;
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
     private List<BrokerAccountDto> _accounts = new();
-    private string _selectedCounts = "In Range"; // session-only, always defaults to In Range on launch
+    private string _selectedCounts = "6"; // session-only, always defaults to 6 on launch
     private List<OptionQuoteDto> _lastAllQuotes = new(); // current-expiration chain from the last fetch, for instant re-filtering
+
+    // The exact OTM/range/Counts-filtered lists dgvQuotes itself is currently showing (return value
+    // of the PopulateQuotesGrid call below) — kept so MultiChartForm's live options grid can mirror
+    // the SAME rows/values, not re-derive its own filter and risk showing different strikes.
+    private List<OptionQuoteDto> _lastOtmCalls = new();
+    private List<OptionQuoteDto> _lastOtmPuts = new();
+
+    // Same idea as the three fields above, but for the NEXT-expiration chain (dgvQuotesNext) — lets
+    // MultiChartForm's tabbed options grid mirror the "next" tab too (Fase 2 of the tabbed-grid
+    // feature), same identical-rows guarantee.
+    private List<OptionQuoteDto> _lastAllQuotesNext = new();
+    private List<OptionQuoteDto> _lastOtmCallsNext = new();
+    private List<OptionQuoteDto> _lastOtmPutsNext = new();
+
+    // Strikes force-shown in dgvQuotes regardless of the OTM-only filter — set by clicking a
+    // trade's Strike cell in dgvTrades (DgvTrades_CellClick), so a trade that's gone ITM (and
+    // would otherwise vanish from the grid) stays visible from then on. Cleared on ticker switch.
+    private readonly HashSet<(string Type, decimal Strike)> _forcedStrikes = new();
 
     public Form1()
     {
         InitializeComponent();
-        FormClosing += (s, e) => { _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose(); };
+        // Hidden carrier column — not shown on this grid, only exists so the Demo/Real flag rides
+        // along the normal cell-values copy that TwoPanelChartsControl's mirror grid already does
+        // (RefreshTradesGrid copies dgvTrades' cells positionally); the mirror is the only place
+        // this is actually shown, per explicit request ("solo en este trade grid").
+        dgvTrades.Columns.Add(new DataGridViewTextBoxColumn { Name = "colTradeDemoReal", HeaderText = "Demo/Real", Visible = false });
+        SetupChartsTab();
+        FormClosing += async (s, e) =>
+        {
+            _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose();
+            _tokenKeepAliveTimer?.Dispose();
+            if (_historyClient != null) await _historyClient.DisposeAsync();
+            if (_candleHubClient != null) await _candleHubClient.DisposeAsync();
+            _candleHubServer?.Dispose();
+        };
 
         // Start with blank placeholder rows (no data, just empty cells) so the grids look like
         // ready spreadsheets instead of a solid gray box before the user picks a ticker.
@@ -64,34 +136,145 @@ public partial class Form1 : Form
         LoadRadioSelection(grpContracts, ContractsSettingsStore.Load());
         ApplyRadioStyle(grpCounts);
         chkSaveDumps.Checked = DumpSettingsStore.Load();
+        chkShowOrderConfirmation.Checked = OrderConfirmationSettingsStore.Load();
         grpOptionsChainNext.Visible = !chkHideNextExpDate.Checked;
         if (BrokerSettingsStore.Load() == BrokerName.Schwab)
             LoadSchwabCredentials();
         LoadAwsSettings();
-        LoadCoordsButtons();
         LoadBalance();
         LoadTickerButtons();
         LoadCachedAccounts();
         Load += Form1_Load;
         StartAutoCaptureScheduler();
         StartIvHistorialScheduler();
+        StartMarketOpenCloseSnapshotScheduler();
+
+        // Deletes every Telegram push this app has sent — across ALL ticker instances, since
+        // they all share the same telegram_pushes.json file and the same channel. Added via code
+        // (not the designer) so it doesn't require touching Form1.Designer.cs's layout. Lives on
+        // the Settings tab (moved from Quotes), alongside the other action buttons relocated
+        // there.
+        var btnDeleteTelegramPushes = new Button
+        {
+            Location = new Point(422, 480),
+            Size     = new Size(90, 25),
+            Text     = "Del. Telegram"
+        };
+        btnDeleteTelegramPushes.Click += BtnDeleteTelegramPushes_Click;
+        tabSettings.Controls.Add(btnDeleteTelegramPushes);
+
+        // "History" tab — Calendar (trading journal) + Trade Log views over TradeHistoryStore.
+        // Built entirely in HistoryTabPanel (no designer file), same convention as
+        // MultiChartForm/ChartPanel.
+        var tabHistory = new TabPage("History") { Padding = new Padding(8) };
+        tabHistory.Controls.Add(new HistoryTabPanel());
+        tabControl.TabPages.Add(tabHistory);
     }
 
-    // Prompts for one of the 5 fixed app users on startup instead of auto-logging in as a
-    // hardcoded account. Canceling the login closes the whole app immediately.
-    private void Form1_Load(object? sender, EventArgs e)
+    private async void BtnDeleteTelegramPushes_Click(object? sender, EventArgs e)
     {
-        using var loginForm = new LoginForm(_apiHttpClient, ApiBaseUrl);
-        if (loginForm.ShowDialog(this) != DialogResult.OK || loginForm.AccessToken == null)
+        var pushes = TelegramPushStore.Load();
+        if (pushes.Count == 0)
         {
-            Environment.Exit(0);
+            MessageBox.Show("No hay pushes de Telegram guardados para borrar.", "Eliminar pushes de Telegram",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        _apiHttpClient.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", loginForm.AccessToken);
+        var confirm = MessageBox.Show(
+            $"Se van a borrar {pushes.Count} mensajes enviados a Telegram (de todas las instancias). Esta acción no se puede deshacer.\n\n¿Continuar?",
+            "Eliminar pushes de Telegram", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
 
-        lblStatusUser.Text = $"User: {loginForm.FirstName} {loginForm.LastName}";
+        var (botToken, chatId) = TelegramSettingsStore.Load();
+        if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+        {
+            MessageBox.Show("Telegram no está configurado (falta Bot Token o Chat ID).", "Eliminar pushes de Telegram",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        int ok = 0, failed = 0;
+        foreach (var push in pushes)
+        {
+            var (deleted, detail) = await TelegramNotifier.DeleteMessageAsync(botToken, push.ChatId, push.MessageId);
+            if (deleted) ok++;
+            else { failed++; LogLine($"{DateTime.Now:HH:mm:ss} [Telegram] No se pudo borrar mensaje {push.MessageId} ({push.Symbol}/{push.Kind}): {detail}", Color.Orange); }
+        }
+
+        // Best-effort sweep — clear regardless of individual failures (a message Telegram
+        // rejected, e.g. older than ~48h, will never succeed on a later retry either).
+        TelegramPushStore.Clear();
+
+        LogLine($"{DateTime.Now:HH:mm:ss} [Telegram] Borrados {ok}/{pushes.Count} pushes ({failed} fallaron).", Color.Cyan);
+        MessageBox.Show($"Borrados {ok} de {pushes.Count} mensajes.{(failed > 0 ? $"\n{failed} fallaron (ver log)." : string.Empty)}",
+            "Eliminar pushes de Telegram", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    // Anchored user — logs straight in against the API on startup, no LoginForm prompt.
+    // Change these two constants to switch which of the 5 fixed app users this instance runs as.
+    private const string AnchoredUsername = "user1";
+    private const string AnchoredPassword = "Pass1234!";
+
+    private async void Form1_Load(object? sender, EventArgs e)
+    {
+        // API login bypassed, per explicit request — no POST /auth/login at startup, no Bearer
+        // token set on _apiHttpClient, app no longer exits if that call would have failed. Left
+        // commented (not deleted) so it can be re-enabled later. SaveTradeToApiAsync's own API
+        // send is disabled the same way (see its own comment) — its apiTradeId simply stays 0,
+        // which TradeHistoryStore.Add already treats as "assign a local negative id instead",
+        // the exact same fallback path already used when the API is unreachable or "AWS" is off.
+        lblStatusUser.Text = "User: (API bypass)";
+        CtLogWriter.WireUp(); // regenerates the CT.md whenever CtRecordStore changes, any symbol/panel
+        /*
+        try
+        {
+            var response = await _apiHttpClient.PostAsJsonAsync($"{ApiBaseUrl}/auth/login",
+                new { username = AnchoredUsername, password = AnchoredPassword });
+
+            var result = response.IsSuccessStatusCode
+                ? await response.Content.ReadFromJsonAsync<LoginResult>()
+                : null;
+
+            if (result?.AccessToken == null)
+            {
+                MessageBox.Show($"Login failed for anchored user '{AnchoredUsername}'.", "Login Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(0);
+                return;
+            }
+
+            _apiHttpClient.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", result.AccessToken);
+
+            lblStatusUser.Text = $"User: {result.Name} {result.LastName}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Login failed: {ex.Message}", "Login Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Environment.Exit(0);
+        }
+        */
+
+        // Decide hub-vs-client (and become the token hub if we win the race) as soon as the app
+        // opens, instead of waiting for the user to open a Live Chart window — token renewal
+        // depends on _isWebSocketHub being settled early, not just streaming.
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            LogLine($"{DateTime.Now:HH:mm:ss} [Hub] No se pudo inicializar streaming al arrancar: {ex.Message}", Color.OrangeRed);
+        }
+
+        // Start the 30-min token keep-alive right away, not just once "Start Polling" is clicked
+        // (StartTokenKeepAlive's OWN call site inside BeginPolling) — per explicit request: the
+        // token needs to stay fresh through premarket even if polling never gets started that
+        // early, since a manual "Fetch Quotes" or anything else querying options could still hit a
+        // stale one in the meantime. Safe to call again later from BeginPolling too — it's a no-op
+        // if the timer is already running (see its own guard).
+        if (IsPrimaryTickerInstance()) StartTokenKeepAlive();
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
@@ -131,6 +314,150 @@ public partial class Form1 : Form
             BeginPolling(showWarnings: false, isAutoCapture: true);
         };
         _autoCaptureTimer.Start();
+    }
+
+    // Saves a combined 3-chart snapshot for every symbol that currently has a Live Chart window
+    // open (_liveChartForms), at market open (9:30 AM ET) and close (4:00 PM ET) — skips silently
+    // for any symbol that isn't open, never opens one just to capture it. Runs independently in
+    // every app instance (each only knows about its OWN _liveChartForms, unlike the shared hub).
+    private void StartMarketOpenCloseSnapshotScheduler()
+    {
+        _marketSnapshotTimer = new System.Windows.Forms.Timer { Interval = 20000 }; // check every 20s
+        _marketSnapshotTimer.Tick += (s, e) =>
+        {
+            var today = DateOnly.FromDateTime(MarketHours.NowEst);
+
+            if (MarketHours.IsInMarketOpenSnapshotWindow && _openSnapshotDoneFor != today)
+            {
+                _openSnapshotDoneFor = today;
+                _ = CaptureOpenCloseSnapshotsAsync("Open");
+            }
+
+            if (MarketHours.IsInMarketCloseSnapshotWindow && _closeSnapshotDoneFor != today)
+            {
+                _closeSnapshotDoneFor = today;
+                _ = CaptureOpenCloseSnapshotsAsync("Close");
+
+                // Only the primary (first) ticker instance builds the combined daily note — every
+                // other ticker's own Open/Close PNGs already exist on disk (each process saves its
+                // own via CaptureOpenCloseSnapshotsAsync above), this just gathers all of them into
+                // one markdown file instead of each process writing a redundant copy.
+                if (IsPrimaryTickerInstance())
+                {
+                    var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).ToList();
+                    _ = DailyChartSnapshotsMarkdownWriter.WriteAsync(symbols, MarketHours.NowEst);
+                }
+            }
+
+            if (MarketHours.IsInMarketCloseSnapshotWindow && _expiredTradesClosedFor != today)
+            {
+                _expiredTradesClosedFor = today;
+                _ = CloseExpiredTradesAsync();
+            }
+
+            if (_isWebSocketHub && MarketHours.IsInMarketCloseSnapshotWindow && _wsForcedDisconnectDoneFor != today)
+            {
+                _wsForcedDisconnectDoneFor = today;
+                _ = ForceDisconnectWebSocketAsync();
+            }
+        };
+        _marketSnapshotTimer.Start();
+    }
+
+    // Only this (the hub) instance's Schwab connection stays open past 4pm ET otherwise — force
+    // it closed so the socket is only ever live from whenever this instance opened in the morning
+    // until market close, instead of sitting connected all night for no reason.
+    private async Task ForceDisconnectWebSocketAsync()
+    {
+        if (_historyClient == null) return;
+        RaiseWsStatusEvent("Market closed — forcing disconnect from Schwab streamer");
+        await _historyClient.StopAsync();
+        RaiseWsStatusEvent("Disconnected");
+    }
+
+    // Only the hub instance ever calls this directly (ForceDisconnectWebSocketAsync, and the
+    // OnWsStatusEvent hookup in SetUpLiveFeedAsync) — relays the WS connect/disconnect/reconnect
+    // status to every other instance's process via the hub TCP socket. No longer surfaced in any
+    // Live Chart window's own log (per explicit request — that log stays free of WS noise).
+    private void RaiseWsStatusEvent(string text)
+    {
+        _candleHubServer?.BroadcastWsEvent(text);
+    }
+
+    // At 4pm ET, any still-open trade whose own expiration date is today is worthless — close it
+    // (PnL/Telegram push flow exactly like any other close) and mark the 1h chart with a red
+    // "Expired!!!" label. Trades expiring on a later date are left untouched; RestoreOpenTrades
+    // already reopens/keeps showing them on the next app start if still valid.
+    private async Task CloseExpiredTradesAsync()
+    {
+        var today = DateOnly.FromDateTime(MarketHours.NowEst);
+
+        var expiredRows = dgvTrades.Rows.Cast<DataGridViewRow>()
+            .Where(r => r.Tag is TradeRowTag { ExpirationDate: var exp } && exp == today)
+            .Where(r => string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
+            .ToList();
+
+        foreach (var row in expiredRows)
+            await CloseTradeRowAsync(row, "EXPIRED");
+    }
+
+    private async Task CaptureOpenCloseSnapshotsAsync(string tag)
+    {
+        // Popup Live Chart windows (3 panels) take priority; the Charts tab's own 2-panel combined
+        // image (panel 1 + 2) is used only as a fallback for a symbol with no popup open, per
+        // explicit request — same priority as SaveTradeChartSnapshotAsync's trade Entry/Close.
+        var sources = _liveChartForms
+            .Where(kv => !kv.Value.IsDisposed)
+            .ToDictionary(kv => kv.Key, kv => (Func<Task<Bitmap?>>)(() => kv.Value.CaptureCombinedChartImageAsync()));
+
+        if (_chartsTabForm != null && !sources.ContainsKey(_chartsTabForm.Symbol))
+            sources[_chartsTabForm.Symbol] = () => _chartsTabForm.CaptureCombinedChartImageAsync();
+
+        foreach (var (symbol, captureAsync) in sources)
+        {
+            // CaptureCombinedChartImageAsync has no catch of its own — a transient WebView2 issue
+            // on any one of the panels (e.g. mid-recovery from a crash, see 4fdaa72) throws
+            // straight through it. One retry after a short delay covers exactly that case (the
+            // panel is usually back by then); if it still fails, log it instead of swallowing
+            // silently — confirmed live: IWM/DIA's Close snapshot went missing one day with zero
+            // trace of why, even though every Live Chart window was visibly open and healthy.
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                try
+                {
+                    using var combined = await captureAsync();
+                    if (combined == null) break;
+
+                    var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
+                    Directory.CreateDirectory(folder);
+                    var fileName = $"{symbol}_{MarketHours.NowEst:yyyyMMdd}_{tag}.png";
+                    combined.Save(Path.Combine(folder, fileName), System.Drawing.Imaging.ImageFormat.Png);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    if (attempt == 1) { await Task.Delay(2000); continue; }
+                    LogSnapshotException(tag, symbol, ex);
+                }
+            }
+        }
+    }
+
+    private const string SnapshotExceptionLogPath = @"C:\OptionsData\EventLog\handler_exceptions.log";
+    private static readonly object SnapshotExceptionLogLock = new();
+
+    private static void LogSnapshotException(string tag, string symbol, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SnapshotExceptionLogPath)!);
+            lock (SnapshotExceptionLogLock)
+            {
+                File.AppendAllText(SnapshotExceptionLogPath,
+                    $"[{DateTime.Now:O}] CaptureOpenCloseSnapshotsAsync tag={tag} symbol={symbol}{Environment.NewLine}{ex}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch { /* best-effort diagnostic logging — never let this affect the snapshot flow */ }
     }
 
     // Maps each broker radio button to its BrokerName via its control Name (rbSchwab → Schwab,
@@ -202,6 +529,11 @@ public partial class Form1 : Form
         DumpSettingsStore.Save(chkSaveDumps.Checked);
     }
 
+    private void ChkShowOrderConfirmation_CheckedChanged(object? sender, EventArgs e)
+    {
+        OrderConfirmationSettingsStore.Save(chkShowOrderConfirmation.Checked);
+    }
+
     private void ChkHideNextExpDate_CheckedChanged(object? sender, EventArgs e)
     {
         grpOptionsChainNext.Visible = !chkHideNextExpDate.Checked;
@@ -231,7 +563,10 @@ public partial class Form1 : Form
     private void CallPutFilter_CheckedChanged(object? sender, EventArgs e)
     {
         if (_selectedTicker == null || _lastAllQuotes.Count == 0) return;
-        PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true);
+        (_lastOtmCalls, _lastOtmPuts) = PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
+            selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+            forcedStrikes: _forcedStrikes);
+        OnQuotesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
     }
 
     private static void ApplyRadioStyle(GroupBox group)
@@ -248,7 +583,7 @@ public partial class Form1 : Form
         var tickers = TickerSettingsStore.Load();
 
         dgvTickers.Rows.Clear();
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 6; i++)
         {
             if (i < tickers.Count)
                 dgvTickers.Rows.Add(tickers[i].Symbol, tickers[i].Low, tickers[i].High, tickers[i].ExpDate);
@@ -280,6 +615,144 @@ public partial class Form1 : Form
         }
     }
 
+    // Per-ticker toggle: only gates "event" Telegram pushes (Piso/Techo, T-Line, Abriendo la
+    // Volatilidad, Demand/Supply Zone, auto-push) — trade open/close pushes are unaffected.
+    // The checkbox itself lives on MultiChartForm (the live chart window), not here — this is
+    // just the shared persistence helper both Form1's ticker list and MultiChartForm read/write.
+    internal static void SetTelegramEnabledFor(string symbol, bool enabled)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { TelegramEnabled = enabled };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    // Reusable helper for ChartPanel/MultiChartForm to check before sending an "event" Telegram push.
+    internal static bool IsTelegramEnabledFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.TelegramEnabled ?? true;
+    }
+
+    // Per-ticker toggle: MultiChartForm's "AWS" checkbox — controls whether a trade opened from
+    // that live-chart window's own options grid gets POSTed to the API / uploaded to S3 at all.
+    // When off, SaveTradeToApiAsync skips the POST (id falls back negative, same mechanism as an
+    // unreachable API), and everything downstream (UploadScreenshotAsync, the close Telegram push)
+    // reuses that negative-id signal to stay fully local — see those methods for the actual gating.
+    internal static void SetAwsEnabledFor(string symbol, bool enabled)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { AwsEnabled = enabled };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static bool IsAwsEnabledFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.AwsEnabled ?? true;
+    }
+
+    // Per-ticker polling cadence (seconds), default 6 — per explicit request, so certain symbols
+    // can be polled more/less often than others instead of the one-size-fits-all fixed interval.
+    // Same persistence pattern as AWS/Telegram above (tickers.json).
+    internal static void SetPollingIntervalFor(string symbol, int seconds)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { PollingIntervalSeconds = seconds };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static int GetPollingIntervalFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.PollingIntervalSeconds ?? 6;
+    }
+
+    // Per-ticker toggle: DailyChartForm's "D.PM" checkbox — controls whether the solid yellow
+    // Daily SMA20 reference line (ChartPanel.EvaluateDailyPmAndBb) gets drawn on panel 1/2 (tab
+    // Charts) and panel 3 (popup). Same persistence pattern as AWS/Telegram/polling interval above.
+    internal static void SetDailyPmLineEnabledFor(string symbol, bool enabled)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { DailyPmLineEnabled = enabled };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static bool IsDailyPmLineEnabledFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.DailyPmLineEnabled ?? true;
+    }
+
+    // Per-ticker toggle: DailyChartForm's "D40"/"D100"/"D200" checkboxes — which Daily SMA periods
+    // (besides 20/D.PM, which has its own separate flag above) get the solid tab-Charts-only
+    // reference line. A list (not one bool per period) so it's easy to check/toggle a single period
+    // without touching the others.
+    internal static void SetDailySmaLineEnabledFor(string symbol, int period, bool enabled)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        var periods = new HashSet<int>(tickers[idx].DailySmaLinesEnabled ?? new List<int>());
+        if (enabled) periods.Add(period); else periods.Remove(period);
+
+        tickers[idx] = tickers[idx] with { DailySmaLinesEnabled = periods.ToList() };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static HashSet<int> GetDailySmaLinesEnabledFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return new HashSet<int>(entry?.DailySmaLinesEnabled ?? new List<int>());
+    }
+
+    // Per-ticker options-chain strike count (per side — see IMarketDataService.GetOptionsChainAsync
+    // and TickerEntry.StrikeCount's own comment). Per explicit request, tuned per symbol against
+    // its own average daily move instead of one fixed 40 for everyone.
+    internal static void SetStrikeCountFor(string symbol, int strikeCount)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var idx = tickers.FindIndex(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        tickers[idx] = tickers[idx] with { StrikeCount = strikeCount };
+        TickerSettingsStore.Save(tickers);
+    }
+
+    internal static int GetStrikeCountFor(string symbol)
+    {
+        var tickers = TickerSettingsStore.Load();
+        var entry = tickers.FirstOrDefault(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return entry?.StrikeCount ?? 40;
+    }
+
+    // Applies a just-changed polling interval to the LIVE timer immediately, if it's currently
+    // running for this same symbol — no need to disconnect/reconnect. Skipped while the 11 AM
+    // throttle is active (that fixed 60s override takes priority; the new value still persists and
+    // takes effect on the next natural StartPollingTimer, e.g. tomorrow's session).
+    internal void ApplyLivePollingInterval(string symbol, int seconds)
+    {
+        if (_pollingTimer == null || _selectedTicker?.Symbol != symbol || _throttledAfter11) return;
+        _pollingTimer.Interval = Math.Max(1, seconds) * 1000;
+    }
+
     private void TickerButton_Click(object? sender, EventArgs e)
     {
         if (sender is not Button clicked) return;
@@ -296,6 +769,8 @@ public partial class Form1 : Form
         clicked.Font = new Font(clicked.Font, FontStyle.Bold);
 
         _selectedTicker = clicked.Tag as TickerEntry;
+        UpdateEarningsStatusLabel();
+        _forcedStrikes.Clear();
 
         // Reset to blank placeholder rows — real quotes arrive once Start Polling/Fetch Quotes
         // is used, so keep the grids looking like ready tables in the meantime.
@@ -307,6 +782,38 @@ public partial class Form1 : Form
 
         RestoreOpenTrades(_selectedTicker?.Symbol ?? string.Empty);
         PadWithBlankRows(dgvTrades, 4);
+    }
+
+    // Shows the next earnings date for the selected symbol next to "User: ..." in the status bar
+    // (EarningsDateStore, filled in by hand for now — no UI to edit it yet). Split across 2
+    // ToolStripStatusLabels (date + "(remaining N days)") since a single label can't mix 2 fonts/
+    // colors — only the "remaining" part changes styling.
+    private void UpdateEarningsStatusLabel()
+    {
+        var entry = _selectedTicker != null
+            ? EarningsDateStore.Load().FirstOrDefault(e => e.Symbol.Equals(_selectedTicker.Symbol, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        if (entry == null)
+        {
+            lblEarningsDate.Text = string.Empty;
+            lblEarningsRemaining.Text = string.Empty;
+            return;
+        }
+
+        var remainingDays = entry.EarningDate.DayNumber - DateOnly.FromDateTime(DateTime.Today).DayNumber;
+
+        lblEarningsDate.Text = $"Earning Date: {entry.EarningDate:yyyy-MM-dd}";
+        lblEarningsRemaining.Text = $"( Remaining {remainingDays} days)";
+
+        Color color;
+        FontStyle style;
+        if (remainingDays < 0)      { color = Color.Orange; style = FontStyle.Bold; }
+        else if (remainingDays < 5) { color = Color.Red;     style = FontStyle.Bold; }
+        else                        { color = Color.Green;   style = FontStyle.Regular; }
+
+        lblEarningsRemaining.ForeColor = color;
+        lblEarningsRemaining.Font = new Font(statusStrip1.Font, style);
     }
 
     private void RestoreOpenTrades(string symbol)
@@ -331,30 +838,18 @@ public partial class Form1 : Form
 
             if (t.ExpirationDate < today)
             {
-                // Expired — close with Bid = 0
+                // Expired — close it out in the backend (PnL = 0, since it's worthless past
+                // expiration) but don't add a row to the grid at all; the user only wants to see
+                // trades that are still open/valid, not a "Closed" row for something that just
+                // expired unattended.
                 var entryTime = t.EntryTime;
                 var now       = DateTime.Now;
                 var duration  = now - entryTime;
                 var pnl       = Math.Round((0m - t.EntryPrice) * decimal.Parse(t.Contracts) * 100, 2);
                 var pnlPct    = t.EntryPrice > 0 ? Math.Round(pnl / (t.EntryPrice * decimal.Parse(t.Contracts) * 100) * 100, 1) : 0m;
 
-                dgvTrades.Rows.Add(
-                    t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
-                    string.Empty, t.EntryPrice.ToString("F2"), t.Contracts,
-                    t.EntryPrice.ToString("F2"), "0.00", string.Empty,
-                    pnl.ToString("F2"), pnlPct.ToString("F1"), t.PnlTarget,
-                    now.ToString("HH:mm:ss"), "Closed");
-
-                var expiredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                expiredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime);
-                expiredRow.DefaultCellStyle.ForeColor = Color.Gray;
-                expiredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
-                SetTradeTypeColor(expiredRow, t.OptionType);
-
-                // LogLine($"{now:HH:mm:ss} Restored EXPIRED trade ({t.OptionType}) Strike: {t.StrikePrice}  Closed with Bid=0  PnL: {pnl:F2}", Color.Gray);
-
                 OpenTradesStore.Remove(t.TradeId);
-                if (t.TradeId > 0)
+                if (t.TradeId != 0) // 0 == entry never even got a local id (SaveTradeToApiAsync failed outright) — nothing to close
                     _ = CloseTradeInApiAsync(t.TradeId, 0m, pnl, pnlPct, duration);
             }
             else
@@ -371,11 +866,13 @@ public partial class Form1 : Form
                     string.Empty, "Close");
 
                 var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime);
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+                restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
                 restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
                 SetTradeTypeColor(restoredRow, t.OptionType);
+                restoredRow.Cells["colTradeDemoReal"].Value = t.IsDemo ? "Demo" : "Real";
 
                 // LogLine($"{DateTime.Now:HH:mm:ss} Restored open trade ({t.OptionType}) Strike: {t.StrikePrice}  Entry: {t.EntryPrice:F2}  Contracts: {t.Contracts}", Color.Cyan);
             }
@@ -407,6 +904,8 @@ public partial class Form1 : Form
         rbTrade.Font = new Font(rbTrade.Font, rbTrade.Checked ? FontStyle.Bold : FontStyle.Regular);
         rbTradeTarget.ForeColor = rbTradeTarget.Checked ? Color.Green : SystemColors.ControlText;
         rbTradeTarget.Font = new Font(rbTradeTarget.Font, rbTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
+        rbNoTradeTarget.ForeColor = rbNoTradeTarget.Checked ? Color.DarkOrange : SystemColors.ControlText;
+        rbNoTradeTarget.Font = new Font(rbNoTradeTarget.Font, rbNoTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
     }
 
     private void LoadBalance()
@@ -442,9 +941,6 @@ public partial class Form1 : Form
         var creds = SchwabCredentialsStore.Load();
         var hasCreds = !string.IsNullOrEmpty(creds.ApiKey) && !string.IsNullOrEmpty(creds.ApiSecret);
         lblCredentialsSaved.Visible = hasCreds;
-
-        // Wire logger so token events appear in the log panel
-        // _schwabAuth.SetLogCallback(msg => Invoke(() => LogLine(msg, Color.Yellow)));
 
         var tokens = SchwabTokenStore.Load();
         if (tokens != null && !string.IsNullOrEmpty(tokens.AccessToken))
@@ -557,7 +1053,6 @@ public partial class Form1 : Form
                 DateTime.UtcNow.AddSeconds(expiresIn - 30),
                 DateTime.UtcNow.AddDays(7));
             SchwabTokenStore.Save(tokens);
-            // LogLine($"{DateTime.Now:HH:mm:ss} [Token] Refresh token saved — valid until {DateTime.Now.AddDays(7):yyyy-MM-dd}", Color.Yellow);
 
             txtResponse.Text = string.Empty;
             lblTokenStatus.Text = "Token saved successfully";
@@ -666,6 +1161,14 @@ public partial class Form1 : Form
             }
         }
 
+        // Primary ticker only: keep the access token alive proactively (checked/renewed every 30
+        // min, from right now through the RTH close) instead of only refreshing reactively whenever
+        // some REST/WS call happens to need it — BeginPolling itself waits for market open before
+        // making any real request when clicked in premarket (see the else branch below), so without
+        // this the token would just sit unrefreshed the whole premarket window, and a manual
+        // "Fetch Quotes" click (or anything else) during that window could hit a stale one.
+        if (IsPrimaryTickerInstance()) StartTokenKeepAlive();
+
         if (MarketHours.IsOpen)
         {
             StartPollingTimer();
@@ -686,12 +1189,102 @@ public partial class Form1 : Form
         }
     }
 
+    // Proactively renews the Schwab access token every 30 minutes, starting immediately and
+    // running through the RTH close (16:00 ET) regardless of whether polling itself is later
+    // stopped/restarted — the point is to guarantee a fresh token is available all session,
+    // including premarket, for anything that needs to query options (not just this instance's
+    // own polling loop). Only ever started on the primary ticker instance (see BeginPolling); the
+    // actual Schwab call inside GetAccessTokenAsync still only fires for real if this PC is also
+    // the token authority (IsTokenAuthority) — same gate every other caller already respects.
+    private void StartTokenKeepAlive()
+    {
+        if (_tokenKeepAliveTimer != null) return; // already running — BeginPolling can be called more than once today
+
+        _ = RenewAccessTokenIfNeededAsync();
+
+        _tokenKeepAliveTimer = new System.Windows.Forms.Timer { Interval = 30 * 60 * 1000 };
+        _tokenKeepAliveTimer.Tick += async (s, e) =>
+        {
+            if (MarketHours.NowEst.TimeOfDay >= new TimeSpan(16, 0, 0))
+            {
+                _tokenKeepAliveTimer?.Stop();
+                _tokenKeepAliveTimer?.Dispose();
+                _tokenKeepAliveTimer = null;
+                return;
+            }
+            await RenewAccessTokenIfNeededAsync();
+        };
+        _tokenKeepAliveTimer.Start();
+    }
+
+    private static readonly string TokenKeepAliveLogPath = @"C:\OptionsData\EventLog\token_keepalive.log";
+    private static readonly object TokenKeepAliveLogLock = new();
+
+    // Diagnostic-only, per explicit request: logs WHICH branch of IsTokenAuthority() this instance
+    // is relying on at each keep-alive tick (and whether it actually came back true), since the
+    // symptom reported ("primary instance not renewing") has 3 different possible root causes —
+    // _isWebSocketHub never won the hub race, HubHostSettingsStore empty/unset, or this instance
+    // not being IsPrimaryTickerInstance() — and there was previously no way to tell which one it
+    // was without attaching a debugger.
+    private void LogTokenAuthorityState(bool isAuthority, DateTime? expiresAt)
+    {
+        try
+        {
+            var hubHost = HubHostSettingsStore.Load();
+            var isPrimaryTicker = IsPrimaryTickerInstance();
+            LogLine($"{DateTime.Now:HH:mm:ss} [Token] symbol={_selectedTicker?.Symbol} isAuthority={isAuthority} " +
+                     $"isWebSocketHub={_isWebSocketHub} hubHost='{hubHost}' isPrimaryTicker={isPrimaryTicker} " +
+                     $"currentExpiresAt={expiresAt:O}", isAuthority ? Color.DimGray : Color.Orange);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(TokenKeepAliveLogPath)!);
+            lock (TokenKeepAliveLogLock)
+            {
+                File.AppendAllText(TokenKeepAliveLogPath,
+                    $"[{DateTime.Now:O}] symbol={_selectedTicker?.Symbol} isAuthority={isAuthority} " +
+                    $"isWebSocketHub={_isWebSocketHub} hubHost='{hubHost}' isPrimaryTicker={isPrimaryTicker} " +
+                    $"currentExpiresAt={expiresAt:O}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Best-effort logging — never let a logging failure cascade.
+        }
+    }
+
+    private async Task RenewAccessTokenIfNeededAsync()
+    {
+        try
+        {
+            var creds  = SchwabCredentialsStore.Load();
+            var tokens = SchwabTokenStore.Load();
+            if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return;
+
+            var isAuthority = IsTokenAuthority();
+            LogTokenAuthorityState(isAuthority, tokens?.AccessTokenExpiresAt);
+
+            await _schwabAuth.GetAccessTokenAsync(
+                creds.ApiKey, creds.ApiSecret,
+                tokens?.AccessToken ?? string.Empty,
+                tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
+                tokens?.RefreshToken ?? string.Empty,
+                OnSchwabTokenRenewed,
+                isAuthority, ReloadTokenFromDisk);
+        }
+        catch (Exception ex)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Token] Keep-alive renewal failed: {ex.Message}", Color.Orange);
+        }
+    }
+
     private void StartPollingTimer()
     {
-        // Fetch immediately then every 6 seconds
+        // Fetch immediately then every N seconds — per-symbol, configurable (default 6), see
+        // GetPollingIntervalFor/SetPollingIntervalFor. The 11 AM throttle below still always drops
+        // to a fixed 60s regardless of this base interval.
         _ = FetchAndUpdateQuotesAsync();
 
-        _pollingTimer = new System.Windows.Forms.Timer { Interval = 6000 };
+        var intervalSeconds = _selectedTicker != null ? GetPollingIntervalFor(_selectedTicker.Symbol) : 6;
+        _pollingTimer = new System.Windows.Forms.Timer { Interval = Math.Max(1, intervalSeconds) * 1000 };
         _pollingTimer.Tick += async (s, e) =>
         {
             if (!MarketHours.IsOpen)
@@ -741,9 +1334,18 @@ public partial class Form1 : Form
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
         lblExpDate.Text = $"ExpDate: {expDate:yyyy-MM-dd}";
         lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
+        if (_lblChartsPollingTime != null) _lblChartsPollingTime.Text = lblLastUpdate.Text;
 
         try
         {
+            // Settles the hub-vs-client election (_isWebSocketHub) BEFORE creating the market-data
+            // service below — without this, a user who goes straight to Fetch/Start Polling
+            // without ever opening a Live Chart first never sets _isWebSocketHub, so
+            // IsTokenAuthority() comes back false and an expired token can never renew itself
+            // ("El hub no ha renovado el access token todavía..."). Cheap after the first call —
+            // EnsureLiveFeedReadyAsync memoizes its own task.
+            await EnsureLiveFeedReadyAsync();
+
             var service = CreateMarketDataService(chkSaveDumps.Checked);
 
             var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
@@ -751,13 +1353,21 @@ public partial class Form1 : Form
 
             // Single call covering today → nextExpDate, so both grids share one underlying (spot) snapshot.
             var fromDate  = DateOnly.FromDateTime(MarketHours.NowEst);
-            var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate)).ToList();
+            var strikeCount = GetStrikeCountFor(_selectedTicker.Symbol);
+            var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate, strikeCount)).ToList();
 
             var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();
             var allQuotesNext = fullChain.Where(q => q.ExpirationDate == nextExpDate).ToList();
 
             _lastAllQuotes = allQuotes;
             _lastSpotPrice = fullChain.FirstOrDefault()?.SpotPrice ?? _lastSpotPrice;
+
+            // While LEVEL_ONE_EQUITIES stays disabled (see SchwabStreamerClient), feed this
+            // polling cycle's spot price into the live chart's forming candle instead, if one
+            // happens to be open for this symbol — every ~6s instead of waiting a full minute for
+            // the next CHART_EQUITY bar.
+            if (_lastSpotPrice > 0 && _liveChartForms.TryGetValue(_selectedTicker.Symbol, out var chartForOwnTicker) && !chartForOwnTicker.IsDisposed)
+                chartForOwnTicker.FeedPollingPrice(_lastSpotPrice, DateTime.UtcNow);
 
             // Primary chain (current ExpDate)
             if (chkSaveToCsv.Checked)
@@ -768,7 +1378,9 @@ public partial class Form1 : Form
                 TryAppendIvHistorialSnapshot();
             }
 
-            PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true);
+            (_lastOtmCalls, _lastOtmPuts) = PopulateQuotesGrid(dgvQuotes, allQuotes, _selectedTicker, applyCountsFilter: true,
+                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+                forcedStrikes: _forcedStrikes);
 
             // Update PnL for open trades against the FULL chain (not the range-filtered grid),
             // so a trade's current bid keeps updating even after its strike leaves the display range.
@@ -781,6 +1393,7 @@ public partial class Form1 : Form
                 .GroupBy(q => q.StrikePrice)
                 .ToDictionary(g => ("PUT", g.Key), g => g.First());
             UpdateTradesPnL(callMapForTrades, putMapForTrades);
+            OnTradesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
 
             // Next chain (next ExpDate, e.g. tomorrow for daily) — skipped entirely while
             // "Hide Next ExpDate" is checked (no grid refresh, no CSV write).
@@ -789,7 +1402,28 @@ public partial class Form1 : Form
                 if (chkSaveToCsv.Checked)
                     _csvLoggerNext?.AppendRows(allQuotesNext);
 
-                PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
+                _lastAllQuotesNext = allQuotesNext;
+                (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
+            }
+
+            // Live options grid mirrored on the Live Chart window (MultiChartForm) AND the Charts
+            // tab (TwoPanelChartsControl) — fires every poll cycle so those grids stay in sync with
+            // this one without polling on their own. Fired LAST (moved 2026-08-21 from right after
+            // _lastAllQuotes/_lastSpotPrice above) so that by the time a handler reads
+            // GetQuoteSnapshot/GetQuoteSnapshotNext, the "next" chain fields are already this same
+            // cycle's fresh values instead of the previous cycle's — otherwise the "Próxima" tab
+            // was always exactly one poll behind.
+            //
+            // Invoked per-subscriber with its own try/catch instead of a single direct
+            // ?.Invoke(...) — a plain multicast invoke stops calling LATER subscribers the moment
+            // an EARLIER one throws (confirmed live: NFLX's Charts-tab options grid silently never
+            // refreshed — a stale/disposed subscriber elsewhere in the invocation list, registered
+            // before it, was throwing every single poll cycle and killing the rest of that cycle's
+            // invocation, with no exception ever surfacing anywhere to explain why).
+            foreach (var handler in (OnQuotesUpdatedEvent?.GetInvocationList() ?? Array.Empty<Delegate>()))
+            {
+                try { ((Action<string>)handler)(_selectedTicker.Symbol); }
+                catch (Exception ex) { LogLine($"{DateTime.Now:HH:mm:ss} [OnQuotesUpdatedEvent] Subscriber threw: {ex.Message}", Color.OrangeRed); }
             }
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -802,7 +1436,33 @@ public partial class Form1 : Form
         catch (Exception ex)
         {
             StopPolling();
-            MessageBox.Show($"Polling stopped due to error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            // No popup, per explicit request — this used to block with a MessageBox, which just
+            // sat there unattended if nobody was looking at the screen. Logged to disk instead
+            // (with _isWebSocketHub/_isPolling state) so the exact time and surrounding state can
+            // be compared against the WebSocket's own disconnect/reconnect logging afterward, to
+            // see whether these two are actually correlated or just coincidental.
+            LogPollingException(ex);
+        }
+    }
+
+    private static readonly string PollingExceptionLogPath = @"C:\OptionsData\EventLog\polling_exceptions.log";
+    private static readonly object PollingExceptionLogLock = new();
+
+    private void LogPollingException(Exception ex)
+    {
+        try
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Polling] Stopped due to error: {ex.Message}", Color.Red);
+            Directory.CreateDirectory(Path.GetDirectoryName(PollingExceptionLogPath)!);
+            lock (PollingExceptionLogLock)
+            {
+                File.AppendAllText(PollingExceptionLogPath,
+                    $"[{DateTime.Now:O}] symbol={_selectedTicker?.Symbol} isWebSocketHub={_isWebSocketHub} isPolling={_isPolling}{Environment.NewLine}{ex}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Best-effort logging — never let a logging failure cascade.
         }
     }
 
@@ -851,12 +1511,253 @@ public partial class Form1 : Form
             else
                 e.CellStyle.BackColor = dgvQuotes.DefaultCellStyle.BackColor;
         }
+
+        // Range: Strike button active (clickable — same gate as DgvQuotes_CellPainting) AND this
+        // row's Ask actually falls within the ticker's Low-High → same green as Bid above. Matters
+        // most under the "Counts" filter (PopulateQuotesGrid), which can show strikes whose Ask
+        // falls outside the range — "In Range" mode makes this condition trivially true for
+        // almost every visible row, since it already filters by Ask range.
+        var rangeCol = dgvQuotes.Columns["colRange"].Index;
+        if (e.ColumnIndex == rangeCol)
+        {
+            var active   = !IsRowTradeBlocked(row, "colCallBid", "colPutBid");
+            var askCol   = row.Tag?.ToString() == "PUT" ? "colPutAsk" : "colCallAsk";
+            var inRange  = active
+                && TryParseRange(row.Cells["colRange"].Value?.ToString(), out var low, out var high)
+                && decimal.TryParse(row.Cells[askCol].Value?.ToString(), out var ask)
+                && ask >= low && ask <= high;
+
+            e.CellStyle.BackColor = inRange ? Color.LightGreen : dgvQuotes.DefaultCellStyle.BackColor;
+        }
+    }
+
+    // Parses the "Low - High" text PopulateQuotesGrid writes into colRange (e.g. "0.30 - 0.45").
+    // internal (not private) so SimulatorForm's DgvChain_CellFormatting can reuse it for the same
+    // Range-column green-fill rule, instead of duplicating this parsing.
+    internal static bool TryParseRange(string? rangeText, out decimal low, out decimal high)
+    {
+        low = high = 0;
+        var parts = rangeText?.Split(" - ", StringSplitOptions.TrimEntries);
+        return parts?.Length == 2 && decimal.TryParse(parts[0], out low) && decimal.TryParse(parts[1], out high);
     }
 
     // Filters the chain to OTM strikes within the ticker's Ask range and (re)builds the given grid.
+    // Used by TimeframeViewerForm's "8 OTM strikes on rebote" feature — returns the N nearest OTM
+    // strikes (Strike, Ask) for the CURRENT chain fetch, closest-to-spot first. Independent of
+    // whatever Counts/Range/Call-Put filter the main dgvQuotes grid happens to be showing right
+    // now (those are display settings, not what "nearest OTM" means) — ranks _lastAllQuotes fresh
+    // each call, same ranking rule PopulateQuotesGrid uses internally ("Level lookup").
+    // Returns null if `symbol` isn't this instance's own ticker — this app runs one instance per
+    // ticker, so any OTHER symbol simply has no options-chain data loaded here at all.
+    public List<(decimal Strike, decimal Ask)>? GetNearestOtmStrikes(string symbol, bool calls, int count = 5)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol || _lastAllQuotes.Count == 0)
+            return null;
+
+        var optionType = calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
+        var ordered = calls
+            ? _lastAllQuotes.Where(q => q.OptionType == optionType && !q.InTheMoney).OrderBy(q => q.StrikePrice)   // ascending = closest first
+            : _lastAllQuotes.Where(q => q.OptionType == optionType && !q.InTheMoney).OrderByDescending(q => q.StrikePrice); // descending = closest first
+
+        return ordered.Take(count).Select(q => (q.StrikePrice, q.Ask)).ToList();
+    }
+
+    // Used by TimeframeViewerForm's second push (once the SpotPrice cross confirms) — current Bid
+    // for the SAME strikes picked at rebote time (not a fresh "nearest OTM" re-selection, since
+    // price has moved by definition). Same one-instance-per-ticker restriction as above.
+    public List<(decimal Strike, decimal Bid)>? GetBidForStrikes(string symbol, bool calls, IEnumerable<decimal> strikes)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol || _lastAllQuotes.Count == 0)
+            return null;
+
+        var optionType = calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
+        var byStrike = _lastAllQuotes
+            .Where(q => q.OptionType == optionType)
+            .GroupBy(q => q.StrikePrice)
+            .ToDictionary(g => g.Key, g => g.First().Bid);
+
+        return strikes
+            .Select(s => (Strike: s, Bid: byStrike.TryGetValue(s, out var bid) ? bid : 0m))
+            .ToList();
+    }
+
+    // Used by TimeframeViewerForm's "strike, spot" reply flow — current Bid/Ask for ONE specific
+    // strike (may not be one of the 5 auto-picked OTM strikes). Same one-instance-per-ticker
+    // restriction as above.
+    public (decimal Bid, decimal Ask)? GetQuoteForStrike(string symbol, bool calls, decimal strike)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol || _lastAllQuotes.Count == 0)
+            return null;
+
+        var optionType = calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
+        var quote = _lastAllQuotes.FirstOrDefault(q => q.OptionType == optionType && q.StrikePrice == strike);
+        return quote == null ? null : (quote.Bid, quote.Ask);
+    }
+
+    // Fires (symbol) every poll cycle right after _lastAllQuotes is refreshed — MultiChartForm's
+    // live options grid subscribes to this instead of polling on its own.
+    public event Action<string>? OnQuotesUpdatedEvent;
+
+    // Used by MultiChartForm's live options grid — the SAME already-filtered Call/Put lists
+    // dgvQuotes itself is currently showing (whatever Counts/Range/Call-Put filter is selected),
+    // so the two grids always show identical strikes/values, never a separately-derived filter.
+    // Same one-instance-per-ticker restriction as the methods above.
+    internal (List<OptionQuoteDto> AllQuotes, List<OptionQuoteDto> OtmCalls, List<OptionQuoteDto> OtmPuts, TickerEntry Ticker)? GetQuoteSnapshot(string symbol)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return null;
+        return (_lastAllQuotes, _lastOtmCalls, _lastOtmPuts, _selectedTicker);
+    }
+
+    // Same as GetQuoteSnapshot but for the NEXT-expiration chain — only meaningful while
+    // IsNextExpDateVisible is true (chkHideNextExpDate unchecked); the fields are simply stale/
+    // empty otherwise since the poll loop skips refreshing them (see PollAsync).
+    internal (List<OptionQuoteDto> AllQuotes, List<OptionQuoteDto> OtmCalls, List<OptionQuoteDto> OtmPuts, TickerEntry Ticker)? GetQuoteSnapshotNext(string symbol)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return null;
+        return (_lastAllQuotesNext, _lastOtmCallsNext, _lastOtmPutsNext, _selectedTicker);
+    }
+
+    // Whether Form1 itself currently shows the "next" expiration chain grid — MultiChartForm only
+    // renders its second tab when this is true, per explicit request.
+    internal bool IsNextExpDateVisible => !chkHideNextExpDate.Checked;
+
+    // Forwards a Strike-button click from MultiChartForm's mirrored options grid into the EXACT
+    // same handler a click on Form1's own dgvQuotes Strike button would run (DgvQuotes_CellClick —
+    // blocked-row check, then whichever radio mode is currently selected: No Trade / No
+    // Trade-Target / Trade / Trade-Target). Finds the matching row by (type, strike text) since
+    // MultiChartForm doesn't have its own row indices into this grid. Same one-instance-per-ticker
+    // restriction as the methods above.
+    // sendToApi mirrors MultiChartForm's "AWS" checkbox — DgvQuotes_CellClick has no way to take
+    // an extra parameter (it's a fixed-signature event handler, also wired to real user clicks),
+    // so it's handed off through this field instead. Safe because DgvQuotes_CellClick reads (and
+    // resets) it as the very FIRST statement in its body, before any await could let another click
+    // interleave — see DgvQuotes_CellClick.
+    private bool _pendingTradeSendToApi = true;
+
+    // Set by TriggerQuoteStrikeClick right before replaying DgvQuotes_CellClick, read-and-reset as
+    // the first thing that handler does (same pattern as _pendingTradeSendToApi) — lets a click
+    // coming from the Charts tab's own 2 radio buttons (Demo+Target / Real+Target, always WITH
+    // target) override the 4-way Options-Quotes-tab radios for that one click, without touching
+    // what a real click on Options Quotes itself does. null = no override (real click).
+    private bool? _chartsTabTradeOverride;
+
+    internal void TriggerQuoteStrikeClick(string symbol, string rowType, string strikeText, bool sendToApi = true, bool useRealTrade = false)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
+        for (int i = 0; i < dgvQuotes.Rows.Count; i++)
+        {
+            var row = dgvQuotes.Rows[i];
+            if (row.Tag?.ToString() != rowType) continue;
+            if (row.Cells["colStrikePrice"].Value?.ToString() != strikeText) continue;
+            _pendingTradeSendToApi = sendToApi;
+            _chartsTabTradeOverride = useRealTrade;
+            DgvQuotes_CellClick(this, new DataGridViewCellEventArgs(dgvQuotes.Columns["colStrikePrice"].Index, i));
+            return;
+        }
+    }
+
+    // Same as TriggerQuoteStrikeClick, but for a strike clicked on the Live Chart's "Próxima" tab
+    // (dgvQuotesNext, next expiration — e.g. tomorrow for a daily ExpDate code). Unlike
+    // TriggerQuoteStrikeClick, this doesn't replay Form1's own DgvQuotes_CellClick (dgvQuotesNext
+    // has no click handler of its own on Form1 — its Strike column isn't even a button there) —
+    // instead it dispatches directly, always WITH target (per the Charts tab's own 2-way
+    // Demo+Target/Real+Target radios — this is the only caller, dgvQuotesNext has no other click
+    // path), using NextGridColumns and forcing expDateOverride to tomorrow's resolved date so the
+    // trade is persisted (and, for a REAL order, the OCC symbol built) against the correct expiration.
+    internal void TriggerQuoteStrikeClickNext(string symbol, string rowType, string strikeText, bool sendToApi = true, bool useRealTrade = false)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
+        for (int i = 0; i < dgvQuotesNext.Rows.Count; i++)
+        {
+            var row = dgvQuotesNext.Rows[i];
+            if (row.Tag?.ToString() != rowType) continue;
+            if (row.Cells["colStrikePriceNext"].Value?.ToString() != strikeText) continue;
+            if (IsRowTradeBlocked(row, "colCallBidNext", "colPutBidNext")) return;
+
+            var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
+            if (useRealTrade)
+                _ = PlaceRealTradeFromRowAsync(row, NextGridColumns, withTarget: true, sendToApi, nextExpDate);
+            else
+                _ = OpenSimulatedTradeFromRow(row, NextGridColumns, sendToApi, nextExpDate);
+            return;
+        }
+    }
+
+    // Fires (symbol) every time dgvTrades changes — a trade opens, closes, or its PnL is refreshed
+    // on the regular poll cycle — so MultiChartForm's mirrored trades grid can stay in sync.
+    public event Action<string>? OnTradesUpdatedEvent;
+
+    // Read-only access to dgvTrades for MultiChartForm's mirror grid to copy values/colors from.
+    // Same one-instance-per-ticker restriction as the methods above.
+    internal DataGridView? GetTradesGrid(string symbol) =>
+        _selectedTicker != null && _selectedTicker.Symbol == symbol ? dgvTrades : null;
+
+    // Forwards a Close-button click from MultiChartForm's mirrored trades grid into the EXACT same
+    // handler a click on Form1's own dgvTrades Close button would run (DgvTrades_CellClick) — real
+    // trades still place a real SELL_TO_CLOSE order, demo trades just close in the log, identical
+    // either way to clicking Close on Form1 itself. rowIndex is positional — valid as long as the
+    // mirror grid was last rebuilt in the same row order as dgvTrades (always true; see
+    // MultiChartForm's RefreshTradesGrid, which fully rebuilds every time).
+    internal void TriggerTradeCloseClick(string symbol, int rowIndex)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
+        if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return;
+        DgvTrades_CellClick(this, new DataGridViewCellEventArgs(dgvTrades.Columns["colTradeClose"].Index, rowIndex));
+    }
+
+    // Distinct background so an automatic (bot-driven) demo trade is visually different from a
+    // manually-clicked one in the SAME grid — per explicit request ("solo mostrar que el trade es
+    // automático"), nothing more elaborate than a color.
+    private static readonly Color AutomaticTradeRowColor = Color.Lavender;
+
+    // Distinct background for the 3 rows of a "Refuerzo" group (2 source Demo trades + the
+    // averaged result) — see TryCreateReinforcementAsync/CloseTradeRowAsync's group-close handling.
+    private static readonly Color ReinforcementRowColor = Color.Khaki;
+
+    // Opens a demo trade in THIS Form1 instance's own Trades grid (dgvTrades) — used by
+    // TimeframeViewerForm's "strike, spot" reply flow. Reuses the exact same RecordEntryAsync path
+    // real/manual demo trades go through, so it gets live PnL updates from the normal polling loop
+    // (UpdateTradesPnL) for free — including the existing target-based auto-close, just with a
+    // 300% target instead of the user's global TargetSettingsStore percentage (see
+    // overrideTargetPct). suppressAutoClose stays FALSE on purpose so that auto-close fires.
+    // Returns null if the symbol doesn't match this instance's own ticker, or the strike has no
+    // live quote right now.
+    public async Task<DataGridViewRow?> OpenAutomaticDemoTrade(string symbol, bool calls, decimal strike)
+    {
+        var quote = GetQuoteForStrike(symbol, calls, strike);
+        if (quote == null || quote.Value.Ask <= 0) return null;
+
+        var rowType = calls ? "CALL" : "PUT";
+        var (_, row) = await RecordEntryAsync(symbol, rowType, strike.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            level: string.Empty, quote.Value.Bid, quote.Value.Ask, contracts: "1", entryLabel: "Auto TF Rebote",
+            isDemo: true, suppressAutoClose: false, overrideTargetPct: 300m);
+
+        row.DefaultCellStyle.BackColor = AutomaticTradeRowColor;
+        return row;
+    }
+
+    // Closes an automatic demo trade opened above — used when TimeframeViewerForm's SpotPrice
+    // cross fires BEFORE the 300% target does (the target close, if it happens first, is already
+    // handled automatically by UpdateTradesPnL — see OpenAutomaticDemoTrade). closeType "SPOT" is
+    // deliberately neither "MANUAL" (would try to place a real broker order) nor "TARGET" (would
+    // price the exit at T_Bid instead of the live Bid) — CloseTradeRowAsync falls back to the
+    // current on-screen Bid for any other closeType, which is exactly what a spot-cross close
+    // should use.
+    public async Task CloseAutomaticDemoTradeAsync(DataGridViewRow row) => await CloseTradeRowAsync(row, "SPOT");
+
+    // True once the row shows an exit time — used by TimeframeViewerForm to tell whether the 300%
+    // target already auto-closed the trade before its own SpotPrice-cross check got to it.
+    public static bool IsTradeRowClosed(DataGridViewRow row) =>
+        !string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString());
+
     // Returns the in-range OTM call/put lists so the caller can build trade-PnL maps if needed.
-    private (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
-        DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false)
+    // Static (no Form1 instance state) so it's reusable from SimulatorForm's own grid too —
+    // selectedCounts/callOnly/putOnly used to live on Form1's fields/checkboxes, now explicit
+    // parameters instead (same values, callers just pass them through).
+    internal static (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
+        DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false,
+        string? selectedCounts = null, bool callOnly = false, bool putOnly = false,
+        IEnumerable<(string Type, decimal Strike)>? forcedStrikes = null)
     {
         decimal.TryParse(ticker.Low,  out var rangeLow);
         decimal.TryParse(ticker.High, out var rangeHigh);
@@ -878,7 +1779,7 @@ public partial class Form1 : Form
         List<OptionQuoteDto> otmCalls;
         List<OptionQuoteDto> otmPuts;
 
-        if (applyCountsFilter && int.TryParse(_selectedCounts, out var count))
+        if (applyCountsFilter && int.TryParse(selectedCounts, out var count))
         {
             // Show the N closest OTM strikes regardless of the Ask price range.
             var callStrikeSet = allOtmCallStrikes.Take(count).ToHashSet();
@@ -912,17 +1813,44 @@ public partial class Form1 : Form
                 .ToList();
         }
 
+        // Force-include specific strikes regardless of the OTM filter above (see
+        // DgvTrades_CellClick — a trade whose strike went ITM would otherwise silently vanish from
+        // the grid). Only added if a real quote for that (type, strike) actually exists and isn't
+        // already in the list; re-sorted afterward to keep the usual descending-by-strike order.
+        if (forcedStrikes != null)
+        {
+            var addedCall = false;
+            var addedPut  = false;
+            foreach (var (type, strike) in forcedStrikes)
+            {
+                if (type == "CALL" && !otmCalls.Any(q => q.StrikePrice == strike))
+                {
+                    var quote = allQuotes.FirstOrDefault(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && q.StrikePrice == strike);
+                    if (quote != null) { otmCalls.Add(quote); addedCall = true; }
+                }
+                else if (type == "PUT" && !otmPuts.Any(q => q.StrikePrice == strike))
+                {
+                    var quote = allQuotes.FirstOrDefault(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && q.StrikePrice == strike);
+                    if (quote != null) { otmPuts.Add(quote); addedPut = true; }
+                }
+            }
+            if (addedCall) otmCalls = otmCalls.OrderByDescending(q => q.StrikePrice).ToList();
+            if (addedPut)  otmPuts  = otmPuts.OrderByDescending(q => q.StrikePrice).ToList();
+        }
+
         // CALL/PUT checkbox filter (current grid only): one checked shows only that side;
         // both checked or both unchecked shows both.
         if (applyCountsFilter)
         {
-            var callOnly = chkCallFilter.Checked && !chkPutFilter.Checked;
-            var putOnly  = chkPutFilter.Checked && !chkCallFilter.Checked;
             if (callOnly) otmPuts  = new List<OptionQuoteDto>();
             if (putOnly)  otmCalls = new List<OptionQuoteDto>();
         }
 
-        // Always rebuild rows so strikes that move ITM/OTM are reflected immediately
+        // Always rebuild rows so strikes that move ITM/OTM are reflected immediately — but
+        // Rows.Clear() resets the grid's scroll position to the top, so every poll cycle (every
+        // ~6s) was yanking the view back up if the user had scrolled down. Save it here and
+        // restore it (clamped) once the rows are rebuilt below.
+        var scrollRowToRestore = grid.Rows.Count > 0 ? grid.FirstDisplayedScrollingRowIndex : -1;
         grid.Rows.Clear();
 
         foreach (var call in otmCalls)
@@ -959,7 +1887,74 @@ public partial class Form1 : Form
 
         PadWithBlankRows(grid, 8);
 
+        if (scrollRowToRestore >= 0 && grid.Rows.Count > 0)
+            grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, grid.Rows.Count - 1);
+
         return (otmCalls, otmPuts);
+    }
+
+    // Single-column-set variant of PopulateQuotesGrid, used by MultiChartForm's live options grid
+    // on the Live Chart window — Calls and Puts share the same Strike/Bid/Ask/Sprd/Conts/Level/Range
+    // columns (one row per option, not one call+put column set per row), sorted by strike
+    // descending so calls (above spot) sit above puts (below spot) in one continuous list.
+    // otmCalls/otmPuts are the EXACT already-filtered lists dgvQuotes is currently showing (see
+    // GetQuoteSnapshot) — same Counts/Range/Call-Put filter Form1 has selected, not a separately
+    // derived one, so both grids always show identical strikes/values. allQuotes (the FULL,
+    // unfiltered chain) is only used for Level's ranking, same as PopulateQuotesGrid's own
+    // "rank among ALL OTM strikes before range/count filter" rule.
+    internal static void PopulateSingleSideOptionsGrid(
+        DataGridView grid, List<OptionQuoteDto> allQuotes, List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, TickerEntry ticker)
+    {
+        var rangeText = $"{ticker.Low} - {ticker.High}";
+
+        var allOtmCallStrikes = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call && !q.InTheMoney)
+            .OrderBy(q => q.StrikePrice)
+            .Select(q => q.StrikePrice)
+            .ToList();
+        var allOtmPutStrikes = allQuotes
+            .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put && !q.InTheMoney)
+            .OrderByDescending(q => q.StrikePrice)
+            .Select(q => q.StrikePrice)
+            .ToList();
+
+        var scrollRowToRestore = grid.Rows.Count > 0 ? grid.FirstDisplayedScrollingRowIndex : -1;
+        grid.Rows.Clear();
+
+        var combined = otmCalls.Select(q => (Quote: q, IsCall: true))
+            .Concat(otmPuts.Select(q => (Quote: q, IsCall: false)))
+            .OrderByDescending(x => x.Quote.StrikePrice)
+            .ToList();
+
+        bool? previousWasCall = null;
+        foreach (var (quote, isCall) in combined)
+        {
+            // Blank separator row right where the list crosses from Calls into Puts (combined is
+            // sorted strike-descending, so OTM calls — above spot — always come first) — quarter
+            // height of a normal row, just a visual gap, no data/click behavior of its own.
+            if (previousWasCall == true && !isCall)
+            {
+                grid.Rows.Add();
+                var separatorRow = grid.Rows[grid.Rows.Count - 1];
+                separatorRow.Tag = "SEPARATOR";
+                separatorRow.Height = Math.Max(1, grid.RowTemplate.Height / 4);
+            }
+            previousWasCall = isCall;
+
+            var sprd      = FormatSprd(quote.Ask - quote.Bid);
+            var contracts = GetContractsValue(quote.Ask);
+            var levelIdx  = isCall ? allOtmCallStrikes.IndexOf(quote.StrikePrice) : allOtmPutStrikes.IndexOf(quote.StrikePrice);
+            var level     = (levelIdx + 1).ToString();
+            grid.Rows.Add(
+                FormatStrike(quote.StrikePrice),
+                quote.Bid.ToString("F2"), quote.Ask.ToString("F2"), sprd,
+                contracts, level, rangeText);
+            grid.Rows[grid.Rows.Count - 1].Tag = isCall ? "CALL" : "PUT";
+        }
+
+        PadWithBlankRows(grid, 8);
+        if (scrollRowToRestore >= 0 && grid.Rows.Count > 0)
+            grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, grid.Rows.Count - 1);
     }
 
     // Fills the grid with empty rows up to targetTotal so it still looks like a full table
@@ -1053,6 +2048,22 @@ public partial class Form1 : Form
         return !decimal.TryParse(bidStr, out var bid) || bid == 0m;
     }
 
+    // Guards the Strike button on the tradable (current-expiration) grid: blocks the trade if
+    // the option is illiquid (bid = 0), the spread is too wide (Sprd >= 6, same cents units
+    // shown in the Sprd column), or there's no room for even 1 contract at the current Position
+    // Size (Conts = 0) — any one of these makes clicking Strike a guaranteed-bad trade.
+    private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName)
+    {
+        if (IsRowBidZero(row, callBidColName, putBidColName)) return true;
+
+        var sprdColName = row.Tag?.ToString() == "PUT" ? "colPutSprd" : "colCallSprd";
+        if (decimal.TryParse(row.Cells[sprdColName].Value?.ToString(), out var sprd) && sprd >= 6) return true;
+
+        if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
+
+        return false;
+    }
+
     private void DgvQuotes_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
     {
         if (e.RowIndex < 0) return;
@@ -1061,7 +2072,7 @@ public partial class Form1 : Form
         var val     = e.Value?.ToString();
         var row     = dgvQuotes.Rows[e.RowIndex];
         var rowType = row.Tag?.ToString();
-        var disabled = IsRowBidZero(row, "colCallBid", "colPutBid");
+        var disabled = IsRowTradeBlocked(row, "colCallBid", "colPutBid");
 
         // Paint default background
         e.PaintBackground(e.ClipBounds, true);
@@ -1091,44 +2102,157 @@ public partial class Form1 : Form
     {
         if (e.RowIndex < 0 || e.ColumnIndex != dgvQuotes.Columns["colStrikePrice"].Index) return;
 
-        // Block clicks on illiquid options (bid = 0) to avoid opening a guaranteed-loss order
-        if (IsRowBidZero(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
+        // Read-and-reset FIRST, before anything else — see _pendingTradeSendToApi's comment. A
+        // real user click on this grid (not via TriggerQuoteStrikeClick) never touches the field,
+        // so it's always still true here, same as before this feature existed.
+        var sendToApi = _pendingTradeSendToApi;
+        _pendingTradeSendToApi = true;
+        var chartsOverride = _chartsTabTradeOverride;
+        _chartsTabTradeOverride = null;
 
+        // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
+        if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
+
+        // A click coming from the Charts tab's own Demo+Target/Real+Target radios always carries
+        // target — bypasses the 4-way Options-Quotes radios below entirely for this one click.
+        if (chartsOverride.HasValue)
+        {
+            if (chartsOverride.Value)
+                _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true, sendToApi);
+            else
+                OpenSimulatedTrade(e.RowIndex, sendToApi);
+            return;
+        }
+
+        // rbNoTrade ("No Trade") runs free, no target auto-close; rbNoTradeTarget
+        // ("No Trade-Target") is the one that auto-closes at target — swapped 2026-08-03, the
+        // wiring had these backwards since rbNoTradeTarget was added.
         if (rbNoTrade.Checked)
-            OpenSimulatedTrade(e.RowIndex);
+            OpenSimulatedTradeNoTarget(e.RowIndex, sendToApi);
         else if (rbTrade.Checked)
-            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false);
+            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: false, sendToApi);
         else if (rbTradeTarget.Checked)
-            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true);
+            _ = PlaceRealTradeAsync(e.RowIndex, withTarget: true, sendToApi);
+        else if (rbNoTradeTarget.Checked)
+            OpenSimulatedTrade(e.RowIndex, sendToApi);
     }
 
-    private async void OpenSimulatedTrade(int rowIndex)
+    // Column names differ between dgvQuotes (today's chain) and dgvQuotesNext (next chain, e.g.
+    // tomorrow for daily) — this lets the trade-open methods below work against either grid instead
+    // of hardcoding dgvQuotes's own column names. See TriggerQuoteStrikeClickNext.
+    private readonly record struct OptionsGridColumns(
+        string Strike, string Contracts, string Level, string CallBid, string CallAsk, string PutBid, string PutAsk);
+    private static readonly OptionsGridColumns TodayGridColumns = new(
+        "colStrikePrice", "colContracts", "colLevel", "colCallBid", "colCallAsk", "colPutBid", "colPutAsk");
+    private static readonly OptionsGridColumns NextGridColumns = new(
+        "colStrikePriceNext", "colContractsNext", "colLevelNext", "colCallBidNext", "colCallAskNext", "colPutBidNext", "colPutAskNext");
+
+    private async void OpenSimulatedTrade(int rowIndex, bool sendToApi = true) =>
+        await OpenSimulatedTradeFromRow(dgvQuotes.Rows[rowIndex], TodayGridColumns, sendToApi, expDateOverride: null);
+
+    private async Task OpenSimulatedTradeFromRow(DataGridViewRow row, OptionsGridColumns cols, bool sendToApi, DateOnly? expDateOverride)
     {
-        var row       = dgvQuotes.Rows[rowIndex];
         var rowType   = row.Tag?.ToString() ?? "CALL";
-        var strike    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
-        var contracts = row.Cells["colContracts"].Value?.ToString() ?? "0";
-        var level     = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
+        var strike    = row.Cells[cols.Strike].Value?.ToString() ?? string.Empty;
+        var contracts = row.Cells[cols.Contracts].Value?.ToString() ?? "0";
+        var level     = row.Cells[cols.Level].Value?.ToString() ?? string.Empty;
         var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
-        var (bid, ask) = ReadRowBidAsk(row, rowType);
+        var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false);
+        var (_, newRow) = await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: false, sendToApi: sendToApi, expDateOverride: expDateOverride);
+        await TryCreateReinforcementAsync(newRow, symbol, rowType, strike, suppressAutoClose: false, sendToApi, expDateOverride);
     }
 
-    private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType)
+    // Same as OpenSimulatedTrade, but with suppressAutoClose: true — no target% auto-close, the
+    // demo trade just runs until closed manually or auto-closed at 4pm ET if it expires today.
+    private async void OpenSimulatedTradeNoTarget(int rowIndex, bool sendToApi = true) =>
+        await OpenSimulatedTradeNoTargetFromRow(dgvQuotes.Rows[rowIndex], TodayGridColumns, sendToApi, expDateOverride: null);
+
+    private async Task OpenSimulatedTradeNoTargetFromRow(DataGridViewRow row, OptionsGridColumns cols, bool sendToApi, DateOnly? expDateOverride)
+    {
+        var rowType   = row.Tag?.ToString() ?? "CALL";
+        var strike    = row.Cells[cols.Strike].Value?.ToString() ?? string.Empty;
+        var contracts = row.Cells[cols.Contracts].Value?.ToString() ?? "0";
+        var level     = row.Cells[cols.Level].Value?.ToString() ?? string.Empty;
+        var symbol    = _selectedTicker?.Symbol ?? "UNK";
+
+        var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
+        if (ask <= 0) return;
+
+        var (_, newRow) = await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Manual", isDemo: true, suppressAutoClose: true, sendToApi: sendToApi, expDateOverride: expDateOverride);
+        await TryCreateReinforcementAsync(newRow, symbol, rowType, strike, suppressAutoClose: true, sendToApi, expDateOverride);
+    }
+
+    // Demo-only "Refuerzo": if another Demo trade is already open at the same (Type, Strike) and
+    // isn't already part of a reinforcement group, average the two into a 3rd row (contracts sum,
+    // weighted-average entry price) instead of leaving two independent positions — per explicit
+    // request. A 3rd trade arriving at a strike that's already part of a group is left alone (no
+    // re-averaging), per explicit request ("se ignora por ahora"). The averaged row's target% is
+    // recalculated fresh from the averaged price (RecordEntryAsync always derives T_Bid from
+    // whatever "ask" it's given), and it flows through the exact same live-update/close machinery
+    // as any normal row — UpdateTradesPnL/CloseTradeRowAsync need no changes for it to work.
+    private async Task TryCreateReinforcementAsync(DataGridViewRow newRow, string symbol, string rowType,
+        string strike, bool suppressAutoClose, bool sendToApi, DateOnly? expDateOverride)
+    {
+        var sourceRow = dgvTrades.Rows.Cast<DataGridViewRow>()
+            .FirstOrDefault(r => r != newRow
+                && r.Tag is TradeRowTag { ReinforcementGroupId: null }
+                && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString())
+                && r.Cells["colTradeType"].Value?.ToString() == rowType
+                && r.Cells["colTradeStrike"].Value?.ToString() == strike);
+        if (sourceRow == null) return;
+        var sourceTradeId = (sourceRow.Tag as TradeRowTag)?.TradeId ?? 0;
+        var newTradeId    = (newRow.Tag as TradeRowTag)?.TradeId ?? 0;
+
+        int.TryParse(sourceRow.Cells["colTradeContracts"].Value?.ToString(), out var c1);
+        decimal.TryParse(sourceRow.Cells["colTradeEntryPrice"].Value?.ToString(), out var p1);
+        int.TryParse(newRow.Cells["colTradeContracts"].Value?.ToString(), out var c2);
+        decimal.TryParse(newRow.Cells["colTradeEntryPrice"].Value?.ToString(), out var p2);
+        if (c1 <= 0 || c2 <= 0) return;
+
+        var combinedContracts = c1 + c2;
+        var avgPrice = Math.Round((c1 * p1 + c2 * p2) / combinedContracts, 2);
+        decimal.TryParse(sourceRow.Cells["colTradeBid"].Value?.ToString(), out var bid);
+
+        var (reinforcementId, reinforcementRow) = await RecordEntryAsync(
+            symbol, rowType, strike, "0", bid, avgPrice, combinedContracts.ToString(), "Trade Refuerzo",
+            isDemo: true, suppressAutoClose: suppressAutoClose, sendToApi: sendToApi, expDateOverride: expDateOverride);
+
+        if (reinforcementRow.Tag is TradeRowTag rTag)
+            reinforcementRow.Tag = rTag with { ReinforcementGroupId = reinforcementId, IsReinforcementResult = true };
+        if (sourceRow.Tag is TradeRowTag sTag)
+            sourceRow.Tag = sTag with { ReinforcementGroupId = reinforcementId };
+        if (newRow.Tag is TradeRowTag nTag)
+            newRow.Tag = nTag with { ReinforcementGroupId = reinforcementId };
+
+        // Note in trade_history.json (and, via CloseTradeRowAsync -> DailyTradeLogWriter, the
+        // Obsidian .md log at close time) that this trade is a Refuerzo result, and which 2 trades
+        // it combines — the API send is bypassed right now (see SaveTradeToApiAsync), so this only
+        // ever reaches the local store, same as every other trade at the moment.
+        if (reinforcementId != 0)
+            TradeHistoryStore.MarkReinforcement(reinforcementId, $"{sourceTradeId},{newTradeId}");
+
+        sourceRow.DefaultCellStyle.BackColor        = ReinforcementRowColor;
+        newRow.DefaultCellStyle.BackColor           = ReinforcementRowColor;
+        reinforcementRow.DefaultCellStyle.BackColor = ReinforcementRowColor;
+
+        LogLine($"{DateTime.Now:HH:mm:ss} [Refuerzo] {symbol} {rowType} @ {strike}: {c1}@{p1:F2} + {c2}@{p2:F2} -> {combinedContracts}@{avgPrice:F2} (TradeId {reinforcementId})", Color.Khaki);
+    }
+
+    private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType, OptionsGridColumns cols)
     {
         decimal bid, ask;
         if (rowType == "CALL")
         {
-            decimal.TryParse(row.Cells["colCallBid"].Value?.ToString(), out bid);
-            decimal.TryParse(row.Cells["colCallAsk"].Value?.ToString(), out ask);
+            decimal.TryParse(row.Cells[cols.CallBid].Value?.ToString(), out bid);
+            decimal.TryParse(row.Cells[cols.CallAsk].Value?.ToString(), out ask);
         }
         else
         {
-            decimal.TryParse(row.Cells["colPutBid"].Value?.ToString(), out bid);
-            decimal.TryParse(row.Cells["colPutAsk"].Value?.ToString(), out ask);
+            decimal.TryParse(row.Cells[cols.PutBid].Value?.ToString(), out bid);
+            decimal.TryParse(row.Cells[cols.PutAsk].Value?.ToString(), out ask);
         }
         return (bid, ask);
     }
@@ -1137,13 +2261,22 @@ public partial class Form1 : Form
     // Shared by simulated trades and real (broker) trades. Returns the API trade id and the new grid row.
     private async Task<(int TradeId, DataGridViewRow Row)> RecordEntryAsync(string symbol, string rowType, string strike, string level,
         decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool suppressAutoClose = false,
-        string? accountHash = null, string? occSymbol = null, int quantity = 0)
+        string? accountHash = null, string? occSymbol = null, int quantity = 0, decimal? overrideTargetPct = null, bool sendToApi = true,
+        DateOnly? expDateOverride = null)
     {
-        decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
+        decimal targetPct;
+        if (overrideTargetPct.HasValue) targetPct = overrideTargetPct.Value;
+        else decimal.TryParse(TargetSettingsStore.Load(), out targetPct);
         var tBid      = Math.Round(ask * (1 + targetPct / 100m), 2);
         var entryStr  = ask.ToString("F2");
         var entryTime = DateTime.Now;
         var now       = entryTime.ToString("HH:mm:ss");
+
+        // Any trade opened without a target (suppressAutoClose — demo "No Trade" or real "Trade")
+        // runs free until manually closed; the target% never drives anything for it, so leave
+        // PnL_Target blank instead of showing a number that looks like it's in effect. "No
+        // Trade-Target" and "Trade-Target" (both suppressAutoClose: false) keep showing it.
+        var pnlTargetCell = suppressAutoClose ? string.Empty : targetPct.ToString("F0");
 
         RemoveBlankPlaceholderRows(dgvTrades);
 
@@ -1151,27 +2284,42 @@ public partial class Form1 : Form
             now, rowType, strike,
             bid.ToString("F2"), ask.ToString("F2"), contracts,
             entryStr, bid.ToString("F2"), tBid.ToString("F2"),
-            "0.00", "0.00", targetPct.ToString("F0"),
+            "0.00", "0.00", pnlTargetCell,
             string.Empty, "Close");
 
         var newRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
         newRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
         newRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+        newRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
         newRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
         SetTradeTypeColor(newRow, rowType);
+        if (decimal.TryParse(strike, out var strikeForMoneyness))
+            SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
+        newRow.Cells["colTradeDemoReal"].Value = isDemo ? "Demo" : "Real";
 
-        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}", Color.White);
+        // Premium = riesgo máximo de la posición = precio de entrada * 100 (por contrato) *
+        // cantidad de contratos. "ask" ya es el valor usado como EntryPrice acá mismo (ver
+        // entryStr abajo) tanto para demo como para real — el real recibe su propio log aparte
+        // cuando se confirma el fill ("Real EntryPrice confirmed"), esto es solo el de apertura.
+        decimal.TryParse(contracts, out var contractsForPremium);
+        var premium = ask * 100 * contractsForPremium;
+        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}  Premium={premium:F2}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
         System.Windows.Forms.Application.DoEvents();
 
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
-        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo);
-        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity);
+        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo, sendToApi);
+        // expDateOverride carries the clicked-tab's own expiration (e.g. "Próxima" tab on the Live
+        // Chart's tabbed options grid — see TriggerQuoteStrikeClickNext) instead of always the
+        // ticker's default resolved date, so a trade opened for tomorrow's chain is persisted with
+        // tomorrow's ExpirationDate, not today's.
+        var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
+        newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
+            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice);
         PadWithBlankRows(dgvTrades, 4);
 
-        var expDate = ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         OpenTradesStore.Add(new PersistedTrade(
             TradeId:        tradeId,
             Symbol:         symbol,
@@ -1182,12 +2330,35 @@ public partial class Form1 : Form
             EntryTime:      entryTime,
             ExpirationDate: expDate,
             Level:          level,
-            PnlTarget:      targetPct.ToString("F0")));
+            PnlTarget:      targetPct.ToString("F0"),
+            EntrySpotPrice: _lastSpotPrice,
+            IsDemo:         isDemo));
 
-        var entryPath = CaptureScreenshot(symbol, rowType, "entry");
-        // LogLine($"{now} Screenshot: {entryPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(entryPath, symbol, rowType, tradeId, now);
+        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
+        // through here. Awaited (with a repaint delay) BEFORE the entry snapshot below, same
+        // pattern as the close flow's ΔS marker — otherwise the snapshot capture/upload can win the
+        // race against WebView2's JS round-trip and get uploaded to S3 (and from there into the
+        // Obsidian daily note) without the line ever having been drawn on it.
+        if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
+        {
+            await chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
+            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice);
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
 
+        // Same white entry-spot line on the Charts tab's own panel 2 (15m RTH) — per explicit
+        // request; this tab is a separate TwoPanelChartsControl Form1 never fed a live trade-open
+        // marker into before (only the popup Live Chart window got one, above).
+        if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+        {
+            if (decimal.TryParse(strike, out var strikeValForChartsTab))
+                await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
+        }
+
+        _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
+
+        OnTradesUpdatedEvent?.Invoke(symbol);
         return (tradeId, newRow);
     }
 
@@ -1220,6 +2391,29 @@ public partial class Form1 : Form
         };
     }
 
+    // Which instance on THIS machine is allowed to actually call Schwab to renew the access
+    // token — every other instance just re-reads whatever this one last wrote to
+    // SchwabTokenStore (local %AppData% file, never shared over the network — each PC keeps and
+    // renews its own copy of the same refresh token, which gets copied over manually about once
+    // a week). Two cases:
+    //   - This PC hosts the real streaming connection (_isWebSocketHub) — the hub instance is
+    //     also the token authority, same as before.
+    //   - This PC is a pure remote client of another PC's hub (Hub Host configured) — it never
+    //     contends for the streaming port, so _isWebSocketHub is always false here. Falls back to
+    //     IsPrimaryTickerInstance() (first ticker in this PC's own TickerSettingsStore) instead,
+    //     so exactly one instance on this PC is still designated.
+    // The Hub Host gate matters: without it, a PC that DOES host the hub could end up with two
+    // simultaneous authorities (the hub winner AND whichever instance happens to be "primary
+    // ticker") if they're different processes — racing each other to renew.
+    private bool IsTokenAuthority() =>
+        _isWebSocketHub || (!string.IsNullOrWhiteSpace(HubHostSettingsStore.Load()) && IsPrimaryTickerInstance());
+
+    private static (string AccessToken, DateTime ExpiresAt) ReloadTokenFromDisk()
+    {
+        var t = SchwabTokenStore.Load();
+        return (t?.AccessToken ?? string.Empty, t?.AccessTokenExpiresAt ?? DateTime.MinValue);
+    }
+
     private SchwabTradingService CreateSchwabTradingService()
     {
         var creds  = SchwabCredentialsStore.Load();
@@ -1230,7 +2424,8 @@ public partial class Form1 : Form
             tokens?.RefreshToken ?? string.Empty,
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
-            OnSchwabTokenRenewed);
+            OnSchwabTokenRenewed,
+            IsTokenAuthority(), ReloadTokenFromDisk);
     }
 
     // Same broker-dispatch pattern as CreateTradingService, for the market-data (quotes) side.
@@ -1254,10 +2449,507 @@ public partial class Form1 : Form
             tokens?.RefreshToken ?? string.Empty,
             tokens?.AccessToken ?? string.Empty,
             tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
-            OnSchwabTokenRenewed, enableDumps);
+            OnSchwabTokenRenewed, enableDumps,
+            IsTokenAuthority(), ReloadTokenFromDisk);
     }
 
-    private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget)
+    // allowRefresh defaults to this instance's own IsTokenAuthority() — the one call site in
+    // SetUpLiveFeedAsync that wins the streaming port race passes true explicitly (before
+    // _isWebSocketHub itself is set, so IsTokenAuthority() can't see it yet); every other caller
+    // (client instances that just need a SchwabStreamerClient for REST history fetches) leaves it
+    // at the default so they never race the authority to renew the access token themselves.
+    private SchwabStreamerClient CreateSchwabStreamerClient(bool? allowRefresh = null)
+    {
+        var creds  = SchwabCredentialsStore.Load();
+        var tokens = SchwabTokenStore.Load();
+        var effectiveAllowRefresh = allowRefresh ?? IsTokenAuthority();
+        return new SchwabStreamerClient(
+            _marketHttpClient, _schwabAuth,
+            creds.ApiKey, creds.ApiSecret,
+            tokens?.RefreshToken ?? string.Empty,
+            tokens?.AccessToken ?? string.Empty,
+            tokens?.AccessTokenExpiresAt ?? DateTime.MinValue,
+            OnSchwabTokenRenewed,
+            effectiveAllowRefresh, ReloadTokenFromDisk);
+    }
+
+    // Opens a live-chart window (candles only, streamed via WebSocket) for the currently
+    // selected ticker. Fully separate from the existing polling-based Quotes tab — doesn't touch
+    // any of that state. Reuses one shared streaming connection across all 4 tickers.
+    private async void BtnLiveChart_Click(object? sender, EventArgs e)
+    {
+        if (_selectedTicker == null)
+        {
+            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        // Already have a window open for this symbol — just bring it forward instead of
+        // touching the streamer again.
+        if (_liveChartForms.TryGetValue(_selectedTicker.Symbol, out var existing) && !existing.IsDisposed)
+        {
+            existing.Activate();
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null; // let the next click retry instead of staying stuck on a faulted attempt
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        // One window, 3 chart panels side by side (1h / 15m RTH / 15m RTH+Overnight), all fed by
+        // _historyClient (REST) + _liveFeed (hub or relay) set up in EnsureLiveFeedReadyAsync.
+        var symbol = _selectedTicker.Symbol;
+        var multiChartForm = new MultiChartForm(symbol, _historyClient!, _liveFeed!, this);
+        multiChartForm.FormClosed += (s, e2) => _liveChartForms.Remove(symbol);
+        _liveChartForms[symbol] = multiChartForm;
+
+        // Wire T-Line mirroring onto any DailyChartForm(s) already open for this symbol (opened
+        // via THIS form's own "Daily" button, before this live chart existed) — see BtnDaily_Click.
+        if (_openDailyChartsBySymbol.TryGetValue(symbol, out var openDailyForms))
+            foreach (var dailyForm in openDailyForms.Where(f => !f.IsDisposed))
+                multiChartForm.AttachDailyMirroring(dailyForm);
+
+        multiChartForm.Show();
+    }
+
+    // ==================================================================================
+    // "Charts" tab — panel 1 (1h) + panel 2 (15m RTH) embedded directly in the main form,
+    // instead of a separate Live Chart popup window, per explicit request ("estamos pasando la
+    // funcionalidad de live chart para main form... por ahora si copias algo de alla para aca, no
+    // importa, luego eliminaremos la logica de alla"). Constructs TwoPanelChartsControl directly —
+    // a real UserControl, not a nested Form — so keyboard input (e.g. Delete on a selected T-Line)
+    // reaches its WebView2 controls correctly, which the previous "embed a whole MultiChartForm
+    // with TopLevel=false" hack could not do. No panel 3/side grids ever exist here at all, so
+    // there's nothing to hide post-construction anymore.
+    // ==================================================================================
+    private TwoPanelChartsControl? _chartsTabForm;
+    private Button? _btnChartsConnect;
+    private Panel? _chartsHost;
+    private Label? _lblChartsPollingTime;
+
+    // Top-docked strip for the Connect/Disconnect button (always visible, own row — never
+    // overlapped by the charts) + a separate Fill-docked host panel dedicated to the embedded
+    // MultiChartForm, added once here and left in place — toggling only shows/hides/creates-
+    // disposes the chart form inside it, never touches the button's own row.
+    //
+    // Auto-connects (silently, no click needed) the moment the "Charts" tab is first selected
+    // AND a ticker is already chosen — per explicit request ("quiero ver los controles... desde
+    // el inicio"): the panels + their full toolbars should already be there, not gated behind a
+    // manual click. The button stays as a manual Connect (if no ticker was selected yet when the
+    // tab was first opened) / Disconnect (per explicit request, "necesito poder detenerlo").
+    private void SetupChartsTab()
+    {
+        var host = new Panel { Dock = DockStyle.Fill };
+        _chartsHost = host;
+        tabCharts.Controls.Add(host);
+
+        // No dedicated Top-docked strip for this button anymore — that reserved its own band above
+        // the chart toolbar (Rect...BB edges), leaving a visible gap between the tab strip and the
+        // charts' own controls. Floats instead (no Dock, Anchor Top|Right, added AFTER host so it
+        // paints in front of it) directly over the top-right corner, letting the chart toolbar sit
+        // flush against the tab strip with nothing reserved above it, per explicit request.
+        var btn = new Button { Text = "Connect", Size = new Size(100, 28) };
+        btn.Click += (s, e) => _ = ConnectChartsTabAsync();
+        btn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+        // Polling time, same format/style as this tab's own lblLastUpdate ("hh:mm:ss tt", bold
+        // DarkGoldenrod) — floats next to the Connect/Disconnect button (same Anchor/no-Dock
+        // convention as that button), per explicit request to see it here too. Updated wherever
+        // lblLastUpdate itself is (see StartPollingTimer/PollQuotesOnceAsync).
+        var lblPolling = new Label
+        {
+            AutoSize  = true,
+            Font      = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold),
+            ForeColor = Color.DarkGoldenrod,
+            Anchor    = AnchorStyles.Top | AnchorStyles.Right
+        };
+        _lblChartsPollingTime = lblPolling;
+
+        void RepositionChartsConnectButton()
+        {
+            btn.Location = new Point(tabCharts.ClientSize.Width - btn.Width - 8, 3);
+            lblPolling.Location = new Point(btn.Right - lblPolling.Width, btn.Bottom + 4);
+        }
+        RepositionChartsConnectButton();
+        tabCharts.Resize += (s, e) => RepositionChartsConnectButton();
+        // AutoSize means lblPolling.Width changes with its own text — reposition on every text
+        // change too, or a longer/shorter timestamp would drift away from (or overlap) the button.
+        lblPolling.TextChanged += (s, e) => RepositionChartsConnectButton();
+        tabCharts.Controls.Add(lblPolling);
+        tabCharts.Controls.Add(btn);
+        lblPolling.BringToFront();
+        btn.BringToFront();
+        _btnChartsConnect = btn;
+
+        tabControl.SelectedIndexChanged += (s, e) =>
+        {
+            if (tabControl.SelectedTab == tabCharts && _chartsTabForm == null && _selectedTicker != null)
+                _ = ConnectChartsTabAsync();
+        };
+    }
+
+    private async Task ConnectChartsTabAsync()
+    {
+        // Already connected — a manual click here means "Disconnect": tear down and go back to
+        // the button (auto-connect above only fires while _chartsTabForm is still null).
+        if (_chartsTabForm != null)
+        {
+            _chartsHost!.Controls.Remove(_chartsTabForm);
+            _chartsTabForm.Dispose();
+            _chartsTabForm = null;
+            _btnChartsConnect!.Text = "Connect";
+            return;
+        }
+
+        if (_selectedTicker == null)
+        {
+            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        try
+        {
+            var symbol = _selectedTicker.Symbol;
+            var chartsControl = new TwoPanelChartsControl(symbol, _historyClient!, _liveFeed!, this)
+            {
+                Dock = DockStyle.Fill
+            };
+            _chartsTabForm = chartsControl;
+            _chartsHost!.Controls.Add(chartsControl);
+
+            _btnChartsConnect!.Text = "Disconnect";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not open the embedded charts:\n\n{ex}",
+                "Charts Tab Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // Opens the single "1h Charts — SPY/QQQ/DIA/IWM" window (no per-ticker selection needed —
+    // always the same 4 symbols). Same shared-streamer setup as BtnLiveChart_Click.
+    private async void BtnFourEtfCharts_Click(object? sender, EventArgs e)
+    {
+        if (_fourEtfChartsForm is { IsDisposed: false })
+        {
+            _fourEtfChartsForm.Activate();
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var form = new FourEtfChartsForm(_historyClient!, _liveFeed!);
+        form.FormClosed += (s, e2) => _fourEtfChartsForm = null;
+        _fourEtfChartsForm = form;
+        form.Show();
+    }
+
+    // Opens the "Multi-Timeframe Viewer" window — one symbol, 4 charts (5m/15m/1h/4h
+    // RTH+Overnight), read-only (no drawing tools/auto-detection). Same shared-streamer setup as
+    // BtnLiveChart_Click/BtnFourEtfCharts_Click.
+    private async void BtnTimeframeViewer_Click(object? sender, EventArgs e)
+    {
+        if (_timeframeViewerForm is { IsDisposed: false })
+        {
+            _timeframeViewerForm.Activate();
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var form = new TimeframeViewerForm(_historyClient!, _liveFeed!, this);
+        form.FormClosed += (s, e2) => _timeframeViewerForm = null;
+        _timeframeViewerForm = form;
+        form.Show();
+    }
+
+    // Lets the user configure a REMOTE hub IP (another computer on the LAN running this same app
+    // as the hub) so THIS instance connects to it instead of deciding locally. Only takes effect
+    // on the next connect (EnsureLiveFeedReadyAsync hasn't run yet, or the app is restarted) —
+    // if streaming already started this session under the old setting, it keeps running as-is.
+    private void BtnHubHost_Click(object? sender, EventArgs e)
+    {
+        var current = HubHostSettingsStore.Load();
+
+        using var dialog = new Form
+        {
+            Text = "Remote Hub Host",
+            Width = 380,
+            Height = 160,
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+        };
+        var lbl = new Label
+        {
+            Text = "IP de la PC que hace de hub (vacío = esta PC decide sola):",
+            Location = new Point(10, 12),
+            Size = new Size(350, 32)
+        };
+        var txt = new TextBox { Text = current, Location = new Point(10, 48), Size = new Size(345, 24) };
+        var btnOk = new Button { Text = "Guardar", Location = new Point(190, 82), Size = new Size(80, 28), DialogResult = DialogResult.OK };
+        var btnCancel = new Button { Text = "Cancelar", Location = new Point(275, 82), Size = new Size(80, 28), DialogResult = DialogResult.Cancel };
+        dialog.Controls.Add(lbl);
+        dialog.Controls.Add(txt);
+        dialog.Controls.Add(btnOk);
+        dialog.Controls.Add(btnCancel);
+        dialog.AcceptButton = btnOk;
+        dialog.CancelButton = btnCancel;
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            HubHostSettingsStore.Save(txt.Text.Trim());
+            MessageBox.Show(
+                "Guardado. Se va a usar la próxima vez que esta instancia se conecte al streaming (cerrá y volvé a abrir la app si ya estaba conectada).",
+                "Hub Host", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+
+    // Opens the price/options replay simulator — reads previously-recorded data from disk only,
+    // no live streaming/polling connection involved, so it can be open at the same time as
+    // everything else in this form without any interaction between them.
+    private void BtnSimulator_Click(object? sender, EventArgs e)
+    {
+        var simulatorForm = new SimulatorForm(_selectedTicker?.Symbol);
+        simulatorForm.Show();
+    }
+
+    // Opens the standalone Daily/Hora/15 Min chart window (same DailyChartForm MultiChartForm's
+    // own "Daily" button opens) for the currently selected ticker, without needing a live chart
+    // window open first — per explicit request. Needs _historyClient for its REST history fetches
+    // (the "15 Min" tab) and live streaming for the day's still-forming daily/hourly candles, so
+    // it goes through the same EnsureLiveFeedReadyAsync gate as BtnLiveChart_Click.
+    private async void BtnDaily_Click(object? sender, EventArgs e)
+    {
+        if (_selectedTicker == null)
+        {
+            MessageBox.Show("Please select a ticker first.", "No Ticker Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret))
+        {
+            MessageBox.Show("Schwab API credentials are not configured.", "Missing Credentials", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            await EnsureLiveFeedReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _liveFeedReadyTask = null;
+            MessageBox.Show($"Could not start live streaming:\n\n{ex.Message}",
+                "Live Chart Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var symbol = _selectedTicker.Symbol;
+        var dailyCandles = ChartPanel.GetLastDailyCandles(symbol, 250); // enough for SMA100/200 to have data
+        var dailyForm = new DailyChartForm(symbol, dailyCandles, _historyClient!);
+
+        if (!_openDailyChartsBySymbol.TryGetValue(symbol, out var list)) _openDailyChartsBySymbol[symbol] = list = new List<DailyChartForm>();
+        list.Add(dailyForm);
+        dailyForm.FormClosed += (s2, e2) => list.Remove(dailyForm);
+
+        // A live chart for this symbol may already be open — wire T-Line mirroring onto it right
+        // away. If one opens LATER instead, BtnLiveChart_Click wires it at that point.
+        if (_liveChartForms.TryGetValue(symbol, out var liveChart) && !liveChart.IsDisposed)
+            liveChart.AttachDailyMirroring(dailyForm);
+
+        dailyForm.Show();
+    }
+
+    // Same disk-only pattern as BtnSimulator_Click — the 4-ETF (SPY/QQQ/IWM/DIA) replay window
+    // needs no Schwab creds or live feed, so it can open independently of everything else.
+    private void BtnFourEtfSimulator_Click(object? sender, EventArgs e)
+    {
+        var fourEtfSimulatorForm = new FourEtfSimulatorForm();
+        fourEtfSimulatorForm.Show();
+    }
+
+    // Lazily decides whether this instance is the hub or a client, then sets up _historyClient +
+    // _liveFeed accordingly — cheap to call repeatedly, does nothing once already set up.
+    //
+    // Caches the in-flight Task itself (not just checking "_liveFeed != null" after the fact) so
+    // clicking "Live Chart" for two different tickers in quick succession can't race: without
+    // this, both calls would see _liveFeed still null while the first attempt is awaiting, and
+    // each would try to become the hub / connect independently (confirmed in ws_raw.log: two
+    // interleaved requestid sequences fighting over the same Schwab login).
+    private Task? _liveFeedReadyTask;
+
+    private Task EnsureLiveFeedReadyAsync()
+    {
+        _liveFeedReadyTask ??= SetUpLiveFeedAsync();
+        return _liveFeedReadyTask;
+    }
+
+    private async Task SetUpLiveFeedAsync()
+    {
+        var symbols = TickerSettingsStore.Load().Select(t => t.Symbol).ToList();
+        if (symbols.Count == 0 && _selectedTicker != null) symbols.Add(_selectedTicker.Symbol);
+
+        // DIA/IWM aren't in TickerSettingsStore yet — added by hand for the SPY/QQQ/DIA/IWM live
+        // chart window (FourEtfChartsForm) until that comes from the tickers table instead.
+        symbols.AddRange(FourEtfChartsForm.Symbols);
+        symbols = symbols.Distinct().ToList();
+
+        // If a REMOTE hub IP is configured (HubHostSettingsStore — set via "Hub Host" button,
+        // meant for an instance running on a DIFFERENT computer that wants to read another
+        // machine's hub instead of deciding locally), always connect there as a client. This
+        // instance never tries to bind the port itself/become a hub in that case.
+        var remoteHost = HubHostSettingsStore.Load();
+        if (!string.IsNullOrWhiteSpace(remoteHost))
+        {
+            var remoteHubClient = new CandleHubClient();
+
+            // This machine never touches Schwab or the hub machine's C:\OptionsData — without
+            // this, it has no local tick history at all, so its own Simulator/4-ETF Simulator
+            // windows have nothing to replay. Mirror every relayed candle/tick straight to this
+            // machine's own disk, same folder structure the hub itself writes to.
+            remoteHubClient.OnNewCandle    += (symbol, candle) => TickPriceStore.Append(symbol, candle.Time, candle.Close);
+            remoteHubClient.OnLevelOneTick += (symbol, price, time) => LevelOneTickStore.Append(symbol, time, price);
+
+            await remoteHubClient.ConnectAsync(LiveHubPort, remoteHost);
+
+            _candleHubClient = remoteHubClient;
+            _historyClient   = CreateSchwabStreamerClient();
+            _liveFeed        = remoteHubClient;
+            return;
+        }
+
+        // No remote hub configured — try to become the hub first — whichever app instance/
+        // process ON THIS MACHINE gets there first binds the port and owns the real Schwab
+        // connection for as long as it stays open.
+        var hubServer = new CandleHubServer();
+        if (hubServer.TryStart(LiveHubPort))
+        {
+            _candleHubServer = hubServer;
+
+            var streamer = CreateSchwabStreamerClient(allowRefresh: true);
+            _isWebSocketHub = true;
+            // Relayed to every OTHER instance via the hub TCP socket (BroadcastWsEvent) — only
+            // the hub instance owns the real Schwab connection.
+            streamer.OnWsStatusEvent += RaiseWsStatusEvent;
+            await streamer.ConnectAsync();
+            await streamer.SubscribeChartEquity(symbols);
+            // Re-enabled 2026-07-30 — root cause of the earlier "Bad command formatting"
+            // rejection was the service name itself ("LEVEL_ONE_EQUITIES" instead of the correct
+            // "LEVELONE_EQUITIES", confirmed against a working third-party SDK). Watch ws_raw.log
+            // on first use after this change to confirm the ADD actually succeeds this time.
+            await streamer.SubscribeLevelOneEquity(symbols);
+            streamer.OnNewCandle += (symbol, candle) => hubServer.Broadcast(symbol, candle);
+            streamer.OnLevelOneTick += (symbol, price, time) => hubServer.BroadcastLevelOne(symbol, price, time);
+
+            _historyClient = streamer;
+            _liveFeed      = streamer; // this instance's own connection IS the live feed
+            return;
+        }
+
+        // Another instance on this machine already owns the port — connect to it as a client
+        // instead. Still need our OWN SchwabStreamerClient for REST history fetches (no
+        // per-account limit on that, unlike the streaming socket) — it's never connected/subscribed.
+        var hubClient = new CandleHubClient();
+        await hubClient.ConnectAsync(LiveHubPort);
+
+        _candleHubClient = hubClient;
+        _historyClient   = CreateSchwabStreamerClient();
+        _liveFeed        = hubClient;
+    }
+
+    private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget, bool sendToApi = true) =>
+        await PlaceRealTradeFromRowAsync(dgvQuotes.Rows[rowIndex], TodayGridColumns, withTarget, sendToApi, expDateOverride: null);
+
+    private async Task PlaceRealTradeFromRowAsync(DataGridViewRow row, OptionsGridColumns cols, bool withTarget, bool sendToApi, DateOnly? expDateOverride)
+    {
+        var rowType      = row.Tag?.ToString() ?? "CALL";
+        var strikeStr    = row.Cells[cols.Strike].Value?.ToString() ?? string.Empty;
+        var contractsStr = row.Cells[cols.Contracts].Value?.ToString() ?? "0";
+        var level        = row.Cells[cols.Level].Value?.ToString() ?? string.Empty;
+
+        var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
+        if (!decimal.TryParse(strikeStr, out var strike)) return;
+
+        await PlaceRealTradeCoreAsync(rowType, strike, contractsStr, level, bid, ask, withTarget, sendToApi, expDateOverride);
+    }
+
+    // Places a REAL market BUY_TO_OPEN order for the given option (row click in the Quotes tab
+    // grid; quantity/level already computed by PopulateQuotesGrid). expDateOverride carries the
+    // clicked-tab's own expiration (see TriggerQuoteStrikeClickNext) — it drives BOTH the OCC
+    // symbol sent to Schwab and the persisted trade's ExpirationDate, so a "Próxima" tab order
+    // actually targets tomorrow's contract, not today's.
+    private async Task PlaceRealTradeCoreAsync(string rowType, decimal strike, string contractsStr, string level, decimal bid, decimal ask, bool withTarget, bool sendToApi = true, DateOnly? expDateOverride = null)
     {
         var account = SelectedAccountStore.Load();
         if (account == null || string.IsNullOrEmpty(account.HashValue))
@@ -1268,39 +2960,38 @@ public partial class Form1 : Form
         }
         if (_selectedTicker == null) return;
 
-        var row          = dgvQuotes.Rows[rowIndex];
-        var rowType      = row.Tag?.ToString() ?? "CALL";
-        var strikeStr    = row.Cells["colStrikePrice"].Value?.ToString() ?? string.Empty;
-        var contractsStr = row.Cells["colContracts"].Value?.ToString() ?? "0";
-        var level        = row.Cells["colLevel"].Value?.ToString() ?? string.Empty;
-        var symbol       = _selectedTicker.Symbol;
+        var symbol    = _selectedTicker.Symbol;
+        var strikeStr = FormatStrike(strike);
 
-        var (bid, ask) = ReadRowBidAsk(row, rowType);
         if (ask <= 0) return;
         if (!int.TryParse(contractsStr, out var qty) || qty <= 0)
         {
             MessageBox.Show("Invalid contract quantity.", "Order", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
-        if (!decimal.TryParse(strikeStr, out var strike)) return;
 
-        var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
+        var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
         var occ     = OccOptionSymbol.Build(symbol, expDate, rowType, strike);
         var masked  = MaskAccount(account.AccountNumber);
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
         var targetLine = withTarget ? $"\nExit: SELL_TO_CLOSE LIMIT at +{targetPct:F0}% of fill" : string.Empty;
 
-        var confirm = MessageBox.Show(
-            $"Send a REAL market order to Schwab?\n\n" +
-            $"Account: {masked}\n" +
-            $"Symbol:  {symbol} {rowType}\n" +
-            $"Strike:  {strikeStr}\n" +
-            $"Expiry:  {expDate:yyyy-MM-dd}\n" +
-            $"Qty:     {qty} contract(s)\n" +
-            $"Entry:   MARKET BUY_TO_OPEN{targetLine}\n\n" +
-            $"OCC: {occ}",
-            "Confirm REAL Order", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
-        if (confirm != DialogResult.Yes) return;
+        // Show the confirmation dialog unless the user opted out in Settings — either way, this
+        // is a REAL order (with or without a target), never a demo trade.
+        if (chkShowOrderConfirmation.Checked)
+        {
+            var confirm = MessageBox.Show(
+                $"Send a REAL market order to Schwab?\n\n" +
+                $"Account: {masked}\n" +
+                $"Symbol:  {symbol} {rowType}\n" +
+                $"Strike:  {strikeStr}\n" +
+                $"Expiry:  {expDate:yyyy-MM-dd}\n" +
+                $"Qty:     {qty} contract(s)\n" +
+                $"Entry:   MARKET BUY_TO_OPEN{targetLine}\n\n" +
+                $"OCC: {occ}",
+                "Confirm REAL Order", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+            if (confirm != DialogResult.Yes) return;
+        }
 
         try
         {
@@ -1315,7 +3006,7 @@ public partial class Form1 : Form
             // Trade-Target rows still auto-close in the log (mirrors the real LIMIT order closing
             // on the server); plain Trade rows are manual-close only.
             var (_, tradeRow) = await RecordEntryAsync(symbol, rowType, strikeStr, level, bid, ask, contractsStr, "Trade REAL (Schwab)", isDemo: false, suppressAutoClose: !withTarget,
-                accountHash: account.HashValue, occSymbol: occ, quantity: qty);
+                accountHash: account.HashValue, occSymbol: occ, quantity: qty, sendToApi: sendToApi, expDateOverride: expDateOverride);
 
             // Poll for the real fill, sync it into the log, then (if Trade-Target) send the LIMIT exit.
             _ = FinalizeRealEntryAsync(trading, account.HashValue, occ, qty, entryOrderId, targetPct, withTarget, tradeRow);
@@ -1451,11 +3142,52 @@ public partial class Form1 : Form
 
     private async void DgvTrades_CellClick(object? sender, DataGridViewCellEventArgs e)
     {
-        if (e.RowIndex < 0 || e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
+        if (e.RowIndex < 0) return;
         var row = dgvTrades.Rows[e.RowIndex];
+
+        if (e.ColumnIndex == dgvTrades.Columns["colTradeStrike"].Index)
+        {
+            ForceStrikeInQuotesGrid(row);
+            return;
+        }
+
+        if (e.ColumnIndex != dgvTrades.Columns["colTradeClose"].Index) return;
         if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return;
 
+        // Refuerzo group: clicking Close on ANY of the 3 linked rows (2 source + result) closes
+        // all 3 together, each at its own current C_Bid — since all 3 share the same underlying
+        // (Type, Strike) quote, that C_Bid is always the same value anyway. Per explicit request,
+        // the 3 rows can't be closed independently of each other.
+        if (row.Tag is TradeRowTag { ReinforcementGroupId: { } groupId })
+        {
+            var groupRows = dgvTrades.Rows.Cast<DataGridViewRow>()
+                .Where(r => r.Tag is TradeRowTag t && t.ReinforcementGroupId == groupId
+                    && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
+                .ToList();
+            foreach (var groupRow in groupRows)
+                await CloseTradeRowAsync(groupRow, "MANUAL");
+            return;
+        }
+
         await CloseTradeRowAsync(row, "MANUAL");
+    }
+
+    // Clicking a trade's Strike cell pins that (type, strike) so it keeps showing in dgvQuotes even
+    // after it goes ITM (PopulateQuotesGrid's OTM-only filter would otherwise silently drop it the
+    // moment spot crosses it) — stays pinned for the rest of the session on this ticker (cleared on
+    // ticker switch, see the Tickers button handler).
+    private void ForceStrikeInQuotesGrid(DataGridViewRow row)
+    {
+        var type = row.Cells["colTradeType"].Value?.ToString();
+        if (string.IsNullOrEmpty(type) || !decimal.TryParse(row.Cells["colTradeStrike"].Value?.ToString(), out var strike))
+            return;
+
+        _forcedStrikes.Add((type, strike));
+
+        if (_selectedTicker != null && _lastAllQuotes.Count > 0)
+            (_lastOtmCalls, _lastOtmPuts) = PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
+                selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
+                forcedStrikes: _forcedStrikes);
     }
 
     private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType)
@@ -1523,19 +3255,23 @@ public partial class Form1 : Form
 
         var duration = TimeSpan.Zero;
         int tradeId  = 0;
-        if (row.Tag is TradeRowTag tag)
+        var tag = row.Tag as TradeRowTag;
+        if (tag != null)
         {
             duration = now - tag.EntryTime;
             tradeId  = tag.TradeId;
         }
 
-        // Recalculate PnL at close time using the confirmed real fill price when we have one
-        // (real MANUAL close), otherwise fall back to the last polled bid shown on screen —
-        // same behavior as before this change for demo trades / TARGET closes / unconfirmed fills.
+        // Recalculate PnL at close time. Priority: confirmed real fill price (real MANUAL close)
+        // > T_Bid (TARGET close — the position closes AT the target price by definition, whether
+        // that's the real LIMIT order resting at the broker or just the auto-close trigger for a
+        // demo trade) > last polled bid shown on screen (plain manual close fallback).
         var entryPriceStr = row.Cells["colTradeEntryPrice"].Value?.ToString() ?? "0";
         var contractsStr  = row.Cells["colTradeContracts"].Value?.ToString() ?? "0";
+        var tBidStr       = row.Cells["colTradeTBid"].Value?.ToString() ?? string.Empty;
         decimal.TryParse(cBid, out var cBidParsed);
-        var exitBid = realClosePrice ?? cBidParsed;
+        decimal? targetClosePrice = closeType == "TARGET" && decimal.TryParse(tBidStr, out var tBidParsed) ? tBidParsed : null;
+        var exitBid = realClosePrice ?? targetClosePrice ?? cBidParsed;
         decimal.TryParse(entryPriceStr, out var entryPrice);
         decimal.TryParse(contractsStr, out var contractsForPnl);
         var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);
@@ -1545,13 +3281,19 @@ public partial class Form1 : Form
 
         row.Cells["colTradePnL"].Value        = pnl;
         row.Cells["colTradePnLPercent"].Value = pnlPct;
+        // Closing PnL% (real fill price, or target price for TARGET closes) can be a new
+        // low/high the live ticks never saw.
+        UpdatePnLMinMax(row, pnlPctVal);
         row.Cells["colTradeExitTime"].Value   = nowStr;
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
+        OnTradesUpdatedEvent?.Invoke(symbol);
 
         var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
 
-        var realCloseLog = realClosePrice.HasValue ? $"  RealClose: {realClosePrice.Value:F2}" : string.Empty;
+        var realCloseLog = realClosePrice.HasValue ? $"  RealClose: {realClosePrice.Value:F2}"
+            : targetClosePrice.HasValue ? $"  TargetClose: {targetClosePrice.Value:F2}"
+            : string.Empty;
         LogLine(string.Empty, Color.White);
         LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}{realCloseLog}", Color.White);
         LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
@@ -1559,44 +3301,178 @@ public partial class Form1 : Form
         System.Windows.Forms.Application.DoEvents();
 
         // Remove from local persistence
-        if (tradeId > 0)
+        if (tradeId != 0)
             OpenTradesStore.Remove(tradeId);
 
-        // Close trade in API
-        if (tradeId > 0)
+        // Close trade (API PATCH if tradeId is a real API id, always updates TradeHistoryStore
+        // locally regardless — see CloseTradeInApiAsync)
+        if (tradeId != 0)
         {
             var exitPrice = exitBid;
             await CloseTradeInApiAsync(tradeId, exitPrice, pnlVal, pnlPctVal, duration);
         }
 
-        // Screenshot exit
-        var exitPath = CaptureScreenshot(symbol, type, "exit");
-        // LogLine($"{nowStr} Screenshot: {exitPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(exitPath, symbol, type, tradeId, nowStr);
+        // Red "Expired!!!" marker on the 15m RTH (middle) chart — only for the 4pm expiration
+        // auto-close, and awaited BEFORE the snapshot below so it's actually drawn on the chart
+        // in time to be captured, instead of racing the capture (it used to be fire-and-forget
+        // AFTER the snapshot, so the marker never made it into the uploaded/pushed image).
+        if (closeType == "EXPIRED" && _liveChartForms.TryGetValue(symbol, out var chartFormExpired) && !chartFormExpired.IsDisposed)
+        {
+            await chartFormExpired.MarkExpiredOnRthChartAsync();
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
 
-        // Screenshot TradeLog (Trades + Logger section of the form)
+        // "ΔS=value" marker on the 15m RTH+Overnight chart — |spot at close - spot at entry|,
+        // anchored at the trade's strike (same price as its green "Stk=xxx" line). EntrySpotPrice
+        // is 0 for trades opened before this feature shipped (no reliable value to show), so those
+        // are skipped rather than drawing a misleading ΔS=<currentSpot>.
+        if (tag is { EntrySpotPrice: > 0 } && _lastSpotPrice > 0 && decimal.TryParse(strike, out var strikeForDelta) &&
+            _liveChartForms.TryGetValue(symbol, out var chartFormDelta) && !chartFormDelta.IsDisposed)
+        {
+            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDelta);
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
+
+        // White spot-price line at close — same marker drawn on entry, mirrors the Simulator.
+        if (_lastSpotPrice > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
+        {
+            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice);
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
+
+        // Same white spot-price line on the Charts tab's own panel 2 (15m RTH), per explicit
+        // request — see the matching call in TriggerQuoteStrikeClick's entry-open flow.
+        if (_lastSpotPrice > 0 && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+        {
+            if (tag is { EntrySpotPrice: > 0 } && decimal.TryParse(strike, out var strikeForDeltaChartsTab))
+                await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDeltaChartsTab);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
+        }
+
+        // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
+        // and the Telegram push below, instead of each capturing its own copy.
+        var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
+
+        // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
+        // Was gated on tradeId > 0 ("this trade reached the API") — but SendTradeCloseTelegramPushAsync
+        // itself never actually uses tradeId (it only needs the image + bot token/chat id), and now
+        // that the API send is bypassed (see SaveTradeToApiAsync), EVERY trade gets a local negative
+        // id, so that gate was silently blocking this push for 100% of trades — an unintended side
+        // effect of the bypass, not something anyone actually wanted disabled. Fixed by dropping the
+        // gate entirely; the function's own checks (imagePath/bot token) still apply.
+        _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
+
+        // Screenshot TradeLog (Trades + Logger section of the form) — scroll the just-closed row
+        // into view first, per explicit request, so it's actually visible in the capture even if
+        // the grid was scrolled elsewhere when the trade closed (CaptureTradeLogScreenshot just
+        // renders whatever's currently on screen).
+        if (dgvTrades.Rows.Contains(row))
+        {
+            dgvTrades.CurrentCell = row.Cells[0];
+            row.Selected = false; // avoid the blue selection highlight masking the gray closed-row color
+        }
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
-        _ = UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr);
+
+        // Uploads Close + TradeLog (fire-and-forget, doesn't block the row from showing "Closed"),
+        // then appends today's Obsidian daily-trade-log entry once both S3 URLs are actually known
+        // — EntryImageUrl is already set from when the trade opened.
+        _ = UploadCloseTradeLogAndAppendDailyAsync(closeChartPath, tradeLogPath, symbol, type, tradeId, nowStr);
     }
 
-    private static string CaptureScreenshot(string symbol, string optionType, string tag)
+    private async Task UploadCloseTradeLogAndAppendDailyAsync(string? closeChartPath, string tradeLogPath,
+        string symbol, string type, int tradeId, string nowStr)
     {
-        var folder = Path.Combine(@"C:\Screenshots", DateTime.Now.ToString("yyyyMMdd"));
-        Directory.CreateDirectory(folder);
+        if (closeChartPath != null)
+            await UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
+        await UploadScreenshotAsync(tradeLogPath, symbol, type, tradeId, nowStr, TradeImageKind.TradeLog);
 
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        var fileName  = $"{symbol}_{optionType}_{timestamp}_{tag}.png";
-        var filePath  = Path.Combine(folder, fileName);
+        if (tradeId == 0) return;
+        var trade = TradeHistoryStore.Load().FirstOrDefault(t => t.Id == tradeId);
+        if (trade != null) DailyTradeLogWriter.AppendTrade(trade);
+    }
 
-        var captureRect = GetCaptureRect(symbol);
-        using var bmp = new Bitmap(captureRect.Width, captureRect.Height);
-        using var g   = Graphics.FromImage(bmp);
-        g.CopyFromScreen(new Point(captureRect.X, captureRect.Y), Point.Empty, captureRect.Size);
-        bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+    // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
+    // WebView2 form itself — not a screen capture — only if a MultiChartForm for this symbol
+    // happens to be open. Best-effort: never blocks the trade flow. Filename matches
+    // CaptureTradeLogScreenshot's format ({Symbol}_{OptionType}_{timestamp}_{Tag}.png) so all 3
+    // screenshots a trade ever gets (Entry, Close, TradeLog) look consistent. Returns the saved
+    // file path (or null if nothing was captured) so callers can upload/reuse it.
+    private async Task<string?> SaveTradeChartSnapshotAsync(string symbol, string optionType, string tag)
+    {
+        try
+        {
+            Bitmap? combined;
+            // Popup Live Chart window (3 panels) takes priority when open; the Charts tab's own
+            // 2-panel combined image (panel 1 + 2) is only used as a fallback when no popup exists
+            // for this symbol, per explicit request.
+            if (_liveChartForms.TryGetValue(symbol, out var chartForm) && !chartForm.IsDisposed)
+                combined = await chartForm.CaptureCombinedChartImageAsync();
+            else if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+                combined = await _chartsTabForm.CaptureCombinedChartImageAsync();
+            else
+                return null;
 
-        return filePath;
+            using var _ = combined;
+            if (combined == null) return null;
+
+            var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
+            Directory.CreateDirectory(folder);
+            var fileName = $"{symbol}_{optionType}_{DateTime.Now:yyyyMMdd_HHmmss}_{tag}.png";
+            var filePath = Path.Combine(folder, fileName);
+            combined.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+            return filePath;
+        }
+        catch
+        {
+            // Best-effort — a chart-snapshot failure (WebView2 not ready, form closing, etc.)
+            // must never block or fail the trade flow.
+            return null;
+        }
+    }
+
+    // Captures the "_Entry" 3-chart snapshot and uploads it to S3 — mirrors the "_Close" path in
+    // CloseTradeRowAsync. Fire-and-forget from RecordEntryAsync, same as every other upload here.
+    private async Task UploadEntryChartSnapshotAsync(string symbol, string optionType, int tradeId, string timeStr)
+    {
+        var path = await SaveTradeChartSnapshotAsync(symbol, optionType, "Entry");
+        if (path != null)
+            await UploadScreenshotAsync(path, symbol, optionType, tradeId, timeStr, TradeImageKind.Entry);
+    }
+
+    // Pushes a Telegram photo (the "_Close" 3-chart snapshot CloseTradeRowAsync already captured
+    // and uploaded — imagePath is null if no Live Chart was open, in which case there's nothing
+    // to attach) with a caption describing the closed trade — symbol, side, strike, entry/exit,
+    // PnL$ and PnL%, duration. Best-effort, fire-and-forget from the caller: a failed/misconfigured
+    // push must never affect the trade-close flow itself (which has already committed by now).
+    private async Task SendTradeCloseTelegramPushAsync(
+        string symbol, int tradeId, string optionType, string strike, string closeType,
+        decimal entryPrice, decimal exitPrice, decimal pnl, decimal pnlPercent, TimeSpan duration,
+        string? imagePath)
+    {
+        try
+        {
+            if (imagePath == null) return; // no Live Chart open for this symbol — nothing to attach
+
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+
+            var pnlSign = pnl >= 0 ? "+" : string.Empty;
+            var caption =
+                $"{symbol} {optionType} {strike} — Closed ({closeType})\n" +
+                $"Entry: {entryPrice:F2}  Exit: {exitPrice:F2}\n" +
+                $"PnL: {pnlSign}{pnl:F2} ({pnlSign}{pnlPercent:F1}%)\n" +
+                $"Duration: {duration:hh\\:mm\\:ss}";
+
+            var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, imagePath, caption);
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "TradeClose", DateTime.Now));
+        }
+        catch
+        {
+            // Best-effort — never let a Telegram/network failure affect the already-closed trade.
+        }
     }
 
     private string CaptureTradeLogScreenshot(string symbol, string optionType)
@@ -1608,180 +3484,73 @@ public partial class Form1 : Form
         var fileName  = $"{symbol}_{optionType}_{timestamp}_TradeLog.png";
         var filePath  = Path.Combine(folder, fileName);
 
-        // Build bounding rect that covers grpTrades + grpLogger on screen
-        var topLeft     = grpTrades.PointToScreen(Point.Empty);
-        var bottomRight = grpLogger.PointToScreen(new Point(grpLogger.Width, grpLogger.Height));
-        var rect        = Rectangle.FromLTRB(topLeft.X, topLeft.Y, bottomRight.X, bottomRight.Y);
+        // Renders grpTrades + grpLogger directly via the form's own drawing (Control.DrawToBitmap)
+        // instead of CopyFromScreen — works even if the window is minimized, occluded, or off-screen.
+        using var tradesBmp = new Bitmap(grpTrades.Width, grpTrades.Height);
+        grpTrades.DrawToBitmap(tradesBmp, new Rectangle(Point.Empty, grpTrades.Size));
 
-        using var bmp = new Bitmap(rect.Width, rect.Height);
-        using var g   = Graphics.FromImage(bmp);
-        g.CopyFromScreen(rect.Location, Point.Empty, rect.Size);
-        bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+        using var loggerBmp = new Bitmap(grpLogger.Width, grpLogger.Height);
+        grpLogger.DrawToBitmap(loggerBmp, new Rectangle(Point.Empty, grpLogger.Size));
+
+        var width  = Math.Max(tradesBmp.Width, loggerBmp.Width);
+        var height = tradesBmp.Height + loggerBmp.Height;
+        using var combined = new Bitmap(width, height);
+        using (var g = Graphics.FromImage(combined))
+        {
+            g.Clear(Color.White);
+            g.DrawImage(tradesBmp, 0, 0);
+            g.DrawImage(loggerBmp, 0, tradesBmp.Height);
+        }
+        combined.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
 
         return filePath;
     }
 
-    private static Rectangle GetCaptureRect(string symbol)
+    // Manual "save the whole window" snapshot, triggered by clicking the clock label next to
+    // Start Polling/Fetch Quotes. DrawToBitmap (not CopyFromScreen) so it still works if the
+    // window is minimized/occluded — same technique CaptureTradeLogScreenshot above already uses.
+    private void LblLastUpdate_Click(object? sender, EventArgs e)
     {
-        var coords = ScreenCoordsStore.Load();
-        coords.TryGetValue(symbol.ToUpperInvariant(), out var tc);
+        var symbol = _selectedTicker.Symbol;
+        var folder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol);
+        Directory.CreateDirectory(folder);
 
-        if (tc is not null &&
-            !string.IsNullOrWhiteSpace(tc.Coords1) &&
-            !string.IsNullOrWhiteSpace(tc.Coords2))
-        {
-            var parts1 = tc.Coords1.Split(',');
-            var parts2 = tc.Coords2.Split(',');
-            if (parts1.Length == 2 && parts2.Length == 2 &&
-                int.TryParse(parts1[0].Trim(), out int x1) &&
-                int.TryParse(parts1[1].Trim(), out int y1) &&
-                int.TryParse(parts2[0].Trim(), out int x2) &&
-                int.TryParse(parts2[1].Trim(), out int y2))
-            {
-                int width  = Math.Abs(x2 - x1);
-                int height = Math.Abs(y2 - y1);
-                if (width > 0 && height > 0)
-                    return new Rectangle(Math.Min(x1, x2), Math.Min(y1, y2), width, height);
-            }
-        }
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var filePath  = Path.Combine(folder, $"{symbol}_{timestamp}_WholeUI.png");
 
-        // Fallback: full primary screen
-        return Screen.PrimaryScreen!.Bounds;
+        using var bmp = new Bitmap(Width, Height);
+        DrawToBitmap(bmp, new Rectangle(Point.Empty, Size));
+        bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+
+        LogLine($"{DateTime.Now:HH:mm:ss} [Screenshot] Whole UI saved: {filePath}", Color.Cyan);
     }
 
-    // (Re)builds one row (button + 2 coord textboxes) per symbol currently in the Tickers table,
-    // preloading whatever coordinates were already saved for that symbol. Called at startup and
-    // whenever the Tickers table is saved, so adding/removing a ticker keeps this in sync.
-    private void LoadCoordsButtons()
-    {
-        pnlCoordsRows.Controls.Clear();
-        _coordsTextboxes.Clear();
-        _coordsButtons.Clear();
-
-        var saved = ScreenCoordsStore.Load();
-        var symbols = TickerSettingsStore.Load()
-            .Select(t => t.Symbol.ToUpperInvariant())
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Distinct()
-            .ToList();
-
-        var y = 2;
-        foreach (var symbol in symbols)
-        {
-            var btn = new Button
-            {
-                Text     = symbol,
-                Location = new Point(5, y),
-                Size     = new Size(60, 23),
-                Tag      = symbol
-            };
-            btn.Click += BtnCoords_Click;
-
-            var t1 = new TextBox { Location = new Point(73, y),  Size = new Size(80, 23), ReadOnly = true };
-            var t2 = new TextBox { Location = new Point(161, y), Size = new Size(80, 23), ReadOnly = true };
-            if (saved.TryGetValue(symbol, out var tc))
-            {
-                t1.Text = tc.Coords1;
-                t2.Text = tc.Coords2;
-            }
-
-            pnlCoordsRows.Controls.Add(btn);
-            pnlCoordsRows.Controls.Add(t1);
-            pnlCoordsRows.Controls.Add(t2);
-
-            _coordsTextboxes[symbol] = (t1, t2);
-            _coordsButtons.Add(btn);
-
-            y += 32;
-        }
-    }
-
-    private void BtnSaveCoords_Click(object? sender, EventArgs e)
-    {
-        var coords = _coordsTextboxes.ToDictionary(
-            kv => kv.Key,
-            kv => new TickerCoords(kv.Value.T1.Text, kv.Value.T2.Text));
-        ScreenCoordsStore.Save(coords);
-
-        MessageBox.Show("Coordinates saved.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
-    }
-
-    private void BtnResetCoords_Click(object? sender, EventArgs e)
-    {
-        foreach (var (t1, t2) in _coordsTextboxes.Values)
-            t1.Text = t2.Text = string.Empty;
-
-        var current = ScreenCoordsStore.Load();
-        foreach (var symbol in _coordsTextboxes.Keys)
-            current[symbol] = new TickerCoords(string.Empty, string.Empty);
-        ScreenCoordsStore.Save(current);
-    }
-
-    private void BtnCoords_Click(object? sender, EventArgs e)
-    {
-        if (sender is not Button btn || btn.Tag is not string symbol) return;
-        if (!_coordsTextboxes.TryGetValue(symbol, out var targets)) return;
-
-        _coordsTarget1    = targets.T1;
-        _coordsTarget2    = targets.T2;
-        _coordsClickCount = 0;
-
-        // Change cursor to crosshair to indicate capture mode
-        this.Cursor = Cursors.Cross;
-
-        // Poll mouse clicks via timer every 50ms
-        _coordsCaptureTimer?.Stop();
-        _coordsCaptureTimer = new System.Windows.Forms.Timer { Interval = 50 };
-        _coordsCaptureTimer.Tick += CoordsCaptureTick;
-        _coordsCaptureTimer.Start();
-
-        btn.BackColor = Color.Yellow;
-        btn.Text = btn.Text + " ...";
-    }
-
-    private void CoordsCaptureTick(object? sender, EventArgs e)
-    {
-        if ((Control.MouseButtons & MouseButtons.Left) == 0) return;
-
-        var pos = Control.MousePosition;
-
-        if (_coordsClickCount == 0)
-        {
-            _coordsTarget1!.Text = $"{pos.X},{pos.Y}";
-            _coordsClickCount = 1;
-        }
-        else
-        {
-            _coordsTarget2!.Text = $"{pos.X},{pos.Y}";
-            StopCoordsCapture();
-        }
-
-        // Wait for mouse release before detecting next click
-        while ((Control.MouseButtons & MouseButtons.Left) != 0)
-            System.Windows.Forms.Application.DoEvents();
-    }
-
-    private void StopCoordsCapture()
-    {
-        _coordsCaptureTimer?.Stop();
-        _coordsCaptureTimer = null;
-        this.Cursor = Cursors.Default;
-
-        // Reset every dynamically-generated coords button's appearance.
-        foreach (var b in _coordsButtons)
-        {
-            b.BackColor = SystemColors.Control;
-            b.Text = b.Text.Replace(" ...", string.Empty);
-        }
-    }
-
+    // Dual-writes every trade to TradeHistoryStore alongside the API call — first step toward
+    // being able to run without the EC2 backend. The API stays the source of truth for the id
+    // whenever it's reachable; if it isn't (apiTradeId stays 0), TradeHistoryStore.Add assigns a
+    // local negative id instead of losing the trade, and THAT becomes the id used everywhere else
+    // (OpenTradesStore, screenshots, close) for the rest of this trade's life.
+    // sendToApi=false (MultiChartForm's "AWS" checkbox off) skips the POST entirely — same
+    // negative-id fallback as an unreachable API, which UploadScreenshotAsync/the close Telegram
+    // push already treat as "keep this trade fully local" (see those call sites).
     private async Task<int> SaveTradeToApiAsync(string symbol, string rowType, string strike, decimal ask,
-        int contracts, int level, decimal targetPct, DateTime entryTime, bool isDemo = false)
+        int contracts, int level, decimal targetPct, DateTime entryTime, bool isDemo = false, bool sendToApi = true)
     {
+        var ticker = _selectedTicker!;
+        var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
+        var apiTradeId = 0;
+
+        // API send bypassed, per explicit request (same change as Form1_Load's login bypass — the
+        // API login was disabled there too, so this POST would just fail auth anyway). Left
+        // commented, not deleted. apiTradeId simply stays 0 below, which TradeHistoryStore.Add
+        // already treats as "assign a local negative id instead" — the same fallback this trade
+        // would take today if sendToApi were false (AWS checkbox off) or the API were unreachable,
+        // so CloseTradeInApiAsync/UploadScreenshotAsync (both gated on tradeId > 0) automatically
+        // stay local-only too, with zero changes needed there.
+        /*
+        if (sendToApi)
         try
         {
-            var ticker = _selectedTicker!;
-            var expDate = ExpirationDateResolver.Resolve(ticker.ExpDate);
             var optionType = rowType == "CALL"
                 ? OptionsTrader.Domain.Enums.OptionType.Call
                 : OptionsTrader.Domain.Enums.OptionType.Put;
@@ -1806,39 +3575,67 @@ public partial class Form1 : Form
             var json = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
-            {
                 this.Invoke(() => LogLine($"API Error {(int)response.StatusCode}: {json}", Color.Red));
-                return 0;
+            else
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                apiTradeId = doc.RootElement.GetProperty("id").GetInt32();
             }
-
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            return doc.RootElement.GetProperty("id").GetInt32();
         }
         catch (Exception ex)
         {
             this.Invoke(() => LogLine($"API Exception: {ex.Message}", Color.Red));
-            return 0;
         }
+        */
+
+        return TradeHistoryStore.Add(new TradeRecord(
+            Id: apiTradeId, Symbol: symbol, OptionType: rowType, StrikePrice: decimal.Parse(strike),
+            SpotPrice: _lastSpotPrice, ExpirationDate: expDate, EntryPrice: ask, ExitPrice: null,
+            EntryTime: entryTime, Contracts: contracts, Level: level, TargetPercent: targetPct,
+            Duration: null, Pnl: null, PnlPercent: null, IsDemo: isDemo, Broker: "Schwab"));
     }
 
     private async Task CloseTradeInApiAsync(int tradeId, decimal exitPrice, decimal pnl, decimal pnlPercent, TimeSpan duration)
     {
-        try
+        // tradeId can be a local-only negative id (see SaveTradeToApiAsync) if the API was
+        // unreachable at open time — nothing to PATCH on the API for those, but still record the
+        // close locally so the trade's full lifecycle isn't lost.
+        if (tradeId > 0)
         {
-            var payload = new
+            try
             {
-                ExitPrice  = exitPrice,
-                PnL        = pnl,
-                PnLPercent = pnlPercent,
-                Duration   = TimeSpan.FromSeconds(Math.Floor(duration.TotalSeconds))
-            };
-            await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
+                var payload = new
+                {
+                    ExitPrice  = exitPrice,
+                    PnL        = pnl,
+                    PnLPercent = pnlPercent,
+                    Duration   = TimeSpan.FromSeconds(Math.Floor(duration.TotalSeconds))
+                };
+                await _apiHttpClient.PatchAsJsonAsync($"{ApiBaseUrl}/trades/{tradeId}/close", payload);
+            }
+            catch { }
         }
-        catch { }
+
+        TradeHistoryStore.Close(tradeId, exitPrice, pnl, pnlPercent, duration);
     }
 
-    private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr)
+    // kind, when given, also saves the resulting S3 URL onto the local TradeHistoryStore record
+    // (EntryImageUrl/CloseImageUrl/TradeLogImageUrl) — this is what lets the trade-detail view
+    // show all 3 images without needing the API, once a trade is uploaded through this path.
+    // tradeId <= 0 (MultiChartForm's "AWS" checkbox off at open time, or a genuinely unreachable
+    // API/SaveTradeToApiAsync fallback — same signal either way) means this trade never leaves the
+    // machine: no S3 upload, no /screenshots POST. It still needs a viewable path though, so the
+    // local file itself (as a file:// URI) is saved onto TradeHistoryStore instead of an S3 URL —
+    // that's what lets TradeDetailForm and the DailyTradeLogWriter .md still show the images.
+    private async Task UploadScreenshotAsync(string localPath, string symbol, string optionType, int tradeId, string timeStr, TradeImageKind? kind = null)
     {
+        if (tradeId <= 0)
+        {
+            if (kind.HasValue)
+                TradeHistoryStore.SetImageUrl(tradeId, kind.Value, new Uri(localPath).AbsoluteUri);
+            return;
+        }
+
         try
         {
             var aws = AwsSettingsStore.Load();
@@ -1867,6 +3664,9 @@ public partial class Form1 : Form
 
             var s3Url = $"https://{aws.BucketName}.s3.amazonaws.com/{s3Key}";
 
+            if (kind.HasValue && tradeId != 0)
+                TradeHistoryStore.SetImageUrl(tradeId, kind.Value, s3Url);
+
             if (tradeId > 0)
             {
                 var payload = new { TradeId = tradeId, Symbol = symbol, S3Url = s3Url };
@@ -1893,6 +3693,41 @@ public partial class Form1 : Form
         rtbLogger.SelectionColor  = color;
         rtbLogger.AppendText(text + Environment.NewLine);
         rtbLogger.ScrollToCaret();
+    }
+
+
+    // CALL is ITM once spot crosses above the strike; PUT is ITM once spot crosses below it.
+    // Colored red (OTM) / green (ITM) — called both at entry (with that moment's spot) and on
+    // every poll tick while the trade is open.
+    private static void SetMoneyness(DataGridViewRow row, string rowType, decimal strike, decimal spot)
+    {
+        var cell = row.Cells["colTradeMoneyness"];
+        var isItm = rowType == "CALL" ? spot > strike : spot < strike;
+        cell.Value           = isItm ? "ITM" : "OTM";
+        cell.Style.ForeColor = isItm ? Color.Green : Color.Red;
+    }
+
+    // Extends the row's Min/Max PnL% columns if the given value is a new low/high — but Min only
+    // ever tracks NEGATIVE values and Max only ever tracks POSITIVE ones. A trade that's never
+    // been profitable leaves Max blank (no positive value to show) rather than showing "the least
+    // negative point reached"; same idea mirrored for Min if it's never gone negative.
+    // Session-only — not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
+    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
+    {
+        var minCell = row.Cells["colTradePnLMin"];
+        var maxCell = row.Cells["colTradePnLMax"];
+
+        if (pnlPct < 0 && (!decimal.TryParse(minCell.Value?.ToString(), out var min) || pnlPct < min))
+        {
+            minCell.Value             = pnlPct.ToString("F1");
+            minCell.Style.ForeColor   = Color.Red;
+        }
+
+        if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
+        {
+            maxCell.Value             = pnlPct.ToString("F1");
+            maxCell.Style.ForeColor   = Color.Green;
+        }
     }
 
     private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
@@ -1924,12 +3759,17 @@ public partial class Form1 : Form
 
             row.Cells["colTradeCBid"].Value                  = currentBid.ToString("F2");
             row.Cells["colTradeCBid"].Style.ForeColor        = Color.Orange;
+            row.Cells["colTradeCBid"].Style.Font             = new Font(dgvTrades.Font, FontStyle.Bold);
             row.Cells["colTradePnL"].Value        = pnl.ToString("F2");
             row.Cells["colTradePnLPercent"].Value = pnlPct.ToString("F1");
 
             // Color PnL
             row.Cells["colTradePnL"].Style.ForeColor        = pnl >= 0 ? Color.Green : Color.Red;
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
+            row.Cells["colTradePnLPercent"].Style.Font      = new Font(dgvTrades.Font, FontStyle.Bold);
+
+            UpdatePnLMinMax(row, pnlPct);
+            SetMoneyness(row, type, strike, _lastSpotPrice);
 
             // Auto-close when the current bid reaches the target price (T_Bid).
             // Plain real trades (no target order) are manual-close only; Trade-Target rows still
@@ -1944,8 +3784,27 @@ public partial class Form1 : Form
         }
 
         // Fire target closes after iterating so the loop isn't re-entered mid-enumeration.
+        // Refuerzo groups: all 3 linked rows share the same (Type, Strike) quote, so they can all
+        // independently qualify for auto-close in the SAME pass — dedupe by group so the group only
+        // gets closed once (closing every still-open row in it), instead of once per qualifying row.
+        var closedReinforcementGroups = new HashSet<int>();
         foreach (var row in rowsToClose)
-            _ = CloseTradeRowAsync(row, "TARGET");
+        {
+            if (row.Tag is TradeRowTag { ReinforcementGroupId: { } groupId })
+            {
+                if (!closedReinforcementGroups.Add(groupId)) continue;
+                var groupRows = dgvTrades.Rows.Cast<DataGridViewRow>()
+                    .Where(r => r.Tag is TradeRowTag t && t.ReinforcementGroupId == groupId
+                        && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
+                    .ToList();
+                foreach (var groupRow in groupRows)
+                    _ = CloseTradeRowAsync(groupRow, "TARGET");
+            }
+            else
+            {
+                _ = CloseTradeRowAsync(row, "TARGET");
+            }
+        }
     }
 
     private async void BtnFetchQuotes_Click(object? sender, EventArgs e)
@@ -1966,6 +3825,7 @@ public partial class Form1 : Form
         var expDate = ExpirationDateResolver.Resolve(_selectedTicker.ExpDate);
         lblExpDate.Text = $"ExpDate: {expDate:yyyy-MM-dd}";
         lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
+        if (_lblChartsPollingTime != null) _lblChartsPollingTime.Text = lblLastUpdate.Text;
 
         btnFetchQuotes.Enabled = false;
         dgvQuotes.Rows.Clear();
@@ -1984,7 +3844,7 @@ public partial class Form1 : Form
         }
     }
 
-    private decimal GetPositionSize()
+    private static decimal GetPositionSize()
     {
         var balance = BalanceStore.Load();
         if (!decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct)) return 0;
@@ -2007,14 +3867,14 @@ public partial class Form1 : Form
 
     private static string CalcContracts(decimal positionSize, decimal ask)
     {
-        if (ask <= 0 || positionSize <= 0) return string.Empty;
+        if (ask <= 0 || positionSize <= 0) return "0";
         // Floor, not round — Position Size % is a risk cap, so rounding up could spend more
         // than the configured budget (e.g. $300 @ 1.18 = 2.54 contracts must stay at 2, not 3).
         var contracts = Math.Floor(positionSize / (ask * 100));
-        return contracts > 0 ? contracts.ToString("F0") : string.Empty;
+        return contracts.ToString("F0");
     }
 
-    private string GetContractsValue(decimal ask)
+    private static string GetContractsValue(decimal ask)
     {
         var selected = ContractsSettingsStore.Load();
         if (selected != "PositionSize" && int.TryParse(selected, out var fixedCount))
@@ -2035,6 +3895,5 @@ public partial class Form1 : Form
 
         TickerSettingsStore.Save(tickers);
         LoadTickerButtons();
-        LoadCoordsButtons();
     }
 }

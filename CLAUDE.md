@@ -123,12 +123,14 @@ The WinForms app communicates **directly** with Schwab API for market data — i
 
 ## Workflow for New Features
 
+`main` is frozen — it's the version under review for the user's TFM (master's thesis) and must not receive any commits until the user explicitly says the review is over. `develop` is the real trunk for ongoing work; it already includes everything `main` has plus all work done since.
+
 Every time the user requests adding a feature:
-1. Run `git checkout main && git pull` before creating the branch.
+1. Run `git checkout develop && git pull` before creating the branch (NOT `main`).
 2. Create a new branch with the format `feature/feature-name`
 3. Checkout to that branch before writing any code
 4. Work on the feature in that branch
-5. When done, inform the user of the created branch name
+5. When done, inform the user of the created branch name — merges back go to `develop`, never to `main`, unless the user explicitly asks otherwise.
 
 ## Git Rules
 

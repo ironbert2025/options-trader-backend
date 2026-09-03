@@ -18,6 +18,8 @@ public class SchwabTradingService : ITradingService
     private readonly string _apiSecret;
     private readonly string _refreshToken;
     private readonly Func<string, DateTime, Task> _onTokenRenewed;
+    private readonly bool _allowRefresh;
+    private readonly Func<(string AccessToken, DateTime ExpiresAt)>? _reloadFromDisk;
 
     private string _storedAccessToken;
     private DateTime _storedExpiresAt;
@@ -30,7 +32,9 @@ public class SchwabTradingService : ITradingService
         string refreshToken,
         string storedAccessToken,
         DateTime storedExpiresAt,
-        Func<string, DateTime, Task> onTokenRenewed)
+        Func<string, DateTime, Task> onTokenRenewed,
+        bool allowRefresh = true,
+        Func<(string AccessToken, DateTime ExpiresAt)>? reloadFromDisk = null)
     {
         _httpClient        = httpClient;
         _authService       = authService;
@@ -40,6 +44,8 @@ public class SchwabTradingService : ITradingService
         _storedAccessToken = storedAccessToken;
         _storedExpiresAt   = storedExpiresAt;
         _onTokenRenewed    = onTokenRenewed;
+        _allowRefresh      = allowRefresh;
+        _reloadFromDisk    = reloadFromDisk;
     }
 
     private async Task OnTokenRenewedInternal(string newAccessToken, DateTime newExpiresAt)
@@ -53,7 +59,8 @@ public class SchwabTradingService : ITradingService
         await _authService.GetAccessTokenAsync(
             _apiKey, _apiSecret,
             _storedAccessToken, _storedExpiresAt,
-            _refreshToken, OnTokenRenewedInternal);
+            _refreshToken, OnTokenRenewedInternal,
+            _allowRefresh, _reloadFromDisk);
 
     public async Task<IEnumerable<BrokerAccountDto>> GetAccountNumbersAsync()
     {

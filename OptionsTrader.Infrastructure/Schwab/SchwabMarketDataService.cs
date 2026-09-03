@@ -9,7 +9,10 @@ namespace OptionsTrader.Infrastructure.Schwab;
 public class SchwabMarketDataService : IMarketDataService
 {
     private const string BaseUrl = "https://api.schwabapi.com/marketdata/v1/chains";
-    private const int StrikePriceCount = 40; // 20 calls + 20 puts
+    // Default fallback only — callers should pass their own per-symbol value (see
+    // Form1.GetStrikeCountFor/SetStrikeCountFor). NOTE: despite the old comment here, this is PER
+    // SIDE — Schwab's chains endpoint returns this many calls AND this many puts, not 40 total.
+    private const int DefaultStrikePriceCount = 40;
 
     private static readonly string DumpFolder = @"C:\Dumps";
 
@@ -21,6 +24,8 @@ public class SchwabMarketDataService : IMarketDataService
     private readonly string _refreshToken;
     private readonly Func<string, DateTime, Task> _onTokenRenewed;
     private readonly bool _enableDumps;
+    private readonly bool _allowRefresh;
+    private readonly Func<(string AccessToken, DateTime ExpiresAt)>? _reloadFromDisk;
 
     // storedAccessToken and storedExpiresAt come from disk each polling cycle via WinForms
     private string _storedAccessToken;
@@ -35,7 +40,9 @@ public class SchwabMarketDataService : IMarketDataService
         string storedAccessToken,
         DateTime storedExpiresAt,
         Func<string, DateTime, Task> onTokenRenewed,
-        bool enableDumps = false)
+        bool enableDumps = false,
+        bool allowRefresh = true,
+        Func<(string AccessToken, DateTime ExpiresAt)>? reloadFromDisk = null)
     {
         _httpClient          = httpClient;
         _authService         = authService;
@@ -46,6 +53,8 @@ public class SchwabMarketDataService : IMarketDataService
         _storedExpiresAt     = storedExpiresAt;
         _onTokenRenewed      = onTokenRenewed;
         _enableDumps         = enableDumps;
+        _allowRefresh        = allowRefresh;
+        _reloadFromDisk      = reloadFromDisk;
     }
 
     // Caches a renewed token in-memory so multiple chain requests in the same polling cycle
@@ -57,18 +66,20 @@ public class SchwabMarketDataService : IMarketDataService
         await _onTokenRenewed(newAccessToken, newExpiresAt);
     }
 
-    public Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly expiration) =>
-        GetOptionsChainAsync(symbol, expiration, expiration);
+    public Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly expiration, int? strikeCount = null) =>
+        GetOptionsChainAsync(symbol, expiration, expiration, strikeCount);
 
-    public async Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly fromDate, DateOnly toDate)
+    public async Task<IEnumerable<OptionQuoteDto>> GetOptionsChainAsync(string symbol, DateOnly fromDate, DateOnly toDate, int? strikeCount = null)
     {
         var token = await _authService.GetAccessTokenAsync(
             _apiKey, _apiSecret,
             _storedAccessToken, _storedExpiresAt,
-            _refreshToken, OnTokenRenewedInternal);
+            _refreshToken, OnTokenRenewedInternal,
+            _allowRefresh, _reloadFromDisk);
         var fromStr = fromDate.ToString("yyyy-MM-dd");
         var toStr   = toDate.ToString("yyyy-MM-dd");
-        var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={fromStr}&toDate={toStr}&strikeCount={StrikePriceCount}&_t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+        var effectiveStrikeCount = strikeCount ?? DefaultStrikePriceCount;
+        var url = $"{BaseUrl}?symbol={symbol}&contractType=ALL&fromDate={fromStr}&toDate={toStr}&strikeCount={effectiveStrikeCount}&_t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);

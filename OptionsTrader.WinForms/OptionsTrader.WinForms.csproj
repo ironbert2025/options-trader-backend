@@ -7,6 +7,14 @@
 
   <ItemGroup>
     <PackageReference Include="AWSSDK.S3" Version="4.0.24.1" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Local Lightweight Charts assets served to the WebView2 chart window — no CDN. -->
+    <None Include="ChartAssets\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <PropertyGroup>

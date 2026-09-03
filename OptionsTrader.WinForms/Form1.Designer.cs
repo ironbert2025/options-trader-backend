@@ -17,8 +17,11 @@ partial class Form1
     {
         statusStrip1 = new StatusStrip();
         lblStatusUser = new ToolStripStatusLabel();
+        lblEarningsDate = new ToolStripStatusLabel();
+        lblEarningsRemaining = new ToolStripStatusLabel();
         tabControl = new TabControl();
         tabQuotes = new TabPage();
+        tabCharts = new TabPage();
         grpLogger = new GroupBox();
         rtbLogger = new RichTextBox();
         grpTrades = new GroupBox();
@@ -37,6 +40,9 @@ partial class Form1
         colTradePnLTarget = new DataGridViewTextBoxColumn();
         colTradeExitTime = new DataGridViewTextBoxColumn();
         colTradeClose = new DataGridViewButtonColumn();
+        colTradePnLMin = new DataGridViewTextBoxColumn();
+        colTradePnLMax = new DataGridViewTextBoxColumn();
+        colTradeMoneyness = new DataGridViewTextBoxColumn();
         grpOptionsChain = new GroupBox();
         dgvQuotes = new DataGridView();
         colSymbolQ = new DataGridViewTextBoxColumn();
@@ -76,6 +82,13 @@ partial class Form1
         chkSaveToCsv = new CheckBox();
         chkHideNextExpDate = new CheckBox();
         btnFetchQuotes = new Button();
+        btnLiveChart = new Button();
+        btnFourEtfCharts = new Button();
+        btnHubHost = new Button();
+        btnSimulator = new Button();
+        btnDaily = new Button();
+        btnFourEtfSimulator = new Button();
+        btnTimeframeViewer = new Button();
         btnStartPolling = new Button();
         lblExpDate = new Label();
         lblLastUpdate = new Label();
@@ -88,6 +101,7 @@ partial class Form1
         rbNoTrade = new RadioButton();
         rbTrade = new RadioButton();
         rbTradeTarget = new RadioButton();
+        rbNoTradeTarget = new RadioButton();
         grpContracts = new GroupBox();
         rbContracts1 = new RadioButton();
         rbContracts2 = new RadioButton();
@@ -105,10 +119,6 @@ partial class Form1
         rbCounts8 = new RadioButton();
         rbCounts9 = new RadioButton();
         rbCounts10 = new RadioButton();
-        rbCounts11 = new RadioButton();
-        rbCounts12 = new RadioButton();
-        rbCounts13 = new RadioButton();
-        rbCounts14 = new RadioButton();
         rbCountsInRange = new RadioButton();
         tabSettings = new TabPage();
         grpBroker = new GroupBox();
@@ -122,15 +132,12 @@ partial class Form1
         colHigh = new DataGridViewTextBoxColumn();
         colExpDate = new DataGridViewTextBoxColumn();
         btnSaveTickers = new Button();
-        grpScreenCoords = new GroupBox();
-        btnSaveCoords = new Button();
-        btnResetCoords = new Button();
-        pnlCoordsRows = new Panel();
         grpPositionSize = new GroupBox();
         rbPosition25 = new RadioButton();
         rbPosition5 = new RadioButton();
         rbPosition10 = new RadioButton();
         chkSaveDumps = new CheckBox();
+        chkShowOrderConfirmation = new CheckBox();
         grpTarget = new GroupBox();
         rbTarget10 = new RadioButton();
         rbTarget35 = new RadioButton();
@@ -181,7 +188,6 @@ partial class Form1
         tabSettings.SuspendLayout();
         grpBroker.SuspendLayout();
         grpTickers.SuspendLayout();
-        grpScreenCoords.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)dgvTickers).BeginInit();
         grpPositionSize.SuspendLayout();
         grpTarget.SuspendLayout();
@@ -196,6 +202,7 @@ partial class Form1
         // tabControl
         // 
         tabControl.Controls.Add(tabQuotes);
+        tabControl.Controls.Add(tabCharts);
         tabControl.Controls.Add(tabSettings);
         tabControl.Dock = DockStyle.Fill;
         tabControl.Location = new Point(0, 0);
@@ -211,6 +218,9 @@ partial class Form1
         tabQuotes.Controls.Add(grpOptionsChain);
         tabQuotes.Controls.Add(grpOptionsChainNext);
         tabQuotes.Controls.Add(btnFetchQuotes);
+        tabQuotes.Controls.Add(btnLiveChart);
+        tabQuotes.Controls.Add(btnSimulator);
+        tabQuotes.Controls.Add(btnDaily);
         tabQuotes.Controls.Add(btnStartPolling);
         tabQuotes.Controls.Add(lblLastUpdate);
         tabQuotes.Controls.Add(grpBalance);
@@ -225,6 +235,15 @@ partial class Form1
         tabQuotes.Size = new Size(1016, 572);
         tabQuotes.TabIndex = 1;
         tabQuotes.Text = "Options Quotes";
+        //
+        // tabCharts
+        //
+        tabCharts.Location = new Point(4, 24);
+        tabCharts.Name = "tabCharts";
+        tabCharts.Padding = new Padding(8);
+        tabCharts.Size = new Size(1016, 572);
+        tabCharts.TabIndex = 2;
+        tabCharts.Text = "Charts";
         // 
         // grpLogger
         // 
@@ -266,7 +285,7 @@ partial class Form1
         dgvTrades.AllowUserToDeleteRows = false;
         dgvTrades.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         dgvTrades.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        dgvTrades.Columns.AddRange(new DataGridViewColumn[] { colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk, colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid, colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose });
+        dgvTrades.Columns.AddRange(new DataGridViewColumn[] { colTradeTime, colTradeType, colTradeStrike, colTradeBid, colTradeAsk, colTradeContracts, colTradeEntryPrice, colTradeCBid, colTradeTBid, colTradePnL, colTradePnLPercent, colTradePnLTarget, colTradeExitTime, colTradeClose, colTradePnLMin, colTradePnLMax, colTradeMoneyness });
         dgvTrades.Dock = DockStyle.Fill;
         dgvTrades.Location = new Point(3, 19);
         dgvTrades.Name = "dgvTrades";
@@ -337,11 +356,12 @@ partial class Form1
         colTradePnL.ReadOnly = true;
         // 
         // colTradePnLPercent
-        // 
+        //
         colTradePnLPercent.HeaderText = "PnL_Percent";
         colTradePnLPercent.Name = "colTradePnLPercent";
         colTradePnLPercent.ReadOnly = true;
-        // 
+        colTradePnLPercent.DefaultCellStyle.Font = new Font(dgvTrades.Font, FontStyle.Bold);
+        //
         // colTradePnLTarget
         // 
         colTradePnLTarget.HeaderText = "PnL_Target";
@@ -359,9 +379,27 @@ partial class Form1
         colTradeClose.FlatStyle = FlatStyle.Flat;
         colTradeClose.HeaderText = "Close";
         colTradeClose.Name = "colTradeClose";
-        // 
+        //
+        // colTradePnLMin
+        //
+        colTradePnLMin.HeaderText = "Min PnL%";
+        colTradePnLMin.Name = "colTradePnLMin";
+        colTradePnLMin.ReadOnly = true;
+        //
+        // colTradePnLMax
+        //
+        colTradePnLMax.HeaderText = "Max PnL%";
+        colTradePnLMax.Name = "colTradePnLMax";
+        colTradePnLMax.ReadOnly = true;
+        //
+        // colTradeMoneyness
+        //
+        colTradeMoneyness.HeaderText = "OTM/ITM";
+        colTradeMoneyness.Name = "colTradeMoneyness";
+        colTradeMoneyness.ReadOnly = true;
+        //
         // grpOptionsChain
-        // 
+        //
         grpOptionsChain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
         grpOptionsChain.Controls.Add(dgvQuotes);
         grpOptionsChain.Controls.Add(lblCallHeader);
@@ -725,9 +763,72 @@ partial class Form1
         btnFetchQuotes.TabIndex = 1;
         btnFetchQuotes.Text = "Fetch Quotes";
         btnFetchQuotes.Click += BtnFetchQuotes_Click;
-        // 
+        //
+        // btnLiveChart
+        //
+        btnLiveChart.Location = new Point(1020, 4);
+        btnLiveChart.Name = "btnLiveChart";
+        btnLiveChart.Size = new Size(95, 25);
+        btnLiveChart.TabIndex = 2;
+        btnLiveChart.Text = "Live Chart";
+        btnLiveChart.Click += BtnLiveChart_Click;
+        //
+        // btnFourEtfCharts (moved to Settings tab)
+        //
+        btnFourEtfCharts.Location = new Point(8, 480);
+        btnFourEtfCharts.Name = "btnFourEtfCharts";
+        btnFourEtfCharts.Size = new Size(120, 25);
+        btnFourEtfCharts.TabIndex = 3;
+        btnFourEtfCharts.Text = "Block Mov";
+        btnFourEtfCharts.Click += BtnFourEtfCharts_Click;
+        //
+        // btnHubHost (moved to Settings tab)
+        //
+        btnHubHost.Location = new Point(134, 480);
+        btnHubHost.Name = "btnHubHost";
+        btnHubHost.Size = new Size(90, 25);
+        btnHubHost.TabIndex = 4;
+        btnHubHost.Text = "Hub Host";
+        btnHubHost.Click += BtnHubHost_Click;
+        //
+        // btnSimulator
+        //
+        btnSimulator.Location = new Point(1020, 34);
+        btnSimulator.Name = "btnSimulator";
+        btnSimulator.Size = new Size(90, 25);
+        btnSimulator.TabIndex = 5;
+        btnSimulator.Text = "Simulador";
+        btnSimulator.Click += BtnSimulator_Click;
+        //
+        // btnDaily
+        //
+        btnDaily.Location = new Point(1020, 64);
+        btnDaily.Name = "btnDaily";
+        btnDaily.Size = new Size(90, 25);
+        btnDaily.TabIndex = 12;
+        btnDaily.Text = "Daily";
+        btnDaily.Click += BtnDaily_Click;
+        //
+        // btnFourEtfSimulator (moved to Settings tab)
+        //
+        btnFourEtfSimulator.Location = new Point(230, 480);
+        btnFourEtfSimulator.Name = "btnFourEtfSimulator";
+        btnFourEtfSimulator.Size = new Size(90, 25);
+        btnFourEtfSimulator.TabIndex = 6;
+        btnFourEtfSimulator.Text = "Sim 4 ETF";
+        btnFourEtfSimulator.Click += BtnFourEtfSimulator_Click;
+        //
+        // btnTimeframeViewer (moved to Settings tab)
+        //
+        btnTimeframeViewer.Location = new Point(326, 480);
+        btnTimeframeViewer.Name = "btnTimeframeViewer";
+        btnTimeframeViewer.Size = new Size(120, 25);
+        btnTimeframeViewer.TabIndex = 7;
+        btnTimeframeViewer.Text = "Timeframes";
+        btnTimeframeViewer.Click += BtnTimeframeViewer_Click;
+        //
         // btnStartPolling
-        // 
+        //
         btnStartPolling.BackColor = Color.DarkGreen;
         btnStartPolling.FlatStyle = FlatStyle.Flat;
         btnStartPolling.ForeColor = Color.White;
@@ -742,12 +843,14 @@ partial class Form1
         // lblLastUpdate
         // 
         lblLastUpdate.AutoSize = true;
+        lblLastUpdate.Cursor = Cursors.Hand;
         lblLastUpdate.Font = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold);
         lblLastUpdate.ForeColor = Color.DarkGoldenrod;
         lblLastUpdate.Location = new Point(435, 39);
         lblLastUpdate.Name = "lblLastUpdate";
         lblLastUpdate.Size = new Size(0, 13);
         lblLastUpdate.TabIndex = 5;
+        lblLastUpdate.Click += LblLastUpdate_Click;
         //
         // grpBalance
         // 
@@ -777,32 +880,33 @@ partial class Form1
         lblPositionAmount.TabIndex = 1;
         // 
         // grpTickerButtons
-        // 
+        //
         grpTickerButtons.Controls.Add(flpTickers);
         grpTickerButtons.Location = new Point(128, 4);
         grpTickerButtons.Name = "grpTickerButtons";
-        grpTickerButtons.Size = new Size(285, 68);
+        grpTickerButtons.Size = new Size(285, 96);
         grpTickerButtons.TabIndex = 6;
         grpTickerButtons.TabStop = false;
         grpTickerButtons.Text = "Tickers";
-        // 
+        //
         // flpTickers
-        // 
+        //
         flpTickers.Dock = DockStyle.Fill;
         flpTickers.Location = new Point(3, 19);
         flpTickers.Name = "flpTickers";
         flpTickers.Padding = new Padding(4);
-        flpTickers.Size = new Size(279, 46);
+        flpTickers.Size = new Size(279, 73);
         flpTickers.TabIndex = 0;
-        // 
+        //
         // grpTrade
         // 
         grpTrade.Controls.Add(rbNoTrade);
+        grpTrade.Controls.Add(rbNoTradeTarget);
         grpTrade.Controls.Add(rbTrade);
         grpTrade.Controls.Add(rbTradeTarget);
-        grpTrade.Location = new Point(850, 4);
+        grpTrade.Location = new Point(740, 4);
         grpTrade.Name = "grpTrade";
-        grpTrade.Size = new Size(150, 96);
+        grpTrade.Size = new Size(155, 116);
         grpTrade.TabIndex = 7;
         grpTrade.TabStop = false;
         grpTrade.Text = "Trade";
@@ -819,22 +923,32 @@ partial class Form1
         rbNoTrade.TabStop = true;
         rbNoTrade.Text = "No Trade";
         rbNoTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
-        // 
+        //
+        // rbNoTradeTarget
+        //
+        rbNoTradeTarget.AutoSize = false;
+        rbNoTradeTarget.Location = new Point(12, 44);
+        rbNoTradeTarget.Name = "rbNoTradeTarget";
+        rbNoTradeTarget.Size = new Size(130, 20);
+        rbNoTradeTarget.TabIndex = 1;
+        rbNoTradeTarget.Text = "No Trade-Target";
+        rbNoTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
+        //
         // rbTrade
-        // 
-        rbTrade.Location = new Point(12, 44);
+        //
+        rbTrade.Location = new Point(12, 66);
         rbTrade.Name = "rbTrade";
         rbTrade.Size = new Size(80, 20);
-        rbTrade.TabIndex = 1;
+        rbTrade.TabIndex = 2;
         rbTrade.Text = "Trade";
         rbTrade.CheckedChanged += TradeRadioButton_CheckedChanged;
-        // 
+        //
         // rbTradeTarget
         //
         rbTradeTarget.AutoSize = true;
-        rbTradeTarget.Location = new Point(12, 62);
+        rbTradeTarget.Location = new Point(12, 88);
         rbTradeTarget.Name = "rbTradeTarget";
-        rbTradeTarget.TabIndex = 2;
+        rbTradeTarget.TabIndex = 3;
         rbTradeTarget.Text = "Trade-Target";
         rbTradeTarget.CheckedChanged += TradeRadioButton_CheckedChanged;
         //
@@ -847,7 +961,7 @@ partial class Form1
         grpContracts.Controls.Add(rbContracts5);
         grpContracts.Controls.Add(rbContracts6);
         grpContracts.Controls.Add(rbContractsPositionSize);
-        grpContracts.Location = new Point(1008, 4);
+        grpContracts.Location = new Point(905, 4);
         grpContracts.Name = "grpContracts";
         grpContracts.Size = new Size(105, 96);
         grpContracts.TabIndex = 8;
@@ -929,14 +1043,10 @@ partial class Form1
         grpCounts.Controls.Add(rbCounts8);
         grpCounts.Controls.Add(rbCounts9);
         grpCounts.Controls.Add(rbCounts10);
-        grpCounts.Controls.Add(rbCounts11);
-        grpCounts.Controls.Add(rbCounts12);
-        grpCounts.Controls.Add(rbCounts13);
-        grpCounts.Controls.Add(rbCounts14);
         grpCounts.Controls.Add(rbCountsInRange);
         grpCounts.Location = new Point(545, 4);
         grpCounts.Name = "grpCounts";
-        grpCounts.Size = new Size(265, 96);
+        grpCounts.Size = new Size(185, 96);
         grpCounts.TabIndex = 9;
         grpCounts.TabStop = false;
         grpCounts.Text = "Counts";
@@ -970,16 +1080,18 @@ partial class Form1
         //
         // rbCounts6
         //
+        rbCounts6.Checked = true;
         rbCounts6.Location = new Point(132, 20);
         rbCounts6.Name = "rbCounts6";
         rbCounts6.Size = new Size(36, 18);
         rbCounts6.TabIndex = 3;
+        rbCounts6.TabStop = true;
         rbCounts6.Text = "6";
         rbCounts6.CheckedChanged += CountsRadioButton_CheckedChanged;
         //
         // rbCounts7
         //
-        rbCounts7.Location = new Point(174, 20);
+        rbCounts7.Location = new Point(6, 42);
         rbCounts7.Name = "rbCounts7";
         rbCounts7.Size = new Size(36, 18);
         rbCounts7.TabIndex = 4;
@@ -988,7 +1100,7 @@ partial class Form1
         //
         // rbCounts8
         //
-        rbCounts8.Location = new Point(216, 20);
+        rbCounts8.Location = new Point(48, 42);
         rbCounts8.Name = "rbCounts8";
         rbCounts8.Size = new Size(36, 18);
         rbCounts8.TabIndex = 5;
@@ -997,7 +1109,7 @@ partial class Form1
         //
         // rbCounts9
         //
-        rbCounts9.Location = new Point(6, 42);
+        rbCounts9.Location = new Point(90, 42);
         rbCounts9.Name = "rbCounts9";
         rbCounts9.Size = new Size(42, 18);
         rbCounts9.TabIndex = 6;
@@ -1006,56 +1118,19 @@ partial class Form1
         //
         // rbCounts10
         //
-        rbCounts10.Location = new Point(48, 42);
+        rbCounts10.Location = new Point(132, 42);
         rbCounts10.Name = "rbCounts10";
         rbCounts10.Size = new Size(42, 18);
         rbCounts10.TabIndex = 7;
         rbCounts10.Text = "10";
         rbCounts10.CheckedChanged += CountsRadioButton_CheckedChanged;
         //
-        // rbCounts11
-        //
-        rbCounts11.Location = new Point(90, 42);
-        rbCounts11.Name = "rbCounts11";
-        rbCounts11.Size = new Size(42, 18);
-        rbCounts11.TabIndex = 8;
-        rbCounts11.Text = "11";
-        rbCounts11.CheckedChanged += CountsRadioButton_CheckedChanged;
-        //
-        // rbCounts12
-        //
-        rbCounts12.Location = new Point(132, 42);
-        rbCounts12.Name = "rbCounts12";
-        rbCounts12.Size = new Size(42, 18);
-        rbCounts12.TabIndex = 9;
-        rbCounts12.Text = "12";
-        rbCounts12.CheckedChanged += CountsRadioButton_CheckedChanged;
-        //
-        // rbCounts13
-        //
-        rbCounts13.Location = new Point(174, 42);
-        rbCounts13.Name = "rbCounts13";
-        rbCounts13.Size = new Size(42, 18);
-        rbCounts13.TabIndex = 10;
-        rbCounts13.Text = "13";
-        rbCounts13.CheckedChanged += CountsRadioButton_CheckedChanged;
-        //
-        // rbCounts14
-        //
-        rbCounts14.Location = new Point(216, 42);
-        rbCounts14.Name = "rbCounts14";
-        rbCounts14.Size = new Size(42, 18);
-        rbCounts14.TabIndex = 11;
-        rbCounts14.Text = "14";
-        rbCounts14.CheckedChanged += CountsRadioButton_CheckedChanged;
-        //
         // rbCountsInRange
         //
-        rbCountsInRange.Checked = true;
         rbCountsInRange.Location = new Point(6, 64);
         rbCountsInRange.Name = "rbCountsInRange";
         rbCountsInRange.Size = new Size(90, 18);
-        rbCountsInRange.TabIndex = 12;
+        rbCountsInRange.TabIndex = 8;
         rbCountsInRange.TabStop = true;
         rbCountsInRange.Text = "In Range";
         rbCountsInRange.CheckedChanged += CountsRadioButton_CheckedChanged;
@@ -1064,16 +1139,20 @@ partial class Form1
         // 
         tabSettings.Controls.Add(grpBroker);
         tabSettings.Controls.Add(grpTickers);
-        tabSettings.Controls.Add(grpScreenCoords);
         tabSettings.Controls.Add(grpPositionSize);
         tabSettings.Controls.Add(chkSaveDumps);
         tabSettings.Controls.Add(chkSaveToCsv);
         tabSettings.Controls.Add(chkHideNextExpDate);
+        tabSettings.Controls.Add(chkShowOrderConfirmation);
         tabSettings.Controls.Add(grpTarget);
         tabSettings.Controls.Add(grpSchwabCredentials);
         tabSettings.Controls.Add(grpRefreshToken);
         tabSettings.Controls.Add(grpAccounts);
         tabSettings.Controls.Add(grpAwsSettings);
+        tabSettings.Controls.Add(btnFourEtfCharts);
+        tabSettings.Controls.Add(btnHubHost);
+        tabSettings.Controls.Add(btnFourEtfSimulator);
+        tabSettings.Controls.Add(btnTimeframeViewer);
         tabSettings.Location = new Point(4, 24);
         tabSettings.Name = "tabSettings";
         tabSettings.Padding = new Padding(8);
@@ -1128,44 +1207,10 @@ partial class Form1
         grpTickers.Controls.Add(btnSaveTickers);
         grpTickers.Location = new Point(175, 8);
         grpTickers.Name = "grpTickers";
-        grpTickers.Size = new Size(340, 168);
+        grpTickers.Size = new Size(340, 210);
         grpTickers.TabIndex = 1;
         grpTickers.TabStop = false;
         grpTickers.Text = "Tickers";
-        //
-        // grpScreenCoords
-        //
-        grpScreenCoords.Controls.Add(btnSaveCoords);
-        grpScreenCoords.Controls.Add(btnResetCoords);
-        grpScreenCoords.Controls.Add(pnlCoordsRows);
-        grpScreenCoords.Location = new Point(525, 8);
-        grpScreenCoords.Name = "grpScreenCoords";
-        grpScreenCoords.Size = new Size(265, 200);
-        grpScreenCoords.TabIndex = 6;
-        grpScreenCoords.TabStop = false;
-        grpScreenCoords.Text = "Screen Coordinates";
-        // pnlCoordsRows — one row (button + 2 coord textboxes) generated per Ticker symbol at
-        // runtime by LoadCoordsButtons(); AutoScroll so it never overflows the GroupBox if more
-        // than ~4 tickers are configured.
-        pnlCoordsRows.Location = new Point(5, 22);
-        pnlCoordsRows.Name = "pnlCoordsRows";
-        pnlCoordsRows.Size = new Size(255, 128);
-        pnlCoordsRows.AutoScroll = true;
-        pnlCoordsRows.TabIndex = 0;
-        // btnSaveCoords
-        btnSaveCoords.Location = new Point(78, 155);
-        btnSaveCoords.Name = "btnSaveCoords";
-        btnSaveCoords.Size = new Size(80, 23);
-        btnSaveCoords.TabIndex = 12;
-        btnSaveCoords.Text = "Save";
-        btnSaveCoords.Click += BtnSaveCoords_Click;
-        // btnResetCoords
-        btnResetCoords.Location = new Point(166, 155);
-        btnResetCoords.Name = "btnResetCoords";
-        btnResetCoords.Size = new Size(80, 23);
-        btnResetCoords.TabIndex = 13;
-        btnResetCoords.Text = "Reset";
-        btnResetCoords.Click += BtnResetCoords_Click;
         //
         // dgvTickers
         // 
@@ -1178,7 +1223,7 @@ partial class Form1
         dgvTickers.RowHeadersVisible = false;
         dgvTickers.RowTemplate.Height = 22;
         dgvTickers.ScrollBars = ScrollBars.None;
-        dgvTickers.Size = new Size(318, 112);
+        dgvTickers.Size = new Size(318, 154);
         dgvTickers.TabIndex = 0;
         // 
         // colSymbol
@@ -1207,7 +1252,7 @@ partial class Form1
         // 
         // btnSaveTickers
         // 
-        btnSaveTickers.Location = new Point(250, 138);
+        btnSaveTickers.Location = new Point(250, 180);
         btnSaveTickers.Name = "btnSaveTickers";
         btnSaveTickers.Size = new Size(80, 23);
         btnSaveTickers.TabIndex = 1;
@@ -1261,6 +1306,18 @@ partial class Form1
         chkSaveDumps.TabIndex = 3;
         chkSaveDumps.Text = "Save Dumps";
         chkSaveDumps.CheckedChanged += ChkSaveDumps_CheckedChanged;
+        //
+        // chkShowOrderConfirmation
+        //
+        chkShowOrderConfirmation.AutoSize = true;
+        chkShowOrderConfirmation.Checked = false;
+        chkShowOrderConfirmation.CheckState = CheckState.Unchecked;
+        chkShowOrderConfirmation.Location = new Point(800, 190);
+        chkShowOrderConfirmation.Name = "chkShowOrderConfirmation";
+        chkShowOrderConfirmation.Size = new Size(160, 19);
+        chkShowOrderConfirmation.TabIndex = 5;
+        chkShowOrderConfirmation.Text = "Show Order Confirmation";
+        chkShowOrderConfirmation.CheckedChanged += ChkShowOrderConfirmation_CheckedChanged;
         //
         // grpTarget
         // 
@@ -1573,7 +1630,7 @@ partial class Form1
         //
         // statusStrip1
         //
-        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser });
+        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser, lblEarningsDate, lblEarningsRemaining });
         statusStrip1.Location = new Point(0, 578);
         statusStrip1.Name = "statusStrip1";
         statusStrip1.Size = new Size(1181, 22);
@@ -1583,6 +1640,17 @@ partial class Form1
         //
         lblStatusUser.Name = "lblStatusUser";
         lblStatusUser.Size = new Size(0, 17);
+        //
+        // lblEarningsDate
+        //
+        lblEarningsDate.Name = "lblEarningsDate";
+        lblEarningsDate.Margin = new Padding(12, 3, 0, 2);
+        lblEarningsDate.Size = new Size(0, 17);
+        //
+        // lblEarningsRemaining
+        //
+        lblEarningsRemaining.Name = "lblEarningsRemaining";
+        lblEarningsRemaining.Size = new Size(0, 17);
         //
         // Form1
         //
@@ -1616,8 +1684,6 @@ partial class Form1
         tabSettings.ResumeLayout(false);
         grpBroker.ResumeLayout(false);
         grpTickers.ResumeLayout(false);
-        grpScreenCoords.ResumeLayout(false);
-        grpScreenCoords.PerformLayout();
         ((System.ComponentModel.ISupportInitialize)dgvTickers).EndInit();
         grpPositionSize.ResumeLayout(false);
         grpTarget.ResumeLayout(false);
@@ -1636,7 +1702,10 @@ partial class Form1
 
     private StatusStrip statusStrip1;
     private ToolStripStatusLabel lblStatusUser;
+    private ToolStripStatusLabel lblEarningsDate;
+    private ToolStripStatusLabel lblEarningsRemaining;
     private TabControl tabControl;
+    private TabPage tabCharts;
     private TabPage tabQuotes;
     private TabPage tabSettings;
     private DataGridView dgvQuotes;
@@ -1663,6 +1732,7 @@ partial class Form1
     private RadioButton rbNoTrade;
     private RadioButton rbTrade;
     private RadioButton rbTradeTarget;
+    private RadioButton rbNoTradeTarget;
     private GroupBox grpContracts;
     private RadioButton rbContracts1;
     private RadioButton rbContracts2;
@@ -1680,10 +1750,6 @@ partial class Form1
     private RadioButton rbCounts8;
     private RadioButton rbCounts9;
     private RadioButton rbCounts10;
-    private RadioButton rbCounts11;
-    private RadioButton rbCounts12;
-    private RadioButton rbCounts13;
-    private RadioButton rbCounts14;
     private RadioButton rbCountsInRange;
     private GroupBox grpOptionsChain;
     private GroupBox grpOptionsChainNext;
@@ -1721,7 +1787,17 @@ partial class Form1
     private DataGridViewTextBoxColumn colTradePnLTarget;
     private DataGridViewTextBoxColumn colTradeExitTime;
     private DataGridViewButtonColumn colTradeClose;
+    private DataGridViewTextBoxColumn colTradePnLMin;
+    private DataGridViewTextBoxColumn colTradePnLMax;
+    private DataGridViewTextBoxColumn colTradeMoneyness;
     private Button btnFetchQuotes;
+    private Button btnLiveChart;
+    private Button btnFourEtfCharts;
+    private Button btnHubHost;
+    private Button btnSimulator;
+    private Button btnDaily;
+    private Button btnFourEtfSimulator;
+    private Button btnTimeframeViewer;
     private Button btnStartPolling;
     private Label lblExpDate;
     private Label lblLastUpdate;
@@ -1743,6 +1819,7 @@ partial class Form1
     private Button btnSaveTickers;
     private GroupBox grpPositionSize;
     private CheckBox chkSaveDumps;
+    private CheckBox chkShowOrderConfirmation;
     private RadioButton rbPosition25;
     private RadioButton rbPosition5;
     private RadioButton rbPosition10;
@@ -1779,8 +1856,4 @@ partial class Form1
     private TextBox txtAwsRegion;
     private Button btnSaveAwsSettings;
     private Label lblAwsSaved;
-    private GroupBox grpScreenCoords;
-    private Panel pnlCoordsRows;
-    private Button btnSaveCoords;
-    private Button btnResetCoords;
 }
