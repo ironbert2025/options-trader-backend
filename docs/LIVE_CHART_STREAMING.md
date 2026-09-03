@@ -1,127 +1,131 @@
 # Live Chart (WebView2 + Lightweight Charts + Schwab Streaming)
 
-Documento de referencia para esta feature, desarrollada íntegramente en la rama `feature/trade-pnl-min-max`. Objetivo: que cualquiera (o yo mismo en otra sesión) pueda retomarla sin releer todo el historial de commits.
+Reference document for this feature, developed entirely on the `feature/trade-pnl-min-max` branch. Goal: so that anyone (or myself, in another session) can pick it back up without rereading the whole commit history.
 
-> Este documento reemplaza la versión anterior (que describía el estado inicial, sin validar contra tráfico real). Todo lo de acá abajo ya está implementado y en uso.
+> This document replaces the previous version (which described the initial state, not validated against real traffic). Everything below is already implemented and in use.
 
 ---
 
-## Qué es
+## What it is
 
-Un gráfico de velas **en vivo** del subyacente (spot, ej. SPY/QQQ/TSLA/AAPL/DIA/IWM), alimentado por streaming WebSocket directo a Schwab — **completamente aislado** del resto de la app (no toca el polling de Quotes, ni el trading, ni ninguna lógica existente). Se abre con el botón **"Live Chart"** en la pestaña Quotes.
+A **live** candlestick chart of the underlying (spot, e.g. SPY/QQQ/TSLA/AAPL/DIA/IWM), fed by a direct WebSocket stream to Schwab — **completely isolated** from the rest of the app (it doesn't touch Quotes polling, trading, or any existing logic). It opens via the **"Live Chart"** button on the Quotes tab (popup window, `MultiChartForm`, 3 panels). There's also a **Charts tab embedded in Form1** (`TwoPanelChartsControl`), always available without opening a separate window, with only 2 of the 3 panels (1h and 15m RTH) but its own trades/options grid and trade-mode radios — see [`LIVE_CHART_ANALYSIS.md`](../LIVE_CHART_ANALYSIS.md) for details.
 
-## 1. Los 3 paneles
+## 1. The 3 panels
 
-Un solo `MultiChartForm` contiene **3 `ChartPanel`** lado a lado (horizontal):
+A single `MultiChartForm` contains **3 `ChartPanel`** side by side (horizontal):
 
-| Panel | Modo (`ChartPanelMode`) | Intervalo | Sesión |
+| Panel | Mode (`ChartPanelMode`) | Interval | Session |
 |---|---|---|---|
-| **1h** | `Hourly15` | velas de 1 hora | Regular (RTH), 9:30 AM - 4:00 PM ET |
-| **15m RTH** | `Fifteen_RTH` | velas de 15 min | Regular (RTH), 9:30 AM - 4:00 PM ET |
-| **15m RTH+Overnight** | `Fifteen_Full` | velas de 15 min (toggle a 5 min) | Regular + pre/after-hours |
+| **1h** | `Hourly15` | 1-hour candles | Regular (RTH), 9:30 AM - 4:00 PM ET |
+| **15m RTH** | `Fifteen_RTH` | 15-min candles | Regular (RTH), 9:30 AM - 4:00 PM ET |
+| **15m RTH+Overnight** | `Fifteen_Full` | 15-min candles (toggle to 5 min) | Regular + pre/after-hours |
 
-Cada `ChartPanel` agrega los ticks a su propio bucket (1h/15m) de forma independiente, en memoria (`_liveBucket`/`_liveBucketIndex`/`_liveAnchor`), sin volver a tocar la red — un solo flujo de datos alimenta los 3.
+Each `ChartPanel` adds ticks to its own bucket (1h/15m) independently, in memory (`_liveBucket`/`_liveBucketIndex`/`_liveAnchor`), without touching the network again — a single data stream feeds all 3.
 
-## 2. Una sola conexión Schwab, múltiples instancias del programa
+## 2. One Schwab connection, multiple instances of the program
 
-Schwab permite **una sola conexión de streaming por cuenta**, pero el operador corre **una instancia del programa por ticker** (cada una con su propio grid/chart). Esto se resuelve con un **hub local** (`OptionsTrader.WinForms/LocalCandleHub.cs`):
+Schwab allows **only one streaming connection per account**, but the trader runs **one instance of the program per ticker** (each with its own grid/chart). This is solved with a **local hub** (`OptionsTrader.WinForms/LocalCandleHub.cs`):
 
-- La primera instancia que arranca **bindea el puerto fijo `51919`** (`CandleHubServer.TryStart`, `IPAddress.Any`) y se convierte en el **"hub"**: es la única que abre la conexión real a Schwab (`SchwabStreamerClient`), y **rebroadcastea** cada candle/tick como JSON delimitado por saltos de línea a quien esté conectado.
-- Cualquier otra instancia (en la misma PC, o en **otra PC de la misma red LAN**) que no logre bindear el puerto se conecta como **cliente** (`CandleHubClient`) al hub — mismo puerto, `IPAddress.Any` acepta conexiones locales (`127.0.0.1`) y remotas (IP de la LAN) simultáneamente.
-- **Acceso desde otra PC**: botón **"Hub Host"** en Quotes — guarda la IP del hub remoto (`HubHostSettingsStore` → `%AppData%\OptionsTrader\hubhost.json`). Si está configurada, esa instancia se conecta directo a esa IP como cliente, sin intentar convertirse en hub. Requiere abrir el puerto 51919 en el firewall de la PC que hace de hub.
-- `ICandleFeed` (`OptionsTrader.Application/Interfaces/ICandleFeed.cs`) abstrae la fuente — `ChartPanel` no necesita saber si le llega la conexión real (`SchwabStreamerClient`) o un relay (`CandleHubClient`).
-- Reconexión automática con backoff si el hub cae; los clientes reintentan cada 5s indefinidamente.
+- The first instance to start **binds the fixed port `51919`** (`CandleHubServer.TryStart`, `IPAddress.Any`) and becomes the **"hub"**: it's the only one that opens the real connection to Schwab (`SchwabStreamerClient`), and it **rebroadcasts** each candle/tick as newline-delimited JSON to whoever is connected.
+- Any other instance (on the same PC, or on **another PC on the same LAN**) that fails to bind the port connects as a **client** (`CandleHubClient`) to the hub — same port, `IPAddress.Any` accepts local (`127.0.0.1`) and remote (LAN IP) connections simultaneously.
+- **Access from another PC**: **"Hub Host"** button on Quotes — saves the remote hub's IP (`HubHostSettingsStore` → `%AppData%\OptionsTrader\hubhost.json`). If configured, that instance connects directly to that IP as a client, without trying to become a hub. Requires opening port 51919 in the firewall of the PC acting as hub.
+- `ICandleFeed` (`OptionsTrader.Application/Interfaces/ICandleFeed.cs`) abstracts the source — `ChartPanel` doesn't need to know whether it's receiving the real connection (`SchwabStreamerClient`) or a relay (`CandleHubClient`).
+- Automatic reconnection with backoff if the hub goes down; clients retry every 5s indefinitely.
 
-Este mecanismo se construyó en `b759645` y se extendió a LAN en `507cd5f`.
+This mechanism was built in `b759645` and extended to LAN in `507cd5f`.
 
-## 3. Fuentes de precio: `CHART_EQUITY` vs `LEVEL_ONE_EQUITIES`
+## 3. Price sources: `CHART_EQUITY` vs `LEVEL_ONE_EQUITIES`
 
-Al validar contra tráfico real se detectó que el chart no coincidía exactamente con ThinkorSwim. Investigando (comparando `TickPriceStore` contra el spot casi-continuo del chain de opciones) se confirmó: diferencia absoluta promedio ~$0.32, máxima ~$0.83 sobre SPY (~$740) — un desvío estructural, no un bug.
+When validating against real traffic, it was detected that the chart didn't exactly match ThinkorSwim. Investigating (comparing `TickPriceStore` against the near-continuous spot from the options chain) confirmed: average absolute difference ~$0.32, max ~$0.83 on SPY (~$740) — a structural deviation, not a bug.
 
-**Causa**: `CHART_EQUITY` solo empuja **una barra de 1 minuto** por símbolo — el `Close` que llega en un momento dado puede reflejar un precio de varios segundos atrás dentro de ese minuto, no el último trade real.
+**Cause**: `CHART_EQUITY` only pushes **one 1-minute bar** per symbol — the `Close` that arrives at a given moment may reflect a price from several seconds earlier within that minute, not the latest real trade.
 
-**Solución** (`9666309`): se suscribe también a `LEVEL_ONE_EQUITIES` (última cotización real, mucho mayor frecuencia — varias veces por segundo):
+**Solution** (`9666309`): also subscribe to `LEVEL_ONE_EQUITIES` (last real quote, much higher frequency — several times per second):
 
-- `CHART_EQUITY` sigue siendo dueño de **Open/High/Low y los límites de cada vela** (dónde empieza/termina un bucket).
-- `LEVEL_ONE_EQUITIES` solo actualiza el **`Close` de la vela EN FORMACIÓN** (`Streamer_OnLevelOneTick` en `ChartPanel.cs`), así el precio mostrado sigue al último trade real sin esperar el cierre de la barra de 1 minuto.
-- Campos usados (asumidos según la documentación pública de Schwab, **no confirmados contra tráfico real todavía** — a diferencia de `CHART_EQUITY`, que sí se validó con `ws_raw.log`): `"3"` = Last Price, `"35"` = Trade Time. Si el precio se ve en 0 o extraño en el chart, revisar `ws_raw.log` — el código ya protege contra precios ≤ 0 (nunca llegan al chart, pero sí se guardan en el archivo crudo).
-- **Se guarda la data cruda de ambas fuentes por separado**, justo para poder comparar mañana cuál sigue mejor al precio real:
-  - `TickPriceStore` (existente) — 1 fila/minuto, derivada de `CHART_EQUITY`. `C:\OptionsData\MarketData\Ticks\{Symbol}\{Symbol}_Ticks_{yyyyMMdd}.csv`.
-  - `LevelOneTickStore` (nuevo) — cada tick de `LEVEL_ONE_EQUITIES`, milisegundos. `C:\OptionsData\MarketData\TicksLevelOne\{Symbol}\{Symbol}_L1Ticks_{yyyyMMdd}.csv`.
-- Relayado por el hub local (`CandleHubServer.BroadcastLevelOne` / `CandleHubClient.OnLevelOneTick`) — todas las instancias se benefician, no solo la que tiene la conexión real. Una instancia que lee un hub **remoto** (otra PC en la LAN) también escribe su propio `TickPriceStore`/`LevelOneTickStore` local (antes solo escribía la instancia hub) — necesario para que el Simulador/"Sim 4 ETF" tengan datos que reproducir en esa máquina.
+- `CHART_EQUITY` remains the owner of **Open/High/Low and each candle's boundaries** (where a bucket starts/ends).
+- `LEVEL_ONE_EQUITIES` only updates the **`Close` of the candle CURRENTLY FORMING** (`Streamer_OnLevelOneTick` in `ChartPanel.cs`), so the displayed price tracks the last real trade without waiting for the 1-minute bar to close.
+- Fields used (assumed based on Schwab's public documentation, **not yet confirmed against real traffic** — unlike `CHART_EQUITY`, which was validated with `ws_raw.log`): `"3"` = Last Price, `"35"` = Trade Time. If the price looks like 0 or odd on the chart, check `ws_raw.log` — the code already guards against prices ≤ 0 (they never reach the chart, but they are still saved to the raw file).
+- **Raw data from both sources is saved separately**, precisely so that tomorrow it can be compared which one tracks the real price better:
+  - `TickPriceStore` (existing) — 1 row/minute, derived from `CHART_EQUITY`. `C:\OptionsData\MarketData\Ticks\{Symbol}\{Symbol}_Ticks_{yyyyMMdd}.csv`.
+  - `LevelOneTickStore` (new) — every `LEVEL_ONE_EQUITIES` tick, milliseconds. `C:\OptionsData\MarketData\TicksLevelOne\{Symbol}\{Symbol}_L1Ticks_{yyyyMMdd}.csv`.
+- Relayed by the local hub (`CandleHubServer.BroadcastLevelOne` / `CandleHubClient.OnLevelOneTick`) — all instances benefit, not only the one holding the real connection. An instance reading from a **remote** hub (another PC on the LAN) also writes its own local `TickPriceStore`/`LevelOneTickStore` (previously only the hub instance wrote them) — necessary so the Simulator/"Sim 4 ETF" have data to replay on that machine.
 
-## 4. Manejo de zona horaria (resuelto, no tocar sin razón)
+## 4. Time-zone handling (resolved, don't touch without reason)
 
-Lightweight Charts muestra el timestamp Unix que le pasás como **dígitos UTC literales** — no convierte a la zona horaria local del navegador. Solución: `CandleData.Time` se guarda siempre en **UTC real**; justo antes de mandarlo al JS (`ChartPanel.FakeUtcEpochSeconds` / `ToChartJson`), se convierte a hora de **Nueva York (Eastern)** vía `TimeZoneInfo`, y ese valor se "disfraza" de UTC para que el gráfico lo muestre tal cual — así siempre se ve en hora de NY, sin importar en qué timezone esté configurada la PC. Cualquier tiempo nuevo que se le pase a `chart.html` (líneas, marcas, etc.) debe pasar por este mismo truco.
+Lightweight Charts displays the Unix timestamp you pass it as **literal UTC digits** — it doesn't convert to the browser's local time zone. Solution: `CandleData.Time` is always stored in **real UTC**; right before sending it to the JS side (`ChartPanel.FakeUtcEpochSeconds` / `ToChartJson`), it's converted to **New York (Eastern)** time via `TimeZoneInfo`, and that value is "disguised" as UTC so the chart displays it as-is — so it always shows in NY time, regardless of what time zone the PC is configured with. Any new time passed to `chart.html` (lines, marks, etc.) must go through this same trick.
 
-## 5. Agregación de velas
+## 5. Candle aggregation
 
-Schwab's `pricehistory` (REST, historial) solo devuelve velas de 1 minuto — `ChartPanel.AggregateToInterval` las agrupa en buckets de 15 o 60 minutos del lado del cliente (C#), anclados a las 9:30 AM ET para RTH, o a medianoche ET para el panel full-day. La agregación en vivo (`Streamer_OnNewCandle`) usa la misma lógica de bucket para que los límites siempre coincidan entre historial y velas en vivo.
+Schwab's `pricehistory` (REST, history) only returns 1-minute candles — `ChartPanel.AggregateToInterval` groups them into 15- or 60-minute buckets on the client side (C#), anchored at 9:30 AM ET for RTH, or midnight ET for the full-day panel. Live aggregation (`Streamer_OnNewCandle`) uses the same bucket logic so boundaries always match between history and live candles.
 
-**Vista Daily** (panel 1h, botón "Daily"): agrega hasta ~200 días de velas horarias en velas diarias (`HourlyCandleStore.MaxCandles = 1500` ≈ 200 días × 7 velas/día), recalculando las 4 SMA sobre los cierres diarios. Historial horario respaldado en `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv`, backfileado inicialmente desde Yahoo Finance (script `backfill_hourly.js`, no versionado en el repo — vivió en el scratchpad de la sesión) para superar el límite de 10 días de Schwab.
+**Daily view** (1h panel, "Daily" button, opens `DailyChartForm`): aggregates up to ~200 days of hourly candles into daily candles (`HourlyCandleStore.MaxCandles = 1500` ≈ 200 days × 7 candles/day, also separately backed up in `DailyCandleStore` → `C:\OptionsData\MarketData\Candles\{Symbol}_Daily.csv`), recalculating the 4 SMAs over daily closes. Hourly history backed up in `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv`, initially backfilled from Yahoo Finance (script `backfill_hourly.js`, not versioned in the repo — it lived in the session scratchpad) to get past Schwab's 10-day limit. It's not just a read-only view: it has its own T-Line tool (mirrored to the Live Chart), "D.PM"/"D40"/"D100"/"D200" checkboxes (draw the corresponding daily SMA over the Live Chart) and "SMA Watch" buttons (arm watches for the daily SMA crossing the live price of the 1h panel) — see [`LIVE_CHART_ANALYSIS.md`](../LIVE_CHART_ANALYSIS.md).
 
-## 6. Indicadores
+## 6. Indicators
 
-- **SMA 20/40/100/200** — panel 1h, calculadas en JS (`configureSmas`). Sin marcadores de hover (`crosshairMarkerVisible: false`).
-- **Bollinger Bands (20, 2 std devs)** — panel 1h y 15m RTH (`configureBollinger`).
-- **Monitores Cross-SMA (manual)** — **removidos del Live Chart en vivo**; la misma lógica de toggles (↑/↓ × 20/40/100/200) y push a Telegram sigue existiendo, pero solo en el **Simulador** (`SimulatorForm.cs`/`SimulatedChartPanel.cs`), sin equivalente en `MultiChartForm`.
-- **Líneas rojas de High/Low del día anterior** — auto-dibujadas al abrir el chart en los 3 paneles (`ChartPanel.EvaluatePrevDayHiLoAsync`/`DrawPrevDayHiLoAsync`); un lado se salta si el precio ya gapeó más allá de él. Borrar una H-Line se sincroniza entre los 3 paneles (`OnHLineDeletedEvent`).
-- **Banner "Expuesto en 3 charts"** — en premarket, si el precio en vivo rompe el mismo lado de Bollinger(20,2) en Daily + 1h + 15m RTH simultáneamente, aparece arriba del panel 15m RTH (`ChartPanel.GetBollingerDirection`/`GetDailyBollingerDirection`, orquestado en `MultiChartForm`).
+- **SMA 20/40/100/200** — 1h panel, calculated in JS (`configureSmas`). No hover markers (`crosshairMarkerVisible: false`).
+- **Bollinger Bands (20, 2 std devs)** — 1h and 15m RTH panels (`configureBollinger`).
+- **Cross-SMA monitors (manual)** — **removed from the live Live Chart**; the same toggle logic (↑/↓ × 20/40/100/200) and Telegram push still exists, but only in the **Simulator** (`SimulatorForm.cs`/`SimulatedChartPanel.cs`), with no equivalent in `MultiChartForm`.
+- **Red previous-day High/Low lines** — auto-drawn when the chart opens, on all 3 panels (`ChartPanel.EvaluatePrevDayHiLoAsync`/`DrawPrevDayHiLoAsync`); one side is skipped if the price already gapped past it. Deleting an H-Line is synced across the 3 panels (`OnHLineDeletedEvent`).
+- **"Exposed on 3 charts" banner** — in premarket, if the live price breaks the same side of Bollinger(20,2) on Daily + 1h + 15m RTH simultaneously, a banner appears above the 15m RTH panel (`ChartPanel.GetBollingerDirection`/`GetDailyBollingerDirection`, orchestrated in `MultiChartForm`).
 
-## 7. Herramientas de dibujo
+## 7. Drawing tools
 
-Todas implementadas como *Series Primitives* de Lightweight Charts v4 en `chart.html` (no hay tipo de serie nativo para esto):
+All implemented as *Series Primitives* of Lightweight Charts v4 in `chart.html` (there's no native series type for this):
 
-| Herramienta | Panel(es) | Notas |
+| Tool | Panel(s) | Notes |
 |---|---|---|
-| T-Line | 1h, 15m RTH (panel 3 ya no tiene esta herramienta) | Persistida por símbolo en **ambos** paneles, cada uno con su propio `TLineStore` (tag "1h"/"RTH"); múltiples líneas independientes por panel, sin límite de 1; ya no se mirrorea entre paneles |
-| H-Line | 1h, 15m RTH | Línea roja hasta el borde derecho; misma herramienta reusada en ambos paneles |
-| Rect (azul) | 15m RTH+Overnight | Rectángulo por 2 clicks |
-| Rect (gris) | 1h | Para marcar lateralidad |
-| DZ/SZ | 15m RTH+Overnight | Zonas de demanda/oferta, relleno entre pares |
-| Arrow (diagonal) | 15m RTH+Overnight | Rojo si el 1er click es más alto que el 2do, verde si no |
-| Flechas verticales (↑/↓) | 1h | Punta en el punto de click; arrastrables; persistidas por símbolo (`VerticalArrowStore`) |
+| T-Line | 1h, 15m RTH (panel 3 no longer has this tool) | Persisted per symbol in **both** panels, each with its own `TLineStore` (tag "1h"/"RTH"); multiple independent lines per panel, no 1-line limit; no longer mirrored between panels |
+| H-Line | 1h, 15m RTH | Red line to the right edge; same tool reused on both panels |
+| Rect (blue) | 15m RTH+Overnight | Rectangle via 2 clicks |
+| Rect (gray) | 1h | For marking sideways movement |
+| DZ/SZ | 15m RTH+Overnight | Demand/supply zones, filled between pairs |
+| Arrow (diagonal) | 15m RTH+Overnight | Red if the 1st click is higher than the 2nd, green otherwise |
+| Vertical arrows (↑/↓) | 1h | Tip at the click point; draggable; persisted per symbol (`VerticalArrowStore`) |
+| T-Line (Daily popup) | `DailyChartForm`, "Hourly"/"15 Min" tabs | Automatically mirrored to the corresponding 1h/15m RTH panel of the Live Chart (one-way only) |
+| Rect (Daily popup) | `DailyChartForm` | Persisted per symbol (`RectStore`, contextTag "Daily"/"DailyColor") — distinct from the blue Rect in the Live Chart |
 
-**Patrón seleccionable/borrable** (gris, azul, T-Line, flechas verticales): click cerca del borde/línea selecciona (contorno amarillo), tecla `Delete` borra el seleccionado. `Clear` (por panel) borra todo lo dibujado en ese panel — y en el 1h también limpia los stores persistidos.
+**Selectable/deletable pattern** (gray, blue, T-Line, vertical arrows): clicking near the edge/line selects it (yellow outline), the `Delete` key deletes the selected one. `Clear` (per panel) deletes everything drawn on that panel — and on the 1h panel it also clears the persisted stores.
 
-**Persistencia** (`TLineStore`, `VerticalArrowStore`, ambos en `OptionsTrader.WinForms`): CSV simple por símbolo en `C:\OptionsData\ChartDrawings\{Symbol}\`, sin base de datos. Comunicación chart→C# vía `window.chrome.webview.postMessage` → `CoreWebView2.WebMessageReceived` en `ChartPanel.cs`.
+**Persistence** (`TLineStore`, `VerticalArrowStore`, both in `OptionsTrader.WinForms`): simple CSV per symbol in `C:\OptionsData\ChartDrawings\{Symbol}\`, no database. Chart→C# communication via `window.chrome.webview.postMessage` → `CoreWebView2.WebMessageReceived` in `ChartPanel.cs`.
 
-## 8. Línea azul de pre-market (panel 15m RTH)
+## 8. Pre-market blue line (15m RTH panel)
 
-Al abrir "Live Chart" **antes de las 9:30 AM ET**, arranca una línea azul en el momento del click, siguiendo el precio en vivo (`startPreMarketLine` / `updatePreMarketLine` en `chart.html`) hasta que el mercado abre — ahí C# simplemente deja de mandar actualizaciones, así que se congela sola, sin lógica extra de "freeze". **No se persiste a disco** — cerrar y reabrir el chart (ese día o al siguiente) reinicia todo el proceso desde cero. Si se abre después de las 9:30, no aparece nada.
+When "Live Chart" is opened **before 9:30 AM ET**, a blue line starts at the moment of the click, following the live price (`startPreMarketLine` / `updatePreMarketLine` in `chart.html`) until the market opens — at which point C# simply stops sending updates, so it freezes on its own, with no extra "freeze" logic. **Not persisted to disk** — closing and reopening the chart (that day or the next) restarts the whole process from scratch. If opened after 9:30, nothing appears.
 
-## 9. Snapshot local de los 3 charts por trade
+## 9. Local snapshot of the 3 charts per trade
 
-Al registrar un trade (demo o real, punto único de convergencia: `Form1.RecordEntryAsync`), si hay un `MultiChartForm` abierto para ese símbolo, se capturan los 3 paneles vía `CoreWebView2.CapturePreviewAsync` (renderiza el chart real, **no** una captura de pantalla — funciona aunque la ventana esté minimizada u ocluida), se combinan lado a lado en el mismo orden que se ven en pantalla, y se guardan en `C:\OptionsData\ChartSnapshots\{Symbol}\{Symbol}_{timestamp}_trade{tradeId}.png`. Solo local — no sube a S3 ni toca la base de datos. Best-effort: nunca bloquea el flujo del trade.
+When a trade is recorded (demo or real, single convergence point: `Form1.RecordEntryAsync`), if a `MultiChartForm` is open for that symbol, the 3 panels are captured via `CoreWebView2.CapturePreviewAsync` (renders the actual chart, **not** a screen capture — works even if the window is minimized or occluded), combined side by side in the same order they appear on screen, and saved to `C:\OptionsData\ChartSnapshots\{Symbol}\{Symbol}_{timestamp}_trade{tradeId}.png`. Local only — doesn't upload to S3 or touch the database. Best-effort: never blocks the trade flow.
 
-## 10. Otras ventanas relacionadas
+## 10. Other related windows
 
-- **"Block Mov"** (`FourEtfChartsForm.cs`): ventana con 4 charts de 1h (SPY, QQQ, DIA, IWM) lado a lado, sin toolbar — para ver el movimiento del mercado en conjunto. DIA/IWM se agregan a mano a la lista de suscripción (`Form1.SetUpLiveFeedAsync`), pendiente de que salga de la tabla de Tickers como los demás.
-- **"Sim 4 ETF"** (`FourEtfSimulatorForm.cs`): a diferencia de "Block Mov" (arriba, en vivo), esta es una ventana de **repetición offline** (disco, sin streaming) — SPY/QQQ/IWM/DIA en grid 2x2, 15m RTH+Overnight, Play/pause compartido, un único toggle DZ/SZ para las 4 charts, y grid de cadena de opciones con selector de símbolo.
+- **"Block Mov"** (`FourEtfChartsForm.cs`): window with 4 1h charts (SPY, QQQ, DIA, IWM) side by side, no toolbar — for watching overall market movement. DIA/IWM are added manually to the subscription list (`Form1.SetUpLiveFeedAsync`), pending removal from the Tickers table like the others.
+- **"Sim 4 ETF"** (`FourEtfSimulatorForm.cs`): unlike "Block Mov" (above, live), this is an **offline replay** window (disk-based, no streaming) — SPY/QQQ/IWM/DIA in a 2x2 grid, 15m RTH+Overnight, shared Play/pause, a single DZ/SZ toggle for all 4 charts, and an options-chain grid with a symbol selector.
 
-## 11. Archivos involucrados
+## 11. Files involved
 
 - **`OptionsTrader.Application/DTOs/Streaming/CandleData.cs`** — DTO `{Time (UTC), Open, High, Low, Close}`.
 - **`OptionsTrader.Application/Interfaces/ICandleFeed.cs`** — `OnNewCandle`, `OnLevelOneTick`, `OnDisconnected`.
-- **`OptionsTrader.Infrastructure/Schwab/SchwabStreamerClient.cs`** — cliente WebSocket hecho a mano. `ConnectAsync`/`LoginAsync`/`SubscribeChartEquity`/`SubscribeLevelOneEquity`, parseo de mensajes, reconexión con backoff. `LogRawMessage` vuelca todo el tráfico crudo a `C:\OptionsTraderPush\ws_raw.log` para validar el formato contra Schwab real.
-- **`OptionsTrader.Infrastructure/Schwab/TickPriceStore.cs`** / **`LevelOneTickStore.cs`** — captura de ticks crudos (ver §3).
-- **`OptionsTrader.WinForms/ChartPanel.cs`** — `Panel` embebible con el WebView2: carga de historial, agregación de velas (histórica y en vivo), indicadores, dibujo, captura de imagen (`CaptureImageAsync`).
-- **`OptionsTrader.WinForms/MultiChartForm.cs`** — ventana contenedora, arma los 3 `ChartPanel`, toolbar por columna, captura combinada (`CaptureCombinedChartImageAsync`).
-- **`OptionsTrader.WinForms/LocalCandleHub.cs`** — `CandleHubServer`/`CandleHubClient` (ver §2 y §3).
-- **`OptionsTrader.WinForms/HubHostSettingsStore.cs`**, **`TLineStore.cs`**, **`VerticalArrowStore.cs`**, **`HourlyCandleStore.cs`** — persistencia local (ver secciones correspondientes).
-- **`OptionsTrader.WinForms/FourEtfChartsForm.cs`** — ventana "Block Mov".
-- **`OptionsTrader.WinForms/FourEtfSimulatorForm.cs`** — ventana "Sim 4 ETF" (repetición offline, distinta de "Block Mov").
-- **`OptionsTrader.WinForms/ChartAssets/`** — `lightweight-charts.js` (v4.1.3, local, sin CDN) + `chart.html` (todo el JS del chart: indicadores, dibujo, líneas, vista Daily).
-- **`Form1.cs` / `Form1.Designer.cs`** — botones `btnLiveChart`, `btnFourEtfCharts`, `btnHubHost`; `SetUpLiveFeedAsync` (elección de hub/cliente, suscripciones); `RecordEntryAsync` (snapshot de trade).
+- **`OptionsTrader.Infrastructure/Schwab/SchwabStreamerClient.cs`** — hand-built WebSocket client. `ConnectAsync`/`LoginAsync`/`SubscribeChartEquity`/`SubscribeLevelOneEquity`, message parsing, reconnection with backoff. `LogRawMessage` dumps all raw traffic to `C:\OptionsTraderPush\ws_raw.log` to validate the format against real Schwab traffic.
+- **`OptionsTrader.Infrastructure/Schwab/TickPriceStore.cs`** / **`LevelOneTickStore.cs`** — raw tick capture (see §3).
+- **`OptionsTrader.WinForms/ChartPanel.cs`** — embeddable `Panel` with the WebView2: history loading, candle aggregation (historical and live), indicators, drawing, image capture (`CaptureImageAsync`).
+- **`OptionsTrader.WinForms/MultiChartForm.cs`** — container window, assembles the 3 `ChartPanel`s, per-column toolbar, combined capture (`CaptureCombinedChartImageAsync`).
+- **`OptionsTrader.WinForms/LocalCandleHub.cs`** — `CandleHubServer`/`CandleHubClient` (see §2 and §3).
+- **`OptionsTrader.WinForms/HubHostSettingsStore.cs`**, **`TLineStore.cs`**, **`VerticalArrowStore.cs`**, **`HourlyCandleStore.cs`**, **`DailyCandleStore.cs`**, **`RectStore.cs`**, **`SmaDailyWatchStore.cs`**, **`CtRecordStore.cs`**, **`CtLogWriter.cs`** — local persistence (see corresponding sections).
+- **`OptionsTrader.WinForms/DailyChartForm.cs`** — "Daily" window (daily candles, its own mirrored T-Line, D.PM/D40/D100/D200 checkboxes, SMA Watch buttons).
+- **`OptionsTrader.WinForms/TwoPanelChartsControl.cs`** — Charts tab embedded in Form1 (2 panels, its own trades/options grid).
+- **`OptionsTrader.WinForms/FourEtfChartsForm.cs`** — "Block Mov" window.
+- **`OptionsTrader.WinForms/FourEtfSimulatorForm.cs`** — "Sim 4 ETF" window (offline replay, distinct from "Block Mov").
+- **`OptionsTrader.WinForms/ChartAssets/`** — `lightweight-charts.js` (v4.1.3, local, no CDN) + `chart.html` (all the chart's JS: indicators, drawing, lines, Daily view).
+- **`Form1.cs` / `Form1.Designer.cs`** — `btnLiveChart`, `btnFourEtfCharts`, `btnHubHost` buttons; `SetUpLiveFeedAsync` (hub/client selection, subscriptions); `RecordEntryAsync` (trade snapshot).
 
-## 12. Qué NO toca esta feature
+## 12. What this feature does NOT touch
 
-- El polling de 6s de la pestaña Quotes, `PopulateQuotesGrid`, `FetchAndUpdateQuotesAsync`.
-- Cualquier lógica de trading (`PlaceRealTradeAsync`, `CloseTradeRowAsync`, etc.) — el snapshot de charts se agrega *después* de que el trade ya se guardó, sin alterar su flujo.
-- La autenticación OAuth2 existente (`SchwabAuthService`) — se reusa tal cual, sin cambios.
+- The 6s polling of the Quotes tab, `PopulateQuotesGrid`, `FetchAndUpdateQuotesAsync`.
+- Any trading logic (`PlaceRealTradeAsync`, `CloseTradeRowAsync`, etc.) — the chart snapshot is added *after* the trade has already been saved, without altering its flow.
+- The existing OAuth2 authentication (`SchwabAuthService`) — reused as-is, unchanged.
 
-## 13. Pendiente / próximas ideas
+## 13. Pending / future ideas
 
-1. Confirmar los números de campo de `LEVEL_ONE_EQUITIES` (`3`, `35`) contra `ws_raw.log` con tráfico real — comparar `TickPriceStore` vs `LevelOneTickStore` vs precio real (ej. ThinkorSwim) para decidir si el `Close` en vivo debería basarse 100% en L1.
-2. Mover DIA/IWM de "agregados a mano" a la tabla de Tickers real.
-3. ~~Simulador offline (fase 2) sobre los ticks capturados~~ — implementado: ver el Simulador individual (`SimulatorForm.cs`) y "Sim 4 ETF" (`FourEtfSimulatorForm.cs`, §10), documentados en detalle en [`SIMULADOR_TELEGRAM_Y_REGISTRO.md`](SIMULADOR_TELEGRAM_Y_REGISTRO.md).
+1. Confirm the `LEVEL_ONE_EQUITIES` field numbers (`3`, `35`) against `ws_raw.log` with real traffic — compare `TickPriceStore` vs `LevelOneTickStore` vs the real price (e.g. ThinkorSwim) to decide whether the live `Close` should be based 100% on L1.
+2. Move DIA/IWM from "added manually" to the real Tickers table.
+3. ~~Offline simulator (phase 2) over captured ticks~~ — implemented: see the individual Simulator (`SimulatorForm.cs`) and "Sim 4 ETF" (`FourEtfSimulatorForm.cs`, §10), documented in detail in [`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md).
