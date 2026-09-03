@@ -1,62 +1,65 @@
-# Estructura de `C:\OptionsData`
+# Structure of `C:\OptionsData`
 
-Carpeta local (fuera del repositorio) donde la app WinForms guarda todo lo que no vive en la base de datos ni en S3 — datos de mercado, datos de trades, dibujos del chart y logs. Reorganizada por tipo de dato en `94cf365` (antes todo caía suelto y plano en la raíz, mezclando velas, ticks, IV y dibujos por convención de nombre).
+Local folder (outside the repository) where the WinForms app saves everything that doesn't live
+in the database or in S3 — market data, trade data, chart drawings, and logs. Reorganized by data
+type in `94cf365` (before that, everything landed loose and flat in the root, mixing candles,
+ticks, IV, and drawings by naming convention).
 
-## Estructura
+## Structure
 
 ```
 C:\OptionsData\
 ├── MarketData\
-│   ├── Candles\{Symbol}_Hourly1h.csv          — velas de 1h persistidas (HourlyCandleStore)
-│   ├── Candles\{Symbol}_Daily.csv             — velas diarias persistidas (DailyCandleStore)
-│   ├── Ticks\{Symbol}\{Symbol}_Ticks_{yyyyMMdd}.csv          — 1 fila/min, derivado de CHART_EQUITY (TickPriceStore)
-│   └── TicksLevelOne\{Symbol}\{Symbol}_L1Ticks_{yyyyMMdd}.csv — cada tick de LEVEL_ONE_EQUITIES, ms (LevelOneTickStore)
+│   ├── Candles\{Symbol}_Hourly1h.csv          — persisted 1h candles (HourlyCandleStore)
+│   ├── Candles\{Symbol}_Daily.csv             — persisted daily candles (DailyCandleStore)
+│   ├── Ticks\{Symbol}\{Symbol}_Ticks_{yyyyMMdd}.csv          — 1 row/min, derived from CHART_EQUITY (TickPriceStore)
+│   └── TicksLevelOne\{Symbol}\{Symbol}_L1Ticks_{yyyyMMdd}.csv — every LEVEL_ONE_EQUITIES tick, ms (LevelOneTickStore)
 ├── Trades\
 │   └── Iv\
-│       ├── {Symbol}_{Call|Put}_{fecha}_{exp}.csv  — cotizaciones de opciones por ciclo de polling (CsvLogger)
-│       └── IV_Historial_Apertura.csv              — snapshot de IV ATM de apertura por símbolo/día (IvHistorialWriter)
+│       ├── {Symbol}_{Call|Put}_{date}_{exp}.csv  — option quotes per polling cycle (CsvLogger)
+│       └── IV_Historial_Apertura.csv              — opening ATM IV snapshot per symbol/day (IvHistorialWriter)
 ├── ChartDrawings\
 │   └── {Symbol}\
-│       ├── {Symbol}_TLines_{modeTag}.csv  — T-Lines por panel (TLineStore; modeTag: 1h/RTH/DailyHora/Daily15Min)
-│       ├── {Symbol}_Arrows.csv            — flechas verticales del panel 1h (VerticalArrowStore)
-│       ├── {Symbol}_Rects_{contextTag}.csv — rectángulos de zona (RectStore)
-│       ├── {Symbol}_RectGris.csv          — rectángulo gris de referencia (RectGrisStore)
-│       └── {Symbol}_SmaWatches.csv        — watches de SMA diaria armados (SmaDailyWatchStore)
+│       ├── {Symbol}_TLines_{modeTag}.csv  — T-Lines per panel (TLineStore; modeTag: 1h/RTH/DailyHora/Daily15Min)
+│       ├── {Symbol}_Arrows.csv            — vertical arrows on the 1h panel (VerticalArrowStore)
+│       ├── {Symbol}_Rects_{contextTag}.csv — zone rectangles (RectStore)
+│       ├── {Symbol}_RectGris.csv          — reference gray rectangle (RectGrisStore)
+│       └── {Symbol}_SmaWatches.csv        — armed daily SMA watches (SmaDailyWatchStore)
 ├── ChartSnapshots\
-│   └── {Symbol}\{Symbol}_{timestamp}_trade{tradeId}.png  — snapshot combinado de los 3 charts al registrar un trade
+│   └── {Symbol}\{Symbol}_{timestamp}_trade{tradeId}.png  — combined snapshot of the 3 charts when logging a trade
 ├── EventLog\
-│   ├── events_log.csv                     — eventos de señales (Cruces, Rebotes, DZ/SZ) (EventLogStore)
-│   └── ct_records_{MachineName}.json      — registro global de T-Lines (creación/resolución) (CtRecordStore)
+│   ├── events_log.csv                     — signal events (Crosses, Bounces, DZ/SZ) (EventLogStore)
+│   └── ct_records_{MachineName}.json      — global T-Line record (creation/resolution) (CtRecordStore)
 ├── Simulator\
-│   └── Trades\{Symbol}\{Symbol}_{yyyyMMdd}.csv  — trades abiertos/cerrados en el Simulador (SimTradesStore)
+│   └── Trades\{Symbol}\{Symbol}_{yyyyMMdd}.csv  — trades opened/closed in the Simulator (SimTradesStore)
 ├── Logs\
-│   └── iv_historial_errors.log   — errores de IvHistorialWriter
+│   └── iv_historial_errors.log   — IvHistorialWriter errors
 └── Backups\
-    └── backup_before_*\          — respaldos puntuales de corridas de backfill de velas
+    └── backup_before_*\          — point-in-time backups of candle backfill runs
 ```
 
-## Por qué esta división
+## Why this division
 
-- **Por tipo de dato primero, símbolo después**: cada store define un subfolder fijo — agregar un símbolo nuevo no requiere tocar ninguna ruta.
-- **`Ticks`/`TicksLevelOne` con subcarpeta por símbolo**: son las que más archivos acumulan (uno por día, para siempre), así la carpeta raíz de cada una queda navegable.
-- **`Trades\Iv` separado de `MarketData`**: es data de una operación/ciclo de polling, no de mercado puro — útil si más adelante se arman reportes de trades sin mezclarlo con velas/ticks.
-- **`ChartDrawings` separado**: es puro estado de UI (se podría borrar sin perder nada de valor histórico), distinto de todo lo demás que sí es data real.
-- **`ChartSnapshots` separado**: son imágenes, no CSV — y están asociadas a un trade puntual, no a un símbolo en general.
-- **`Backups`**: convención ya existente (`backup_before_*`) movida a su propia carpeta en vez de vivir al lado de los CSV activos.
+- **By data type first, symbol second**: each store defines a fixed subfolder — adding a new symbol doesn't require touching any path.
+- **`Ticks`/`TicksLevelOne` with a per-symbol subfolder**: these accumulate the most files (one per day, forever), so the root folder of each stays navigable.
+- **`Trades\Iv` separate from `MarketData`**: this is data from an operation/polling cycle, not pure market data — useful if trade reports get built later without mixing it with candles/ticks.
+- **`ChartDrawings` separate**: pure UI state (could be deleted without losing anything of historical value), unlike everything else, which is real data.
+- **`ChartSnapshots` separate**: these are images, not CSVs — and they're associated with a specific trade, not a symbol in general.
+- **`Backups`**: an existing convention (`backup_before_*`) moved into its own folder instead of living alongside the active CSVs.
 
-## Qué store escribe dónde
+## Which store writes where
 
-| Store (código) | Carpeta |
+| Store (code) | Folder |
 |---|---|
 | `HourlyCandleStore` (`OptionsTrader.WinForms`) | `MarketData\Candles\` |
 | `DailyCandleStore` (`OptionsTrader.WinForms`) | `MarketData\Candles\` |
 | `TickPriceStore` (`OptionsTrader.Infrastructure.Schwab`) | `MarketData\Ticks\{Symbol}\` |
 | `LevelOneTickStore` (`OptionsTrader.Infrastructure.Schwab`) | `MarketData\TicksLevelOne\{Symbol}\` |
 | `CsvLogger` (`OptionsTrader.WinForms`) | `Trades\Iv\` |
-| `IvHistorialWriter` (`OptionsTrader.WinForms`) | `Trades\Iv\` (CSV maestro) + `Logs\` (errores) |
+| `IvHistorialWriter` (`OptionsTrader.WinForms`) | `Trades\Iv\` (master CSV) + `Logs\` (errors) |
 | `TLineStore` / `VerticalArrowStore` / `RectStore` / `RectGrisStore` / `SmaDailyWatchStore` (`OptionsTrader.WinForms`) | `ChartDrawings\{Symbol}\` |
 | `Form1.SaveTradeChartSnapshotAsync` | `ChartSnapshots\{Symbol}\` |
 | `EventLogStore` / `CtRecordStore` (`OptionsTrader.WinForms`) | `EventLog\` |
 | `SimTradesStore` (`OptionsTrader.WinForms`) | `Simulator\Trades\{Symbol}\` |
 
-Ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md) para el detalle de los stores relacionados al chart en vivo, y [`docs/FEATURES.md`](FEATURES.md) (§8 y §11) para el resto de la persistencia de la app.
+See [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md) for detail on the stores related to the live chart, and [`docs/FEATURES.md`](FEATURES.md) (§8 and §11) for the rest of the app's persistence.

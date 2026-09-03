@@ -1,227 +1,227 @@
-# Señales de Trading (Cruces, Rebotes, Zonas de Demanda, T-Line, Bollinger)
+# Trading Signals (Crosses, Bounces, Demand Zones, T-Line, Bollinger)
 
-Documento de referencia de todos los detectores de señales agregados sobre el Live Chart (y su
-gemelo en el Simulador) en las últimas sesiones de trabajo. Complementa a
-[`LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md), que documenta la infraestructura de
-streaming/WebSocket — acá solo se documenta la LÓGICA DE DETECCIÓN de cada señal.
+Reference document for all signal detectors added on top of the Live Chart (and its
+twin in the Simulator) in recent work sessions. Complements
+[`LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md), which documents the
+streaming/WebSocket infrastructure — this document only covers the DETECTION LOGIC for each signal.
 
-Todas estas señales viven en **`ChartPanel.cs`** (app en vivo) con una copia deliberadamente
-separada (no heredada, no compartida) en **`SimulatedChartPanel.cs`** (Simulador) — ver
-[`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md) para el porqué de esa
-duplicación intencional.
+All these signals live in **`ChartPanel.cs`** (live app) with a deliberately
+separate copy (not inherited, not shared) in **`SimulatedChartPanel.cs`** (Simulator) — see
+[`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md) for the reasoning behind that
+intentional duplication.
 
 ---
 
-## 1. Cross-SMA manual (Cruce / Rebote) — panel 1h (solo Simulador)
+## 1. Manual Cross-SMA (Cross / Bounce) — 1h panel (Simulator only)
 
-Removido del Live Chart en vivo (los 4 pares de toggles ↑/↓ y la lógica que los maneja se sacaron
-de `ChartPanel.cs`/`MultiChartForm.cs`). La misma mecánica sigue viva únicamente en el
-**Simulador** (`SimulatorForm.cs`/`SimulatedChartPanel.cs` — ver
-[`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md) §2), sin equivalente en la
-app en vivo. Monitores manuales activables por botón (↑/↓ × SMA 20/40/100/200). Al armar un
+Removed from the live Live Chart (the 4 pairs of ↑/↓ toggles and the logic that manages them were
+removed from `ChartPanel.cs`/`MultiChartForm.cs`). The same mechanics remain alive only in the
+**Simulator** (`SimulatorForm.cs`/`SimulatedChartPanel.cs` — see
+[`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md) §2), with no equivalent in the
+live app. Manual monitors activated by button (↑/↓ × SMA 20/40/100/200). When arming a
 monitor:
 
-- Se determina la dirección (`_crossUp`) comparando el precio actual contra la SMA elegida: si el
-  precio está por debajo, se espera un cruce hacia ARRIBA; si está por encima, hacia ABAJO.
-- Se pueden armar varias SMAs en secuencia — se resuelven una por una en orden ascendente de
-  período (`AdvanceCrossSequence`); al resolver la última, `OnCrossSequenceFinished` limpia los
-  botones.
+- The direction (`_crossUp`) is determined by comparing the current price against the chosen SMA: if the
+  price is below it, an UPWARD cross is expected; if it's above, a DOWNWARD cross.
+- Multiple SMAs can be armed in sequence — they're resolved one at a time in ascending period
+  order (`AdvanceCrossSequence`); once the last one resolves, `OnCrossSequenceFinished` clears the
+  buttons.
 
-**Fórmula de cruce genuino** (`EvaluateCrossings`, evaluada solo sobre la SMA actualmente activa
-de la secuencia, en cada vela de 1h recién cerrada):
-
-```
-crossed = vela del color correcto (verde si UP, roja si DOWN)
-          Y el cierre de ESTA vela ya quedó del lado cruzado de la SMA actual
-          Y el cierre de la vela ANTERIOR seguía del otro lado de la SMA de la vela ANTERIOR
-```
-
-Es una comparación de **2 puntos consecutivos** (cierre anterior vs SMA anterior, cierre actual vs
-SMA actual) — **no** "el open de esta vela vs la SMA de esta misma vela". Esto importa porque la
-SMA se mueve entre velas: puede que ninguna vela individual tenga su open/close "montado" sobre la
-SMA, pero el precio sí cruzó genuinamente comparando punto a punto. Este bug (comparar contra la
-SMA equivocada) se detectó y corrigió en agosto/2026 contra datos reales de AAPL, y desde entonces
-es el patrón de referencia reusado en Piso/Techo (ver §2) y en el Simulador.
-
-**Rebote** (`bounced`, si no hubo cruce, se sigue vigilando la MISMA SMA): la vela salió a buscar
-la SMA desde su lado y fue rechazada de vuelta, cerrando del lado original.
-- **Caso 1** — la mecha SÍ tocó/cruzó la SMA intra-vela, pero el cierre volvió al lado original.
-- **Caso 2** — la mecha se quedó corta, pero a menos del 30% (`BounceProximityRatio`) del tamaño
-  del propio movimiento de rechazo — "fue a buscarla y casi la toca".
-
-Cada resolución (Cruce o Rebote) solo escribe una línea en el log de texto del Simulador
-(`LogSimEvent`) — sin Telegram ni `EventLogStore`, a diferencia de las demás señales de este
-documento que sí corren en la app en vivo.
-
-## 2. Piso / Techo auto-armado — panel 1h
-
-Análisis automático **una sola vez por proceso**, corrido justo antes de abrir mercado (solo si son
-antes de las 9:30 AM ET), sobre el cierre de la última vela horaria ya cerrada (ayer):
+**Genuine cross formula** (`EvaluateCrossings`, evaluated only on the currently active SMA
+in the sequence, on each newly closed 1h candle):
 
 ```
-SMA_rápida < SMA_lenta  Y  precio < SMA_rápida  →  "Techo" (tendencia bajista de corto plazo,
-                                                      precio viene de abajo buscando resistencia)
-SMA_rápida > SMA_lenta  Y  precio > SMA_rápida  →  "Piso"  (tendencia alcista de corto plazo,
-                                                      precio viene de arriba buscando soporte)
+crossed = candle of the correct color (green if UP, red if DOWN)
+          AND this candle's close already ended up on the crossed side of the current SMA
+          AND the PREVIOUS candle's close was still on the other side of the PREVIOUS candle's SMA
 ```
 
-Evaluado independientemente para el par (20,40) y el par (100,200) — **nunca son contrarios entre
-sí dentro del mismo par** (si 20 es Techo, 40 también lo es). Cada resultado no-nulo arma **ambos
-períodos del par por separado** (2 watches independientes) — dibuja la etiqueta "Piso"/"Techo" al
-lado de cada SMA y queda así todo el día.
+This is a comparison of **2 consecutive points** (previous close vs. previous SMA, current close vs.
+current SMA) — **not** "this candle's open vs. this same candle's SMA". This matters because the
+SMA moves between candles: no individual candle may have its open/close "sitting" right on the
+SMA, yet the price genuinely crossed when compared point by point. This bug (comparing against the
+wrong SMA) was detected and fixed in August/2026 against real AAPL data, and since then
+it's the reference pattern reused in Floor/Ceiling (see §2) and in the Simulator.
 
-**Resolución de cada watch** (`EvaluatePisoTechoWatches`, por vela de 1h cerrada): misma fórmula de
-2 puntos que Cross-SMA (§1) para Cruce, y la misma fórmula de proximidad al 30% para Rebote —
-aplicada por período (20, 40, 100 o 200) de forma completamente independiente. Cada watch se
-resuelve **una sola vez** (`watch.Done`) y no vuelve a evaluarse el resto del día.
+**Bounce** (`bounced`, if there was no cross, the SAME SMA keeps being watched): the candle reached out toward
+the SMA from its side and was rejected back, closing on the original side.
+- **Case 1** — the wick DID touch/cross the SMA intra-candle, but the close returned to the original side.
+- **Case 2** — the wick fell short, but by less than 30% (`BounceProximityRatio`) of the size of
+  the rejection move itself — "it went for it and almost touched it".
 
-- **Cruce en Techo** → el precio rompió hacia arriba una resistencia → señal alcista.
-- **Rebote en Piso** → el precio rebotó hacia arriba desde un soporte → señal alcista.
-- **Cruce en Piso** → el precio rompió hacia abajo un soporte → señal bajista.
-- **Rebote en Techo** → el precio fue rechazado hacia abajo desde una resistencia → señal bajista.
+Each resolution (Cross or Bounce) only writes one line to the Simulator's text log
+(`LogSimEvent`) — no Telegram or `EventLogStore`, unlike the other signals in this
+document, which do run in the live app.
 
-Cada resolución dispara Telegram + `EventLogStore.Append(..., "PisoTechoCruce"/"PisoTechoRebote",
-"Piso"/"Techo", ...)` y el evento C# `OnPisoTechoResolvedEvent(evento, pisoTecho)`, que
-`MultiChartForm` usa como disparador de la vigilancia de Bollinger en 15m RTH (ver §5).
+## 2. Auto-armed Floor / Ceiling ("Piso" / "Techo") — 1h panel
 
-**Diseño explícito — la etiqueta se queda en pantalla aunque se rompa:** si el precio abre por
-debajo de un "Piso" (o por encima de un "Techo"), el watch interno se invalida y se limpia
-(`InvalidateIfBrokenByOpen`), pero la etiqueta visual "Piso"/"Techo" en el chart **NO se quita** —
-queda visible el resto de la sesión RTH, por pedido explícito, aunque el precio ya la haya cruzado.
+Automatic analysis **once per process**, run right before market open (only if it's
+before 9:30 AM ET), over the close of the last already-closed hourly candle (yesterday):
 
-## 3. Rebote en Zona de Demanda — panel 15m RTH+Overnight
-
-El usuario dibuja manualmente una Zona de Demanda con la herramienta DZ/SZ (2 clicks → 2 líneas:
-verde/Proximal arriba, roja/Distal abajo). Cada par de líneas donde el precio Proximal (demanda) >
-Distal (oferta) se registra como zona a vigilar (`_demandZones`).
-
-**Resolución** (`EvaluateDemandZoneRebounds`, por vela de 15m cerrada):
-1. **Entra** en la zona (`zone.Entered`) cuando el Low de la vela toca o casi toca el Proximal
-   (mismo criterio de proximidad del 30% que Cross-SMA/Piso-Techo).
-2. **Se invalida** (`zone.Done`, sin rebote) si el Low perfora por debajo del Distal — la zona se
-   "quemó".
-3. **Confirma rebote** (`zone.Done`, con evento) si, tras entrar, el Close cierra de vuelta por
-   encima del Proximal.
-
-Dispara Telegram + `EventLogStore.Append(..., "DemandZoneRebound", "Alza", ...)`.
-
-## 4. T-Line + SMA20 breakout — paneles 1h y 15m RTH
-
-El usuario dibuja una T-Line (línea de tendencia, 2 clicks). **Ambos paneles (1h y 15m RTH) persisten
-por símbolo en su propio archivo `TLineStore`** (tag "1h" y tag "RTH" respectivamente) — antes solo el
-panel 1h persistía. Se pueden dibujar **varias T-Lines a la vez** en el mismo panel; cada una se
-evalúa de forma independiente y dispara su propia señal como máximo una vez. Dibujar o borrar una
-T-Line **ya no se mirrorea** entre los 2 paneles (cambio reciente — antes se mirroreaba a los 3
-paneles del Live Chart, incluyendo el panel 3, que ahora perdió la herramienta T-Line por completo).
-`TLineValueAt` extrapola el valor de la línea a cualquier tiempo (no solo entre sus 2 puntos ancla),
-usando la pendiente entre ambos.
-
-**Resolución** (`EvaluateTLineSignal`, por vela cerrada, una sola vez por T-Line dibujada):
 ```
-Breakout alcista = open < T-Line
-                    Y high  > T-Line  Y high  > SMA20
-                    Y close > T-Line  Y close > SMA20
-
-Breakout bajista = open > T-Line
-                    Y low   < T-Line  Y low   < SMA20
-                    Y close < T-Line  Y close < SMA20
+fastSMA < slowSMA  AND  price < fastSMA  →  "Techo" (ceiling; short-term bearish trend,
+                                                      price coming from below looking for resistance)
+fastSMA > slowSMA  AND  price > fastSMA  →  "Piso"  (floor; short-term bullish trend,
+                                                      price coming from above looking for support)
 ```
-Es decir: la vela abrió de un lado, y tanto su mecha como su cierre terminaron confirmados del otro
-lado de AMBAS referencias (T-Line y SMA20) — un cruce simultáneo y limpio de las dos.
 
-En el panel 1h dispara Telegram con la imagen combinada de los 3 charts
-(`MultiChartForm.SendTLineSignalTelegramPushAsync`, no el panel individual) + `EventLogStore`. En
-15m RTH es solo un evento en pantalla (`OnTLineSignalEvent`), sin push propio.
+Evaluated independently for the (20,40) pair and the (100,200) pair — **they're never
+opposite within the same pair** (if 20 is a ceiling, 40 is too). Each non-null result arms **both
+periods of the pair separately** (2 independent watches) — draws the "Piso"/"Techo" label next
+to each SMA and it stays there all day.
 
-**Registro de creación vs. resolución (`CtRecordStore`/`CtLogWriter`):** además de `EventLogStore`,
-cada T-Line dibujada (en cualquiera de sus 3 fuentes — panel 1h, panel 15m RTH, o el Daily popup,
-ver abajo) crea un registro "Pendiente" en `CtRecordStore` en el momento en que se dibuja, que luego
-se actualiza EN EL MISMO REGISTRO (no se agrega uno nuevo) cuando resuelve — a "Alza"/"Baja" si
-rompe, o a "EliminadoSinResolver" si se borra antes de resolver. Es un único archivo JSON global por
-PC (`C:\OptionsData\EventLog\ct_records_{MachineName}.json`, no rotado por día ni símbolo), del cual
-`CtLogWriter` regenera automáticamente una nota `.md` completa cada vez que cambia algo.
+**Resolution of each watch** (`EvaluatePisoTechoWatches`, per closed 1h candle): the same 2-point
+formula as Cross-SMA (§1) for a Cross, and the same 30% proximity formula for a Bounce —
+applied per period (20, 40, 100 or 200) completely independently. Each watch resolves **only once**
+(`watch.Done`) and isn't evaluated again for the rest of the day.
 
-**Tercera fuente de T-Line — Daily popup:** `DailyChartForm` (ver
-[`LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md)) también tiene su propia herramienta T-Line en
-sus tabs "Hora"/"15 Min" (tags "DailyHora"/"Daily15Min" en `TLineStore`), que se mirrorea
-automáticamente hacia el panel 1h/15m RTH del Live Chart correspondiente — dibujarla o borrarla ahí
-también dibuja/borra la copia en el Live Chart, y viceversa no aplica (es de una sola vía, Daily →
-Live Chart).
+- **Cross at Ceiling ("Techo")** → the price broke upward through a resistance → bullish signal.
+- **Bounce at Floor ("Piso")** → the price bounced upward off a support → bullish signal.
+- **Cross at Floor ("Piso")** → the price broke downward through a support → bearish signal.
+- **Bounce at Ceiling ("Techo")** → the price was rejected downward off a resistance → bearish signal.
 
-**Charts tab embebido — panel 2 independiente:** el Charts tab (`TwoPanelChartsControl`, ver
-[`LIVE_CHART_ANALYSIS.md`](../LIVE_CHART_ANALYSIS.md)) también evalúa T-Line + SMA20 en su propio
-panel 2 (15m RTH), de forma independiente a su panel 1 (1h) — mismo detector, misma fórmula, mismo
-registro en `CtRecordStore`/Telegram, cada panel con sus propias líneas.
+Each resolution triggers Telegram + `EventLogStore.Append(..., "PisoTechoCruce"/"PisoTechoRebote",
+"Piso"/"Techo", ...)` and the C# event `OnPisoTechoResolvedEvent(evento, pisoTecho)`, which
+`MultiChartForm` uses as the trigger for the Bollinger watch on the 15m RTH panel (see §5).
 
-## 5. "Abriendo la Volatilidad" (Bollinger Bands) — panel 15m RTH
+**Explicit design — the label stays on screen even if it's broken:** if the price opens below
+a "Piso" (floor) (or above a "Techo" (ceiling)), the internal watch is invalidated and cleared
+(`InvalidateIfBrokenByOpen`), but the visual "Piso"/"Techo" label on the chart is **NOT removed** —
+it stays visible for the rest of the RTH session, by explicit request, even though the price has already crossed it.
 
-**Idea:** una vez que Piso/Techo (§2) confirma que el precio ya rompió o rebotó en una SMA de
-referencia (1h), se busca el momento exacto de entrada mirando las Bandas de Bollinger del panel de
-15m RTH — cuando se están "abriendo" (ensanchando) Y el precio en vivo alcanza la banda del lado
-correcto, ese es el punto de entrada.
+## 3. Bounce in Demand Zone — 15m RTH+Overnight panel
 
-**Se arma** (`ArmVolatilityOpeningWatch(bullish)`) desde `MultiChartForm`, suscrito al
-`OnPisoTechoResolvedEvent` del panel 1h — las 4 combinaciones posibles de Piso/Techo apuntan a una
-dirección concreta:
+The user manually draws a Demand Zone with the DZ/SZ tool (2 clicks → 2 lines:
+green/Proximal on top, red/Distal on the bottom). Each pair of lines where the Proximal (demand) price >
+Distal (supply) price is registered as a zone to watch (`_demandZones`).
 
-| Resolución en 1h | Dirección | Banda vigilada |
+**Resolution** (`EvaluateDemandZoneRebounds`, per closed 15m candle):
+1. **Enters** the zone (`zone.Entered`) when the candle's Low touches or nearly touches the Proximal
+   line (same 30% proximity criterion as Cross-SMA/Floor-Ceiling).
+2. **Invalidates** (`zone.Done`, no bounce) if the Low breaks below the Distal line — the zone
+   is "burned".
+3. **Confirms a bounce** (`zone.Done`, with an event) if, after entering, the Close closes back
+   above the Proximal line.
+
+Triggers Telegram + `EventLogStore.Append(..., "DemandZoneRebound", "Alza", ...)`.
+
+## 4. T-Line + SMA20 breakout — 1h and 15m RTH panels
+
+The user draws a T-Line (trend line, 2 clicks). **Both panels (1h and 15m RTH) persist
+per symbol in their own `TLineStore` file** (tag "1h" and tag "RTH" respectively) — previously only the
+1h panel persisted. **Multiple T-Lines can be drawn at once** on the same panel; each one is
+evaluated independently and fires its own signal at most once. Drawing or deleting a
+T-Line **is no longer mirrored** between the 2 panels (a recent change — previously it was mirrored to all 3
+panels of the Live Chart, including panel 3, which has now lost the T-Line tool entirely).
+`TLineValueAt` extrapolates the line's value to any time (not only between its 2 anchor points),
+using the slope between them.
+
+**Resolution** (`EvaluateTLineSignal`, per closed candle, only once per drawn T-Line):
+```
+Bullish breakout = open < T-Line
+                    AND high  > T-Line  AND high  > SMA20
+                    AND close > T-Line  AND close > SMA20
+
+Bearish breakout = open > T-Line
+                    AND low   < T-Line  AND low   < SMA20
+                    AND close < T-Line  AND close < SMA20
+```
+That is: the candle opened on one side, and both its wick and its close ended up confirmed on the other
+side of BOTH references (T-Line and SMA20) — a simultaneous, clean cross of the two.
+
+On the 1h panel this triggers Telegram with the combined image of the 3 charts
+(`MultiChartForm.SendTLineSignalTelegramPushAsync`, not the individual panel) + `EventLogStore`. On
+15m RTH it's only an on-screen event (`OnTLineSignalEvent`), with no push of its own.
+
+**Creation vs. resolution record (`CtRecordStore`/`CtLogWriter`):** in addition to `EventLogStore`,
+every T-Line drawn (from any of its 3 sources — 1h panel, 15m RTH panel, or the Daily popup,
+see below) creates a "Pendiente" (pending) record in `CtRecordStore` at the moment it's drawn, which is later
+updated IN THE SAME RECORD (not appended as a new one) when it resolves — to "Alza"/"Baja" if
+it breaks, or to "EliminadoSinResolver" if it's deleted before resolving. It's a single global JSON file per
+PC (`C:\OptionsData\EventLog\ct_records_{MachineName}.json`, not rotated by day or symbol), from which
+`CtLogWriter` automatically regenerates a complete `.md` note every time something changes.
+
+**Third T-Line source — Daily popup:** `DailyChartForm` (see
+[`LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md)) also has its own T-Line tool in
+its "Hourly"/"15 Min" tabs (tags "DailyHora"/"Daily15Min" in `TLineStore`), which is automatically mirrored
+to the corresponding 1h/15m RTH panel of the Live Chart — drawing or deleting it there
+also draws/deletes the copy on the Live Chart, but not the other way around (it's one-way,
+Daily → Live Chart).
+
+**Embedded Charts tab — independent panel 2:** the Charts tab (`TwoPanelChartsControl`, see
+[`LIVE_CHART_ANALYSIS.md`](../LIVE_CHART_ANALYSIS.md)) also evaluates T-Line + SMA20 on its own
+panel 2 (15m RTH), independently of its panel 1 (1h) — same detector, same formula, same
+`CtRecordStore`/Telegram record, each panel with its own lines.
+
+## 5. "Volatility Opening" (Bollinger Bands) — 15m RTH panel
+
+**Idea:** once Floor/Ceiling (§2) confirms that the price has already broken through or bounced off a reference
+SMA (1h), the exact entry moment is found by watching the Bollinger Bands on the
+15m RTH panel — when they're "opening" (widening) AND the live price reaches the band on the
+correct side, that's the entry point.
+
+**Armed** (`ArmVolatilityOpeningWatch(bullish)`) from `MultiChartForm`, subscribed to the
+1h panel's `OnPisoTechoResolvedEvent` — the 4 possible Floor/Ceiling combinations each point to a
+specific direction:
+
+| 1h Resolution | Direction | Band watched |
 |---|---|---|
-| Cruce en Techo | Alcista (CALL) | Superior |
-| Rebote en Piso | Alcista (CALL) | Superior |
-| Cruce en Piso | Bajista (PUT) | Inferior |
-| Rebote en Techo | Bajista (PUT) | Inferior |
+| Cross at Ceiling | Bullish (CALL) | Upper |
+| Bounce at Floor | Bullish (CALL) | Upper |
+| Cross at Floor | Bearish (PUT) | Lower |
+| Bounce at Ceiling | Bearish (PUT) | Lower |
 
-Una vez armado, **sin límite de tiempo** (válido el resto de la sesión) hasta que dispare una vez
-(`_volatilityOpeningFired`, no se re-arma después de disparar).
+Once armed, it's valid **with no time limit** (valid for the rest of the session) until it fires once
+(`_volatilityOpeningFired`, doesn't re-arm after firing).
 
-**Bandas de Bollinger** (`BollingerBandsAt`, calculadas en C# **solo para esta detección** — es una
-copia independiente del cálculo que ya existe en `chart.html` para dibujar, período 20, 2
-desviaciones estándar sobre los cierres de las velas de 15m ya cerradas).
+**Bollinger Bands** (`BollingerBandsAt`, calculated in C# **only for this detection** — it's an
+independent copy of the calculation that already exists in `chart.html` for drawing, period 20, 2
+standard deviations over the closes of already-closed 15m candles).
 
-**Evaluación** (`EvaluateVolatilityOpening`, en **cada tick en vivo** — no en el cierre de vela, a
-pedido explícito para capturar el momento exacto — vía `UpdateLivePriceFromExternalSource` y
-también en cada vela de 1 min cerrada como respaldo):
+**Evaluation** (`EvaluateVolatilityOpening`, on **every live tick** — not on candle close, by
+explicit request, to capture the exact moment — via `UpdateLivePriceFromExternalSource` and
+also on every closed 1-minute candle as a fallback):
 
 ```
-ancho_actual  = BandaSuperior(ahora) - BandaInferior(ahora)
-ancho_previo  = BandaSuperior(hace 3 velas) - BandaInferior(hace 3 velas)
-abriendo      = ancho_actual > ancho_previo   (las bandas se están ensanchando)
+current_width  = UpperBand(now) - LowerBand(now)
+previous_width = UpperBand(3 candles ago) - LowerBand(3 candles ago)
+opening        = current_width > previous_width   (the bands are widening)
 
-alcista: dispara si abriendo Y precio_en_vivo >= BandaSuperior(ahora)
-bajista: dispara si abriendo Y precio_en_vivo <= BandaInferior(ahora)
+bullish: fires if opening AND live_price >= UpperBand(now)
+bearish: fires if opening AND live_price <= LowerBand(now)
 ```
 
-Dispara Telegram + `EventLogStore.Append(..., "VolatilityOpening", "Alza"/"Baja", ...)`.
+Triggers Telegram + `EventLogStore.Append(..., "VolatilityOpening", "Alza"/"Baja", ...)`.
 
-## 6. Rebote de vela diaria contra SMA20 diaria — panel 1h
+## 6. Daily candle bounce against daily SMA20 — 1h panel
 
-Puramente informativo, evaluado una sola vez por instancia al cargar el historial
-(`EvaluateDailyBounce`): agrega las velas horarias a diarias, y si la vela diaria de AYER (la
-última ya cerrada, hoy nunca cuenta) rebotó contra la SMA20 diaria (misma fórmula de proximidad del
-30%, solo Rebote — no hay detección de Cruce diario), se muestra un hint en el chart. **No** manda
-Telegram ni se registra en `EventLogStore` — es solo una pista visual al abrir.
+Purely informational, evaluated only once per instance when loading history
+(`EvaluateDailyBounce`): aggregates hourly candles into daily ones, and if YESTERDAY's daily candle
+(the last already-closed one, today never counts) bounced off the daily SMA20 (same 30% proximity
+formula, Bounce only — there's no daily Cross detection), a hint is shown on the chart. **Does not** send
+Telegram or get recorded in `EventLogStore` — it's just a visual hint on open.
 
 ---
 
-## Resumen de constantes compartidas
+## Summary of shared constants
 
-| Constante | Valor | Uso |
+| Constant | Value | Use |
 |---|---|---|
-| `BounceProximityRatio` | 30% | Umbral de "casi tocó" para todo Rebote (Cross-SMA, Piso/Techo, Demand Zone, Daily Bounce) |
-| Bollinger | período 20, 2 std dev | "Abriendo la Volatilidad", y el dibujo en `chart.html` (cálculos independientes) |
-| `VolatilityWidthLookback` | 3 velas | Cuántas velas de 15m atrás se compara el ancho de banda para confirmar que se está abriendo |
+| `BounceProximityRatio` | 30% | "Almost touched" threshold for every Bounce (Cross-SMA, Floor/Ceiling, Demand Zone, Daily Bounce) |
+| Bollinger | period 20, 2 std dev | "Volatility Opening", and the drawing in `chart.html` (independent calculations) |
+| `VolatilityWidthLookback` | 3 candles | How many 15m candles back the band width is compared to confirm it's opening |
 
-## Archivos involucrados
+## Files involved
 
-- **`OptionsTrader.WinForms/ChartPanel.cs`** — todas las detecciones §1-§6 (app en vivo).
-- **`OptionsTrader.WinForms/SimulatedChartPanel.cs`** — copia ported de §1, §2, §3, §4 y §5 (sin
-  Telegram, log-only) para el Simulador — ver
+- **`OptionsTrader.WinForms/ChartPanel.cs`** — all detections §1-§6 (live app).
+- **`OptionsTrader.WinForms/SimulatedChartPanel.cs`** — ported copy of §1, §2, §3, §4 and §5 (no
+  Telegram, log-only) for the Simulator — see
   [`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md).
-- **`OptionsTrader.WinForms/MultiChartForm.cs`** — orquesta el puente entre paneles (Piso/Techo en
-  1h → arma Bollinger en 15m RTH) y el push de T-Line con el snapshot combinado.
-- **`OptionsTrader.WinForms/TwoPanelChartsControl.cs`** — Charts tab embebido, evalúa T-Line + SMA20
-  en su propio panel 2 (15m RTH) de forma independiente.
-- **`OptionsTrader.WinForms/EventLogStore.cs`** — CSV acumulativo de todos los eventos
+- **`OptionsTrader.WinForms/MultiChartForm.cs`** — orchestrates the bridge between panels (Floor/Ceiling in
+  1h → arms Bollinger in 15m RTH) and the T-Line push with the combined snapshot.
+- **`OptionsTrader.WinForms/TwoPanelChartsControl.cs`** — embedded Charts tab, evaluates T-Line + SMA20
+  on its own panel 2 (15m RTH) independently.
+- **`OptionsTrader.WinForms/EventLogStore.cs`** — cumulative CSV of all events
   (`C:\OptionsData\EventLog\events_log.csv`).
-- **`OptionsTrader.WinForms/CtRecordStore.cs`** / **`CtLogWriter.cs`** — registro global de creación
-  vs. resolución de cada T-Line (JSON + nota `.md` regenerada).
+- **`OptionsTrader.WinForms/CtRecordStore.cs`** / **`CtLogWriter.cs`** — global record of creation
+  vs. resolution for each T-Line (JSON + regenerated `.md` note).

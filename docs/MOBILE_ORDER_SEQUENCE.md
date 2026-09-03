@@ -1,83 +1,83 @@
-# Secuencia de envío de orden desde la app móvil (thinkorswim)
+# Order-sending sequence from the mobile app (thinkorswim)
 
-Este documento muestra, paso a paso, el flujo real que sigue un trader al enviar una orden de opciones desde la app móvil del broker (thinkorswim by Schwab). Es el mismo flujo descrito en la sección **"Origen y motivación del proyecto"** del [`README.md`](../README.md): desde que el trader decide entrar hasta que la orden efectivamente se envía al mercado pasan **no menos de 20 segundos**, tiempo suficiente para que el precio se mueva de forma significativa respecto al observado al momento de la decisión.
+This document shows, step by step, the real flow a trader follows when sending an options order from the broker's mobile app (thinkorswim by Schwab). It's the same flow described in the **"Project origin and motivation"** section of the [`README.md`](../README.md): from the moment the trader decides to enter until the order is actually sent to the market, **no less than 20 seconds** pass — enough time for the price to move significantly relative to what was observed at the moment of the decision.
 
-Esta es precisamente la razón de ser de la **Windows App** de este proyecto: automatizar y comprimir este mismo flujo a **menos de 3 segundos**.
+This is precisely the reason for being of this project's **Windows App**: to automate and compress this same flow to **under 3 seconds**.
 
-📹 **Video de la secuencia completa (~20 segundos):** [Ver en Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link)
+📹 **Video of the complete sequence (~20 seconds):** [Watch on Google Drive](https://drive.google.com/file/d/1nJOHh_ZM6y3UUC_i5ikqjJbbLqsSNDmv/view?usp=drive_link)
 
 ---
 
-## Paso a paso
+## Step by step
 
-### 1. Pantalla de inicio del móvil
-Localizar el ícono de la app thinkorswim entre las demás apps del teléfono.
+### 1. Mobile home screen
+Locate the thinkorswim app icon among the other apps on the phone.
 
 <img src="images/mobile/01-home-screen.png" alt="Home screen" width="280">
 
-### 2. Login en la app
-Autenticación con Login ID y Face ID.
+### 2. App login
+Authentication with Login ID and Face ID.
 
 <img src="images/mobile/02-login.png" alt="Login" width="280">
 
-### 3. Selección de cuenta
-Elegir la cuenta sobre la que se operará (paperMoney o Live Trading), entre las cuentas vinculadas.
+### 3. Account selection
+Choose the account to trade on (paperMoney or Live Trading), among the linked accounts.
 
-<img src="images/mobile/03-select-account.png" alt="Selección de cuenta" width="280">
+<img src="images/mobile/03-select-account.png" alt="Account selection" width="280">
 
-### 4. Overview de la cuenta
-Revisar el estado de la cuenta (posiciones, Net Liq) antes de operar.
+### 4. Account overview
+Review the account status (positions, Net Liq) before trading.
 
-<img src="images/mobile/04-account-overview.png" alt="Overview de cuenta" width="280">
+<img src="images/mobile/04-account-overview.png" alt="Account overview" width="280">
 
-### 5. Búsqueda del símbolo
-Buscar el ticker a operar (por ejemplo SPY) en el buscador de símbolos.
+### 5. Symbol search
+Search for the ticker to trade (for example SPY) in the symbol search.
 
-<img src="images/mobile/05-symbol-search.png" alt="Búsqueda de símbolo" width="280">
+<img src="images/mobile/05-symbol-search.png" alt="Symbol search" width="280">
 
-### 6. Detalle del símbolo y cadena de opciones
-Ver el precio spot, Bid/Ask e IV del subyacente, y las fechas de expiración disponibles.
+### 6. Symbol detail and option chain
+View the underlying's spot price, Bid/Ask and IV, and the available expiration dates.
 
-<img src="images/mobile/06-spy-detail.png" alt="Detalle SPY" width="280">
+<img src="images/mobile/06-spy-detail.png" alt="SPY detail" width="280">
 
-### 7. Selección del strike
-Elegir el strike y tipo de opción (Call/Put) dentro de la cadena de opciones (option chain).
+### 7. Strike selection
+Choose the strike and option type (Call/Put) within the option chain.
 
-<img src="images/mobile/07-option-chain.png" alt="Cadena de opciones" width="280">
+<img src="images/mobile/07-option-chain.png" alt="Option chain" width="280">
 
-### 8. Armado de la orden
-Configurar tipo de orden (Limit/Market), cantidad y revisar el costo estimado del trade.
+### 8. Order setup
+Configure order type (Limit/Market), quantity, and review the estimated trade cost.
 
-<img src="images/mobile/08-order-entry.png" alt="Armado de orden" width="280">
+<img src="images/mobile/08-order-entry.png" alt="Order setup" width="280">
 
-### 9. Ajuste final antes de revisar
-Confirmar cantidad, tipo de orden a mercado y cuenta antes de pasar a revisión.
+### 9. Final adjustment before review
+Confirm quantity, market order type, and account before moving on to review.
 
-<img src="images/mobile/09-order-entry-market.png" alt="Orden a mercado" width="280">
+<img src="images/mobile/09-order-entry-market.png" alt="Market order" width="280">
 
-### 10. Confirmación de la orden simulada
-Pantalla de confirmación con el detalle completo: costo del trade, break-even, máxima ganancia/pérdida y efecto en el buying power.
+### 10. Simulated order confirmation
+Confirmation screen with full detail: trade cost, break-even, max profit/loss, and effect on buying power.
 
-<img src="images/mobile/10-order-confirmation.png" alt="Confirmación de orden" width="280">
+<img src="images/mobile/10-order-confirmation.png" alt="Order confirmation" width="280">
 
-### 11. Orden ejecutada (Filled)
-Verificar en el historial de órdenes del día que la orden fue ejecutada (Filled) y a qué precio.
+### 11. Order executed (Filled)
+Verify in the day's order history that the order was executed (Filled) and at what price.
 
-<img src="images/mobile/11-order-filled.png" alt="Orden ejecutada" width="280">
+<img src="images/mobile/11-order-filled.png" alt="Order executed" width="280">
 
-### 12. Resumen de cuenta post-operación
-Revisar el resumen de la cuenta (P/L del día, posiciones activas, órdenes) luego de operar.
+### 12. Post-trade account summary
+Review the account summary (day's P/L, active positions, orders) after trading.
 
-<img src="images/mobile/12-account-summary.png" alt="Resumen de cuenta" width="280">
+<img src="images/mobile/12-account-summary.png" alt="Account summary" width="280">
 
 ---
 
-## Comparación con la Windows App
+## Comparison with the Windows App
 
-| | App móvil (thinkorswim) | Windows App (este proyecto) |
+| | Mobile app (thinkorswim) | Windows App (this project) |
 |---|---|---|
-| Pasos manuales | Login → cuenta → búsqueda de símbolo → cadena de opciones → armado de orden → revisión → envío → verificación | Un clic sobre la fila del strike en el grid de cotizaciones |
-| Tiempo aproximado | ~20 segundos | < 3 segundos |
-| Riesgo de slippage | Alto — el precio puede moverse considerablemente durante el proceso manual | Mínimo — la orden se envía y confirma casi instantáneamente |
+| Manual steps | Login → account → symbol search → option chain → order setup → review → send → verification | A single click on the strike row in the quotes grid |
+| Approximate time | ~20 seconds | < 3 seconds |
+| Slippage risk | High — the price can move considerably during the manual process | Minimal — the order is sent and confirmed almost instantly |
 
-Ver también [`docs/FEATURES.md`](FEATURES.md) y [`docs/USER_GUIDE.md`](USER_GUIDE.md) para el detalle del flujo equivalente en la Windows App.
+See also [`docs/FEATURES.md`](FEATURES.md) and [`docs/USER_GUIDE.md`](USER_GUIDE.md) for the detail of the equivalent flow in the Windows App.

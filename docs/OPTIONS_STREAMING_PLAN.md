@@ -1,23 +1,31 @@
-# Plan: opciones en vivo por WebSocket (`LEVELONE_OPTIONS`)
+# Plan: live options via WebSocket (`LEVELONE_OPTIONS`)
 
-Investigación + plan para agregar un modo "WebSocket" al grid de OptionsChain, como alternativa al polling REST actual (intervalo configurable por símbolo, 6s por defecto — ver `TickerSettingsStore.PollingIntervalSeconds`). El número de strikes por lado (`strikeCount`) también es configurable por símbolo (`TickerSettingsStore.StrikeCount`, default 40) — cualquier tamaño de fallback REST que se planee para este modo WebSocket debe tomar ese valor en vez de un número fijo. **No implementado todavía** — este documento es la referencia para cuando se arranque.
+Research + plan to add a "WebSocket" mode to the OptionsChain grid, as an alternative to the
+current REST polling (interval configurable per symbol, 6s by default — see
+`TickerSettingsStore.PollingIntervalSeconds`). The number of strikes per side (`strikeCount`) is
+also configurable per symbol (`TickerSettingsStore.StrikeCount`, default 40) — any REST fallback
+size planned for this WebSocket mode should use that value instead of a fixed number.
+**Not implemented yet** — this document is the reference for when it gets started.
 
 ---
 
-## Investigación (confirmada contra código real de dos SDKs distintos)
+## Research (confirmed against real code from two different SDKs)
 
-### Nombre del servicio
-**`LEVELONE_OPTIONS`** — sin guion bajo entre LEVEL y ONE (mismo tipo de error que tuvimos con `LEVEL_ONE_EQUITIES` vs `LEVELONE_EQUITIES`, ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md) — confirmar de nuevo contra `ws_raw.log` cuando se implemente, no asumir que este nombre está 100% verificado en producción todavía).
+### Service name
+**`LEVELONE_OPTIONS`** — no underscore between LEVEL and ONE (same type of mistake we had with
+`LEVEL_ONE_EQUITIES` vs `LEVELONE_EQUITIES`, see [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md) —
+confirm again against `ws_raw.log` when this is implemented, don't assume this name is 100%
+verified in production yet).
 
-### Formato del símbolo de suscripción (distinto al ticker normal)
-No es "SPY" — es un identificador de contrato específico con padding fijo:
+### Subscription symbol format (different from the normal ticker)
+It's not "SPY" — it's a specific contract identifier with fixed padding:
 ```
-{Underlying, padded a 6 chars con espacios}{YYMMDD}{C|P}{Strike a 8 dígitos}
+{Underlying, padded to 6 chars with spaces}{YYMMDD}{C|P}{Strike padded to 8 digits}
 ```
-Ejemplos reales confirmados en código: `"GOOGL 240712C00200000"`, `"AAPL 240517P00190000"` (200.00 → `00200000`).
+Real examples confirmed in code: `"GOOGL 240712C00200000"`, `"AAPL 240517P00190000"` (200.00 → `00200000`).
 
-### Mapeo de campos (LEVEL_ONE_OPTION)
-| Campo | Índice | Campo | Índice |
+### Field mapping (LEVEL_ONE_OPTION)
+| Field | Index | Field | Index |
 |---|---|---|---|
 | symbol | 0 | strikePrice | 24 |
 | description | 1 | contractType (C/P) | 25 |
@@ -25,7 +33,7 @@ Ejemplos reales confirmados en código: `"GOOGL 240712C00200000"`, `"AAPL 240517
 | askPrice | 3 | expirationMonth | 27 |
 | lastPrice | 4 | timeValue (≈ExtrinsicValue) | 29 |
 | totalVolume | 8 | expirationDay | 30 |
-| openInterest | 9 | dte (días a vto.) | 31 |
+| openInterest | 9 | dte (days to expiration) | 31 |
 | volatility (IV) | 10 | **delta** | 32 |
 | quoteTime | 11 | **gamma** | 33 |
 | tradeTime | 12 | **theta** | 34 |
@@ -33,9 +41,10 @@ Ejemplos reales confirmados en código: `"GOOGL 240712C00200000"`, `"AAPL 240517
 | bidSize/askSize | 20/21 | rho | 36 |
 | netChange | 23 | underlyingPrice | 39 |
 
-Cubre 1 a 1 todos los campos que ya usa `OptionQuoteDto` (Bid, Ask, SpotPrice, IntrinsicValue, ExtrinsicValue, Delta, Gamma, Theta, Vega, IV).
+Covers 1:1 all the fields already used by `OptionQuoteDto` (Bid, Ask, SpotPrice, IntrinsicValue,
+ExtrinsicValue, Delta, Gamma, Theta, Vega, IV).
 
-**Fuentes:**
+**Sources:**
 - [Schwabdev stream.py — GitHub](https://github.com/tylerebowers/Schwabdev/blob/main/schwabdev/stream.py)
 - [Schwabdev stream_demo.py — GitHub](https://github.com/tylerebowers/Schwabdev/blob/main/docs/examples/stream_demo.py)
 - [schwab-py streaming docs](https://schwab-py.readthedocs.io/en/latest/streaming.html)
@@ -43,45 +52,56 @@ Cubre 1 a 1 todos los campos que ya usa `OptionQuoteDto` (Bid, Ask, SpotPrice, I
 
 ---
 
-## El problema de fondo
+## The underlying problem
 
-Con equities (`LEVELONE_EQUITIES`) nos suscribimos a un puñado fijo de símbolos (SPY, QQQ...) que nunca cambian. Con opciones, **el set de contratos que interesa cambia todo el tiempo** — a medida que el spot se mueve, entran y salen strikes del rango OTM mostrado en el grid. El WebSocket no entrega "la cadena completa" de una vez, solo empuja updates de los contratos puntuales ya suscritos.
+With equities (`LEVELONE_EQUITIES`) we subscribe to a fixed handful of symbols (SPY, QQQ...)
+that never change. With options, **the set of contracts of interest changes constantly** — as
+the spot moves, strikes enter and leave the OTM range shown in the grid. The WebSocket doesn't
+deliver "the whole chain" at once, it only pushes updates for the specific contracts already
+subscribed to.
 
-**Conclusión: seguimos necesitando REST periódicamente** — para descubrir qué strikes existen/entran en rango. El WebSocket reemplaza el refresco de precio de los contratos ya conocidos, no el descubrimiento de la cadena.
+**Conclusion: we still need REST periodically** — to discover which strikes exist/come into
+range. The WebSocket replaces the price refresh for already-known contracts, not the chain
+discovery.
 
 ---
 
-## Plan de implementación
+## Implementation plan
 
-### 1. UI — nuevo radiobutton
-Pestaña Quotes, cerca de "Start Polling"/"Fetch Quotes": radiobuttons **"Polling"** / **"WebSocket"**. Selección persistida (nuevo `QuoteSourceSettingsStore`, mismo patrón que el resto de los settings locales en `%AppData%\OptionsTrader\`).
+### 1. UI — new radio button
+Quotes tab, near "Start Polling"/"Fetch Quotes": **"Polling"** / **"WebSocket"** radio buttons.
+Selection persisted (new `QuoteSourceSettingsStore`, same pattern as the rest of the local
+settings in `%AppData%\OptionsTrader\`).
 
-### 2. Capa de streaming nueva (`SchwabStreamerClient`)
-- `SubscribeLevelOneOptions(IEnumerable<string> occKeys)` / `UnsubscribeLevelOneOptions(...)` — mismo patrón que `SubscribeLevelOneEquity`.
-- Nuevo helper `BuildOptionStreamKey(symbol, strike, expDate, isCall)` — arma el string con el padding exacto de arriba.
-- Parseo en `HandleMessage` para `serviceName == "LEVELONE_OPTIONS"`, mapeando los campos de la tabla a un nuevo evento `OnOptionTick(string occKey, OptionQuoteDto quote)`.
+### 2. New streaming layer (`SchwabStreamerClient`)
+- `SubscribeLevelOneOptions(IEnumerable<string> occKeys)` / `UnsubscribeLevelOneOptions(...)` — same pattern as `SubscribeLevelOneEquity`.
+- New helper `BuildOptionStreamKey(symbol, strike, expDate, isCall)` — builds the string with the exact padding shown above.
+- Parsing in `HandleMessage` for `serviceName == "LEVELONE_OPTIONS"`, mapping the table's fields to a new `OnOptionTick(string occKey, OptionQuoteDto quote)` event.
 
-### 3. Descubrimiento de la cadena (REST, mucho menos frecuente)
-- Al entrar en modo WebSocket: un fetch REST inicial (reusa `GetOptionsChainAsync`, ya existente) para conocer los strikes disponibles de la expiración actual (y next, si "Hide Next ExpDate" no está marcado).
-- Refresco periódico (ej. cada 30-60s, no cada 6s) solo para: (a) detectar strikes nuevos que entraron en rango si el spot se movió, y (b) rearmar la suscripción (UNSUBS de los que salieron de rango + ADD de los nuevos).
+### 3. Chain discovery (REST, much less frequent)
+- When entering WebSocket mode: an initial REST fetch (reuses `GetOptionsChainAsync`, already existing) to learn the available strikes for the current expiration (and the next one, if "Hide Next ExpDate" isn't checked).
+- Periodic refresh (e.g. every 30-60s, not every 6s) only to: (a) detect new strikes that came into range if the spot moved, and (b) rebuild the subscription (UNSUBS for the ones that left range + ADD for the new ones).
 
-### 4. Actualización del grid
-- Modo Polling: sin cambios, rebuild completo cada 6s vía `PopulateQuotesGrid`.
-- Modo WebSocket: cada `OnOptionTick` actualiza **solo la fila de ese contrato** en `dgvQuotes` (bid/ask/griegos), sin rehacer el grid entero — necesita un índice `occKey → DataGridViewRow`.
+### 4. Grid update
+- Polling mode: unchanged, full rebuild every 6s via `PopulateQuotesGrid`.
+- WebSocket mode: each `OnOptionTick` updates **only that contract's row** in `dgvQuotes` (bid/ask/greeks), without rebuilding the whole grid — needs an `occKey → DataGridViewRow` index.
 
-### 5. Multi-instancia / hub compartido
-Comparte la MISMA conexión Schwab (una por cuenta) que ya usan velas y L1 de equities. Hay que extender otra vez el relay del hub local (`CandleHubServer`/`CandleHubClient`, ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md)) para relayear también ticks de opciones — cada instancia necesita recibir solo los ticks de SUS contratos suscritos.
+### 5. Multi-instance / shared hub
+Shares the SAME Schwab connection (one per account) already used by equity candles and L1. The
+local hub relay (`CandleHubServer`/`CandleHubClient`, see [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md))
+needs to be extended again to also relay option ticks — each instance needs to receive only the
+ticks for ITS subscribed contracts.
 
-### 6. Riesgos / cosas a verificar en vivo antes de confiar en esto
-- Confirmar que Schwab empuja **griegos** (delta/gamma/etc.) con la misma frecuencia que bid/ask, o si los recalcula con menor frecuencia.
-- Confirmar el nombre exacto del servicio contra tráfico real (`ws_raw.log`) — mismo tipo de sorpresa que `LEVEL_ONE_EQUITIES` vs `LEVELONE_EQUITIES`.
-- Manejo de "churn" de suscripciones: si el spot se mueve rápido, entrar/salir de rango constantemente podría generar muchos ADD/UNSUBS — decidir un buffer (suscribirse a un rango un poco más ancho que el mostrado) para no estar resuscribiendo todo el tiempo.
-- Volumen de suscripciones: ~6-10 strikes por lado (call/put) más "Next ExpDate" ≈ 20-40 contratos simultáneos por instancia — confirmar que Schwab no tenga un límite bajo de símbolos por conexión para `LEVELONE_OPTIONS`.
+### 6. Risks / things to verify live before trusting this
+- Confirm that Schwab pushes **greeks** (delta/gamma/etc.) at the same frequency as bid/ask, or whether it recalculates them less frequently.
+- Confirm the exact service name against real traffic (`ws_raw.log`) — same type of surprise as `LEVEL_ONE_EQUITIES` vs `LEVELONE_EQUITIES`.
+- Handling subscription "churn": if the spot moves fast, constantly entering/leaving range could generate a lot of ADD/UNSUBS — decide on a buffer (subscribe to a slightly wider range than shown) to avoid constantly re-subscribing.
+- Subscription volume: ~6-10 strikes per side (call/put) plus "Next ExpDate" ≈ 20-40 simultaneous contracts per instance — confirm Schwab doesn't have a low symbol-per-connection limit for `LEVELONE_OPTIONS`.
 
-### Orden sugerido de construcción (cuando se arranque)
-1. `SubscribeLevelOneOptions`/parseo en `SchwabStreamerClient`, validado a mano contra `ws_raw.log` con 1-2 contratos antes de nada más (mismo protocolo que se usó para depurar `LEVELONE_EQUITIES`).
-2. `BuildOptionStreamKey` + pruebas unitarias/manuales del formato exacto.
-3. UI del radiobutton + `QuoteSourceSettingsStore`.
-4. Lógica de descubrimiento de cadena + rearmado de suscripción (churn).
-5. Actualización incremental del grid.
-6. Extender el hub local para multi-instancia.
+### Suggested build order (when started)
+1. `SubscribeLevelOneOptions`/parsing in `SchwabStreamerClient`, validated by hand against `ws_raw.log` with 1-2 contracts before anything else (same protocol used to debug `LEVELONE_EQUITIES`).
+2. `BuildOptionStreamKey` + unit/manual tests of the exact format.
+3. Radio button UI + `QuoteSourceSettingsStore`.
+4. Chain discovery logic + subscription rebuild (churn).
+5. Incremental grid update.
+6. Extend the local hub for multi-instance.

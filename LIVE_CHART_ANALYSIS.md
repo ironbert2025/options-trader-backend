@@ -1,191 +1,191 @@
-# Live Chart — Análisis Técnico
+# Live Chart — Technical Analysis
 
-Ámbito: `OptionsTrader.WinForms/ChartPanel.cs`, `MultiChartForm.cs`, `TwoPanelChartsControl.cs`, `DailyChartForm.cs`, `ChartAssets/chart.html`, y los stores de persistencia (`EventLogStore`, `TLineStore`, `VerticalArrowStore`, `RectStore`, `RectGrisStore`, `SmaDailyWatchStore`, `HourlyCandleStore`, `DailyCandleStore`, `CtRecordStore`, `CtLogWriter`).
+Scope: `OptionsTrader.WinForms/ChartPanel.cs`, `MultiChartForm.cs`, `TwoPanelChartsControl.cs`, `DailyChartForm.cs`, `ChartAssets/chart.html`, and the persistence stores (`EventLogStore`, `TLineStore`, `VerticalArrowStore`, `RectStore`, `RectGrisStore`, `SmaDailyWatchStore`, `HourlyCandleStore`, `DailyCandleStore`, `CtRecordStore`, `CtLogWriter`).
 
-Además de la ventana popup `MultiChartForm` descrita abajo, existe un **Charts tab embebido en Form1** (`TwoPanelChartsControl`) — solo 2 de los 3 paneles (1h y 15m RTH, sin panel 3/Overnight), siempre disponible sin abrir una ventana aparte. Tiene su propio grid de opciones ("Hoy"/"Próxima"), su propio grid de trades espejo (18 columnas, incluye columna "Demo/Real"), checkboxes AWS/Telegram y polling configurable por símbolo, y sus propios 2 radio buttons independientes Demo-Target/Real-Target (naranja/verde, default Demo-Target al conectar) — separados del grupo de 4 radios de la pestaña Options Quotes, controlan solo los trades abiertos desde el grid del Charts tab, siempre con target. Los análisis automáticos (Piso/Techo, T-Line+SMA20, etc.) descritos en este documento corren igual en ambos paneles del Charts tab, de forma independiente a `MultiChartForm`.
+Besides the `MultiChartForm` popup window described below, there is a **Charts tab embedded in Form1** (`TwoPanelChartsControl`) — only 2 of the 3 panels (1h and 15m RTH, no panel 3/Overnight), always available without opening a separate window. It has its own options grid ("Today"/"Next"), its own mirror trades grid (18 columns, includes a "Demo/Real" column), AWS/Telegram checkboxes and configurable per-symbol polling, and its own 2 independent Demo-Target/Real-Target radio buttons (orange/green, default Demo-Target on connect) — separate from the group of 4 radios on the Options Quotes tab, controlling only trades opened from the Charts tab grid, always with a target. The automatic analyses (Floor/Ceiling, T-Line+SMA20, etc.) described in this document run the same way in both Charts tab panels, independently of `MultiChartForm`.
 
-Cada ticker corre como un proceso de WinForms independiente. `MultiChartForm` es la ventana "Live Charts — {Symbol}" y aloja 3 `ChartPanel` (uno por timeframe), cada uno con su propio WebView2 renderizando `chart.html` (Lightweight Charts). Los 3 paneles comparten el mismo `SchwabStreamerClient`/`ICandleFeed` — no abren conexiones independientes.
+Each ticker runs as an independent WinForms process. `MultiChartForm` is the "Live Charts — {Symbol}" window and hosts 3 `ChartPanel` instances (one per timeframe), each with its own WebView2 rendering `chart.html` (Lightweight Charts). The 3 panels share the same `SchwabStreamerClient`/`ICandleFeed` — they do not open independent connections.
 
-## 1. Paneles y sus overlays
+## 1. Panels and their overlays
 
-| Panel | Modo | Velas | Sesión | Overlays automáticos propios |
+| Panel | Mode | Candles | Session | Own automatic overlays |
 |---|---|---|---|---|
-| **1h** | `Hourly15` | 1h | Solo RTH (9:30–16:00 ET) | SMA 20/40/100/200, Bollinger(20,2) con banda media amarilla punteada + marcadores de borde opcionales, day dividers, Piso/Techo, PM, BB widening + Δ, prev-day Hi/Lo, línea de cierre del día anterior (etiqueta "C"), ATH (checkbox), "1er Rebote 90%", hint "Potencial CT al Alza/Baja" (T-Line), hint "Análisis Diario", línea "Stk="/"ΔS=" |
-| **15m RTH** | `Fifteen_RTH` | 15m | Solo RTH | Bollinger(20,2) con banda media amarilla **sólida** + marcadores de borde (checkbox), PM, BB widening + Δ, prev-day Hi/Lo, línea "C", ATH, banner "Expuesto en 3 charts", reference lines Piso/Techo (mirroreadas desde 1h, **ahora también visibles en premarket**), línea blanca de entrada/cierre de trade (**nuevo**, antes solo en panel 3) |
-| **15m RTH+Overnight** | `Fifteen_Full` | 15m (toggle a 5m) | RTH + pre/after-hours | prev-day Hi/Lo, línea "C", ATH, reference lines Piso/Techo (mirroreadas), zonas Demand/Supply (manuales pero evaluadas automáticamente), línea blanca de entrada/cierre de trade, label "ΔS" — **ya no tiene la herramienta T-Line** |
+| **1h** | `Hourly15` | 1h | RTH only (9:30–16:00 ET) | SMA 20/40/100/200, Bollinger(20,2) with dotted yellow middle band + optional edge markers, day dividers, Floor/Ceiling, PM, BB widening + Δ, prev-day Hi/Lo, previous-day close line (label "C"), ATH (checkbox), "1st Bounce 90%", "Potential CT Up/Down" hint (T-Line), "Daily Analysis" hint, "Stk="/"ΔS=" line |
+| **15m RTH** | `Fifteen_RTH` | 15m | RTH only | Bollinger(20,2) with **solid** yellow middle band + edge markers (checkbox), PM, BB widening + Δ, prev-day Hi/Lo, "C" line, ATH, "Exposed on 3 charts" banner, Floor/Ceiling reference lines (mirrored from 1h, **now also visible in premarket**), white trade entry/close line (**new**, previously only on panel 3) |
+| **15m RTH+Overnight** | `Fifteen_Full` | 15m (toggle to 5m) | RTH + pre/after-hours | prev-day Hi/Lo, "C" line, ATH, Floor/Ceiling reference lines (mirrored), Demand/Supply zones (manual but evaluated automatically), white trade entry/close line, "ΔS" label — **no longer has the T-Line tool** |
 
-Además: botón **Daily** (1h) abre `DailyChartForm` (ventana separada, WebView2 propio) con velas diarias agregadas desde `HourlyCandleStore` (hasta 250 días, para tener suficiente historia para SMA100/200). No es solo informativa, tiene 3 herramientas propias:
-- **T-Line** (tabs "Hora"/"15 Min", tags "DailyHora"/"Daily15Min" en `TLineStore`) — se mirrorea automáticamente al panel 1h/15m RTH correspondiente del Live Chart (una sola vía, Daily → Live Chart).
-- **"D.PM"/"D40"/"D100"/"D200"** (checkboxes) — dibujan la SMA diaria 20/40/100/200 como línea sólida (color propio de cada SMA) sobre el panel 1h/15m RTH del Live Chart, persistidos por símbolo vía `Form1.GetDailySmaLinesEnabledFor`/`SetDailySmaLineEnabledFor` (`TickerSettingsStore`).
-- **"SMA Watch"** (botones toolbar, periodos 20/40/100/200) — arma un monitor de cruce contra el precio en vivo, distinto de las 2 herramientas anteriores: no dibuja nada en el Live Chart, solo arma la vigilancia (`ChartPanel.EvaluateSmaCrossWatches`, panel 1h) para detectar cuando el precio cruza esa SMA diaria. Persistido por símbolo vía `SmaDailyWatchStore` (`C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_SmaWatches.csv`), sobrevive cerrar/reabrir cualquiera de las 2 ventanas hasta que se desarma manualmente.
+Additionally: the **Daily** button (1h) opens `DailyChartForm` (separate window, its own WebView2) with daily candles aggregated from `HourlyCandleStore` (up to 250 days, to have enough history for SMA100/200). It is not just informational — it has 3 tools of its own:
+- **T-Line** (tabs "Hour"/"15 Min", tags "DailyHora"/"Daily15Min" in `TLineStore`) — automatically mirrors to the corresponding 1h/15m RTH panel of the Live Chart (one-way only, Daily → Live Chart).
+- **"D.PM"/"D40"/"D100"/"D200"** (checkboxes) — draw the daily SMA 20/40/100/200 as a solid line (each SMA's own color) over the 1h/15m RTH panel of the Live Chart, persisted per symbol via `Form1.GetDailySmaLinesEnabledFor`/`SetDailySmaLineEnabledFor` (`TickerSettingsStore`).
+- **"SMA Watch"** (toolbar buttons, periods 20/40/100/200) — arms a cross-monitor against the live price, distinct from the two tools above: it draws nothing on the Live Chart, it only arms the watch (`ChartPanel.EvaluateSmaCrossWatches`, panel 1h) to detect when price crosses that daily SMA. Persisted per symbol via `SmaDailyWatchStore` (`C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_SmaWatches.csv`), survives closing/reopening either of the 2 windows until manually disarmed.
 
-Debajo de los 3 charts: grid de opciones en vivo (espejo de Form1) y grid de trades (espejo de Form1, click en Strike/Close reenvía al handler real de Form1). Un `crossLog` (TextBox) muestra todos los eventos detectados y los eventos de WebSocket (connect/disconnect/reconnect).
+Below the 3 charts: a live options grid (mirroring Form1) and a trades grid (mirroring Form1, clicking Strike/Close forwards to Form1's real handler). A `crossLog` (TextBox) shows all detected events and WebSocket events (connect/disconnect/reconnect).
 
-En `Form1` (fuera del Live Chart, pero misma sesión de trabajo): click en el label de la hora ("HH:mm:ss AM/PM", junto a Start Polling/Fetch Quotes) guarda un screenshot de toda la ventana (`DrawToBitmap`, funciona minimizada) en `C:\OptionsData\ChartSnapshots\{Symbol}\{Symbol}_{timestamp}_WholeUI.png`, y loguea la ruta en el Logger de Form1.
+In `Form1` (outside the Live Chart, but the same work session): clicking the time label ("HH:mm:ss AM/PM", next to Start Polling/Fetch Quotes) saves a screenshot of the whole window (`DrawToBitmap`, works while minimized) to `C:\OptionsData\ChartSnapshots\{Symbol}\{Symbol}_{timestamp}_WholeUI.png`, and logs the path in Form1's Logger.
 
-## 2. Análisis automáticos
+## 2. Automatic analyses
 
-Todos corren en C# sobre `_closedCandles` (velas ya cerradas, recalculadas con SMA simple igual que el overlay JS) — no dependen del dibujo del chart.
+All run in C# over `_closedCandles` (already-closed candles, recalculated with a simple SMA the same as the JS overlay) — they do not depend on the chart drawing.
 
-### Piso/Techo (panel 1h, una vez por sesión de proceso)
-- `EvaluatePisoTechoOnce`: se calcula **una sola vez por instancia de app** (estático, `s_pisoTechoAnalyzed`), solo si el chart se abre **antes de las 9:30 AM ET**. Evalúa los pares (20,40) y (100,200) de forma independiente por SMA (no por par): en alineación bajista (fast<slow) cada SMA es "Techo" solo si el precio sigue por debajo de ESA SMA; en alineación alcista, "Piso" solo si sigue por encima.
-- Cada SMA que resuelve Piso/Techo arma un **watch** (`s_pisoTechoWatches`) — se evalúa en cada vela 1h cerrada (`EvaluatePisoTechoWatches`), y también en vivo ante un gap-cross (`EvaluatePisoTechoGapLive`, usando el SMA recalculado con el precio en vivo).
-- Resolución: **Cruce** (precio cruza y cierra del otro lado — por cierre, o por gap en el open) o **Rebote** (se acerca, no cruza — o se acerca al menos un 30% del movimiento de rechazo — y cierra rechazado). Cada watch resuelve una sola vez (`Done`) y no se re-arma en el día.
-- `ValidatePisoTechoAgainstOpen` (una vez, al abrir RTH) y `ValidatePisoTechoAgainstLivePrice` (continuo en premarket) invalidan una SMA cuyo nivel ya fue roto por el open/gap antes de que el watch llegara a evaluarse — el watch interno se limpia, pero **el label visual NO se quita** (por pedido explícito, queda visible toda la sesión RTH aunque el precio ya la haya roto).
-- Las reference-lines punteadas (15m RTH/Overnight) ahora terminan en el cierre de la sesión RTH de hoy (16:00 ET) en vez de extenderse hasta el borde derecho del chart — `markPisoTechoRefLine`/`GetTodaySessionEndFakeEpoch` (`MultiChartForm`) / `GetSessionEndFakeEpoch` (`SimulatorForm`).
-- La última vela 1h del día (15:00–16:00) nunca recibe el "siguiente bucket" que cierra las demás — `EvaluateLastHourCandleBeforeCloseIfNeeded` la fuerza a las 15:59 para no perder un Cruce/Rebote genuino de la última hora.
-- Persistencia: **solo en memoria estática** (variables `s_pisoTecho*`), sobrevive cerrar/reabrir la ventana Live Chart el mismo día de proceso, pero se pierde al reiniciar la app o al día siguiente (no hay store en disco).
-- Log: cada resolución escribe en `EventLogStore` (`Hora`, `PisoTechoCruce`/`PisoTechoRebote`) y dispara `OnPisoTechoResolvedEvent`, que MultiChartForm reenvía a Telegram (snapshot combinado de los 3 charts) y al `crossLog`.
-- **"1er Rebote: 90%"** (label amarillo, 1h, esquina inferior derecha): visible mientras SMA20 y SMA40 son AMBAS "Techo", el watch de SMA20 no resolvió aún, y ninguna vela tocó SMA20 desde que se armó (`s_sma20TechoTouched`).
+### Floor/Ceiling (panel 1h, once per process session)
+- `EvaluatePisoTechoOnce`: calculated **only once per app instance** (static, `s_pisoTechoAnalyzed`), only if the chart is opened **before 9:30 AM ET**. It evaluates the (20,40) and (100,200) pairs independently per SMA (not per pair): in a bearish alignment (fast<slow) each SMA is "Ceiling" (Techo) only if the price stays below THAT SMA; in a bullish alignment, "Floor" (Piso) only if it stays above.
+- Each SMA that resolves Floor/Ceiling arms a **watch** (`s_pisoTechoWatches`) — evaluated on each closed 1h candle (`EvaluatePisoTechoWatches`), and also live on a gap-cross (`EvaluatePisoTechoGapLive`, using the SMA recalculated with the live price).
+- Resolution: **Cross** (Cruce — price crosses and closes on the other side — by close, or by a gap at the open) or **Bounce** (Rebote — approaches without crossing — or approaches at least 30% of the rejection move — and closes rejected). Each watch resolves only once (`Done`) and does not re-arm during the day.
+- `ValidatePisoTechoAgainstOpen` (once, at the RTH open) and `ValidatePisoTechoAgainstLivePrice` (continuous in premarket) invalidate an SMA whose level was already broken by the open/gap before the watch got to evaluate — the internal watch is cleared, but **the visual label is NOT removed** (by explicit request, it stays visible for the whole RTH session even if the price has already broken it).
+- The dotted reference lines (15m RTH/Overnight) now end at today's RTH session close (16:00 ET) instead of extending to the chart's right edge — `markPisoTechoRefLine`/`GetTodaySessionEndFakeEpoch` (`MultiChartForm`) / `GetSessionEndFakeEpoch` (`SimulatorForm`).
+- The last 1h candle of the day (15:00–16:00) never receives the "next bucket" that closes the others — `EvaluateLastHourCandleBeforeCloseIfNeeded` forces it at 15:59 so as not to miss a genuine Cross/Bounce in the last hour.
+- Persistence: **in-memory static only** (`s_pisoTecho*` variables), survives closing/reopening the Live Chart window on the same process day, but is lost on app restart or the next day (no disk store).
+- Log: each resolution writes to `EventLogStore` (`Hora`, `PisoTechoCruce`/`PisoTechoRebote`) and fires `OnPisoTechoResolvedEvent`, which MultiChartForm forwards to Telegram (combined snapshot of the 3 charts) and to `crossLog`.
+- **"1st Bounce: 90%"** (yellow label, 1h, bottom-right corner): visible while SMA20 and SMA40 are BOTH "Ceiling" (Techo), the SMA20 watch hasn't resolved yet, and no candle has touched SMA20 since it was armed (`s_sma20TechoTouched`).
 
-### "Abriendo la Volatilidad" (panel 15m RTH)
-- Se arma por default en el primer tick RTH del día (`ArmVolatilityOpeningWatchDefault`, ambos lados) y adicionalmente cuando el panel 1h resuelve un Piso/Techo (Cruce en Techo o Rebote en Piso → alcista; Cruce en Piso o Rebote en Techo → bajista).
-- Evaluado en cada tick en vivo: dispara cuando las Bandas de Bollinger(20,2) están más anchas que hace 3 velas Y la SMA20 (banda media) está inclinada en la dirección armada. Dispara una sola vez por sesión.
-- Log en `EventLogStore` (`15Min`, `VolatilityOpening`) + Telegram (single-panel, vía `SendChartToTelegramAsync`).
-- Evento informativo aparte, `OnVolatilityAlreadyOpenEvent`: si al armar el watch las bandas YA estaban ensanchándose, solo log en `crossLog` (sin Telegram/EventLogStore).
+### "Volatility Opening" (panel 15m RTH)
+- Armed by default on the first RTH tick of the day (`ArmVolatilityOpeningWatchDefault`, both sides) and additionally when the 1h panel resolves a Floor/Ceiling (Cross on Ceiling or Bounce on Floor → bullish; Cross on Floor or Bounce on Ceiling → bearish).
+- Evaluated on every live tick: fires when the Bollinger(20,2) bands are wider than 3 candles ago AND the SMA20 (middle band) is sloped in the armed direction. Fires only once per session.
+- Log in `EventLogStore` (`15Min`, `VolatilityOpening`) + Telegram (single-panel, via `SendChartToTelegramAsync`).
+- Separate informational event, `OnVolatilityAlreadyOpenEvent`: if the bands were ALREADY widening when the watch was armed, only logs to `crossLog` (no Telegram/EventLogStore).
 
-### Demand/Supply Zone rebote (panel 15m RTH+Overnight)
-- El usuario dibuja pares de líneas con la herramienta **DZ/SZ** (1ª línea = verde/Proximal, 2ª = roja/Distal). Geometría decide el tipo: Proximal > Distal → Demand Zone (debajo del precio); Proximal < Distal → Supply Zone (arriba).
-- `EvaluateDemandZoneRebounds`/`EvaluateSupplyZoneRebounds`, por cada vela 15m cerrada: **Entrada** cuando el Low/High toca la zona (o se acerca dentro del 30% del movimiento de rechazo); **Rota** (invalidada para siempre) si el Low/High rompe la línea Distal; **Rebote confirmado** cuando, estando Entered y no Rota, el Close vuelve a cerrar fuera de la línea Proximal (puede confirmar en la misma vela que entra).
-- Al confirmar, arma `_autoZonePushArmed`: desde ahí, **cada vela 15m cerrada** dispara un push automático del snapshot combinado a Telegram hasta que se presiona **"Stop Push"** (o hasta que otra zona reconfirme).
-- Log en `EventLogStore` (`15Min`, `DemandZoneRebound`/`SupplyZoneRebound`) + Telegram (self-contained, panel individual) + Telegram combinado adicional vía auto-push.
+### Demand/Supply Zone bounce (panel 15m RTH+Overnight)
+- The user draws pairs of lines with the **DZ/SZ** tool (1st line = green/Proximal, 2nd = red/Distal). Geometry decides the type: Proximal > Distal → Demand Zone (below the price); Proximal < Distal → Supply Zone (above).
+- `EvaluateDemandZoneRebounds`/`EvaluateSupplyZoneRebounds`, for each closed 15m candle: **Entry** when the Low/High touches the zone (or approaches within 30% of the rejection move); **Broken** (Rota — invalidated forever) if the Low/High breaks the Distal line; **Confirmed bounce** when, while Entered and not Broken, the Close closes back outside the Proximal line (can confirm on the same candle it enters).
+- On confirmation, it arms `_autoZonePushArmed`: from then on, **every closed 15m candle** triggers an automatic push of the combined snapshot to Telegram until **"Stop Push"** is pressed (or until another zone reconfirms).
+- Log in `EventLogStore` (`15Min`, `DemandZoneRebound`/`SupplyZoneRebound`) + Telegram (self-contained, individual panel) + additional combined Telegram via auto-push.
 
-### T-Line + SMA20 breakout (panel 1h y panel 15m RTH — panel 3 ya no tiene T-Line)
-- **Ya no hay límite de 1 T-Line**: se pueden dibujar varias T-Lines a la vez en el mismo panel, cada una evaluada de forma completamente independiente (`_tLineSignalFiredFor`, un `HashSet` de líneas en vez de un único flag). Cada T-Line dispara su señal como máximo una vez, y solo se resetea si se borra esa línea puntual.
-- Panel 1h y panel 15m RTH son ahora **totalmente independientes entre sí**: cada uno tiene su propio archivo `TLineStore` (tag "1h" o "RTH"), y dibujar/borrar una T-Line en un panel **ya no se mirrorea** al otro (a diferencia del H-Line, que sigue mirroreándose entre los 3 paneles). El **panel 3 (15m RTH+Overnight) perdió la herramienta T-Line por completo**, por pedido explícito.
-- Al cerrar una vela: dispara si abrió de un lado de la T-Line, el High/Low cruzó T-Line Y SMA20 (propia del panel) durante la vela, y el cierre quedó del otro lado de ambas.
-- Log en `EventLogStore` (`Hora`, `TLineBreakout`) + Telegram combinado (`SendTLineSignalTelegramPushAsync`, en MultiChartForm). Además, cada T-Line dibujada crea un registro "Pendiente" en `CtRecordStore` en el momento de dibujarse (creación), que se actualiza EN EL MISMO REGISTRO al resolver (Alza/Baja) o al borrarse sin resolver (EliminadoSinResolver) — ver sección 5.
-- El hint "Potencial CT al Alza/Baja" se decide por convención técnica al dibujar la línea (descendente → alza; ascendente → baja) — puramente visual, overlay dentro del chart.
+### T-Line + SMA20 breakout (panel 1h and panel 15m RTH — panel 3 no longer has T-Line)
+- **No longer a 1 T-Line limit**: several T-Lines can now be drawn at once on the same panel, each evaluated completely independently (`_tLineSignalFiredFor`, a `HashSet` of lines instead of a single flag). Each T-Line fires its signal at most once, and only resets if that specific line is deleted.
+- Panel 1h and panel 15m RTH are now **fully independent of each other**: each has its own `TLineStore` file (tag "1h" or "RTH"), and drawing/deleting a T-Line on one panel **no longer mirrors** to the other (unlike the H-Line, which still mirrors across all 3 panels). **Panel 3 (15m RTH+Overnight) lost the T-Line tool entirely**, by explicit request.
+- On candle close: fires if it opened on one side of the T-Line, the High/Low crossed both the T-Line AND the SMA20 (the panel's own) during the candle, and the close ended up on the other side of both.
+- Log in `EventLogStore` (`Hora`, `TLineBreakout`) + combined Telegram (`SendTLineSignalTelegramPushAsync`, in MultiChartForm). Also, each drawn T-Line creates a "Pendiente" (Pending) record in `CtRecordStore` at the moment it is drawn (creation), which is updated IN THAT SAME RECORD when it resolves (Alza/Baja, i.e. Up/Down) or when deleted without resolving (EliminadoSinResolver) — see section 5.
+- The "Potential CT Up/Down" hint is decided by technical convention when drawing the line (descending → up; ascending → down) — purely visual, an overlay within the chart.
 
-### PM (Punto Medio) — pendiente SMA20
-- Continuo (cada tick, **premarket y RTH por igual**), en paneles 1h y 15m RTH: verde si SMA20 sube vs. hace 3 velas, rojo si baja. No es "una vez" — se redibuja constantemente.
-- `MultiChartForm` cruza la dirección de AMBOS paneles: si coinciden (ambos verdes o ambos rojos), dibuja el label "PM" en tamaño grande en los dos; si no coinciden, tamaño normal. Decisión cross-panel — ningún panel la sabe por sí solo.
+### PM (Midpoint) — SMA20 slope
+- Continuous (every tick, **premarket and RTH alike**), on panels 1h and 15m RTH: green if SMA20 rises vs. 3 candles ago, red if it falls. It's not "once" — it is redrawn constantly.
+- `MultiChartForm` cross-checks the direction of BOTH panels: if they match (both green or both red), it draws the "PM" label in large size on both; if they don't match, normal size. Cross-panel decision — no panel knows it on its own.
 
-### BB (Bollinger widening) + Δ (panel 1h y 15m RTH)
-- Puramente visual/continuo (sin estado armado/disparado): label "BB" mientras las bandas propias de ESE panel se están ensanchando (mismo criterio que "Abriendo la Volatilidad" pero sin exigir dirección armada), coloreado igual que PM.
-- "Δ": distancia del precio en vivo a la banda más cercana, solo mientras el precio sigue ENTRE ambas bandas (se oculta si ya rompió una banda).
-- **Ahora también evaluado en premarket** (`EvaluateBollingerWideningLabel` se llama desde la rama premarket de `Streamer_OnNewCandle`/`UpdateLivePriceFromExternalSource`, igual que PM) — antes solo corría una vez arrancaba la sesión RTH; ahora "BB" ya puede verse junto a "PM" antes de las 9:30.
+### BB (Bollinger widening) + Δ (panel 1h and 15m RTH)
+- Purely visual/continuous (no armed/fired state): "BB" label while THAT panel's own bands are widening (same criterion as "Volatility Opening" but without requiring an armed direction), colored the same way as PM.
+- "Δ": distance from the live price to the nearest band, only while the price stays BETWEEN both bands (hidden once it has broken a band).
+- **Now also evaluated in premarket** (`EvaluateBollingerWideningLabel` is called from the premarket branch of `Streamer_OnNewCandle`/`UpdateLivePriceFromExternalSource`, same as PM) — previously it only ran once the RTH session started; now "BB" can already be seen next to "PM" before 9:30.
 
-### PM + BB alineados en color (log para backtesting)
-- `MultiChartForm` rastrea, además del cruce de PM entre paneles, si "BB" también coincide en color (verde/rojo) entre 1h y 15m RTH — y si PM y BB coinciden entre sí. Cuando las 4 condiciones se cumplen a la vez (PM 1h == PM 15m RTH == BB 1h == BB 15m RTH, todas mostrando la misma dirección), se loguea **una sola línea** en `crossLog` con la hora exacta (`HH:mm:ss  PM + BB alineados en Alza (verde)/Baja (rojo) (1h y 15m RTH)`) — solo en la transición hacia el estado alineado (no repite en cada tick mientras se mantiene). `ChartPanel.OnBollingerWideningLevelEvent` es el evento nuevo que hace esto posible (mismo patrón que `OnPuntoMedioLevelEvent`).
+### PM + BB aligned in color (backtesting log)
+- `MultiChartForm` tracks, in addition to the PM cross between panels, whether "BB" also matches in color (green/red) between 1h and 15m RTH — and whether PM and BB match each other. When all 4 conditions hold at once (PM 1h == PM 15m RTH == BB 1h == BB 15m RTH, all showing the same direction), **a single line** is logged to `crossLog` with the exact time (`HH:mm:ss  PM + BB alineados en Alza (verde)/Baja (rojo) (1h y 15m RTH)`) — only on the transition into the aligned state (it does not repeat on every tick while it stays aligned). `ChartPanel.OnBollingerWideningLevelEvent` is the new event that makes this possible (same pattern as `OnPuntoMedioLevelEvent`).
 
-### "Expuesto" (texto junto a la línea azul premarket, panel 1h y 15m RTH)
-- En cada tick premarket, compara el precio en vivo contra las bandas de Bollinger(20,2) propias de ESE panel (`GetBollingerDirection`) — "Expuesto" arriba de la línea si el precio ya rompió la banda superior, debajo si rompió la inferior, oculto si sigue dentro.
-- El texto sigue el punto de anclaje real de la línea (recomputado en cada frame según tiempo/precio) en vez de quedar fijo en el centro del canvas — corregido porque antes se veía "pegado en pantalla" al hacer zoom/pan.
-- Congelado (junto con la línea azul) al llegar las 9:30 — sigue mostrándose durante toda la sesión RTH con el valor que tenía al momento de la apertura (`s_preMarketLineState`, ver sección 4), no desaparece al abrir el mercado.
+### "Exposed" (text next to the premarket blue line, panel 1h and 15m RTH)
+- On every premarket tick, compares the live price against THAT panel's own Bollinger(20,2) bands (`GetBollingerDirection`) — "Exposed" above the line if the price already broke the upper band, below if it broke the lower band, hidden if it stays within.
+- The text follows the line's actual anchor point (recomputed every frame based on time/price) instead of staying fixed at the center of the canvas — fixed because it previously looked "stuck on screen" when zooming/panning.
+- Frozen (together with the blue line) once 9:30 arrives — it keeps showing throughout the RTH session with the value it had at the moment of the open (`s_preMarketLineState`, see section 4), it does not disappear when the market opens.
 
-### "Expuesto en 3 charts" (banner amarillo, 15m RTH — solo premarket)
-- En cada tick premarket del panel 1h (`OnPreMarketPriceUpdated`), MultiChartForm compara la dirección Bollinger(20,2) de Daily (agregado en memoria desde `HourlyCandleStore`), 1h y 15m RTH. Si las 3 coinciden (todas Above o todas Below) → banner. Se re-evalúa en cada tick, nada queda "pegado" — desaparece apenas una deja de coincidir.
+### "Exposed on 3 charts" (yellow banner, 15m RTH — premarket only)
+- On every premarket tick of the 1h panel (`OnPreMarketPriceUpdated`), MultiChartForm compares the Bollinger(20,2) direction of Daily (aggregated in memory from `HourlyCandleStore`), 1h, and 15m RTH. If all 3 match (all Above or all Below) → banner. Re-evaluated on every tick, nothing stays "stuck" — it disappears as soon as one stops matching.
 
-### Prev-day High/Low (los 3 paneles, auto-dibujado)
-- Se dibuja **una vez por apertura de chart** (`_drewPrevDayHiLo`), como H-Lines rojas, solo el lado que el precio de referencia NO rompió ya (evita dibujar el High si hubo gap-up por encima de él, por ejemplo). En `Fifteen_Full` y después de las 9:30 se dibuja inmediatamente al cargar historial; en `Hourly15`/`Fifteen_RTH` antes de las 9:30 se difiere al primer tick premarket (mismo momento en que aparece la línea azul premarket).
+### Prev-day High/Low (all 3 panels, auto-drawn)
+- Drawn **once per chart opening** (`_drewPrevDayHiLo`), as red H-Lines, only the side that the reference price did NOT already break (avoids drawing the High if there was a gap-up above it, for example). In `Fifteen_Full` and after 9:30 it is drawn immediately upon loading history; in `Hourly15`/`Fifteen_RTH` before 9:30 it is deferred to the first premarket tick (the same moment the premarket blue line appears).
 
-### Daily bounce (panel 1h, informativo, una vez por sesión)
-- `EvaluateDailyBounce`, justo tras cargar el historial: agrega velas 1h a diarias, toma la última vela diaria YA CERRADA (ayer) y aplica la misma fórmula caso-1/caso-2 de rebote contra la SMA20 diaria. Solo detecta Rebote (no Cruce). Puramente informativo: log en `crossLog` + overlay "Análisis Diario" dentro del chart + `EventLogStore` (`Diario`, `DailyBounce`) — **sin Telegram**.
+### Daily bounce (panel 1h, informational, once per session)
+- `EvaluateDailyBounce`, right after loading history: aggregates 1h candles into daily ones, takes the last ALREADY CLOSED daily candle (yesterday), and applies the same case-1/case-2 bounce formula against the daily SMA20. Only detects Bounce (not Cross). Purely informational: log in `crossLog` + "Daily Analysis" overlay within the chart + `EventLogStore` (`Diario`, `DailyBounce`) — **no Telegram**.
 
 ### Day dividers (panel 1h)
-- Líneas verticales punteadas separando los últimos 5 días de velas 1h (últimas 4 líneas). Toggle manual (checkbox "Día", activado por default), no es un análisis, es puramente decorativo.
+- Dotted vertical lines separating the last 5 days of 1h candles (last 4 lines). Manual toggle (checkbox "Día", enabled by default), it is not an analysis, it's purely decorative.
 
-## 3. Dibujos automáticos vs. manuales
+## 3. Automatic vs. manual drawings
 
-| Elemento | Origen | Panel(es) | Persiste en disco | Se borra con | Mirror entre paneles |
+| Element | Origin | Panel(s) | Persists to disk | Deleted by | Mirrored between panels |
 |---|---|---|---|---|---|
-| Velas + SMA + Bollinger | Automático | Todos (SMA solo 1h) | No (se recalcula siempre) | — | No aplica |
-| Piso/Techo labels + ref-lines | Automático | 1h (labels), 15m RTH/Overnight (ref-lines) | No — solo memoria estática | Invalidación por open/gap, o nueva sesión de proceso | Sí (ref-line mirroreada a los otros 2) |
-| Prev-day Hi/Lo (H-Line roja) | Automático | Todos | No | Delete manual (click + Delete) — dispara `OnHLineDeletedEvent` | Sí, a los otros 2 paneles |
-| PM / BB / Δ / "1er Rebote" | Automático | 1h / 15m RTH | No | — (se recalcula en cada tick) | PM sí (tamaño compartido); BB/Δ no se mirrorean visualmente, pero su alineación cross-panel SÍ se rastrea para el log de backtesting (ver sección 2) |
-| Banner "Expuesto en 3 charts" | Automático | 15m RTH | No | — (re-evaluado en cada tick) | No |
-| **T-Line** | Manual (toolbar) | 1h, 15m RTH (panel 3 ya no tiene esta herramienta) | **Sí** — `TLineStore` propio por panel (tag "1h" y tag "RTH", archivos separados) | Click + Delete (`tline_delete`) | **No** — cada panel es independiente; ya no se mirrorea al otro (cambio reciente, antes se mirroreaba a los 3) |
-| **H-Line** | Manual (**un solo botón**, sobre el panel 2 — arma el modo dibujo en los 3 paneles a la vez) | 1h, 15m RTH, 15m Overnight | No (no hay HLineStore) | Click + Delete | Sí — dibujar (`hline_add`/`addMirroredHLine`) y borrar en cualquiera de los 3 se mirrorea a los otros 2 |
-| **Rect** (celeste) | Manual (toolbar) | 15m RTH+Overnight | No | Solo vía Clear (no individual) | No |
-| **Rect Gris** | Manual (toolbar) | 1h | **Sí** — `RectGrisStore` | Click borde + Delete | No |
-| **DZ/SZ** (Demand/Supply) | Manual (toolbar) | 15m RTH+Overnight | No (solo memoria: `_demandZones`/`_supplyZones`) | Solo vía Clear | No |
-| **Arrow** (flecha diagonal) | Manual (toolbar) | 15m RTH+Overnight | No | Solo vía Clear | No |
-| **Flecha Verde/Roja** (vertical) | Manual (toolbar) | 1h | **Sí** — `VerticalArrowStore` (incluye drag/move) | Click shaft + Delete | No |
-| **Stk (verde, "Stk=xxx")** | Automático al abrir trade | Todos (o solo Overnight según llamada) | No | Click + Delete (`strike_delete`) | Sí, a los otros 2 |
-| **ΔS (Delta-S)** | Automático al cerrar trade | Overnight (llamada explícita `MarkDeltaSOnOvernightChartAsync`) | No | Se borra junto con su Stk line (commit reciente) | — |
-| **Línea blanca de entrada/cierre de trade** | Automático al abrir/cerrar trade | Panel 2 (15m RTH) **y** panel 3 (Overnight) — antes solo panel 3 | No | Se recalcula/redibuja | — |
-| **ATH (línea de referencia)** | Automático (calculado) + checkbox show/hide | Todos | Sí — `AllTimeHighStore` | Checkbox oculta/muestra, no borra el dato | Sí, el valor calculado en 1h se propaga a los otros 2 |
-| **Línea de cierre del día anterior ("C")** | Automático al cargar historial | Todos | No | — (se redibuja) | Sí, cada panel la calcula por su cuenta desde sus propias velas |
+| Candles + SMA + Bollinger | Automatic | All (SMA only 1h) | No (always recalculated) | — | Not applicable |
+| Floor/Ceiling labels + ref-lines | Automatic | 1h (labels), 15m RTH/Overnight (ref-lines) | No — static memory only | Invalidation by open/gap, or new process session | Yes (ref-line mirrored to the other 2) |
+| Prev-day Hi/Lo (red H-Line) | Automatic | All | No | Manual delete (click + Delete) — fires `OnHLineDeletedEvent` | Yes, to the other 2 panels |
+| PM / BB / Δ / "1st Bounce" | Automatic | 1h / 15m RTH | No | — (recalculated every tick) | PM yes (shared size); BB/Δ are not visually mirrored, but their cross-panel alignment IS tracked for the backtesting log (see section 2) |
+| "Exposed on 3 charts" banner | Automatic | 15m RTH | No | — (re-evaluated every tick) | No |
+| **T-Line** | Manual (toolbar) | 1h, 15m RTH (panel 3 no longer has this tool) | **Yes** — own `TLineStore` per panel (tag "1h" and tag "RTH", separate files) | Click + Delete (`tline_delete`) | **No** — each panel is independent; no longer mirrored to the other (recent change, previously mirrored to all 3) |
+| **H-Line** | Manual (**a single button**, over panel 2 — arms drawing mode on all 3 panels at once) | 1h, 15m RTH, 15m Overnight | No (no HLineStore) | Click + Delete | Yes — drawing (`hline_add`/`addMirroredHLine`) and deleting on any of the 3 mirrors to the other 2 |
+| **Rect** (light blue) | Manual (toolbar) | 15m RTH+Overnight | No | Only via Clear (not individually) | No |
+| **Rect Gris** (gray rect) | Manual (toolbar) | 1h | **Yes** — `RectGrisStore` | Click on edge + Delete | No |
+| **DZ/SZ** (Demand/Supply) | Manual (toolbar) | 15m RTH+Overnight | No (memory only: `_demandZones`/`_supplyZones`) | Only via Clear | No |
+| **Arrow** (diagonal) | Manual (toolbar) | 15m RTH+Overnight | No | Only via Clear | No |
+| **Green/Red Arrow** (vertical) | Manual (toolbar) | 1h | **Yes** — `VerticalArrowStore` (includes drag/move) | Click shaft + Delete | No |
+| **Stk (green, "Stk=xxx")** | Automatic when opening a trade | All (or Overnight only depending on the call) | No | Click + Delete (`strike_delete`) | Yes, to the other 2 |
+| **ΔS (Delta-S)** | Automatic when closing a trade | Overnight (explicit call `MarkDeltaSOnOvernightChartAsync`) | No | Deleted together with its Stk line (recent commit) | — |
+| **White trade entry/close line** | Automatic when opening/closing a trade | Panel 2 (15m RTH) **and** panel 3 (Overnight) — previously only panel 3 | No | Recalculated/redrawn | — |
+| **ATH (reference line)** | Automatic (calculated) + show/hide checkbox | All | Yes — `AllTimeHighStore` | Checkbox hides/shows, does not delete the data | Yes, the value calculated in 1h propagates to the other 2 |
+| **Previous-day close line ("C")** | Automatic on loading history | All | No | — (redrawn) | Yes, each panel calculates it on its own from its own candles |
 
-**Clear** (botón por columna) borra todo lo dibujado en ese panel y, en 1h, además limpia `TLineStore`, `VerticalArrowStore` y `RectGrisStore` en disco (borra el archivo).
+**Clear** (button per column) deletes everything drawn on that panel, and on 1h, also clears `TLineStore`, `VerticalArrowStore`, and `RectGrisStore` on disk (deletes the file).
 
-## 4. Qué persiste y qué no
+## 4. What persists and what doesn't
 
-| Store | Archivo | Contenido | Por símbolo | Se limpia diario |
+| Store | File | Content | Per symbol | Cleared daily |
 |---|---|---|---|---|
-| `TLineStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_TLines.csv` | T-Lines del panel 1h (t1,p1,t2,p2 — epoch "ET disfrazado de UTC") | Sí | No — persiste hasta borrado manual (Delete o Clear) |
-| `VerticalArrowStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_Arrows.csv` | Flechas verticales del panel 1h (time, price, up) | Sí | No |
-| `RectGrisStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_RectGris.csv` | Rectángulos grises del panel 1h (t1,p1,t2,p2) | Sí | No |
-| `HourlyCandleStore` | `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv` | Velas 1h acumuladas entre sesiones (hasta 1500, ~200 días hábiles) para SMA100/200 y vista Daily | Sí | No — crece día a día |
-| `EventLogStore` | `C:\OptionsData\EventLog\events_log.csv` | Log CSV acumulativo de TODOS los eventos de análisis (todos los símbolos, un solo archivo compartido entre procesos, con reintentos por lock) | No (columna Symbol dentro del CSV) | No |
-| `CtRecordStore` | `C:\OptionsData\EventLog\ct_records_{MachineName}.json` | Registro global (todos los símbolos, todas las fuentes de T-Line) de creación (Pendiente) y resolución (Alza/Baja/EliminadoSinResolver) de cada T-Line — un JSON por PC, no rotado por día/símbolo, `CtLogWriter` regenera una nota `.md` completa en cada cambio | No (campo Symbol dentro del JSON) | No |
-| `SmaDailyWatchStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_SmaWatches.csv` | Periodos de SMA Diaria (20/40/100/200) actualmente armados para vigilancia de cruce en vivo, desde `DailyChartForm` | Sí | No |
-| `RectStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_Rects_{contextTag}.csv` | Rectángulos del Daily popup (`DailyChartForm`, no del Live Chart) — contextTag "Daily"/"DailyColor" | Sí | No |
-| `DailyCandleStore` | `C:\OptionsData\MarketData\Candles\{Symbol}_Daily.csv` | Velas diarias agregadas persistidas | Sí | No |
-| **No persiste** | — | Piso/Techo (estático en memoria, `s_pisoTecho*`), línea azul premarket (`s_preMarketLineState`, en memoria), H-Lines manuales, Rect celeste, DZ/SZ, Arrow diagonal, estado de "Abriendo la Volatilidad"/PM/BB (todo se recalcula desde `_closedCandles` en cada apertura) | — | — |
+| `TLineStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_TLines.csv` | T-Lines from panel 1h (t1,p1,t2,p2 — epoch "ET disguised as UTC") | Yes | No — persists until manually deleted (Delete or Clear) |
+| `VerticalArrowStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_Arrows.csv` | Vertical arrows from panel 1h (time, price, up) | Yes | No |
+| `RectGrisStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_RectGris.csv` | Gray rectangles from panel 1h (t1,p1,t2,p2) | Yes | No |
+| `HourlyCandleStore` | `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv` | 1h candles accumulated across sessions (up to 1500, ~200 business days) for SMA100/200 and the Daily view | Yes | No — grows day by day |
+| `EventLogStore` | `C:\OptionsData\EventLog\events_log.csv` | Cumulative CSV log of ALL analysis events (all symbols, a single file shared between processes, with lock retries) | No (Symbol column within the CSV) | No |
+| `CtRecordStore` | `C:\OptionsData\EventLog\ct_records_{MachineName}.json` | Global record (all symbols, all T-Line sources) of creation (Pendiente/Pending) and resolution (Alza/Baja/EliminadoSinResolver, i.e. Up/Down/DeletedUnresolved) of each T-Line — one JSON per PC, not rotated by day/symbol, `CtLogWriter` regenerates a complete `.md` note on every change | No (Symbol field within the JSON) | No |
+| `SmaDailyWatchStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_SmaWatches.csv` | Daily SMA periods (20/40/100/200) currently armed for live cross monitoring, from `DailyChartForm` | Yes | No |
+| `RectStore` | `C:\OptionsData\ChartDrawings\{Symbol}\{Symbol}_Rects_{contextTag}.csv` | Rectangles from the Daily popup (`DailyChartForm`, not the Live Chart) — contextTag "Daily"/"DailyColor" | Yes | No |
+| `DailyCandleStore` | `C:\OptionsData\MarketData\Candles\{Symbol}_Daily.csv` | Persisted aggregated daily candles | Yes | No |
+| **Does not persist** | — | Floor/Ceiling (static in memory, `s_pisoTecho*`), premarket blue line (`s_preMarketLineState`, in memory), manual H-Lines, light-blue Rect, DZ/SZ, diagonal Arrow, "Volatility Opening"/PM/BB state (everything is recalculated from `_closedCandles` on every opening) | — | — |
 
-Nota: `s_preMarketLineState` (línea azul premarket + exposición Bollinger congelada) es estático en memoria, keyed por `{symbol}_{mode}` — sobrevive cerrar/reabrir el Live Chart el mismo día de proceso pero se pierde al reiniciar la app.
+Note: `s_preMarketLineState` (premarket blue line + frozen Bollinger exposure) is static in memory, keyed by `{symbol}_{mode}` — survives closing/reopening the Live Chart on the same process day but is lost on app restart.
 
-## 4bis. Gating por ticker: AWS y Telegram
+## 4bis. Per-ticker gating: AWS and Telegram
 
-`TickerSettingsStore` guarda, por cada símbolo, dos checkboxes independientes:
+`TickerSettingsStore` stores, for each symbol, two independent checkboxes:
 
-- **AWS**: si está apagado, el trade abierto desde el grid del Live Chart **no** hace `POST` a la API ASP.NET Core ni sube screenshots a S3 — usa un id de trade negativo como fallback local. El trade sigue apareciendo en `dgvTrades` (mirror) y en la nota diaria combinada en Markdown, pero las imágenes referenciadas son rutas `file://` locales en vez de URLs de S3. No dispara push a Telegram tampoco (no hay nada que enviar sin el registro persistido).
-- **Telegram**: gatilla únicamente los pushes de **"evento"** — Piso/Techo, T-Line breakout, Abriendo la Volatilidad, DZ/SZ (manual y auto-push) — pero **no** afecta los pushes de apertura/cierre de trade, que siguen su propio camino independiente de este checkbox.
+- **AWS**: if off, a trade opened from the Live Chart grid does **not** `POST` to the ASP.NET Core API nor upload screenshots to S3 — it uses a negative trade id as a local fallback. The trade still appears in `dgvTrades` (mirror) and in the combined daily Markdown note, but the referenced images are local `file://` paths instead of S3 URLs. It also doesn't trigger a Telegram push (there is nothing to send without the persisted record).
+- **Telegram**: gates only the **"event"** pushes — Floor/Ceiling, T-Line breakout, Volatility Opening, DZ/SZ (manual and auto-push) — but does **not** affect trade open/close pushes, which follow their own path independent of this checkbox.
 
-Ambos se consultan vía `Form1.IsAwsEnabledFor(symbol)` / `IsTelegramEnabledFor(symbol)`, reutilizados por `ChartPanel`/`MultiChartForm` antes de cada push o persistencia remota.
+Both are queried via `Form1.IsAwsEnabledFor(symbol)` / `IsTelegramEnabledFor(symbol)`, reused by `ChartPanel`/`MultiChartForm` before every push or remote persistence.
 
-## 5. Eventos y trades guardados en disco
+## 5. Events and trades saved to disk
 
-- **`EventLogStore`** (`C:\OptionsData\EventLog\events_log.csv`): una fila por evento detectado, columnas `Date,Time,Symbol,Timeframe,EventType,Direction,Description,Price,Reference`. Eventos que escriben ahí: `DailyBounce`, `TLineBreakout`, `DemandZoneRebound`, `SupplyZoneRebound`, `PisoTechoCruce`, `PisoTechoRebote`, `VolatilityOpening`. Archivo único compartido entre los procesos de todos los tickers (lock exclusivo con reintento, igual patrón que `OpenTradesStore`).
-- **`EventLogMarkdownWriter`**: se invoca cada vez que un push a Telegram tiene éxito (`AppendEvent(symbol, caption, screenshotPath)`) — registro paralelo en Markdown de cada push exitoso con su caption y ruta del PNG (no confirmado el path exacto sin leer el archivo, pero se dispara desde `SendChartToTelegramAsync`, `SendTLineSignalTelegramPushAsync`, `SendPisoTechoTelegramPushAsync` y `SendAutoZonePushAsync`).
-- **`CtRecordStore`/`CtLogWriter`**: registro específico de T-Lines, separado de `EventLogStore`/`EventLogMarkdownWriter` — un JSON global por PC (no rotado por día/símbolo) que trackea la CREACIÓN de cada T-Line (status "Pendiente", el momento en que se dibuja) y luego actualiza ESE MISMO registro cuando resuelve ("Alza"/"Baja") o se borra sin resolver ("EliminadoSinResolver"). `CtLogWriter` se suscribe a los cambios y regenera una nota `.md` completa (`{MachineName}_CT.md`) en cada mutación — no es append-only como los otros writers de esta lista.
-- **Trades reales**: el Live Chart NO los guarda directamente — los trades (reales o demo) se abren/cierran a través de `Form1`, que llama a la API ASP.NET Core (`OptionsTrader.API`) para persistirlos en la base de datos SQL Server (RDS), como indica la arquitectura Clean Architecture del proyecto (`Domain.Trade` → DTO → API). El Live Chart solo REACCIONA a esos trades (dibuja Stk/ΔS, refresca el grid espejo) — no escribe la tabla de trades. Esto lo distingue claramente del Simulador, que persiste sus propios trades en un CSV local (`SimTradesStore`), sin pasar por la API/DB.
-- **Screenshots de Telegram**: PNGs guardados en `C:\OptionsTraderPush\{Symbol}_{Tipo}_{yyyyMMdd_HHmmss}.png`, capturados vía `CoreWebView2.CapturePreviewAsync` (no captura de pantalla — funciona aunque la ventana esté minimizada/oculta).
+- **`EventLogStore`** (`C:\OptionsData\EventLog\events_log.csv`): one row per detected event, columns `Date,Time,Symbol,Timeframe,EventType,Direction,Description,Price,Reference`. Events that write there: `DailyBounce`, `TLineBreakout`, `DemandZoneRebound`, `SupplyZoneRebound`, `PisoTechoCruce`, `PisoTechoRebote`, `VolatilityOpening`. A single file shared across the processes of all tickers (exclusive lock with retry, same pattern as `OpenTradesStore`).
+- **`EventLogMarkdownWriter`**: invoked every time a Telegram push succeeds (`AppendEvent(symbol, caption, screenshotPath)`) — a parallel Markdown record of each successful push with its caption and PNG path (exact path not confirmed without reading the file, but it is triggered from `SendChartToTelegramAsync`, `SendTLineSignalTelegramPushAsync`, `SendPisoTechoTelegramPushAsync`, and `SendAutoZonePushAsync`).
+- **`CtRecordStore`/`CtLogWriter`**: a T-Line-specific record, separate from `EventLogStore`/`EventLogMarkdownWriter` — a global JSON per PC (not rotated by day/symbol) that tracks the CREATION of each T-Line (status "Pendiente"/Pending, the moment it is drawn) and then updates THAT SAME record when it resolves ("Alza"/"Baja", i.e. Up/Down) or is deleted without resolving ("EliminadoSinResolver"). `CtLogWriter` subscribes to the changes and regenerates a complete `.md` note (`{MachineName}_CT.md`) on every mutation — unlike the other writers in this list, it is not append-only.
+- **Real trades**: the Live Chart does NOT save them directly — trades (real or demo) are opened/closed through `Form1`, which calls the ASP.NET Core API (`OptionsTrader.API`) to persist them to the SQL Server database (RDS), as dictated by the project's Clean Architecture (`Domain.Trade` → DTO → API). The Live Chart only REACTS to those trades (draws Stk/ΔS, refreshes the mirror grid) — it does not write to the trades table. This clearly distinguishes it from the Simulator, which persists its own trades to a local CSV (`SimTradesStore`), without going through the API/DB.
+- **Telegram screenshots**: PNGs saved to `C:\OptionsTraderPush\{Symbol}_{Tipo}_{yyyyMMdd_HHmmss}.png`, captured via `CoreWebView2.CapturePreviewAsync` (not a screen capture — works even while the window is minimized/hidden).
 
-## 6. Checklist cronológico de pruebas — Premarket → Cierre RTH
+## 6. Chronological test checklist — Premarket → RTH Close
 
-**Antes de abrir la app (una sola vez al día, antes de las 9:30 AM ET):**
-- [ ] Verificar que `C:\OptionsData\ChartDrawings\{Symbol}\*` y `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv` existen de sesiones previas (si aplica) — confirmar que T-Lines/Arrows/RectGris se recargan al abrir el chart.
+**Before opening the app (once a day, before 9:30 AM ET):**
+- [ ] Verify that `C:\OptionsData\ChartDrawings\{Symbol}\*` and `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv` exist from previous sessions (if applicable) — confirm that T-Lines/Arrows/RectGris reload when the chart opens.
 
-**Premarket (antes de 9:30 AM ET):**
-- [ ] Abrir "Live Charts — {Symbol}" ANTES de las 9:30 — confirmar que se ejecuta `EvaluatePisoTechoOnce` (revisar `crossLog` o el label Piso/Techo en el panel 1h).
-- [ ] Confirmar que aparece la línea azul premarket + valor de precio en el panel correspondiente.
-- [ ] Verificar que las ref-lines punteadas Piso/Techo aparecen mirroreadas en los paneles 15m RTH y 15m Overnight.
-- [ ] Si el precio se mueve premarket, confirmar invalidación en vivo de Piso/Techo si rompe el nivel (`ValidatePisoTechoAgainstLivePrice`) — el watch interno se limpia, pero el label debe seguir visible en los 3 paneles (no se quita, por diseño).
-- [ ] Confirmar banner "Expuesto en 3 charts" aparece/desaparece correctamente según Bollinger Daily+1h+15m coincidan.
-- [ ] Confirmar prev-day Hi/Lo se dibuja en los 3 paneles en el primer tick premarket (paneles 1h/15m RTH) o de inmediato (panel Overnight).
-- [ ] Confirmar que "BB" (junto a "PM") ya aparece/actualiza en premarket, no solo después de las 9:30.
-- [ ] Confirmar que el texto "Expuesto" sigue el punto de anclaje de la línea azul al hacer zoom/pan (no debe quedar fijo en el centro del canvas).
+**Premarket (before 9:30 AM ET):**
+- [ ] Open "Live Charts — {Symbol}" BEFORE 9:30 — confirm `EvaluatePisoTechoOnce` runs (check `crossLog` or the Floor/Ceiling label on panel 1h).
+- [ ] Confirm the premarket blue line + price value appears on the corresponding panel.
+- [ ] Verify the dotted Floor/Ceiling ref-lines appear mirrored on the 15m RTH and 15m Overnight panels.
+- [ ] If price moves in premarket, confirm live invalidation of Floor/Ceiling if it breaks the level (`ValidatePisoTechoAgainstLivePrice`) — the internal watch is cleared, but the label should stay visible across all 3 panels (not removed, by design).
+- [ ] Confirm the "Exposed on 3 charts" banner appears/disappears correctly based on whether Daily+1h+15m Bollinger match.
+- [ ] Confirm prev-day Hi/Lo is drawn on all 3 panels on the first premarket tick (1h/15m RTH panels) or immediately (Overnight panel).
+- [ ] Confirm that "BB" (next to "PM") already appears/updates in premarket, not only after 9:30.
+- [ ] Confirm the "Exposed" text follows the blue line's anchor point when zooming/panning (it should not stay fixed at the center of the canvas).
 
-**Apertura RTH (9:30 AM ET):**
-- [ ] Confirmar `ValidatePisoTechoAgainstOpen` corre una sola vez — un gap de apertura que rompe un nivel debe limpiar el watch interno (el label/ref-line se queda visible, no se quita).
-- [ ] Confirmar `ArmVolatilityOpeningWatchDefault` arma ambos lados en el panel 15m RTH en el primer tick RTH.
-- [ ] Confirmar que el day divider de "hoy" aparece a la derecha del último divisor en el panel 1h.
+**RTH Open (9:30 AM ET):**
+- [ ] Confirm `ValidatePisoTechoAgainstOpen` runs only once — an opening gap that breaks a level should clear the internal watch (the label/ref-line stays visible, not removed).
+- [ ] Confirm `ArmVolatilityOpeningWatchDefault` arms both sides on the 15m RTH panel on the first RTH tick.
+- [ ] Confirm today's day divider appears to the right of the last divider on panel 1h.
 
-**Durante la sesión RTH:**
-- [ ] Dibujar una H-Line (con el botón único sobre el panel 2) en cualquiera de los 3 paneles — confirmar que aparece en los otros 2, y que borrarla (Delete) en cualquiera la borra en los 3.
-- [ ] Confirmar que la línea azul premarket + "Expuesto" quedan congeladas y visibles toda la sesión RTH (no desaparecen al abrir el mercado).
-- [ ] Provocar (o esperar) que PM y BB coincidan en color en ambos paneles (1h y 15m RTH) — confirmar UNA sola línea en `crossLog` con la hora exacta, sin repetirse mientras se mantiene la alineación.
-- [ ] Confirmar que las reference-lines punteadas Piso/Techo (15m RTH/Overnight) terminan en el cierre de sesión (16:00 ET), no se extienden hasta el borde del chart.
-- [ ] Dibujar varias T-Lines en el panel 1h — confirmar que cada una se evalúa de forma independiente (sin límite de 1 línea) y que NO se mirrorean al panel 15m RTH (cada panel es independiente).
-- [ ] Provocar (o simular) un cruce/rebote de T-Line+SMA20 en 1h — confirmar log en `crossLog`, fila en `events_log.csv`, y push combinado a Telegram.
-- [ ] Dibujar un par DZ (verde arriba/rojo abajo) en el panel Overnight — llevar el precio a tocar la zona y confirmar Entrada → Rebote → auto-push armado en cada vela 15m subsecuente hasta "Stop Push".
-- [ ] Repetir con un par SZ (Supply).
-- [ ] Confirmar que un Piso/Techo resuelto en 1h arma correctamente "Abriendo la Volatilidad" en el panel 15m RTH con la dirección correcta (Cruce en Techo/Rebote en Piso → alcista; lo inverso → bajista).
-- [ ] Confirmar labels PM/BB/Δ se actualizan en vivo y que el tamaño de PM crece cuando 1h y 15m RTH coinciden en dirección.
-- [ ] Abrir un trade (demo o real) desde el grid de opciones — confirmar línea Stk verde en los 3 paneles; cerrarlo — confirmar label ΔS en el panel correspondiente.
-- [ ] Borrar una línea Stk en un panel — confirmar que desaparece en los otros 2.
-- [ ] Cerrar y reabrir la ventana "Live Charts" el mismo día — confirmar que T-Line/Arrows/RectGris (1h) se recargan desde disco, y que Piso/Techo/línea premarket se redibujan desde el estado estático en memoria (sin re-analizar).
-- [ ] Forzar una desconexión/reconexión de WebSocket — confirmar que aparece en `crossLog` vía `LogWebSocketEvent`.
+**During the RTH session:**
+- [ ] Draw an H-Line (with the single button over panel 2) on any of the 3 panels — confirm it appears on the other 2, and that deleting it (Delete) on any one deletes it on all 3.
+- [ ] Confirm the premarket blue line + "Exposed" remain frozen and visible for the whole RTH session (they do not disappear when the market opens).
+- [ ] Trigger (or wait for) PM and BB to match in color on both panels (1h and 15m RTH) — confirm a SINGLE line in `crossLog` with the exact time, without repeating while the alignment holds.
+- [ ] Confirm the dotted Floor/Ceiling reference lines (15m RTH/Overnight) end at session close (16:00 ET), not extending to the chart's edge.
+- [ ] Draw several T-Lines on panel 1h — confirm each is evaluated independently (no 1-line limit) and that they do NOT mirror to the 15m RTH panel (each panel is independent).
+- [ ] Trigger (or simulate) a T-Line+SMA20 cross/bounce on 1h — confirm log in `crossLog`, a row in `events_log.csv`, and a combined push to Telegram.
+- [ ] Draw a DZ pair (green above/red below) on the Overnight panel — bring the price to touch the zone and confirm Entry → Bounce → auto-push armed on every subsequent 15m candle until "Stop Push".
+- [ ] Repeat with an SZ (Supply) pair.
+- [ ] Confirm a Floor/Ceiling resolved on 1h correctly arms "Volatility Opening" on the 15m RTH panel with the right direction (Cross on Ceiling/Bounce on Floor → bullish; the reverse → bearish).
+- [ ] Confirm the PM/BB/Δ labels update live and that PM's size grows when 1h and 15m RTH match in direction.
+- [ ] Open a trade (demo or real) from the options grid — confirm the green Stk line on all 3 panels; close it — confirm the ΔS label on the corresponding panel.
+- [ ] Delete a Stk line on one panel — confirm it disappears on the other 2.
+- [ ] Close and reopen the "Live Charts" window the same day — confirm T-Line/Arrows/RectGris (1h) reload from disk, and that Floor/Ceiling/premarket line are redrawn from the static in-memory state (without re-analyzing).
+- [ ] Force a WebSocket disconnect/reconnect — confirm it appears in `crossLog` via `LogWebSocketEvent`.
 
-**Cierre de la última vela 1h (15:59–16:00 ET):**
-- [ ] Confirmar que `EvaluateLastHourCandleBeforeCloseIfNeeded` evalúa la vela de 15:00-16:00 aunque no llegue un tick de la siguiente hora (revisar `events_log.csv` por un evento Piso/Techo con timestamp ~15:59).
+**Closing of the last 1h candle (15:59–16:00 ET):**
+- [ ] Confirm `EvaluateLastHourCandleBeforeCloseIfNeeded` evaluates the 15:00-16:00 candle even if no tick arrives for the next hour (check `events_log.csv` for a Floor/Ceiling event with a timestamp ~15:59).
 
-**Post-cierre / verificación de persistencia:**
-- [ ] Revisar `C:\OptionsData\EventLog\events_log.csv` — confirmar todas las filas del día con Symbol/EventType/Direction correctos.
-- [ ] Revisar `C:\OptionsData\ChartDrawings\{Symbol}\*.csv` — confirmar que las T-Lines/Arrows/RectGris dibujadas hoy están guardadas.
-- [ ] Revisar `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv` — confirmar que las velas de hoy se agregaron (una fila más por vela 1h RTH del día).
-- [ ] Confirmar que Piso/Techo NO sobrevive a un reinicio de la app (es memoria estática, no hay store) — al reabrir mañana debe re-analizarse desde cero en premarket.
-- [ ] Si se usó el screenshot manual (click en el label de hora de Form1), confirmar el PNG en `C:\OptionsData\ChartSnapshots\{Symbol}\*_WholeUI.png` y la línea correspondiente en el Logger de Form1.
+**Post-close / persistence verification:**
+- [ ] Review `C:\OptionsData\EventLog\events_log.csv` — confirm all of today's rows have correct Symbol/EventType/Direction.
+- [ ] Review `C:\OptionsData\ChartDrawings\{Symbol}\*.csv` — confirm today's drawn T-Lines/Arrows/RectGris are saved.
+- [ ] Review `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv` — confirm today's candles were appended (one more row per 1h RTH candle of the day).
+- [ ] Confirm Floor/Ceiling does NOT survive an app restart (it's static memory, no store) — on reopening tomorrow it should be re-analyzed from scratch in premarket.
+- [ ] If the manual screenshot was used (click on Form1's time label), confirm the PNG in `C:\OptionsData\ChartSnapshots\{Symbol}\*_WholeUI.png` and the corresponding line in Form1's Logger.
