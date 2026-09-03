@@ -1,7 +1,7 @@
 # Simulador, Telegram y Registro de Eventos/Trades
 
 Documento de referencia sobre 3 piezas construidas en paralelo a las señales de trading (ver
-[`SENALES_Y_ESTRATEGIAS.md`](SENALES_Y_ESTRATEGIAS.md)): el **Simulador** (práctica offline sobre
+[`SIGNALS_AND_STRATEGIES.md`](SIGNALS_AND_STRATEGIES.md)): el **Simulador** (práctica offline sobre
 datos ya capturados), la integración con **Telegram**, y los distintos lugares donde queda
 registro de lo que pasa (CSV + notas de Obsidian). Para el detalle del streaming/WebSocket en vivo,
 ver [`LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md).
@@ -21,7 +21,7 @@ La app en vivo recibe 2 tipos de mensajes de Schwab por streaming WebSocket (det
 
 Ambos pasan por `UpdateLivePriceFromExternalSource` / `Streamer_OnNewCandle` en `ChartPanel.cs` —
 esos son también los 2 puntos donde se evalúan las señales que necesitan precio en vivo tick-a-tick
-(hoy, solo "Abriendo la Volatilidad" — ver `SENALES_Y_ESTRATEGIAS.md` §5). El resto de las señales
+(hoy, solo "Abriendo la Volatilidad" — ver `SIGNALS_AND_STRATEGIES.md` §5). El resto de las señales
 (Piso/Techo, Demand Zone, T-Line) solo necesitan el cierre de vela, así que se evalúan únicamente en
 `Streamer_OnNewCandle`. (Cross-SMA ya no corre en la app en vivo — solo en el Simulador, ver §2.)
 
@@ -35,7 +35,9 @@ parezca mucho.
 **Modelo de datos:** no hay conexión ni WebSocket. `SimulationDataLoader.LoadHourlyCandlesWithContext`
 carga las velas ya capturadas/backfileadas de un símbolo y fecha elegidos
 (`C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv`, el mismo archivo que respalda el panel
-1h en vivo — ver §5). El usuario avanza paso a paso (◀ ▶ o "Ir a hora") y en cada paso
+1h en vivo — ver §5). Al cargar un día, la vista se posiciona exactamente en las 9:30:00 ET
+(apertura de mercado) en vez del primer paso grabado, vía `FindClosestStepIndex` (compartido con
+"Ir a hora"). El usuario avanza paso a paso (◀ ▶ o "Ir a hora") y en cada paso
 `SimulatorForm` **recalcula y reenvía la lista completa de velas visibles hasta ese punto** —
 `SimulatedChartPanel.CargarHastaPasoAsync` reemplaza toda la serie en el chart, no agrega
 incrementalmente como hace el chart en vivo con su `_liveBucket`.
@@ -53,7 +55,7 @@ detecta porque la lista de cerradas encogió, y ahí se resetea todo el estado d
 | Cross-SMA (Cruce/Rebote manual) | Solo acá | Ya no existe en el Live Chart en vivo (removido) — el Simulador es la única implementación restante |
 | Piso/Techo | Sí | Se recalcula **una vez por día simulado cargado** (`SetPisoTechoResultsAsync`), no una vez por proceso — un día simulado es el equivalente más cercano a "una nueva sesión pre-market" |
 | Demand Zone rebote | Sí | Igual |
-| T-Line + SMA20 breakout | Sí | Solo 1 T-Line, en memoria (no hay `TLineStore` — nada de una T-Line de práctica debe sobrevivir a cerrar el Simulador) |
+| T-Line + SMA20 breakout | Sí | Múltiples líneas independientes, en memoria (no hay `TLineStore` — nada de una T-Line de práctica debe sobrevivir a cerrar el Simulador) |
 | Abriendo la Volatilidad (Bollinger) | Sí | Se evalúa contra el **Close de cada vela revelada** (no hay tick en vivo continuo en el Simulador) en vez de un precio continuo |
 | Daily bounce | No portado | — |
 
@@ -62,10 +64,12 @@ backlog de contexto (hasta ~200 días de historial precargado) como "recién cer
 eventos contra velas de meses atrás en el instante de cargar el día. Se fija a la fecha del día
 simulado — solo velas en o después de esa fecha pueden resolver un watch.
 
-**Sin Telegram, sin persistencia real:** el Simulador es *log-only* — cada señal resuelta solo
-escribe una línea en el log de texto en pantalla (`LogSimEvent`). La única excepción es Demand Zone
-Rebound, que sí se persiste en `events_log.csv` (mismo `EventLogStore` que usa la app en vivo) por
-pedido explícito — el resto de las señales del Simulador no tocan ese CSV.
+**Sin Telegram, con registro permanente en disco:** el Simulador nunca envía Telegram, pero cada
+línea que `LogSimEvent` escribe en el log de texto en pantalla (T-Line, Cross-SMA, DZ/SZ,
+Piso/Techo, Abriendo la Volatilidad, Daily Bounce, aperturas/cierres manuales) también se persiste
+vía `SimEventLogMarkdownWriter.AppendEvent` — un archivo `.md` por corrida de replay (ver §4). Además,
+Demand Zone Rebound se persiste también en `events_log.csv` (mismo `EventLogStore` que usa la app en
+vivo) por pedido explícito — el resto de las señales del Simulador no tocan ese CSV en particular.
 
 ## 3. Telegram
 
@@ -95,8 +99,9 @@ permite luego borrar mensajes puntuales si hace falta (`DeleteMessageAsync`).
 | Archivo | Contiene | Formato | Alcance |
 |---|---|---|---|
 | `C:\OptionsData\EventLog\events_log.csv` | Cada señal resuelta (Cross-SMA, Piso/Techo, Demand Zone, Volatilidad) de **todos** los símbolos | CSV acumulativo, 1 fila por evento | App en vivo (+ Demand Zone del Simulador, ver §2) |
-| `C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades\{yyyy_MM_dd}_{PC}.md` | Cada trade cerrado (demo o real) — imágenes Open/Close/TradeLog subidas a S3 | Markdown, 1 archivo por día por PC | Solo app en vivo (`DailyTradeLogWriter`) |
+| `C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades\{yyyy_MM_dd}_{PC}_Trades.md` | Cada trade cerrado (demo o real) — imágenes Open/Close/TradeLog subidas a S3 | Markdown, 1 archivo por día por PC | Solo app en vivo (`DailyTradeLogWriter`) |
 | `C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades\{yyyy_MM_dd}_{PC}_EventLogs.md` | Cada notificación de evento efectivamente empujada a Telegram, texto + imagen | Markdown, 1 archivo por día por PC | Solo app en vivo (`EventLogMarkdownWriter`) |
+| `C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades\{runDate}_{PC}_{Symbol}_Sim_{dataDate}_EventLogs.md` | Cada línea que aparece en el log de texto del Simulador (T-Line, Cross-SMA, DZ/SZ, Piso/Techo, Volatilidad, Daily Bounce, aperturas/cierres manuales) | Markdown, 1 archivo por corrida de replay (símbolo + fecha de datos + fecha en que se corrió) | Solo Simulador (`SimEventLogMarkdownWriter`) |
 
 **Por qué 3 y no 1 solo:** `events_log.csv` es para análisis offline en Excel (una fila estructurada
 por evento, todos los símbolos juntos, útil para estadísticas). Las 2 notas de Obsidian son para
@@ -120,6 +125,7 @@ vivo (`ChartPanel.SendChartToTelegramAsync` y `MultiChartForm.SendTLineSignalTel
 - **`OptionsTrader.WinForms/SimulatorForm.cs`** / **`SimulatedChartPanel.cs`** — Simulador individual completo.
 - **`OptionsTrader.WinForms/FourEtfSimulatorForm.cs`** — "Sim 4 ETF", segunda ventana de simulador (SPY/QQQ/IWM/DIA en grid 2x2, repetición offline desde disco, ver `LIVE_CHART_STREAMING.md` §10).
 - **`OptionsTrader.WinForms/SimulationDataLoader.cs`** — carga de velas históricas para el Simulador.
+- **`OptionsTrader.WinForms/SimEventLogMarkdownWriter.cs`** — nota permanente por corrida de replay del Simulador (Obsidian).
 - **`OptionsTrader.WinForms/TelegramNotifier.cs`** / **`TelegramSettingsStore.cs`** / **`TelegramPushStore.cs`** — integración con Telegram.
 - **`OptionsTrader.WinForms/EventLogStore.cs`** — CSV acumulativo de eventos.
 - **`OptionsTrader.WinForms/DailyTradeLogWriter.cs`** — nota diaria de trades (Obsidian).

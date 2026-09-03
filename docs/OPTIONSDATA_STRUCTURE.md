@@ -8,6 +8,7 @@ Carpeta local (fuera del repositorio) donde la app WinForms guarda todo lo que n
 C:\OptionsData\
 ├── MarketData\
 │   ├── Candles\{Symbol}_Hourly1h.csv          — velas de 1h persistidas (HourlyCandleStore)
+│   ├── Candles\{Symbol}_Daily.csv             — velas diarias persistidas (DailyCandleStore)
 │   ├── Ticks\{Symbol}\{Symbol}_Ticks_{yyyyMMdd}.csv          — 1 fila/min, derivado de CHART_EQUITY (TickPriceStore)
 │   └── TicksLevelOne\{Symbol}\{Symbol}_L1Ticks_{yyyyMMdd}.csv — cada tick de LEVEL_ONE_EQUITIES, ms (LevelOneTickStore)
 ├── Trades\
@@ -16,10 +17,18 @@ C:\OptionsData\
 │       └── IV_Historial_Apertura.csv              — snapshot de IV ATM de apertura por símbolo/día (IvHistorialWriter)
 ├── ChartDrawings\
 │   └── {Symbol}\
-│       ├── {Symbol}_TLines.csv   — T-Lines del panel 1h (TLineStore)
-│       └── {Symbol}_Arrows.csv   — flechas verticales del panel 1h (VerticalArrowStore)
+│       ├── {Symbol}_TLines_{modeTag}.csv  — T-Lines por panel (TLineStore; modeTag: 1h/RTH/DailyHora/Daily15Min)
+│       ├── {Symbol}_Arrows.csv            — flechas verticales del panel 1h (VerticalArrowStore)
+│       ├── {Symbol}_Rects_{contextTag}.csv — rectángulos de zona (RectStore)
+│       ├── {Symbol}_RectGris.csv          — rectángulo gris de referencia (RectGrisStore)
+│       └── {Symbol}_SmaWatches.csv        — watches de SMA diaria armados (SmaDailyWatchStore)
 ├── ChartSnapshots\
 │   └── {Symbol}\{Symbol}_{timestamp}_trade{tradeId}.png  — snapshot combinado de los 3 charts al registrar un trade
+├── EventLog\
+│   ├── events_log.csv                     — eventos de señales (Cruces, Rebotes, DZ/SZ) (EventLogStore)
+│   └── ct_records_{MachineName}.json      — registro global de T-Lines (creación/resolución) (CtRecordStore)
+├── Simulator\
+│   └── Trades\{Symbol}\{Symbol}_{yyyyMMdd}.csv  — trades abiertos/cerrados en el Simulador (SimTradesStore)
 ├── Logs\
 │   └── iv_historial_errors.log   — errores de IvHistorialWriter
 └── Backups\
@@ -40,11 +49,14 @@ C:\OptionsData\
 | Store (código) | Carpeta |
 |---|---|
 | `HourlyCandleStore` (`OptionsTrader.WinForms`) | `MarketData\Candles\` |
+| `DailyCandleStore` (`OptionsTrader.WinForms`) | `MarketData\Candles\` |
 | `TickPriceStore` (`OptionsTrader.Infrastructure.Schwab`) | `MarketData\Ticks\{Symbol}\` |
 | `LevelOneTickStore` (`OptionsTrader.Infrastructure.Schwab`) | `MarketData\TicksLevelOne\{Symbol}\` |
 | `CsvLogger` (`OptionsTrader.WinForms`) | `Trades\Iv\` |
 | `IvHistorialWriter` (`OptionsTrader.WinForms`) | `Trades\Iv\` (CSV maestro) + `Logs\` (errores) |
-| `TLineStore` / `VerticalArrowStore` (`OptionsTrader.WinForms`) | `ChartDrawings\{Symbol}\` |
+| `TLineStore` / `VerticalArrowStore` / `RectStore` / `RectGrisStore` / `SmaDailyWatchStore` (`OptionsTrader.WinForms`) | `ChartDrawings\{Symbol}\` |
 | `Form1.SaveTradeChartSnapshotAsync` | `ChartSnapshots\{Symbol}\` |
+| `EventLogStore` / `CtRecordStore` (`OptionsTrader.WinForms`) | `EventLog\` |
+| `SimTradesStore` (`OptionsTrader.WinForms`) | `Simulator\Trades\{Symbol}\` |
 
-Ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md) para el detalle de los stores relacionados al chart en vivo, y [`docs/FUNCIONALIDADES.md`](FUNCIONALIDADES.md) (§8 y §11) para el resto de la persistencia de la app.
+Ver [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md) para el detalle de los stores relacionados al chart en vivo, y [`docs/FEATURES.md`](FEATURES.md) (§8 y §11) para el resto de la persistencia de la app.

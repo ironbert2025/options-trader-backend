@@ -80,4 +80,4 @@ Revisar el resumen de la cuenta (P/L del día, posiciones activas, órdenes) lue
 | Tiempo aproximado | ~20 segundos | < 3 segundos |
 | Riesgo de slippage | Alto — el precio puede moverse considerablemente durante el proceso manual | Mínimo — la orden se envía y confirma casi instantáneamente |
 
-Ver también [`docs/FUNCIONALIDADES.md`](FUNCIONALIDADES.md) y [`docs/GUIA_USUARIO.md`](GUIA_USUARIO.md) para el detalle del flujo equivalente en la Windows App.
+Ver también [`docs/FEATURES.md`](FEATURES.md) y [`docs/USER_GUIDE.md`](USER_GUIDE.md) para el detalle del flujo equivalente en la Windows App.

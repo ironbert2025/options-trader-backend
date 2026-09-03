@@ -1,12 +1,12 @@
 # Simulador — Análisis Técnico
 
-Ámbito: `OptionsTrader.WinForms/SimulatorForm.cs`, `SimulatedChartPanel.cs`, `SimTradesStore.cs`.
+Ámbito: `OptionsTrader.WinForms/SimulatorForm.cs`, `SimulatedChartPanel.cs`, `SimTradesStore.cs`, `SimulationDataLoader.cs`, `SimEventLogMarkdownWriter.cs`.
 
 ## 1. Propósito y layout de UI
 
 `SimulatorForm` ("Simulador", 1190x1000) es una ventana de **replay** completamente independiente del polling en vivo de `Form1` y del streaming de `MultiChartForm` (puede tenerse abierta simultáneamente con cualquiera de las dos). **No hace paper-trading contra un feed en vivo** — reproduce snapshots de la cadena de opciones grabados previamente para un símbolo+día real (capturados mientras la app corría en vivo), vía `SimulationDataLoader`.
 
-**Flujo de uso:** elegir Symbol (`_cmbSymbol`, desde `TickerSettingsStore`) y Date (`_cmbDate`, desde `SimulationDataLoader.GetAvailableDates`), click "Cargar" (`LoadSelectedDay`) carga los `SimulationStep` de ese día + contexto de velas horarias/intradía. Luego se avanza:
+**Flujo de uso:** elegir Symbol (`_cmbSymbol`, desde `TickerSettingsStore`) y Date (`_cmbDate`, desde `SimulationDataLoader.GetAvailableDates`), click "Cargar" (`LoadSelectedDay`) carga los `SimulationStep` de ese día + contexto de velas horarias/intradía y posiciona la vista exactamente en las 9:30:00 ET (apertura de mercado), no en el primer paso grabado — vía `FindClosestStepIndex`, el mismo helper que usa "Ir a hora". Luego se avanza:
 - Manual: `◀ Atrás` / `Adelante ▶` (`Step(-1/1)`), o `+1 Min` (`StepOneMinute`, procesa PnL/auto-close en cada paso intermedio, sin saltarlos).
 - Automático: Play/Pause con `Timer` a velocidad seleccionable (1/3/5/10 pasos/seg), auto-pausa al llegar al final de los datos.
 - Salto directo: panel "Go to time" con botones de hora (9–15) y minuto (00/15/30/45) — salta al paso más cercano.
@@ -31,7 +31,7 @@ Pero **deliberadamente NO es una subclase ni variante de `ChartPanel`** — el p
 | Feature | Estado en Simulador | Persistencia/Telegram |
 |---|---|---|
 | Cross-SMA (Cruce/Rebote 20/40/100/200) | Presente (`EvaluateCrossings`/`ToggleCrossMonitor`/`AdvanceCrossSequence`), panel 1h | Solo log (`OnCrossSequenceEvent`), sin Telegram/persistencia |
-| T-Line + SMA20 breakout | Presente (`EvaluateTLineSignal`), **1 sola línea en memoria** (sin store), panel 1h — **el Simulador NO fue actualizado** cuando el Live Chart pasó a permitir múltiples T-Lines independientes por panel; sigue con el límite viejo de 1 línea, ver nota de divergencia abajo | Solo log (`OnTLineSignalEvent`) |
+| T-Line + SMA20 breakout | Presente (`EvaluateTLineSignal`), **múltiples líneas independientes en memoria** (`_tLines`, lista + `_tLineSignalFiredFor` como set), sin store — portado desde el Live Chart, ya no tiene el límite viejo de 1 sola línea | Solo log (`OnTLineSignalEvent`) |
 | Demand/Supply Zone rebote (DZ/SZ) | Presente (`EvaluateDemandZoneRebounds`/`EvaluateSupplyZoneRebounds`), armado en Overnight, mirroreado a 15m RTH | **Única excepción**: SÍ escribe en `EventLogStore` (`events_log.csv`, el mismo archivo compartido con la app en vivo) — "per explicit request" |
 | PM (Punto Medio) | Presente (`EvaluatePuntoMedioSlope`/`MarkPuntoMedioAsync`), 1h y 15m RTH, con coordinación cross-panel de tamaño ("grande" si ambos coinciden) igual que `MultiChartForm` | Solo evento, sin persistencia |
 | BB widening + Δ | Presente (`EvaluateBollingerWideningLabel`), 1h y 15m RTH | Puramente visual, sin log |
@@ -43,8 +43,7 @@ Pero **deliberadamente NO es una subclase ni variante de `ChartPanel`** — el p
 - **Prev-day High/Low (H-Lines rojas auto-dibujadas)** — `DrawPrevDayHiLoAsync`/`EvaluatePrevDayHiLoAsync`/`OnPrevDayHiLoDebugEvent`/`markPrevDayHiLo` **no tienen ninguna contraparte** en `SimulatedChartPanel` (confirmado por grep — cero referencias). Es el **único** análisis automático de la lista original que falta; todo lo demás (Piso/Techo, T-Line+SMA20, DZ/SZ rebote, PM, BB widening, daily bounce) tiene equivalente portado.
 - **"BB" en premarket** — en el Live Chart, "BB" ahora se evalúa también durante el premarket real (antes de 9:30 AM ET). El Simulador no tiene un concepto de "premarket" propio (arranca directo con los pasos del día grabado), así que este cambio no aplica/no tiene contraparte aquí.
 
-**Divergencias recientes Live Chart vs. Simulador (a fecha de este análisis, el Simulador quedó desactualizado en estos puntos):**
-- **T-Line múltiple/independiente por panel**: portado al Live Chart (paneles 1h y 15m RTH, cada uno con su propio `TLineStore` y sin límite de líneas, sin mirror entre paneles), **no portado al Simulador** — `SimulatedChartPanel` sigue con el campo único `_tLine` (nullable, 1 sola línea, se reemplaza al dibujar una segunda).
+**Divergencias recientes Live Chart vs. Simulador:**
 - **Panel 3 sin T-Line**: en el Live Chart, panel 3 perdió la herramienta T-Line. El Simulador solo tiene T-Line en el panel 1h de todas formas, así que este punto no genera divergencia real.
 - **ATH (checkbox/línea de referencia)**: no tiene contraparte en `SimulatedChartPanel`/`SimulatorForm` (sin coincidencias de `AllTimeHigh`/`ATH`) — no portado.
 - **Marcadores de borde de Bollinger**: SÍ portados (`SetBollingerEdgeMarkersVisibleAsync`, `enableBollingerEdgeMarkers()`).
@@ -75,7 +74,7 @@ El `ChartPanel` en vivo expone: Rect, Rect Gris (persistido), H-Line (**un solo 
 - Selecciones de Counts/Contracts — campos locales de sesión, nunca se escriben en `CountsSettingsStore`/`ContractsSettingsStore`.
 - T-Line — solo en memoria, sin store equivalente a `TLineStore`.
 - Zonas DZ/SZ — sin store equivalente a `RectGrisStore`; solo listas en memoria (`_demandZones`/`_supplyZones`), limpiadas en `ClearDzSzAsync`.
-- Texto del event log (`_txtEventLog`) — se limpia y repuebla en cada `LoadSelectedDay`, nunca se guarda en disco (excepto los 2 eventos DZ/SZ que también van a `EventLogStore`, ver sección 3/7).
+- Texto del event log (`_txtEventLog`) — se limpia y repuebla en cada `LoadSelectedDay`; en pantalla no sobrevive el cierre de la ventana, pero cada línea sí queda persistida en el `.md` de `SimEventLogMarkdownWriter` (y los 2 eventos DZ/SZ además van a `EventLogStore`, ver sección 3/7).
 - `_forcedStrikes` — se limpia en cada carga de día.
 
 ## 6. Fuente de datos — sin conexión Schwab en vivo
@@ -88,11 +87,12 @@ El Simulador **no** se conecta a ningún feed en vivo. Trabaja exclusivamente co
 
 No hay ninguna llamada a `SchwabClient`, streaming o polling REST en ninguno de los dos archivos. El comentario de clase de `SimulatedChartPanel` lo confirma: "NO streaming connection and NO REST history fetch." Las únicas lecturas externas son configuración local de solo lectura: `TickerSettingsStore`, `BalanceStore`, `PositionSizeSettingsStore`, `TargetSettingsStore`.
 
-## 7. Telegram / EventLogStore
+## 7. Telegram / EventLogStore / SimEventLogMarkdownWriter
 
-El Simulador está casi completamente aislado/local, con **una excepción deliberada**:
+El Simulador está casi completamente aislado/local, con **dos excepciones deliberadas**:
 - **Sin integración de Telegram en ningún lado** — cada análisis automático (Cross-SMA, T-Line, PM, BB widening, Piso/Techo, Abriendo la Volatilidad, daily bounce) es explícitamente "solo log" ("no Telegram, no persistence, per request (\"es un simulador\")").
-- **`EventLogStore.Append` SÍ se llama**, pero únicamente para los 2 eventos de Demand/Supply Zone rebote:
+- **Todo lo que pasa por `LogSimEvent`** (T-Line, Cross-SMA, DZ/SZ, Piso/Techo, Abriendo la Volatilidad, Daily Bounce, aperturas/cierres manuales de trade) **se persiste vía `SimEventLogMarkdownWriter.AppendEvent`**, un archivo `.md` por corrida — no se pierde al cerrar la ventana del Simulador. Ruta: `C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades\{runDate}_{MachineName}_{Symbol}_Sim_{dataDate}_EventLogs.md`, donde `runDate` es hoy (cuándo se corrió el replay) y `dataDate` es el día histórico replayado — un mismo símbolo/día puede replayarse varias veces en fechas distintas, y cada corrida deja su propio archivo.
+- **`EventLogStore.Append` SÍ se llama** además, pero únicamente para los 2 eventos de Demand/Supply Zone rebote:
 ```csharp
 _fullChart.OnDemandZoneReboundEvent += (caption, price, proximal, distal) =>
 {
@@ -101,7 +101,7 @@ _fullChart.OnDemandZoneReboundEvent += (caption, price, proximal, distal) =>
         $"Proximal={proximal:F2};Distal={distal:F2}");
 };
 ```
-  (y simétrico para SupplyZoneRebound/"Baja") — escribe en el **mismo `events_log.csv` persistido** que usa la app en vivo, marcado explícitamente como excepción "per explicit request". Todo lo demás queda solo en `_txtEventLog` en pantalla.
+  (y simétrico para SupplyZoneRebound/"Baja") — escribe en el **mismo `events_log.csv` persistido** que usa la app en vivo, marcado explícitamente como excepción "per explicit request", además del `.md` de `SimEventLogMarkdownWriter` que ya recibe todo evento por igual.
 - Fuera de eso, aislamiento total: stores separados (`SimTradesStore` vs `OpenTradesStore`), configuración separada (campos locales vs. los stores reales), sin estado compartido en tiempo real con `Form1`/`MultiChartForm` más allá de lecturas de configuración de solo lectura.
 
 ## 8. Diferencias clave con el Live Chart

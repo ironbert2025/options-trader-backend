@@ -1,6 +1,6 @@
 # Options Trader
 
-Documentación completa y detallada del proyecto. Para el detalle técnico de cada funcionalidad ver [`docs/FUNCIONALIDADES.md`](docs/FUNCIONALIDADES.md); para la guía de uso paso a paso ver [`docs/GUIA_USUARIO.md`](docs/GUIA_USUARIO.md); para la presentación en PowerPoint ver [`docs/OptionsTrader_Presentacion.pptx`](docs/OptionsTrader_Presentacion.pptx).
+Documentación completa y detallada del proyecto. Para el detalle técnico de cada funcionalidad ver [`docs/FEATURES.md`](docs/FEATURES.md); para la guía de uso paso a paso ver [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md); para la presentación en PowerPoint ver [`docs/OptionsTrader_Presentacion.pptx`](docs/OptionsTrader_Presentacion.pptx).
 
 ---
 
@@ -66,7 +66,7 @@ dotnet run --project OptionsTrader.API
 dotnet run --project OptionsTrader.WinForms
 ```
 
-Al abrir la WinForms se muestra primero una ventana de **login** (ver sección f); luego, en la pestaña **Settings**, se configuran las credenciales de Schwab, cuentas del broker, tickers y demás ajustes (ver [`docs/GUIA_USUARIO.md`](docs/GUIA_USUARIO.md)).
+Al abrir la WinForms se muestra primero una ventana de **login** (ver sección f); luego, en la pestaña **Settings**, se configuran las credenciales de Schwab, cuentas del broker, tickers y demás ajustes (ver [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)).
 
 > **Nota sobre credenciales de API:** para correr la app con datos y órdenes reales se necesitan 4 valores sensibles que **no están incluidos en este repositorio** (Schwab API Key, Schwab API Secret, AWS Access Key y AWS Secret Key). Las cuentas de Schwab vinculadas operan con **dinero real**, por lo que estas credenciales solo se comparten bajo solicitud directa y no se publican en ningún medio. Si es estrictamente necesario ejecutar la aplicación end-to-end durante la evaluación, **por favor solicítalas por correo** y se enviarán de forma privada (no por chat ni por ningún canal público). Sin estas credenciales, el código, la arquitectura y el resto de la documentación (incluyendo los videos demostrativos) pueden revisarse igualmente sin restricción.
 
@@ -98,8 +98,11 @@ OptionsTrader.sln
 - **Screenshots automáticos** de cada apertura/cierre de operación, subidos a S3 y asociados al trade.
 - **Registro para backtesting**: CSV de cotizaciones (con griegos e IV) y snapshot diario de IV de apertura para IV Rank/Percentile propio.
 - **Automatización por horario de mercado**: arranque diferido, reducción de cadencia después de las 11 AM, auto-captura de cierre a las 3:55 PM.
+- **Live Chart** (popup y pestaña **Charts** embebida): gráfico en vivo con detección automática de señales (Piso/Techo, Zonas de Demanda/Oferta, T-Line, Bollinger), herramientas de dibujo manual, y vista Daily con SMA de referencia.
+- **Simulador**: modo de práctica offline que reproduce datos de mercado ya capturados, con los mismos análisis automáticos que el Live Chart, sin conexión ni riesgo real.
+- **Refuerzo**: al abrir un 2do trade Demo sobre el mismo strike/tipo que uno ya abierto, se crea automáticamente un 3er trade promediado (contratos sumados, precio promedio ponderado) que se monitorea y cierra junto con los otros dos.
 
-Ver [`docs/FUNCIONALIDADES.md`](docs/FUNCIONALIDADES.md) para el detalle completo de cada una.
+Ver [`docs/FEATURES.md`](docs/FEATURES.md) para el detalle completo de cada una.
 
 ---
 
@@ -149,4 +152,4 @@ El sistema tiene 5 usuarios fijos sembrados en la base de datos (`user1` a `user
 
 **Nota sobre horario de mercado:** la aplicación consulta datos en tiempo real de la API de Schwab, que solo responde con cotizaciones válidas durante el horario del mercado de EE.UU. (**lunes a viernes, 9:30 AM – 4:00 PM ET**). Si se ejecuta fuera de ese horario (fines de semana o fuera de horario en días hábiles), la pestaña Quotes puede mostrar un error `400 Bad Request` al intentar traer cotizaciones — esto es esperado y no indica un fallo de la aplicación. Para probar el flujo completo de cotizaciones y trades, se recomienda hacerlo en horario de mercado.
 
-Fuera de ese horario igual puede revisarse sin restricción: la compilación y estructura del código, la pestaña Settings y su configuración, el login, el frontend con el histórico de trades (sección f), toda la documentación (`docs/FUNCIONALIDADES.md`, `docs/GUIA_USUARIO.md`) y los videos demostrativos ([`docs/GUION_VIDEO_TFM.md`](docs/GUION_VIDEO_TFM.md)), que ya muestran el flujo completo grabado en horario de mercado.
+Fuera de ese horario igual puede revisarse sin restricción: la compilación y estructura del código, la pestaña Settings y su configuración, el login, el frontend con el histórico de trades (sección f), toda la documentación (`docs/FEATURES.md`, `docs/USER_GUIDE.md`) y los videos demostrativos ([`docs/VIDEO_SCRIPT_TFM.md`](docs/VIDEO_SCRIPT_TFM.md)), que ya muestran el flujo completo grabado en horario de mercado.

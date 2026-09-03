@@ -8,9 +8,10 @@ Esta guía explica, paso a paso, **cómo se usa el programa** para operar opcion
 
 Options Trader te muestra **precios de opciones en tiempo real** de un símbolo (AAPL, TSLA, SPY, QQQ…) y te permite **abrir operaciones con un solo click** sobre el precio de ejercicio (Strike). Puede trabajar en modo **simulado** (práctica) o enviar **órdenes reales a tu cuenta de Schwab**. Además guarda automáticamente capturas e información para que revises tus operaciones después.
 
-El programa tiene **dos pestañas**:
+El programa tiene **tres pestañas**:
 
 - **Options Quotes** — donde operas (precios en vivo y tus trades).
+- **Charts** — gráfico en vivo con tu propio grid de trades y de opciones, para operar sin salir del chart (ver "Parte 3" más abajo).
 - **Settings** — donde configuras todo una sola vez.
 
 ---
@@ -118,6 +119,17 @@ Pulsa **Stop Polling** (el mismo botón de Start) para dejar de recibir precios.
 
 ---
 
+## Parte 3 — Pestaña Charts (operar mirando el gráfico)
+
+La pestaña **Charts** muestra el gráfico en vivo del símbolo seleccionado (1h y 15m), con su propio grid de opciones (tabs "Hoy"/"Próxima") y su propia tabla de Trades — no hace falta ir y venir a Options Quotes.
+
+- **Cómo operar acá**: elige **Demo-Target** (naranja, práctica) o **Real-Target** (verde, dinero real) en los 2 radio buttons de esta pestaña — son independientes de los de Options Quotes. Luego haz click en el Strike igual que en Options Quotes; siempre se abre con Target.
+- La tabla de Trades de esta pestaña es un espejo de la de Options Quotes, con una columna extra **Demo/Real** (naranja/verde) para distinguir de un vistazo qué tipo de operación es.
+- Los checkboxes **AWS** y **Telegram**, y el campo **Poll(s)**, controlan la subida de capturas y notificaciones y el intervalo de actualización de precios para este símbolo.
+- Debajo del gráfico verás avisos automáticos (Piso/Techo, T-Line, Zonas de Demanda/Oferta, etc.) — son análisis que el programa hace solo, mirando el precio y las medias móviles, y te avisan por Telegram si están activados.
+
+---
+
 ## Modos: simulado vs real (importante)
 
 | Modo | ¿Envía dinero real? | ¿Se cierra sola al llegar al Target? | Para qué sirve |
@@ -137,7 +149,7 @@ Pulsa **Stop Polling** (el mismo botón de Start) para dejar de recibir precios.
 - **Captura de cierre del día (3:55 PM)**: 5 minutos antes del cierre, guarda solo los precios finales del día (útil para análisis), aunque el programa ya esté en el modo de 1 minuto.
 - **Capturas automáticas**: toma una foto al abrir y al cerrar cada operación y la guarda en la nube, asociada a tu trade.
 - **Recuperación**: si cierras el programa con operaciones abiertas, al volver a abrirlo las recupera.
-- **Historial de volatilidad de apertura**: todos los días, entre las 9:30 y 9:35 AM, guarda automáticamente un resumen de la volatilidad implícita (IV) de apertura de tu símbolo en `C:\OptionsData\IV_Historial_Apertura.csv`. No requiere ninguna acción tuya — es la base para calcular IV Rank / IV Percentile propios en el futuro.
+- **Historial de volatilidad de apertura**: todos los días, entre las 9:30 y 9:35 AM, guarda automáticamente un resumen de la volatilidad implícita (IV) de apertura de tu símbolo en `C:\OptionsData\Trades\Iv\IV_Historial_Apertura.csv`. No requiere ninguna acción tuya — es la base para calcular IV Rank / IV Percentile propios en el futuro.
 
 ---
 
@@ -158,4 +170,4 @@ Si activaste **Quotes to CSV** en Settings, el programa guarda todos los precios
 
 ---
 
-*Para dudas técnicas o de configuración avanzada, consulta el documento [FUNCIONALIDADES.md](FUNCIONALIDADES.md).*
+*Para dudas técnicas o de configuración avanzada, consulta el documento [FEATURES.md](FEATURES.md).*

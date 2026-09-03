@@ -20,6 +20,10 @@
 12. [Reglas de negocio](#12-reglas-de-negocio)
 13. [Stack tecnológico](#13-stack-tecnológico)
 14. [Gráfico de velas en vivo](#14-gráfico-de-velas-en-vivo)
+15. [Pestaña Charts (Live Chart embebido)](#15-pestaña-charts-live-chart-embebido)
+16. [Simulador](#16-simulador)
+17. [Daily Chart (popup)](#17-daily-chart-popup)
+18. [Refuerzo (promedio de trades Demo)](#18-refuerzo-promedio-de-trades-demo)
 
 ---
 
@@ -60,6 +64,9 @@ Toda la configuración del operador vive en la pestaña **Settings** y se persis
 | **Broker Accounts (Schwab)** | Grid con las cuentas reales del broker; se elige la cuenta por defecto para enviar órdenes. **Se cachea localmente** y se **auto-carga al abrir el programa** (con la cuenta default ya marcada), sin esperar a pulsar Refresh Accounts. | `SelectedAccountStore`, `AccountsCacheStore` |
 | **AWS S3 Settings** | Access Key, Secret Key, Bucket y Region para subir screenshots a S3. | `AwsSettingsStore` |
 | **AWS / Telegram por ticker** | Cada fila de `TickerSettingsStore` tiene un checkbox **AWS** y uno **Telegram** independientes. AWS=off deja el trade **totalmente local**: no hace `POST` a la API/S3, usa un id de trade negativo como fallback, y aun así se ve en `dgvTrades` y en la nota diaria `.md` con rutas de imagen `file://` locales (sin push a Telegram tampoco). Telegram=off solo silencia los pushes de "evento" (Piso/Techo, T-Line, Abriendo la Volatilidad, DZ/SZ, auto-push) — **no** afecta los pushes de apertura/cierre de trade, que van aparte. | `TickerSettingsStore`, `Form1.IsAwsEnabledFor`/`IsTelegramEnabledFor` |
+| **Strike Count por ticker** | Cuántos strikes por lado (Call y Put) se piden a Schwab en cada llamada a la cadena de opciones (`strikeCount`, default 40 - Schwab devuelve esa cantidad POR LADO, no total). Configurable por símbolo para ajustar el tamaño de la cadena descargada a la volatilidad real de cada uno. | `TickerSettingsStore.StrikeCount`, `SchwabMarketDataService` |
+| **Polling por ticker** | Intervalo del polling de cotizaciones, en segundos, configurable por símbolo (antes fijo en 6s para todos). | `TickerSettingsStore.PollingIntervalSeconds` |
+| **SMA Diaria por ticker** | Qué líneas de referencia de SMA Diaria (20/40/100/200) se muestran sobre el Live Chart, y qué periodos están armados para "SMA Watch" (vigilancia de cruce en vivo). | `TickerSettingsStore.DailySmaLinesEnabled`, `SmaDailyWatchStore` |
 | **Save Dumps** | Si está activo, vuelca el JSON crudo de cada respuesta de Schwab a `C:\Dumps` (depuración). | `DumpSettingsStore` |
 | **Quotes to CSV** | Si está activo, registra cada ciclo de cotizaciones a CSV (ver §8). | (estado en UI) |
 | **Hide Next ExpDate** | Marcado por defecto. Oculta el grid *OptionsChain (Next ExpDate)* y **no escribe su CSV**, sin afectar el grid/CSV de la expiración actual. Cambia en vivo, incluso con el polling activo. | (estado en UI) |
@@ -274,6 +281,10 @@ API ASP.NET Core (desplegada en EC2) — capa central de negocio y datos.
 | Ticks en vivo (2 fuentes, para comparar) | Local | `C:\OptionsData\MarketData\Ticks\` y `\TicksLevelOne\` |
 | Dibujos del chart (T-Line, flechas verticales) | Local | `C:\OptionsData\ChartDrawings\{Symbol}\` |
 | Snapshot local de los 3 charts por trade | Local | `C:\OptionsData\ChartSnapshots\{Symbol}\` |
+| Registro de eventos de senales (Piso/Techo, DZ/SZ, T-Line) | Local | `C:\OptionsData\EventLog\events_log.csv` |
+| Registro global de T-Lines (creacion vs. resolucion) | Local | `C:\OptionsData\EventLog\ct_records_{MachineName}.json` + nota `.md` regenerada |
+| Trades del Simulador | Local | `C:\OptionsData\Simulator\Trades\{Symbol}\` |
+| Velas diarias persistidas | Local | `C:\OptionsData\MarketData\Candles\{Symbol}_Daily.csv` |
 | IP de un hub remoto en la LAN (opcional) | Local | `HubHostSettingsStore` → `hubhost.json` |
 | Último username usado (no password) | Local | `LoginUsernameStore` → `last_login_username.txt` |
 
@@ -317,7 +328,7 @@ Puntos clave (detalle completo en [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_ST
 - **Banner "Expuesto en 3 charts"**: en premarket, si el precio rompe el mismo lado de Bollinger(20,2) en Daily, 1h y 15m RTH a la vez, aparece un banner amarillo arriba del panel 15m RTH.
 - **Auto-push a Telegram tras rebote DZ/SZ**: una vez confirmado un rebote de Zona de Demanda/Oferta en el panel 15m RTH+Overnight, se envía automáticamente un snapshot combinado de los 3 charts a Telegram en cada vela de 15m que cierra, hasta pulsar "Stop Push".
 - **Vista Daily** en el panel 1h: agrega hasta 200 días de historial horario en velas diarias.
-- **Herramientas de dibujo** (T-Line, H-Line, rectángulos, zonas DZ/SZ, flechas) — seleccionables y borrables con la tecla Delete; T-Line y flechas verticales del panel 1h se **persisten por símbolo** entre sesiones. El toggle manual Cross-SMA y la herramienta de texto Piso/Techo fueron removidos del Live Chart en vivo (el sistema automático de Piso/Techo sigue activo — ver [`SENALES_Y_ESTRATEGIAS.md`](SENALES_Y_ESTRATEGIAS.md)).
+- **Herramientas de dibujo** (T-Line, H-Line, rectángulos, zonas DZ/SZ, flechas) — seleccionables y borrables con la tecla Delete; T-Line y flechas verticales del panel 1h se **persisten por símbolo** entre sesiones. El toggle manual Cross-SMA y la herramienta de texto Piso/Techo fueron removidos del Live Chart en vivo (el sistema automático de Piso/Techo sigue activo — ver [`SIGNALS_AND_STRATEGIES.md`](SIGNALS_AND_STRATEGIES.md)).
 - **T-Line: ahora múltiples e independientes por panel, sin mirror.** Se pueden dibujar varias T-Lines a la vez en el panel 1h y varias en el panel 15m RTH, cada una con su propio archivo `TLineStore` ("1h"/"RTH") y su propia señal de ruptura evaluada por separado — ya no comparten un único archivo ni se limitan a 1 línea. El **panel 3 (15m RTH+Overnight) ya no tiene la herramienta T-Line**. A diferencia de antes, dibujar o borrar una T-Line **ya no se mirrorea** a los otros paneles — el H-Line sí sigue mirroreándose entre los 3.
 - **ATH (All-Time High)**: checkbox en la toolbar compartida que muestra/oculta una línea de referencia del máximo histórico, dibujada en los 3 paneles a la vez.
 - **Bollinger Bands**: la banda media (SMA20) se dibuja en amarillo — punteada en el panel 1h, sólida en el panel 15m RTH. Checkbox aparte para mostrar/ocultar los marcadores blancos de borde de banda (panel 15m RTH).
@@ -329,6 +340,44 @@ Puntos clave (detalle completo en [`docs/LIVE_CHART_STREAMING.md`](LIVE_CHART_ST
 - Ventana **"Block Mov"**: 4 charts de 1h (SPY/QQQ/DIA/IWM) lado a lado, para ver el movimiento del mercado en conjunto.
 - Ventana **"Sim 4 ETF"** (`FourEtfSimulatorForm`): simulador de repetición offline (disco, sin streaming) de SPY/QQQ/IWM/DIA en grid 2x2 (15m RTH+Overnight), con Play/pause compartido y un único toggle DZ/SZ para las 4 charts, más grid de cadena de opciones con selector de símbolo.
 
+## 15. Pestaña Charts (Live Chart embebido)
+
+Además del popup "Live Chart" (§14), Form1 tiene una tercera pestaña, **Charts**, con un Live Chart embebido (`TwoPanelChartsControl`) siempre disponible sin abrir ventana aparte:
+
+- **2 paneles** (1h y 15m RTH, sin el panel 3/Overnight del popup), con los mismos análisis automáticos (Piso/Techo, T-Line+SMA20, PM, BB) corriendo de forma independiente al popup.
+- **Grid de opciones propio**, con tabs "Hoy"/"Próxima" (misma cadena que Options Quotes, pero embebida aquí).
+- **Grid de Trades propio** (espejo del de Form1, mismas 17 columnas + una columna extra **Demo/Real** en naranja/verde para distinguir el tipo de operación de un vistazo), ajustado al 90% del ancho del contenedor.
+- **2 radio buttons independientes** — **Demo-Target** (naranja, default al conectar) / **Real-Target** (verde) — separados de los 4 radios de Options Quotes; controlan solo los trades abiertos desde el grid de este tab, siempre con target.
+- Checkboxes **AWS**/**Telegram** y campo **Poll(s)** (intervalo de polling), por símbolo, iguales a los del popup.
+- Etiqueta con la hora del último tick de WebSocket recibido, junto a la hora del último ciclo de polling.
+
+Detalle técnico completo en [`LIVE_CHART_ANALYSIS.md`](../LIVE_CHART_ANALYSIS.md).
+
+## 16. Simulador
+
+Ventana de **práctica offline** (`SimulatorForm`), completamente separada del polling en vivo y del Live Chart — reproduce snapshots de la cadena de opciones ya capturados para un símbolo/día real, sin conexión a Schwab:
+
+- Elegis Symbol + Date, click **Cargar** posiciona la vista exactamente en las 9:30:00 ET (apertura de mercado).
+- Avance manual (Atrás/Adelante, +1 Min) o automático (Play/Pause a velocidad seleccionable), o salto directo a una hora.
+- Mismos 3 paneles que el Live Chart (1h/15m RTH/15m RTH+Overnight), con la mayoría de los análisis automáticos portados (Piso/Techo, T-Line+SMA20 múltiple, Zonas de Demanda/Oferta, PM, BB widening, Daily bounce) y además **Cross-SMA manual** (única implementación restante, ya removida del Live Chart en vivo).
+- Grid de trades demo propio (nunca reales, sin conexión al broker) — se cierran manual o automáticamente por target igual que en vivo.
+- Cada evento que aparece en el log de texto en pantalla se persiste además en un archivo `.md` permanente por corrida de replay (no se pierde al cerrar la ventana).
+
+Detalle técnico completo en [`SIMULATOR_ANALYSIS.md`](../SIMULATOR_ANALYSIS.md) y [`docs/SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md).
+
+## 17. Daily Chart (popup)
+
+Botón **Daily** (panel 1h) abre `DailyChartForm`, con velas diarias agregadas (hasta 250 días) para tener suficiente historia para SMA100/200. No es solo informativo, tiene 3 herramientas propias:
+
+- **T-Line** (tabs "Hora"/"15 Min") — se mirrorea automáticamente al panel 1h/15m RTH correspondiente del Live Chart.
+- **"D.PM"/"D40"/"D100"/"D200"** (checkboxes) — dibujan la SMA diaria 20/40/100/200 como línea de referencia sólida sobre el Live Chart, persistidos por símbolo.
+- **"SMA Watch"** (botones) — arman un monitor de cruce de la SMA diaria contra el precio en vivo (panel 1h), independiente de las 2 herramientas anteriores.
+
+## 18. Refuerzo (promedio de trades Demo)
+
+Cuando se abre un **2do trade Demo** sobre el mismo strike y tipo (Call/Put) que uno ya abierto, el programa crea automáticamente un **3er trade "Refuerzo"**: contratos sumados, precio de entrada promediado por peso (ponderado por cantidad de contratos), y target recalculado sobre ese precio promedio. Los 3 trades (los 2 originales + el promediado) se colorean de forma distinta y se actualizan en tiempo real; cerrar cualquiera de los 3 (manual o por target automático) cierra los 3 juntos al mismo precio. La nota diaria de trades en Markdown indica explícitamente cuál fila es el resultado de un Refuerzo. Solo aplica a trades Demo.
+
 ---
 
 *Documento generado a partir del análisis de la base de código. Capturas tomadas de la aplicación en ejecución.*
+

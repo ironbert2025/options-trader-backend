@@ -8,7 +8,7 @@ Documento de referencia para esta feature, desarrollada íntegramente en la rama
 
 ## Qué es
 
-Un gráfico de velas **en vivo** del subyacente (spot, ej. SPY/QQQ/TSLA/AAPL/DIA/IWM), alimentado por streaming WebSocket directo a Schwab — **completamente aislado** del resto de la app (no toca el polling de Quotes, ni el trading, ni ninguna lógica existente). Se abre con el botón **"Live Chart"** en la pestaña Quotes.
+Un gráfico de velas **en vivo** del subyacente (spot, ej. SPY/QQQ/TSLA/AAPL/DIA/IWM), alimentado por streaming WebSocket directo a Schwab — **completamente aislado** del resto de la app (no toca el polling de Quotes, ni el trading, ni ninguna lógica existente). Se abre con el botón **"Live Chart"** en la pestaña Quotes (ventana popup, `MultiChartForm`, 3 paneles). Existe además un **Charts tab embebido en Form1** (`TwoPanelChartsControl`), siempre disponible sin abrir ventana aparte, con solo 2 de los 3 paneles (1h y 15m RTH) pero su propio grid de trades/opciones y radios de trade-mode — ver [`LIVE_CHART_ANALYSIS.md`](../LIVE_CHART_ANALYSIS.md) para el detalle.
 
 ## 1. Los 3 paneles
 
@@ -58,7 +58,7 @@ Lightweight Charts muestra el timestamp Unix que le pasás como **dígitos UTC l
 
 Schwab's `pricehistory` (REST, historial) solo devuelve velas de 1 minuto — `ChartPanel.AggregateToInterval` las agrupa en buckets de 15 o 60 minutos del lado del cliente (C#), anclados a las 9:30 AM ET para RTH, o a medianoche ET para el panel full-day. La agregación en vivo (`Streamer_OnNewCandle`) usa la misma lógica de bucket para que los límites siempre coincidan entre historial y velas en vivo.
 
-**Vista Daily** (panel 1h, botón "Daily"): agrega hasta ~200 días de velas horarias en velas diarias (`HourlyCandleStore.MaxCandles = 1500` ≈ 200 días × 7 velas/día), recalculando las 4 SMA sobre los cierres diarios. Historial horario respaldado en `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv`, backfileado inicialmente desde Yahoo Finance (script `backfill_hourly.js`, no versionado en el repo — vivió en el scratchpad de la sesión) para superar el límite de 10 días de Schwab.
+**Vista Daily** (panel 1h, botón "Daily", abre `DailyChartForm`): agrega hasta ~200 días de velas horarias en velas diarias (`HourlyCandleStore.MaxCandles = 1500` ≈ 200 días × 7 velas/día, también respaldadas aparte en `DailyCandleStore` → `C:\OptionsData\MarketData\Candles\{Symbol}_Daily.csv`), recalculando las 4 SMA sobre los cierres diarios. Historial horario respaldado en `C:\OptionsData\MarketData\Candles\{Symbol}_Hourly1h.csv`, backfileado inicialmente desde Yahoo Finance (script `backfill_hourly.js`, no versionado en el repo — vivió en el scratchpad de la sesión) para superar el límite de 10 días de Schwab. No es solo una vista de solo-lectura: tiene su propia herramienta T-Line (mirroreada al Live Chart), checkboxes "D.PM"/"D40"/"D100"/"D200" (dibujan la SMA diaria correspondiente sobre el Live Chart) y botones "SMA Watch" (arman vigilancia de cruce de la SMA diaria contra el precio en vivo del panel 1h) — ver [`LIVE_CHART_ANALYSIS.md`](../LIVE_CHART_ANALYSIS.md).
 
 ## 6. Indicadores
 
@@ -81,6 +81,8 @@ Todas implementadas como *Series Primitives* de Lightweight Charts v4 en `chart.
 | DZ/SZ | 15m RTH+Overnight | Zonas de demanda/oferta, relleno entre pares |
 | Arrow (diagonal) | 15m RTH+Overnight | Rojo si el 1er click es más alto que el 2do, verde si no |
 | Flechas verticales (↑/↓) | 1h | Punta en el punto de click; arrastrables; persistidas por símbolo (`VerticalArrowStore`) |
+| T-Line (Daily popup) | `DailyChartForm`, tabs "Hora"/"15 Min" | Mirroreada automáticamente al panel 1h/15m RTH correspondiente del Live Chart (una sola vía) |
+| Rect (Daily popup) | `DailyChartForm` | Persistido por símbolo (`RectStore`, contextTag "Daily"/"DailyColor") — distinto del Rect azul del Live Chart |
 
 **Patrón seleccionable/borrable** (gris, azul, T-Line, flechas verticales): click cerca del borde/línea selecciona (contorno amarillo), tecla `Delete` borra el seleccionado. `Clear` (por panel) borra todo lo dibujado en ese panel — y en el 1h también limpia los stores persistidos.
 
@@ -108,7 +110,9 @@ Al registrar un trade (demo o real, punto único de convergencia: `Form1.RecordE
 - **`OptionsTrader.WinForms/ChartPanel.cs`** — `Panel` embebible con el WebView2: carga de historial, agregación de velas (histórica y en vivo), indicadores, dibujo, captura de imagen (`CaptureImageAsync`).
 - **`OptionsTrader.WinForms/MultiChartForm.cs`** — ventana contenedora, arma los 3 `ChartPanel`, toolbar por columna, captura combinada (`CaptureCombinedChartImageAsync`).
 - **`OptionsTrader.WinForms/LocalCandleHub.cs`** — `CandleHubServer`/`CandleHubClient` (ver §2 y §3).
-- **`OptionsTrader.WinForms/HubHostSettingsStore.cs`**, **`TLineStore.cs`**, **`VerticalArrowStore.cs`**, **`HourlyCandleStore.cs`** — persistencia local (ver secciones correspondientes).
+- **`OptionsTrader.WinForms/HubHostSettingsStore.cs`**, **`TLineStore.cs`**, **`VerticalArrowStore.cs`**, **`HourlyCandleStore.cs`**, **`DailyCandleStore.cs`**, **`RectStore.cs`**, **`SmaDailyWatchStore.cs`**, **`CtRecordStore.cs`**, **`CtLogWriter.cs`** — persistencia local (ver secciones correspondientes).
+- **`OptionsTrader.WinForms/DailyChartForm.cs`** — ventana "Daily" (velas diarias, T-Line propia mirroreada, checkboxes D.PM/D40/D100/D200, botones SMA Watch).
+- **`OptionsTrader.WinForms/TwoPanelChartsControl.cs`** — Charts tab embebido en Form1 (2 paneles, grid de trades/opciones propio).
 - **`OptionsTrader.WinForms/FourEtfChartsForm.cs`** — ventana "Block Mov".
 - **`OptionsTrader.WinForms/FourEtfSimulatorForm.cs`** — ventana "Sim 4 ETF" (repetición offline, distinta de "Block Mov").
 - **`OptionsTrader.WinForms/ChartAssets/`** — `lightweight-charts.js` (v4.1.3, local, sin CDN) + `chart.html` (todo el JS del chart: indicadores, dibujo, líneas, vista Daily).
@@ -124,4 +128,4 @@ Al registrar un trade (demo o real, punto único de convergencia: `Form1.RecordE
 
 1. Confirmar los números de campo de `LEVEL_ONE_EQUITIES` (`3`, `35`) contra `ws_raw.log` con tráfico real — comparar `TickPriceStore` vs `LevelOneTickStore` vs precio real (ej. ThinkorSwim) para decidir si el `Close` en vivo debería basarse 100% en L1.
 2. Mover DIA/IWM de "agregados a mano" a la tabla de Tickers real.
-3. ~~Simulador offline (fase 2) sobre los ticks capturados~~ — implementado: ver el Simulador individual (`SimulatorForm.cs`) y "Sim 4 ETF" (`FourEtfSimulatorForm.cs`, §10), documentados en detalle en [`SIMULADOR_TELEGRAM_Y_REGISTRO.md`](SIMULADOR_TELEGRAM_Y_REGISTRO.md).
+3. ~~Simulador offline (fase 2) sobre los ticks capturados~~ — implementado: ver el Simulador individual (`SimulatorForm.cs`) y "Sim 4 ETF" (`FourEtfSimulatorForm.cs`, §10), documentados en detalle en [`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md).

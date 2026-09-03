@@ -1,6 +1,6 @@
 # Plan: opciones en vivo por WebSocket (`LEVELONE_OPTIONS`)
 
-Investigación + plan para agregar un modo "WebSocket" al grid de OptionsChain, como alternativa al polling REST actual (cada 6s). **No implementado todavía** — este documento es la referencia para cuando se arranque.
+Investigación + plan para agregar un modo "WebSocket" al grid de OptionsChain, como alternativa al polling REST actual (intervalo configurable por símbolo, 6s por defecto — ver `TickerSettingsStore.PollingIntervalSeconds`). El número de strikes por lado (`strikeCount`) también es configurable por símbolo (`TickerSettingsStore.StrikeCount`, default 40) — cualquier tamaño de fallback REST que se planee para este modo WebSocket debe tomar ese valor en vez de un número fijo. **No implementado todavía** — este documento es la referencia para cuando se arranque.
 
 ---
 

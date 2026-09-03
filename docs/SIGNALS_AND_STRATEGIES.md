@@ -7,7 +7,7 @@ streaming/WebSocket — acá solo se documenta la LÓGICA DE DETECCIÓN de cada 
 
 Todas estas señales viven en **`ChartPanel.cs`** (app en vivo) con una copia deliberadamente
 separada (no heredada, no compartida) en **`SimulatedChartPanel.cs`** (Simulador) — ver
-[`SIMULADOR_TELEGRAM_Y_REGISTRO.md`](SIMULADOR_TELEGRAM_Y_REGISTRO.md) para el porqué de esa
+[`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md) para el porqué de esa
 duplicación intencional.
 
 ---
@@ -17,7 +17,7 @@ duplicación intencional.
 Removido del Live Chart en vivo (los 4 pares de toggles ↑/↓ y la lógica que los maneja se sacaron
 de `ChartPanel.cs`/`MultiChartForm.cs`). La misma mecánica sigue viva únicamente en el
 **Simulador** (`SimulatorForm.cs`/`SimulatedChartPanel.cs` — ver
-[`SIMULADOR_TELEGRAM_Y_REGISTRO.md`](SIMULADOR_TELEGRAM_Y_REGISTRO.md) §2), sin equivalente en la
+[`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md) §2), sin equivalente en la
 app en vivo. Monitores manuales activables por botón (↑/↓ × SMA 20/40/100/200). Al armar un
 monitor:
 
@@ -84,6 +84,11 @@ Cada resolución dispara Telegram + `EventLogStore.Append(..., "PisoTechoCruce"/
 "Piso"/"Techo", ...)` y el evento C# `OnPisoTechoResolvedEvent(evento, pisoTecho)`, que
 `MultiChartForm` usa como disparador de la vigilancia de Bollinger en 15m RTH (ver §5).
 
+**Diseño explícito — la etiqueta se queda en pantalla aunque se rompa:** si el precio abre por
+debajo de un "Piso" (o por encima de un "Techo"), el watch interno se invalida y se limpia
+(`InvalidateIfBrokenByOpen`), pero la etiqueta visual "Piso"/"Techo" en el chart **NO se quita** —
+queda visible el resto de la sesión RTH, por pedido explícito, aunque el precio ya la haya cruzado.
+
 ## 3. Rebote en Zona de Demanda — panel 15m RTH+Overnight
 
 El usuario dibuja manualmente una Zona de Demanda con la herramienta DZ/SZ (2 clicks → 2 líneas:
@@ -127,6 +132,26 @@ lado de AMBAS referencias (T-Line y SMA20) — un cruce simultáneo y limpio de 
 En el panel 1h dispara Telegram con la imagen combinada de los 3 charts
 (`MultiChartForm.SendTLineSignalTelegramPushAsync`, no el panel individual) + `EventLogStore`. En
 15m RTH es solo un evento en pantalla (`OnTLineSignalEvent`), sin push propio.
+
+**Registro de creación vs. resolución (`CtRecordStore`/`CtLogWriter`):** además de `EventLogStore`,
+cada T-Line dibujada (en cualquiera de sus 3 fuentes — panel 1h, panel 15m RTH, o el Daily popup,
+ver abajo) crea un registro "Pendiente" en `CtRecordStore` en el momento en que se dibuja, que luego
+se actualiza EN EL MISMO REGISTRO (no se agrega uno nuevo) cuando resuelve — a "Alza"/"Baja" si
+rompe, o a "EliminadoSinResolver" si se borra antes de resolver. Es un único archivo JSON global por
+PC (`C:\OptionsData\EventLog\ct_records_{MachineName}.json`, no rotado por día ni símbolo), del cual
+`CtLogWriter` regenera automáticamente una nota `.md` completa cada vez que cambia algo.
+
+**Tercera fuente de T-Line — Daily popup:** `DailyChartForm` (ver
+[`LIVE_CHART_STREAMING.md`](LIVE_CHART_STREAMING.md)) también tiene su propia herramienta T-Line en
+sus tabs "Hora"/"15 Min" (tags "DailyHora"/"Daily15Min" en `TLineStore`), que se mirrorea
+automáticamente hacia el panel 1h/15m RTH del Live Chart correspondiente — dibujarla o borrarla ahí
+también dibuja/borra la copia en el Live Chart, y viceversa no aplica (es de una sola vía, Daily →
+Live Chart).
+
+**Charts tab embebido — panel 2 independiente:** el Charts tab (`TwoPanelChartsControl`, ver
+[`LIVE_CHART_ANALYSIS.md`](../LIVE_CHART_ANALYSIS.md)) también evalúa T-Line + SMA20 en su propio
+panel 2 (15m RTH), de forma independiente a su panel 1 (1h) — mismo detector, misma fórmula, mismo
+registro en `CtRecordStore`/Telegram, cada panel con sus propias líneas.
 
 ## 5. "Abriendo la Volatilidad" (Bollinger Bands) — panel 15m RTH
 
@@ -191,8 +216,12 @@ Telegram ni se registra en `EventLogStore` — es solo una pista visual al abrir
 - **`OptionsTrader.WinForms/ChartPanel.cs`** — todas las detecciones §1-§6 (app en vivo).
 - **`OptionsTrader.WinForms/SimulatedChartPanel.cs`** — copia ported de §1, §2, §3, §4 y §5 (sin
   Telegram, log-only) para el Simulador — ver
-  [`SIMULADOR_TELEGRAM_Y_REGISTRO.md`](SIMULADOR_TELEGRAM_Y_REGISTRO.md).
+  [`SIMULATOR_TELEGRAM_AND_LOGGING.md`](SIMULATOR_TELEGRAM_AND_LOGGING.md).
 - **`OptionsTrader.WinForms/MultiChartForm.cs`** — orquesta el puente entre paneles (Piso/Techo en
   1h → arma Bollinger en 15m RTH) y el push de T-Line con el snapshot combinado.
+- **`OptionsTrader.WinForms/TwoPanelChartsControl.cs`** — Charts tab embebido, evalúa T-Line + SMA20
+  en su propio panel 2 (15m RTH) de forma independiente.
 - **`OptionsTrader.WinForms/EventLogStore.cs`** — CSV acumulativo de todos los eventos
   (`C:\OptionsData\EventLog\events_log.csv`).
+- **`OptionsTrader.WinForms/CtRecordStore.cs`** / **`CtLogWriter.cs`** — registro global de creación
+  vs. resolución de cada T-Line (JSON + nota `.md` regenerada).
