@@ -1,0 +1,112 @@
+<svg viewBox="0 0 1920 1920" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#888"/>
+    </marker>
+    <marker id="arrowStart" markerWidth="10" markerHeight="10" refX="1" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M9,0 L9,6 L0,3 z" fill="#888"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1920" height="1920" fill="#ffffff"/>
+
+  <!-- External label -->
+  <text x="260" y="75" font-size="26" fill="#333">External</text>
+
+  <!-- Broker API box -->
+  <rect x="80" y="105" width="380" height="150" rx="14" fill="#fdebd0" stroke="#e5a63b" stroke-width="1.5"/>
+  <text x="270" y="165" font-size="30" font-weight="bold" text-anchor="middle" fill="#7a4a10">Broker API</text>
+  <text x="270" y="200" font-size="22" text-anchor="middle" fill="#a06a20">Schwab / external</text>
+
+  <!-- AWS Cloud dashed container -->
+  <rect x="870" y="65" width="960" height="1120" rx="20" fill="none" stroke="#e5a63b" stroke-width="2.5" stroke-dasharray="10 8"/>
+  <text x="905" y="105" font-size="26" font-weight="bold" fill="#333">AWS Cloud</text>
+
+  <!-- EC2 Backend dashed container -->
+  <rect x="905" y="140" width="400" height="440" rx="16" fill="none" stroke="#e5a63b" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="925" y="175" font-size="22" fill="#333">EC2 — Backend</text>
+
+  <!-- Backend API box -->
+  <rect x="930" y="200" width="350" height="130" rx="14" fill="#dbe9f9" stroke="#4a86c9" stroke-width="1.5"/>
+  <text x="1105" y="255" font-size="28" font-weight="bold" text-anchor="middle" fill="#1c4a7a">Backend API</text>
+  <text x="1105" y="290" font-size="20" text-anchor="middle" fill="#2c6099">REST / .NET Core</text>
+
+  <!-- Arrow Backend API <-> Database -->
+  <line x1="1105" y1="335" x2="1105" y2="385" stroke="#888" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrowStart)"/>
+
+  <!-- Database box -->
+  <rect x="930" y="390" width="350" height="130" rx="14" fill="#e6e0f7" stroke="#7b5fc7" stroke-width="1.5"/>
+  <text x="1105" y="445" font-size="28" font-weight="bold" text-anchor="middle" fill="#3c2a70">Database</text>
+  <text x="1105" y="480" font-size="20" text-anchor="middle" fill="#5b45a0">SQL Server</text>
+
+  <!-- EC2 Frontend dashed container -->
+  <rect x="1345" y="140" width="400" height="440" rx="16" fill="none" stroke="#e5a63b" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="1365" y="175" font-size="22" fill="#333">EC2 — Frontend</text>
+
+  <!-- Frontend App box -->
+  <rect x="1385" y="210" width="320" height="330" rx="14" fill="#fbe0da" stroke="#c9694a" stroke-width="1.5"/>
+  <text x="1545" y="345" font-size="30" font-weight="bold" text-anchor="middle" fill="#7a2e14">Frontend App</text>
+  <text x="1545" y="385" font-size="22" text-anchor="middle" fill="#a04a2c">Angular</text>
+  <text x="1545" y="415" font-size="22" text-anchor="middle" fill="#a04a2c">EC2 hosted</text>
+
+  <!-- Backend API <-> Frontend App arrow -->
+  <line x1="1280" y1="260" x2="1385" y2="260" stroke="#888" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrowStart)"/>
+
+  <!-- Amazon S3 box -->
+  <rect x="1005" y="740" width="420" height="150" rx="14" fill="#d9f0e6" stroke="#3ba17a" stroke-width="1.5"/>
+  <text x="1215" y="800" font-size="28" font-weight="bold" text-anchor="middle" fill="#155c42">Amazon S3</text>
+  <text x="1215" y="835" font-size="22" text-anchor="middle" fill="#2a7d5c">Image storage</text>
+
+  <!-- Dashed arrows Backend/Frontend <-> S3 -->
+  <line x1="1105" y1="580" x2="1105" y2="735" stroke="#aaa" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)" marker-start="url(#arrowStart)"/>
+  <line x1="1400" y1="580" x2="1400" y2="735" stroke="#aaa" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)" marker-start="url(#arrowStart)"/>
+
+  <!-- Solid arrow Backend API down to PC -->
+  <line x1="945" y1="580" x2="945" y2="1145" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 2-Way label near S3 -->
+  <text x="1010" y="1020" font-size="24" fill="#333">2-Way</text>
+
+  <!-- HTTP/S label near Frontend -->
+  <text x="1330" y="1160" font-size="24" fill="#333">HTTP/S</text>
+
+  <!-- Solid arrow Frontend App down to PC -->
+  <line x1="1495" y1="580" x2="1495" y2="1145" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Left side: 2-Way (MarketData, Trades, Accounts) label -->
+  <text x="170" y="895" font-size="24" text-anchor="middle" fill="#333">2-Way</text>
+  <text x="170" y="925" font-size="24" text-anchor="middle" fill="#333">(MarketData,</text>
+  <text x="170" y="955" font-size="24" text-anchor="middle" fill="#333">Trades,</text>
+  <text x="170" y="985" font-size="24" text-anchor="middle" fill="#333">Accounts)</text>
+
+  <!-- Vertical + horizontal line from Broker API down to Windows App -->
+  <path d="M270,255 V1260 H465" fill="none" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- PC / User dashed container -->
+  <rect x="430" y="1145" width="1010" height="470" rx="20" fill="none" stroke="#888" stroke-width="2"/>
+  <text x="465" y="1195" font-size="26" font-weight="bold" fill="#333">PC / User</text>
+
+  <!-- Windows App box -->
+  <rect x="465" y="1215" width="370" height="160" rx="14" fill="#eeeeee" stroke="#999" stroke-width="1.5"/>
+  <text x="650" y="1280" font-size="28" font-weight="bold" text-anchor="middle" fill="#333">Windows App</text>
+  <text x="650" y="1320" font-size="22" text-anchor="middle" fill="#555">.NET</text>
+
+  <!-- Path from Backend API arrow into Windows App -->
+  <path d="M945,1145 V1215" fill="none" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Web Browser box -->
+  <rect x="895" y="1215" width="410" height="160" rx="14" fill="#e2efd8" stroke="#6a9c4a" stroke-width="1.5"/>
+  <text x="1100" y="1280" font-size="28" font-weight="bold" text-anchor="middle" fill="#2c4a1a">Web Browser</text>
+  <text x="1100" y="1315" font-size="22" text-anchor="middle" fill="#456b30">Chrome / Edge</text>
+  <text x="1100" y="1345" font-size="22" text-anchor="middle" fill="#456b30">HTTP / HTTPS</text>
+
+  <!-- Path from Frontend App arrow into Web Browser -->
+  <path d="M1495,1145 V1215" fill="none" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Legend -->
+  <line x1="80" y1="1750" x2="180" y2="1750" stroke="#888" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrowStart)"/>
+  <text x="200" y="1758" font-size="24" fill="#333">Bidirectional communication</text>
+
+  <line x1="80" y1="1810" x2="180" y2="1810" stroke="#aaa" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)" marker-start="url(#arrowStart)"/>
+  <text x="200" y="1818" font-size="24" fill="#333">Resource read (S3)</text>
+</svg>
