@@ -8,6 +8,16 @@ namespace OptionsTrader.WinForms;
 // Single window (one per ticker) hosting the 3 live-chart panels (1h / 15m RTH / 15m
 // RTH+Overnight) side by side horizontally.
 //
+// Panel 1 (1h) + panel 2 (15m RTH), their own toolbars, and every event wiring that only ever
+// involves those two panels now live in TwoPanelChartsControl (see that file) — extracted into a
+// real UserControl so it can ALSO be embedded directly on Form1's "Charts" tab with correct
+// keyboard routing (a nested non-top-level Form, which this window used to be embedded as there,
+// can't receive keys like Delete on its WebView2 controls). This form still owns panel 3 (15m
+// RTH+Overnight) directly, plus everything that necessarily spans all 3 panels (Telegram pushes
+// using the combined 3-chart screenshot, cross-panel mirroring of H-Lines/strike lines/ATH, the
+// shared event log, the mirrored options/trades grids) — none of which panel 3-less embedded
+// usages need.
+//
 // historyClient is used only for one-off REST history fetches (no per-account limit on that —
 // every app instance/process can freely call it). liveFeed is the actual source of live ticks:
 // in the app instance that owns the one Schwab streaming connection allowed per account (the
@@ -21,46 +31,25 @@ public class MultiChartForm : Form
     private readonly string _symbol;
     private readonly Form1 _form1;
 
-    // Kept for CaptureCombinedChartImageAsync (trade snapshot) — same 3 instances the
-    // constructor's local variables of the same names point to, just also reachable afterward.
-    private ChartPanel? _hourlyPanel;
-    private ChartPanel? _rthPanel;
+    // Panel 1 (1h) + panel 2 (15m RTH), their toolbars and own event wiring — see
+    // TwoPanelChartsControl. Kept as a field for CaptureCombinedChartImageAsync (trade snapshot)
+    // and every public method below that reaches into panel 1/2.
+    private TwoPanelChartsControl _twoPanelControl = null!;
+
+    // Convenience aliases so the rest of this class (largely unchanged from before the panel 1/2
+    // extraction) can keep referring to "_hourlyPanel"/"_rthPanel" as before.
+    private ChartPanel? _hourlyPanel => _twoPanelControl.HourlyPanel;
+    private ChartPanel? _rthPanel => _twoPanelControl.RthPanel;
+
+    // Kept for CaptureCombinedChartImageAsync (trade snapshot) — same instance the constructor's
+    // local variable of the same name points to, just also reachable afterward.
     private ChartPanel? _overnightPanel;
 
-    // Kept for LogWebSocketEvent (Form1 forwards WS connect/disconnect/reconnect events here,
-    // since the hub's Schwab connection isn't owned by this window).
-    private TextBox? _crossLog;
-
-    // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
-    // GetQuoteSnapshot) — clicking Strike forwards into Form1.TriggerQuoteStrikeClick, which runs
-    // the exact same click handler Form1's own grid would (same currently-selected trade mode).
-    private readonly DataGridView _dgvOptions = new()
-    {
-        Dock = DockStyle.Fill,
-        AllowUserToAddRows = false,
-        AllowUserToDeleteRows = false,
-        RowHeadersVisible = false,
-        ReadOnly = true,
-        Font = new Font("Segoe UI", 8F),
-        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
-        ColumnHeadersHeight = 24,
-        SelectionMode = DataGridViewSelectionMode.FullRowSelect
-    };
-
-    // Trades grid mirrored from Form1's own dgvTrades (see Form1.OnTradesUpdatedEvent /
-    // GetTradesGrid) — full read-only copy of values + per-cell colors every refresh; Close button
-    // forwards into Form1.TriggerTradeCloseClick, same handler Form1's own grid uses.
-    private readonly DataGridView _dgvTrades = new()
-    {
-        Dock = DockStyle.Fill,
-        AllowUserToAddRows = false,
-        AllowUserToDeleteRows = false,
-        RowHeadersVisible = false,
-        Font = new Font("Segoe UI", 8F),
-        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
-        ColumnHeadersHeight = 24,
-        SelectionMode = DataGridViewSelectionMode.FullRowSelect
-    };
+    // The mirrored options grid ("Hoy"/"Próxima" tabs) and mirrored trades grid both moved into
+    // TwoPanelChartsControl (see that file) — they're not panel-1/2-specific in what they show,
+    // but Form1's Charts tab (which only ever constructs a TwoPanelChartsControl, no MultiChartForm)
+    // needs them too, so there's exactly one implementation instead of two. _twoPanelControl adds
+    // them to ITS OWN Controls (Dock=Right / Dock=Bottom) — nothing left to declare here.
 
     public MultiChartForm(string symbol, SchwabStreamerClient historyClient, ICandleFeed liveFeed, Form1 form1)
     {
@@ -75,278 +64,83 @@ public class MultiChartForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         BackColor     = SystemColors.Control; // visible in the gaps between/around the 3 panels
 
-        // Toolbar strip on top — same 3-column layout as the charts below, so each column's
-        // controls line up with the chart panel directly beneath it.
-        var toolbar = new TableLayoutPanel
-        {
-            Dock        = DockStyle.Top,
-            Height      = 88,
-            ColumnCount = 3,
-            RowCount    = 1,
-            Padding     = new Padding(6, 4, 6, 0)
-        };
-        // 2:2:3 ratio (of 7 total) — 1h and 15m RTH stay equal, RTH+Overnight is 50% wider than
-        // them (3 vs 2), so the price action there reads more clearly.
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
-        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
-        toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        // Panel 1 (1h) + panel 2 (15m RTH) — own toolbar, own chart layout, own event log — see
+        // TwoPanelChartsControl. hourlyPanel/rthPanel aliases kept below so the rest of this
+        // constructor (largely unchanged) can keep referring to them exactly as before.
+        _twoPanelControl = new TwoPanelChartsControl(symbol, historyClient, liveFeed, form1) { Dock = DockStyle.Fill };
+        // This window sends its own Piso/Techo Telegram push below (3-panel image) — see
+        // SendPisoTechoTelegramPushAsync — so the control's own 2-panel-only push must stay silent.
+        _twoPanelControl.SuppressOwnTelegramPushes = true;
+        var hourlyPanel = _twoPanelControl.HourlyPanel;
+        var rthPanel = _twoPanelControl.RthPanel;
 
-        var layout = new TableLayoutPanel
+        // Outer layout: column 0 hosts panel 1+2 (TwoPanelChartsControl), column 1 hosts panel 3
+        // (15m RTH+Overnight)'s own toolbar+chart — same 400:300 (of 700) ratio the original
+        // 3-column layout gave panels 1+2 combined (200+200) vs panel 3 (300).
+        var outerLayout = new TableLayoutPanel
         {
             Dock        = DockStyle.Fill,
-            ColumnCount = 3,
-            RowCount    = 1,
-            Padding     = new Padding(6, 2, 6, 6)
+            ColumnCount = 2,
+            RowCount    = 1
         };
-        // Same 2:2:3 ratio as the toolbar above, so each column still lines up with its buttons.
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        outerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 400f / 7));
+        outerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
+        outerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        outerLayout.Controls.Add(_twoPanelControl, 0, 0);
 
-        ChartPanel? overnightPanel = null;
-        ChartPanel? hourlyPanel = null;
-        ChartPanel? rthPanel = null;
-        var modes = new[] { ChartPanelMode.Hourly15, ChartPanelMode.Fifteen_RTH, ChartPanelMode.Fifteen_Full };
-        for (int i = 0; i < modes.Length; i++)
+        var panel3Host = new Panel { Dock = DockStyle.Fill };
+        outerLayout.Controls.Add(panel3Host, 1, 0);
+
+        // Panel 3 (15m RTH+Overnight) — shares historyClient/liveFeed with panel 1/2, only ever
+        // reads events / calls the stateless REST history method, never their connection state.
+        ChartPanel? overnightPanel = new ChartPanel(symbol, _historyClient, _liveFeed, ChartPanelMode.Fifteen_Full)
         {
-            // All 3 panels share the SAME historyClient/liveFeed — they only ever read events /
-            // call the stateless REST history method, never each other's connection state.
-            var panel = new ChartPanel(symbol, _historyClient, _liveFeed, modes[i])
-            {
-                Dock   = DockStyle.Fill,
-                Margin = new Padding(6, 2, 6, 6)
-            };
-            layout.Controls.Add(panel, i, 0);
-            if (modes[i] == ChartPanelMode.Fifteen_Full) overnightPanel = panel;
-            if (modes[i] == ChartPanelMode.Hourly15) hourlyPanel = panel;
-            if (modes[i] == ChartPanelMode.Fifteen_RTH) rthPanel = panel;
-        }
-        _hourlyPanel    = hourlyPanel;
-        _rthPanel       = rthPanel;
+            Dock = DockStyle.Fill
+        };
         _overnightPanel = overnightPanel;
 
-        // T-Line / H-Line drawing tools for the 1h panel (column 0). T-Line and H-Line share the
-        // top row (side by side); Clear/Rect sit below, arrows + Daily on the third row.
-        var crossHost = new Panel { Dock = DockStyle.Fill };
-        var btnTLine = new Button
+        // Shared ATH checkbox lives on panel 1/2's own toolbar (TwoPanelChartsControl) and already
+        // toggles panel 1/2 there — this extra handler also toggles panel 3, reproducing the
+        // original single-handler's "toggle all 3 at once" behavior.
+        _twoPanelControl.AthCheckBox.CheckedChanged += async (s, e) =>
         {
-            Text     = "T-Line",
-            Location = new Point(0, 2),
-            Size     = new Size(60, 24)
-        };
-        btnTLine.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleTLineModeAsync();
-            btnTLine.BackColor = on ? Color.Orange : SystemColors.Control;
+            if (overnightPanel != null) await overnightPanel.SetAllTimeHighVisibleAsync(_twoPanelControl.AthCheckBox.Checked);
         };
 
-        var btnHourlyClear = new Button
+        // Shared H-Line button (panel 2's toolbar) — the control's own Click handler (subscribed
+        // first) toggles panel 1/2 and sets an interim button color from panel 2's result; this
+        // extra handler toggles panel 3 and overwrites the color with ITS result, reproducing the
+        // original single-handler's "last panel toggled wins the button color" behavior (panel 3
+        // was toggled last there too).
+        _twoPanelControl.HLineButton.Click += async (s, e) =>
         {
-            Text     = "Clear",
-            Location = new Point(0, 30),
-            Size     = new Size(60, 24)
+            if (overnightPanel == null) return;
+            var on = await overnightPanel.ToggleHLineModeAsync();
+            _twoPanelControl.HLineButton.BackColor = on ? Color.LightSalmon : SystemColors.Control;
         };
 
-        // Filled gray rectangle marking sideways/consolidation ranges around price+SMAs. Click
-        // its border to select (yellow outline), then press Delete to remove just that one.
-        var btnRectGris = new Button
+        // Shared Text button (panel 2's toolbar) — same split pattern as H-Line above.
+        _twoPanelControl.TextButton.Click += async (s, e) =>
         {
-            Text     = "Rect",
-            Location = new Point(66, 30),
-            Size     = new Size(60, 24)
+            if (overnightPanel == null) return;
+            var on = await overnightPanel.ToggleTextModeAsync(_twoPanelControl.ChartTextTextBox.Text);
+            _twoPanelControl.TextButton.BackColor = on ? Color.LightBlue : SystemColors.Control;
         };
-        btnRectGris.Click += async (s, e) =>
+        // When panel 1 or 2 places the text, also disarm panel 3 — mirrors the original 3-way
+        // disarm-the-others-on-placement behavior.
+        _twoPanelControl.OnTextPlaced += placedOn =>
         {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleRectGrisModeAsync();
-            btnRectGris.BackColor = on ? Color.LightGray : SystemColors.Control;
+            if (overnightPanel != null && overnightPanel != placedOn) _ = overnightPanel.ToggleTextModeAsync(string.Empty);
         };
+        // When panel 3 places the text, disarm panel 1/2 (both, since neither equals panel 3) and
+        // reset the shared button — via the control's own internal disarm logic, same as it runs
+        // for its own panels' placements.
+        if (overnightPanel != null)
+            overnightPanel.OnTextPlacedEvent += () => _twoPanelControl.DisarmTextModeExcept(overnightPanel);
 
-        // Single-click vertical arrows: green points up, red points down, tip at the click point.
-        // Click the shaft to select (yellow dashed overlay), Delete removes it.
-        var btnFlechaVerde = new Button
-        {
-            Text     = "↑ Verde",
-            Location = new Point(0, 56),
-            Size     = new Size(60, 24)
-        };
-        var btnFlechaRoja = new Button
-        {
-            Text     = "↓ Roja",
-            Location = new Point(66, 56),
-            Size     = new Size(60, 24)
-        };
-        btnFlechaVerde.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleFlechaVerdeModeAsync();
-            btnFlechaVerde.BackColor = on ? Color.LightGreen : SystemColors.Control;
-        };
-        btnFlechaRoja.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            var on = await hourlyPanel.ToggleFlechaRojaModeAsync();
-            btnFlechaRoja.BackColor = on ? Color.LightSalmon : SystemColors.Control;
-        };
-
-        btnHourlyClear.Click += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            await hourlyPanel.ClearDrawingsAsync();
-            btnTLine.BackColor = SystemColors.Control;
-            btnRectGris.BackColor = SystemColors.Control;
-            btnFlechaVerde.BackColor = SystemColors.Control;
-            btnFlechaRoja.BackColor = SystemColors.Control;
-        };
-
-        // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
-        // days of persisted hourly history) and plain Hourly candles.
-        var btnDaily = new Button
-        {
-            Text     = "Daily",
-            Location = new Point(132, 56),
-            Size     = new Size(70, 24)
-        };
-        // Opens a separate window with its own fresh WebView2 instead of toggling in place on
-        // this panel's own chart — see DailyChartForm's own comment for why (an unresolved
-        // rendering bug in the in-place toggle: correct data/axis range, but candles stayed
-        // invisible until a manual scroll).
-        btnDaily.Click += (s, e) =>
-        {
-            var dailyCandles = ChartPanel.GetLastDailyCandles(_symbol, 250); // enough for SMA100/200 to have data
-            new DailyChartForm(_symbol, dailyCandles).Show();
-        };
-
-        // Dashed vertical lines separating the 7 hourly candles of each trading day (last 4 lines
-        // = last 5 days; today's candles sit unbounded to the right of the most recent one).
-        var chkDayDividers = new CheckBox { Text = "Día", Location = new Point(208, 60), AutoSize = true, Checked = true };
-        chkDayDividers.CheckedChanged += async (s, e) =>
-        {
-            if (hourlyPanel == null) return;
-            await hourlyPanel.ToggleDayDividersAsync();
-        };
-
-        // Shows/hides the ATH reference line — drawn on all 3 panels, so this single checkbox
-        // toggles all 3 at once instead of needing one per panel.
-        var chkAth = new CheckBox { Text = "ATH", Location = new Point(208, 78), AutoSize = true, Checked = true };
-        chkAth.CheckedChanged += async (s, e) =>
-        {
-            if (hourlyPanel != null) await hourlyPanel.SetAllTimeHighVisibleAsync(chkAth.Checked);
-            if (rthPanel != null) await rthPanel.SetAllTimeHighVisibleAsync(chkAth.Checked);
-            if (overnightPanel != null) await overnightPanel.SetAllTimeHighVisibleAsync(chkAth.Checked);
-        };
-
-        crossHost.Controls.Add(btnTLine);
-        crossHost.Controls.Add(btnHourlyClear);
-        crossHost.Controls.Add(btnRectGris);
-        crossHost.Controls.Add(btnFlechaVerde);
-        crossHost.Controls.Add(btnFlechaRoja);
-        crossHost.Controls.Add(btnDaily);
-        crossHost.Controls.Add(chkDayDividers);
-        crossHost.Controls.Add(chkAth);
-        toolbar.Controls.Add(crossHost, 0, 0);
-
-        // T-Line drawing tool for the 15m RTH panel (column 1) — no persistence like the 1h
-        // panel's T-Line, just draw + Clear for this session.
-        var rthToolsHost = new Panel { Dock = DockStyle.Fill };
-        var btnRthTLine = new Button
-        {
-            Text     = "T-Line",
-            Location = new Point(0, 4),
-            Size     = new Size(60, 24)
-        };
-        var btnRthHLine = new Button
-        {
-            Text     = "H-Line",
-            Location = new Point(66, 4),
-            Size     = new Size(60, 24)
-        };
-        var btnRthClear = new Button
-        {
-            Text     = "Clear",
-            Location = new Point(132, 4),
-            Size     = new Size(60, 24)
-        };
-        // Single "Text" button (above the 15m RTH panel, same convention as H-Line) arms
-        // text-placement mode on all 3 panels at once — no mirroring, each panel only places text
-        // where IT was clicked. Reads the Windows clipboard fresh each time this button is pressed.
-        var btnText = new Button
-        {
-            Text     = "Text",
-            Location = new Point(198, 4),
-            Size     = new Size(60, 24)
-        };
-        btnRthTLine.Click += async (s, e) =>
-        {
-            if (rthPanel == null) return;
-            var on = await rthPanel.ToggleTLineModeAsync();
-            btnRthTLine.BackColor = on ? Color.Orange : SystemColors.Control;
-        };
-        // Single H-Line button (above the 15m RTH panel) arms drawing on ALL 3 panels at once —
-        // the user can then click on whichever one they want and it mirrors onto the other 2 (see
-        // the OnHLineDrawnEvent wiring below), instead of needing a separate toggle per panel.
-        btnRthHLine.Click += async (s, e) =>
-        {
-            bool on = false;
-            if (hourlyPanel != null) on = await hourlyPanel.ToggleHLineModeAsync();
-            if (rthPanel != null) on = await rthPanel.ToggleHLineModeAsync();
-            if (overnightPanel != null) on = await overnightPanel.ToggleHLineModeAsync();
-            btnRthHLine.BackColor = on ? Color.LightSalmon : SystemColors.Control;
-        };
-        btnRthClear.Click += async (s, e) =>
-        {
-            if (rthPanel == null) return;
-            await rthPanel.ClearDrawingsAsync();
-            btnRthTLine.BackColor = SystemColors.Control;
-            btnRthHLine.BackColor = SystemColors.Control;
-            btnText.BackColor = SystemColors.Control;
-        };
-        btnText.Click += async (s, e) =>
-        {
-            bool on = false;
-            if (hourlyPanel != null) on = await hourlyPanel.ToggleTextModeAsync();
-            if (rthPanel != null) on = await rthPanel.ToggleTextModeAsync();
-            if (overnightPanel != null) on = await overnightPanel.ToggleTextModeAsync();
-            btnText.BackColor = on ? Color.LightBlue : SystemColors.Control;
-        };
-
-        // Brings every "Live Charts — <Symbol>" window to the front, across ALL running ticker
-        // instances (each is a separate OS process) — not just this one's own windows. Uses raw
-        // Win32 window enumeration (CrossProcessWindowHelper) since a normal BringToFront() can't
-        // reach windows owned by another process.
-        var btnBringAllForward = new Button
-        {
-            Text     = "Traer todas",
-            Location = new Point(0, 30),
-            Size     = new Size(126, 24)
-        };
-        btnBringAllForward.Click += (s, e) =>
-            CrossProcessWindowHelper.BringAllToFront("Live Charts — ");
-
-        // Shows/hides the white Bollinger-band edge markers on this panel — checked by default
-        // (matches the always-on behavior before this toggle existed).
-        var chkBollingerEdges = new CheckBox { Text = "BB edges", Location = new Point(132, 34), AutoSize = true, Checked = true };
-        chkBollingerEdges.CheckedChanged += async (s, e) =>
-        {
-            if (rthPanel == null) return;
-            await rthPanel.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
-        };
-
-        rthToolsHost.Controls.Add(btnRthTLine);
-        rthToolsHost.Controls.Add(btnRthHLine);
-        rthToolsHost.Controls.Add(btnRthClear);
-        rthToolsHost.Controls.Add(btnText);
-        rthToolsHost.Controls.Add(btnBringAllForward);
-        rthToolsHost.Controls.Add(chkBollingerEdges);
-        toolbar.Controls.Add(rthToolsHost, 1, 0);
-
-        // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in the
-        // toolbar column above that panel (column index 2, matching Fifteen_Full's position in
-        // the layout below). A plain Dock=Fill Panel holds them so Clear can anchor to the right.
-        var toolsHost = new Panel { Dock = DockStyle.Fill };
+        // Drawing tools — all only apply to the 15m RTH+Overnight panel, so they live in panel 3's
+        // own toolbar strip, docked above its chart within panel3Host.
+        var toolsHost = new Panel { Dock = DockStyle.Top, Height = 88, Padding = new Padding(6, 4, 6, 0) };
 
         var btnDzSz = new Button
         {
@@ -390,15 +184,6 @@ public class MultiChartForm : Form
         {
             Text     = "5Min",
             Location = new Point(0, 30),
-            Size     = new Size(70, 24)
-        };
-
-        // Draws a line + arrowhead between 2 clicks — red if the 1st click is above the 2nd,
-        // green otherwise. Same toggle pattern as the rest.
-        var btnArrow = new Button
-        {
-            Text     = "Arrow",
-            Location = new Point(76, 30),
             Size     = new Size(70, 24)
         };
 
@@ -457,14 +242,17 @@ public class MultiChartForm : Form
             var on = await overnightPanel.ToggleRectModeAsync();
             btnRect.BackColor = on ? Color.LightSkyBlue : SystemColors.Control;
         };
+        // chart.html auto-disarms the rect tool itself once the 2nd click completes one — per
+        // explicit request, reset the button color to match instead of staying armed-looking.
+        if (overnightPanel != null) overnightPanel.OnRectPlacedEvent += () => btnRect.BackColor = SystemColors.Control;
         btnClear.Click += async (s, e) =>
         {
             if (overnightPanel == null) return;
             await overnightPanel.ClearDrawingsAsync();
             btnDzSz.BackColor = SystemColors.Control;
             btnRect.BackColor = SystemColors.Control;
-            btnArrow.BackColor = SystemColors.Control;
-            btnRthHLine.BackColor = SystemColors.Control;
+            _twoPanelControl.ArrowButton.BackColor = SystemColors.Control;
+            _twoPanelControl.HLineButton.BackColor = SystemColors.Control;
         };
         btn5Min.Click += async (s, e) =>
         {
@@ -472,11 +260,15 @@ public class MultiChartForm : Form
             var is5Min = await overnightPanel.ToggleIntervalAsync();
             btn5Min.BackColor = is5Min ? Color.LightBlue : SystemColors.Control;
         };
-        btnArrow.Click += async (s, e) =>
+        // Panel-3 half of the shared diagonal Arrow arm/disarm — TwoPanelChartsControl's own Click
+        // handler (attached first) toggles panel 1/2; this extra handler on the SAME button also
+        // toggles panel 3, same "sequential toggle → last result wins the button color" behavior
+        // as HLineButton/TextButton above (panel 3 was toggled last there too).
+        _twoPanelControl.ArrowButton.Click += async (s, e) =>
         {
             if (overnightPanel == null) return;
             var on = await overnightPanel.ToggleArrowModeAsync();
-            btnArrow.BackColor = on ? Color.LightYellow : SystemColors.Control;
+            _twoPanelControl.ArrowButton.BackColor = on ? Color.LightYellow : SystemColors.Control;
         };
         btnStopPush.Click += (s, e) => overnightPanel?.StopAutoZonePush();
 
@@ -485,55 +277,84 @@ public class MultiChartForm : Form
         toolsHost.Controls.Add(chkAws);
         toolsHost.Controls.Add(btnClear);
         toolsHost.Controls.Add(btn5Min);
-        toolsHost.Controls.Add(btnArrow);
         toolsHost.Controls.Add(btnStopPush);
         toolsHost.Controls.Add(chkTelegramEvents);
         toolsHost.Controls.Add(lblLiveTick);
-        toolbar.Controls.Add(toolsHost, 2, 0);
 
-        // Small event log below the charts — logs Cross-SMA cruce/rebote detections (so the
-        // Telegram-push feature can be sanity-checked without digging through Telegram itself)
-        // and, via LogWebSocketEvent, WS connect/disconnect/reconnect events forwarded from
-        // Form1's hub connection. Temporary/diagnostic for now.
-        var crossLog = new TextBox
-        {
-            Dock       = DockStyle.Bottom,
-            Height     = 90,
-            Multiline  = true,
-            ReadOnly   = true,
-            ScrollBars = ScrollBars.Vertical,
-            Font       = new Font("Consolas", 8.5F),
-            BackColor  = Color.Black,
-            ForeColor  = Color.LightGreen
-        };
+        // Chart host below the toolbar — Padding stands in for the TableLayoutPanel cell Margin
+        // panel 3's chart used to get from the original 3-column `layout` panel (Dock=Fill doesn't
+        // honor Margin on its own, only a container's Padding), same 6/2/6/6 gap.
+        var panel3ChartHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6, 2, 6, 6) };
+        panel3ChartHost.Controls.Add(overnightPanel);
+        panel3Host.Controls.Add(panel3ChartHost);
+        panel3Host.Controls.Add(toolsHost);
+
+        // T-Line Signal, SMA Cross, Daily Bounce (panel 1) and T-Line Signal, PM Cross (panel 2) —
+        // crossLog/log-only handling moved into TwoPanelChartsControl's own constructor (same
+        // standalone reasoning as the Piso/Techo wiring there), so it also works when the Charts
+        // tab runs without this popup at all. This window keeps ONLY its own Telegram pushes below,
+        // each with the full 3-panel image — TwoPanelChartsControl's own 2-panel pushes stay silent
+        // here via SuppressOwnTelegramPushes (set true right after constructing _twoPanelControl
+        // above). PM Cross has no separate Telegram push to keep (it's log+screenshot only) — its
+        // own copy inside TwoPanelChartsControl already no-ops here for the same reason.
         if (hourlyPanel != null)
         {
-            // T-Line + SMA20 breakout — pushes the combined 3-chart image, same as a trade close.
             hourlyPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
-                _ = SendTLineSignalTelegramPushAsync(message);
+                BeginInvoke(() => _ = SendTLineSignalTelegramPushAsync(message, "Hora"));
             };
 
-            // Daily-candle bounce off SMA20 — purely informational, log only (no Telegram, no
-            // automatic action; the user checks this window in the morning and acts manually).
-            hourlyPanel.OnDailyBounceEvent += message =>
+            hourlyPanel.OnSmaCrossEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => _ = SendSmaCrossTelegramPushAsync(message));
             };
         }
 
         if (rthPanel != null)
         {
-            // Panel 2's own T-Lines are independent from panel 1's — same breakout signal,
-            // evaluated against panel 2's own SMA20/candles, logged/pushed identically.
             rthPanel.OnTLineSignalEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
-                _ = SendTLineSignalTelegramPushAsync(message);
+                BeginInvoke(() => _ = SendTLineSignalTelegramPushAsync(message, "15Min"));
+            };
+
+            // "Cruce de vela con PM" — log-only, per explicit request: written directly to the
+            // per-symbol events .md with the combined 3-panel screenshot, never crossLog, never
+            // Telegram. Kept fully here (not split like the events above) since TwoPanelChartsControl's
+            // own copy is a single unified action, not a separate "log vs Telegram" pair — its copy
+            // already no-ops when hosted by this window (SuppressOwnTelegramPushes), so this is the
+            // only place it runs, same as before this control existed.
+            rthPanel.OnPmCrossEvent += caption =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(async () =>
+                {
+                    // The screenshot is a nice-to-have, not the event itself — a failed/timed-out
+                    // capture (e.g. a minimized window, see ChartPanel.CaptureImageAsync's timeout)
+                    // used to silently drop the WHOLE event here, with zero trace anywhere that a
+                    // PM cross even happened. Always log the text; only skip the image if capture
+                    // failed, same "never silently swallow" fix applied elsewhere this session.
+                    string? path = null;
+                    try
+                    {
+                        using var combined = await CaptureCombinedChartImageAsync();
+                        if (combined != null)
+                        {
+                            var folder = @"C:\OptionsTraderPush";
+                            Directory.CreateDirectory(folder);
+                            path = Path.Combine(folder, $"{_symbol}_PMCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                        }
+                    }
+                    catch
+                    {
+                        path = null; // best-effort — the event still gets logged below without an image
+                    }
+
+                    EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+                });
             };
         }
 
@@ -545,67 +366,48 @@ public class MultiChartForm : Form
             overnightPanel.OnDemandZoneReboundEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
 
             // Supply Zone rebote — symmetric counterpart, same self-contained pattern.
             overnightPanel.OnSupplyZoneReboundEvent += message =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
             };
 
             // Auto-push loop armed by either rebote above — fires on EVERY closed 15m candle from
             // then on, pushing the combined 3-chart snapshot each time, until "Stop Push" is
             // clicked (see btnStopPush) or a fresh rebote later re-arms it.
-            overnightPanel.OnAutoZonePushTickEvent += candle => _ = SendAutoZonePushAsync(candle);
+            // BeginInvoke — this event fires from Streamer_OnNewCandle's background (WebSocket)
+            // thread, and SendAutoZonePushAsync eventually touches CoreWebView2 (via
+            // CaptureCombinedChartImageAsync) — a direct call from that thread throws
+            // "CoreWebView2 can only be accessed from the UI thread.", surfaced as a Telegram push
+            // failure instead of an obvious crash (same threading bug class as the PM indicator/
+            // Piso-Techo events elsewhere in this file, all of which already marshal here).
+            overnightPanel.OnAutoZonePushTickEvent += candle =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => _ = SendAutoZonePushAsync(candle));
+            };
         }
 
-        // "Abriendo la Volatilidad": when the 1h panel resolves a Piso/Techo watch (any SMA
-        // period), arm the 15m RTH panel's Bollinger-widening watch in the direction the
-        // resolution implies price is now headed. Cruce en Techo (breaks up through resistance)
-        // and Rebote en Piso (bounces up off support) are both bullish/CALL (upper band). Cruce
-        // en Piso (breaks down through support) and Rebote en Techo (rejected down off
-        // resistance) are both bearish/PUT (lower band) — see
-        // ChartPanel.ArmVolatilityOpeningWatch/EvaluateVolatilityOpening. caption already carries
-        // the "evaluando Abriendo la Volatilidad (Alza/Baja)" suffix (ChartPanel.
-        // AppendVolatilityArmSuffix) — baked in at the source instead of appended here, so it can't
-        // be silently dropped for any resolution path (close-based, live gap-cross, etc).
-        if (hourlyPanel != null && rthPanel != null)
+        // "Abriendo la Volatilidad" (arming panel 2's watch) + crossLog for the 1h panel's own
+        // Piso/Techo Cruce/Rebote — wired inside TwoPanelChartsControl itself (see its constructor)
+        // so it also works when the Charts tab runs standalone, with no MultiChartForm popup at
+        // all; crossLog goes through the SAME textbox instance either way (AppendCrossLog delegates
+        // into _twoPanelControl.AppendLog), so it must not be duplicated here.
+        //
+        // Telegram push is the one exception kept here rather than moved: the popup's version needs
+        // the full 3-panel combined image (this window's own CaptureCombinedChartImageAsync), while
+        // TwoPanelChartsControl's own push (used when the Charts tab runs standalone) only has
+        // panel 1+2 to work with — per explicit request, the popup keeps working exactly as before.
+        if (hourlyPanel != null)
         {
             hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
             {
-                var bullish = pisoTecho == "Techo" ? evento == "Cruce" : evento == "Rebote";
-                rthPanel.ArmVolatilityOpeningWatch(bullish);
-
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
-                _ = SendPisoTechoTelegramPushAsync(caption);
-            };
-        }
-        else if (hourlyPanel != null)
-        {
-            hourlyPanel.OnPisoTechoResolvedEvent += (evento, pisoTecho, caption) =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {caption}{Environment.NewLine}"));
-                _ = SendPisoTechoTelegramPushAsync(caption);
-            };
-        }
-        if (rthPanel != null)
-        {
-            rthPanel.OnVolatilityOpeningEvent += message =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
-            };
-
-            // "Ya abiertas al armar" — informational heads-up, log-only, doesn't wait for the
-            // spot to actually touch a band (see ChartPanel.OnVolatilityAlreadyOpenEvent).
-            rthPanel.OnVolatilityAlreadyOpenEvent += message =>
-            {
-                if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}"));
+                BeginInvoke(() => _ = SendPisoTechoTelegramPushAsync(caption));
             };
         }
 
@@ -619,8 +421,12 @@ public class MultiChartForm : Form
             hourlyPanel.OnBollingerOpeningEvent += caption =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [1h] {caption}{Environment.NewLine}"));
-                _ = SaveBollingerOpeningSnapshotAsync(caption);
+                // BeginInvoke — same threading fix as OnTLineSignalEvent above (SaveBollingerOpeningSnapshotAsync also touches CoreWebView2).
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog($"{DateTime.Now:HH:mm:ss}  [1h] {caption}{Environment.NewLine}");
+                    _ = SaveBollingerOpeningSnapshotAsync(caption);
+                });
             };
         }
         if (rthPanel != null)
@@ -628,34 +434,19 @@ public class MultiChartForm : Form
             rthPanel.OnBollingerOpeningEvent += caption =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [15m RTH] {caption}{Environment.NewLine}"));
-                _ = SaveBollingerOpeningSnapshotAsync(caption);
+                BeginInvoke(() =>
+                {
+                    AppendCrossLog($"{DateTime.Now:HH:mm:ss}  [15m RTH] {caption}{Environment.NewLine}");
+                    _ = SaveBollingerOpeningSnapshotAsync(caption);
+                });
             };
         }
 
-        // "Expuesto en 3 charts" — premarket-only: on every premarket tick (fired from the 1h
-        // panel, see ChartPanel.OnPreMarketPriceUpdated), check whether that price broke the SAME
-        // side (upper or lower) of the Bollinger(20,2) band on Daily, 1h AND 15m RTH all at once.
-        // Shown as a yellow banner at the top of the 15m RTH panel — hidden again the moment any
-        // one of the 3 stops agreeing (re-evaluated fresh on every tick, nothing latched).
-        if (hourlyPanel != null && rthPanel != null)
-        {
-            hourlyPanel.OnPreMarketPriceUpdated += price =>
-            {
-                var dailyDir  = ChartPanel.GetDailyBollingerDirection(_symbol, price);
-                var hourlyDir = hourlyPanel.GetBollingerDirection(price);
-                var rthDir    = rthPanel.GetBollingerDirection(price);
-
-                var exposed = dailyDir != BollingerDirection.None && dailyDir == hourlyDir && dailyDir == rthDir;
-                _ = exposed ? rthPanel.ShowExposureBannerAsync("Expuesto en 3 charts") : rthPanel.HideExposureBannerAsync();
-            };
-        }
-
-        // Piso/Techo reference line: mirrors each armed SMA's pre-market level onto BOTH the 15m
-        // RTH and RTH+Overnight panels (dashed, same color as that SMA on the 1h panel) — visual
-        // reference for "how far price could go and bounce" without needing the 1h panel open.
-        // Removed automatically if the market-open gap later invalidates that SMA.
-        if (hourlyPanel != null)
+        // Piso/Techo reference line + Daily PM: mirrors onto panel 3 (RTH+Overnight) only —
+        // TwoPanelChartsControl's own constructor already mirrors the same events onto panel 2
+        // (rthPanel), so this window only ever needs to add panel 3's edge on top, same split
+        // pattern as the Stk-line/H-Line/ATH mirroring mesh below.
+        if (hourlyPanel != null && overnightPanel != null)
         {
             hourlyPanel.OnPisoTechoLevelReadyEvent += (period, price) =>
             {
@@ -667,74 +458,40 @@ public class MultiChartForm : Form
                 {
                     var sessionStart = GetTodaySessionStartFakeEpoch();
                     var sessionEnd   = GetTodaySessionEndFakeEpoch();
-                    if (rthPanel != null) _ = rthPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
-                    if (overnightPanel != null) _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
+                    _ = overnightPanel.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
                 });
             };
-            hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
+
+            // Daily "PM" (SMA20) solid yellow reference line — computed on the 1h panel only
+            // (EvaluateDailyPmAndBb), relayed to panel 3 here (panel 1/2 already handled inside
+            // TwoPanelChartsControl), same anchor (yesterday's last close, extending through today)
+            // the red dashed prev-day-close line uses, per explicit request ("igual que la línea
+            // roja... hasta el final").
+            hourlyPanel.OnDailyPmValueEvent += price =>
             {
                 if (IsDisposed) return;
                 BeginInvoke(() =>
                 {
-                    if (rthPanel != null) _ = rthPanel.RemovePisoTechoRefLineAsync(period);
-                    if (overnightPanel != null) _ = overnightPanel.RemovePisoTechoRefLineAsync(period);
+                    var sessionStart = GetTodaySessionStartFakeEpoch();
+                    _ = overnightPanel.MarkDailyPmLineAsync(price, sessionStart);
+                    _ = overnightPanel.SetDailyPmLineVisibleAsync(Form1.IsDailyPmLineEnabledFor(_symbol));
                 });
+            };
+
+            hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => _ = overnightPanel.RemovePisoTechoRefLineAsync(period));
             };
 
             // Race fix: hourlyPanel's HandleCreated (added to the layout earlier in this
             // constructor) can fire EvaluatePisoTechoOnce — and this very event — before the
             // subscription above ever runs, especially when its history loads fast (e.g. plenty of
             // HourlyCandleStore data already cached locally). Catch up immediately in that case.
+            // TwoPanelChartsControl's own constructor already did this once for panel 1/2's sake;
+            // calling it again here is harmless (idempotent re-draws) and ensures panel 3 catches
+            // up too, even though its subscription above runs strictly after that first replay.
             hourlyPanel.ReplayPisoTechoLevels();
-        }
-
-        // "PM" (Punto Medio) size coordination: each panel only knows its OWN SMA20 slope — whether
-        // the 1h and 15m RTH panels currently agree (both bullish or both bearish) is a cross-panel
-        // decision that has to live here. Track the latest direction from each and redraw BOTH with
-        // a shared "large" flag once both are known — bigger text when they agree, normal otherwise.
-        if (hourlyPanel != null && rthPanel != null)
-        {
-            bool? hourlyPmBullish = null;
-            bool? rthPmBullish = null;
-
-            void RedrawPuntoMedio()
-            {
-                if (hourlyPmBullish == null || rthPmBullish == null) return;
-                var large = hourlyPmBullish == rthPmBullish;
-                _ = hourlyPanel.MarkPuntoMedioAsync(hourlyPmBullish.Value, large);
-                _ = rthPanel.MarkPuntoMedioAsync(rthPmBullish.Value, large);
-            }
-
-            hourlyPanel.OnPuntoMedioLevelEvent += bullish => { hourlyPmBullish = bullish; RedrawPuntoMedio(); };
-            rthPanel.OnPuntoMedioLevelEvent += bullish => { rthPmBullish = bullish; RedrawPuntoMedio(); };
-
-            // Backtesting aid: log the exact moment PM AND BB both agree in color (verde/rojo)
-            // across the 1h and 15m RTH panels — i.e. both panels' SMA20 tilting the same direction
-            // AND both panels' Bollinger Bands currently widening in that same direction. Logged
-            // once per alignment episode (only on the false→true transition), not every tick while
-            // it holds, so it doesn't spam the log.
-            bool? hourlyBbBullish = null; // null = BB not currently shown on that panel
-            bool? rthBbBullish = null;
-            var pmBbAligned = false;
-
-            void CheckPmBbAlignment()
-            {
-                var aligned = hourlyPmBullish != null && hourlyPmBullish == rthPmBullish
-                    && hourlyBbBullish != null && hourlyBbBullish == rthBbBullish
-                    && hourlyPmBullish == hourlyBbBullish;
-
-                if (aligned && !pmBbAligned)
-                {
-                    var direction = hourlyPmBullish!.Value ? "Alza (verde)" : "Baja (rojo)";
-                    crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  PM + BB alineados en {direction} (1h y 15m RTH){Environment.NewLine}");
-                }
-                pmBbAligned = aligned;
-            }
-
-            hourlyPanel.OnPuntoMedioLevelEvent += _ => CheckPmBbAlignment();
-            rthPanel.OnPuntoMedioLevelEvent += _ => CheckPmBbAlignment();
-            hourlyPanel.OnBollingerWideningLevelEvent += (show, bullish) => { hourlyBbBullish = show ? bullish : null; CheckPmBbAlignment(); };
-            rthPanel.OnBollingerWideningLevelEvent += (show, bullish) => { rthBbBullish = show ? bullish : null; CheckPmBbAlignment(); };
         }
 
         // Telegram push failures previously vanished silently (fire-and-forget from every call
@@ -746,7 +503,7 @@ public class MultiChartForm : Form
             panel.OnTelegramPushFailedEvent += detail =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
+                BeginInvoke(() => AppendCrossLog($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
             };
             panel.OnPrevDayHiLoDebugEvent += detail =>
             {
@@ -763,306 +520,86 @@ public class MultiChartForm : Form
             };
         }
 
-        // Stk line delete: markStrike draws the same green line on all 3 panels at trade open —
-        // deleting it (click + Delete) on any ONE panel removes it from the other 2 as well, so
-        // the user doesn't have to repeat the same delete 3 times.
-        var allChartPanels = new[] { hourlyPanel, rthPanel, overnightPanel };
-        foreach (var panel in allChartPanels)
+        // Stk line delete / H-Line delete / H-Line draw / ATH: mirrored across all 3 panels when
+        // this control hosts panel 3 too. The panel1<->panel2 edge of each mesh is already wired
+        // INSIDE TwoPanelChartsControl itself (so it also works standalone on Form1's "Charts" tab,
+        // which has no panel 3 at all) — only panel 3's own edges get added here, never
+        // re-wiring panel1<->panel2 too, or a draw/delete would double-fire across that pair.
+        if (overnightPanel != null)
         {
-            if (panel == null) continue;
-            panel.OnStrikeDeletedEvent += price =>
+            overnightPanel.OnStrikeDeletedEvent += price =>
             {
-                foreach (var sibling in allChartPanels)
-                {
-                    if (sibling != null && sibling != panel) _ = sibling.RemoveStrikeLineAsync(price);
-                }
+                if (hourlyPanel != null) _ = hourlyPanel.RemoveStrikeLineAsync(price);
+                if (rthPanel != null) _ = rthPanel.RemoveStrikeLineAsync(price);
+            };
+            overnightPanel.OnHLineDeletedEvent += price =>
+            {
+                if (hourlyPanel != null) _ = hourlyPanel.RemoveHLineAsync(price);
+                if (rthPanel != null) _ = rthPanel.RemoveHLineAsync(price);
+            };
+            overnightPanel.OnHLineDrawnEvent += (time, price) =>
+            {
+                if (hourlyPanel != null) _ = hourlyPanel.AddMirroredHLineAsync(time, price);
+                if (rthPanel != null) _ = rthPanel.AddMirroredHLineAsync(time, price);
             };
         }
-
-        // All-Time High: the 1h panel is the only one that persists a new value (at the RTH close,
-        // see ChartPanel.EvaluateAllTimeHighAtClose) — mirror it onto the other 2 panels' reference
-        // lines so all 3 stay in sync for the rest of the day (and on the next chart open, each
-        // panel loads it fresh from AllTimeHighStore on its own anyway).
         if (hourlyPanel != null)
         {
+            hourlyPanel.OnStrikeDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveStrikeLineAsync(price); };
+            hourlyPanel.OnHLineDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveHLineAsync(price); };
+            hourlyPanel.OnHLineDrawnEvent += (time, price) => { if (overnightPanel != null) _ = overnightPanel.AddMirroredHLineAsync(time, price); };
+            // All-Time High: the 1h panel is the only one that persists a new value (at the RTH
+            // close, see ChartPanel.EvaluateAllTimeHighAtClose) — mirror it onto the other panels'
+            // reference lines so all stay in sync for the rest of the day (and on the next chart
+            // open, each panel loads it fresh from AllTimeHighStore on its own anyway).
             hourlyPanel.OnAllTimeHighUpdatedEvent += newValue =>
             {
-                if (rthPanel != null) _ = rthPanel.MarkAllTimeHighAsync(newValue);
                 if (overnightPanel != null) _ = overnightPanel.MarkAllTimeHighAsync(newValue);
             };
         }
-
-        // H-Line delete: same idea as the Stk line above — manually-drawn H-Lines and the
-        // auto-drawn prev-day High/Low both get mirrored (by price) onto the other 2 panels when
-        // deleted (click + Delete) from any one of them.
-        foreach (var panel in allChartPanels)
+        if (rthPanel != null)
         {
-            if (panel == null) continue;
-            panel.OnHLineDeletedEvent += price =>
-            {
-                foreach (var sibling in allChartPanels)
-                {
-                    if (sibling != null && sibling != panel) _ = sibling.RemoveHLineAsync(price);
-                }
-            };
+            rthPanel.OnStrikeDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveStrikeLineAsync(price); };
+            rthPanel.OnHLineDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveHLineAsync(price); };
+            rthPanel.OnHLineDrawnEvent += (time, price) => { if (overnightPanel != null) _ = overnightPanel.AddMirroredHLineAsync(time, price); };
         }
 
-        // H-Line draw: drawing one on ANY of the 3 panels (the single shared H-Line button arms
-        // all 3 at once — see btnRthHLine above) mirrors it onto the other 2, same idea as T-Line.
-        foreach (var panel in allChartPanels)
-        {
-            if (panel == null) continue;
-            panel.OnHLineDrawnEvent += (time, price) =>
-            {
-                foreach (var sibling in allChartPanels)
-                {
-                    if (sibling != null && sibling != panel) _ = sibling.AddMirroredHLineAsync(time, price);
-                }
-            };
-        }
-
-        // Live options grid — same 7 fields as Form1's dgvQuotes but ONE column set shared by
-        // both Calls and Puts (one row per option) instead of a call-side/put-side pair, and
-        // Bid/Ask/Sprd/Conts/Level moved to the right of Strike with Range pushed to the end
-        // (Form1's own grid keeps Range/Sprd/Bid/Ask BEFORE the Strike button — different order,
-        // per explicit request for this one).
-        _dgvOptions.Columns.AddRange(
-            new DataGridViewButtonColumn { Name = "colStrikeLive", HeaderText = "Strike", Width = 46, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
-            new DataGridViewTextBoxColumn { Name = "colBidLive",   HeaderText = "Bid",   Width = 38, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colAskLive",   HeaderText = "Ask",   Width = 38, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colSprdLive",  HeaderText = "Sprd",  Width = 34, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colContsLive", HeaderText = "Conts", Width = 40, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colLevelLive", HeaderText = "Level", Width = 38, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colRangeLive", HeaderText = "Range", Width = 70, ReadOnly = true });
-        foreach (DataGridViewColumn col in _dgvOptions.Columns)
-            col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-
-        // Same per-cell styling as Form1's own dgvQuotes (DgvQuotes_CellFormatting): Sprd bold red,
-        // Ask bold dark green, Bid background green when that row's Sprd <= 2.
-        _dgvOptions.CellFormatting += (s, e) =>
-        {
-            if (e.RowIndex < 0) return;
-            var row = _dgvOptions.Rows[e.RowIndex];
-            var sprdCol  = _dgvOptions.Columns["colSprdLive"]!.Index;
-            var bidCol   = _dgvOptions.Columns["colBidLive"]!.Index;
-            var askCol   = _dgvOptions.Columns["colAskLive"]!.Index;
-            var rangeCol = _dgvOptions.Columns["colRangeLive"]!.Index;
-
-            if (e.ColumnIndex == sprdCol)
-            {
-                e.CellStyle.ForeColor = Color.Red;
-                e.CellStyle.Font = new Font(_dgvOptions.Font, FontStyle.Bold);
-            }
-            else if (e.ColumnIndex == askCol)
-            {
-                e.CellStyle.ForeColor = Color.DarkGreen;
-                e.CellStyle.Font = new Font(_dgvOptions.Font, FontStyle.Bold);
-            }
-            else if (e.ColumnIndex == bidCol)
-            {
-                e.CellStyle.BackColor = decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd <= 2
-                    ? Color.LightGreen
-                    : _dgvOptions.DefaultCellStyle.BackColor;
-            }
-            else if (e.ColumnIndex == rangeCol)
-            {
-                // Same rule as Form1's dgvQuotes colRange (DgvQuotes_CellFormatting): green when
-                // this row's own Ask actually falls within "Low - High".
-                var rangeText = row.Cells["colRangeLive"].Value?.ToString();
-                var parts = rangeText?.Split(" - ", StringSplitOptions.TrimEntries);
-                var inRange = parts?.Length == 2
-                    && decimal.TryParse(parts[0], out var low) && decimal.TryParse(parts[1], out var high)
-                    && decimal.TryParse(row.Cells["colAskLive"].Value?.ToString(), out var ask)
-                    && ask >= low && ask <= high;
-                e.CellStyle.BackColor = inRange ? Color.LightGreen : _dgvOptions.DefaultCellStyle.BackColor;
-            }
-        };
-
-        // Strike button: dark green for Call rows, red for Put rows, light gray when blocked —
-        // identical to DgvQuotes_CellPainting's colStrikePrice button on Form1's own grid (same
-        // IsRowTradeBlocked rule: bid == 0, OR spread >= 6, OR 0 contracts).
-        _dgvOptions.CellPainting += (s, e) =>
-        {
-            if (e.RowIndex < 0 || e.ColumnIndex != _dgvOptions.Columns["colStrikeLive"]!.Index) return;
-
-            var val     = e.Value?.ToString();
-            var row     = _dgvOptions.Rows[e.RowIndex];
-            var rowType = row.Tag?.ToString();
-            e.PaintBackground(e.ClipBounds, true);
-            if (string.IsNullOrEmpty(val)) { e.Handled = true; return; }
-
-            var disabled =
-                !decimal.TryParse(row.Cells["colBidLive"].Value?.ToString(), out var bid) || bid == 0m
-                || (decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd >= 6)
-                || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0;
-
-            var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
-            var textColor = disabled ? Color.Gray : Color.White;
-            var btnRect   = Rectangle.Inflate(e.CellBounds, -3, -3);
-            using var fillBrush = new SolidBrush(btnColor);
-            using var borderPen = new Pen(ControlPaint.Dark(btnColor, 0.2f));
-            using var textFont  = new Font(_dgvOptions.Font, FontStyle.Bold);
-            e.Graphics!.FillRectangle(fillBrush, btnRect);
-            e.Graphics.DrawRectangle(borderPen, btnRect);
-            TextRenderer.DrawText(e.Graphics, val, textFont, btnRect, textColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
-            e.Handled = true;
-        };
-
-        var optionsGridHost = new Panel { Dock = DockStyle.Right, Width = 345, Padding = new Padding(6, 0, 6, 6) };
-
-        // ExpDate above the grid — same resolved value (handles "0DTE"/weekday shorthand etc.) as
-        // everywhere else this ticker's expiration is shown.
-        var lblExpDate = new Label
-        {
-            Dock      = DockStyle.Top,
-            Height    = 20,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Font      = new Font("Segoe UI", 9F, FontStyle.Bold),
-            ForeColor = Color.White
-        };
-        optionsGridHost.Controls.Add(_dgvOptions);
-        optionsGridHost.Controls.Add(lblExpDate);
-
-        void RefreshOptionsGrid()
-        {
-            var snapshot = _form1.GetQuoteSnapshot(_symbol);
-            if (snapshot == null) return;
-            if (_dgvOptions.IsDisposed || !_dgvOptions.IsHandleCreated) return;
-            _dgvOptions.BeginInvoke(() => Form1.PopulateSingleSideOptionsGrid(
-                _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker));
-            if (!lblExpDate.IsDisposed)
-                lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
-        }
-
-        // Strike click: forwards into Form1's own click handler — opens a trade using whatever
-        // radio mode (No Trade / No Trade-Target / Trade / Trade-Target) is currently selected on
-        // Form1, identical behavior to clicking Strike there directly.
-        _dgvOptions.CellClick += (s, e) =>
-        {
-            if (e.RowIndex < 0 || e.ColumnIndex != _dgvOptions.Columns["colStrikeLive"]!.Index) return;
-            var row = _dgvOptions.Rows[e.RowIndex];
-            var rowType = row.Tag?.ToString();
-            var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
-            if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
-            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, chkAws.Checked);
-        };
-
-        _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
-        void OnForm1QuotesUpdated(string updatedSymbol)
-        {
-            if (updatedSymbol == _symbol) RefreshOptionsGrid();
-        }
-        FormClosed += (s, e) => _form1.OnQuotesUpdatedEvent -= OnForm1QuotesUpdated;
-        Load += (s, e) => RefreshOptionsGrid();
-
-        // Trades grid — exact same 17 columns as Form1's dgvTrades, mirrored below the charts.
-        _dgvTrades.Columns.AddRange(
-            new DataGridViewTextBoxColumn { Name = "colTradeTimeLive",       HeaderText = "Time",        Width = 60, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeTypeLive",       HeaderText = "Type",        Width = 45, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeStrikeLive",     HeaderText = "StrikePrice", Width = 65, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeBidLive",       HeaderText = "Bid",          Width = 45, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeAskLive",       HeaderText = "Ask",          Width = 45, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeContractsLive", HeaderText = "Contracts",    Width = 60, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeEntryPriceLive",HeaderText = "EntryPrice",   Width = 65, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeCBidLive",      HeaderText = "C_Bid",        Width = 50, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeTBidLive",      HeaderText = "T_Bid",        Width = 50, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradePnLLive",       HeaderText = "PnL",          Width = 55, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradePnLPercentLive",HeaderText = "PnL_Percent",  Width = 70, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradePnLTargetLive", HeaderText = "PnL_Target",   Width = 65, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeExitTimeLive",  HeaderText = "ExitTime",     Width = 60, ReadOnly = true },
-            new DataGridViewButtonColumn  { Name = "colTradeCloseLive",     HeaderText = "Close",        Width = 55, FlatStyle = FlatStyle.Standard, UseColumnTextForButtonValue = false },
-            new DataGridViewTextBoxColumn { Name = "colTradePnLMinLive",    HeaderText = "Min PnL%",     Width = 60, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradePnLMaxLive",    HeaderText = "Max PnL%",     Width = 60, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeMoneynessLive", HeaderText = "OTM/ITM",      Width = 55, ReadOnly = true });
-        foreach (DataGridViewColumn col in _dgvTrades.Columns)
-            col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-
-        // Read-only mirror — never show the blue "selected row" highlight, which would otherwise
-        // mask the per-cell colors copied from Form1 (see RefreshTradesGrid) the moment a row gets
-        // auto-selected (Rows.Add() always leaves the newest row selected/current).
-        _dgvTrades.DefaultCellStyle.SelectionBackColor = _dgvTrades.DefaultCellStyle.BackColor;
-        _dgvTrades.DefaultCellStyle.SelectionForeColor = _dgvTrades.DefaultCellStyle.ForeColor;
-
-        // Close click: forwards into Form1's own DgvTrades_CellClick (real trades place an actual
-        // SELL_TO_CLOSE order; demo trades just close in the log) — identical to clicking Close on
-        // Form1's own grid for the same row.
-        _dgvTrades.CellClick += (s, e) =>
-        {
-            if (e.RowIndex < 0 || e.ColumnIndex != _dgvTrades.Columns["colTradeCloseLive"]!.Index) return;
-            if (!string.IsNullOrEmpty(_dgvTrades.Rows[e.RowIndex].Cells["colTradeExitTimeLive"].Value?.ToString())) return;
-            _form1.TriggerTradeCloseClick(_symbol, e.RowIndex);
-        };
-
-        var tradesGridHost = new Panel { Dock = DockStyle.Bottom, Height = 90, Padding = new Padding(6, 0, 6, 6) };
-        tradesGridHost.Controls.Add(_dgvTrades);
-
-        // Full rebuild every refresh (values + per-cell colors copied straight from Form1's own
-        // dgvTrades) — simplest way to stay pixel-identical to whatever coloring Form1 applies
-        // (lavender automatic-trade rows, gray-on-close, PnL colors, etc.) without re-deriving
-        // those rules here. Source column order matches this grid's column order 1:1.
-        void RefreshTradesGrid()
-        {
-            var sourceGrid = _form1.GetTradesGrid(_symbol);
-            if (sourceGrid == null) return;
-            if (_dgvTrades.IsDisposed || !_dgvTrades.IsHandleCreated) return;
-            _dgvTrades.BeginInvoke(() =>
-            {
-                var scrollRowToRestore = _dgvTrades.Rows.Count > 0 ? _dgvTrades.FirstDisplayedScrollingRowIndex : -1;
-                _dgvTrades.Rows.Clear();
-                foreach (DataGridViewRow sourceRow in sourceGrid.Rows)
-                {
-                    var values = sourceRow.Cells.Cast<DataGridViewCell>().Select(c => c.Value).ToArray();
-                    _dgvTrades.Rows.Add(values);
-                    var mirrorRow = _dgvTrades.Rows[_dgvTrades.Rows.Count - 1];
-                    mirrorRow.DefaultCellStyle.BackColor = sourceRow.DefaultCellStyle.BackColor;
-                    mirrorRow.DefaultCellStyle.ForeColor = sourceRow.DefaultCellStyle.ForeColor;
-                    for (int i = 0; i < sourceRow.Cells.Count && i < mirrorRow.Cells.Count; i++)
-                    {
-                        mirrorRow.Cells[i].Style.ForeColor = sourceRow.Cells[i].Style.ForeColor;
-                        mirrorRow.Cells[i].Style.BackColor = sourceRow.Cells[i].Style.BackColor;
-                        if (sourceRow.Cells[i].Style.Font != null)
-                            mirrorRow.Cells[i].Style.Font = sourceRow.Cells[i].Style.Font;
-                    }
-                }
-                if (scrollRowToRestore >= 0 && _dgvTrades.Rows.Count > 0)
-                    _dgvTrades.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, _dgvTrades.Rows.Count - 1);
-
-                // Rows.Add() leaves the first row selected/current by default, which paints it
-                // with the grid's SelectionBackColor (blue) — masking the per-cell colors just
-                // copied above. This is a read-only mirror, nothing should ever look "selected".
-                _dgvTrades.ClearSelection();
-                _dgvTrades.CurrentCell = null;
-            });
-        }
-
-        _form1.OnTradesUpdatedEvent += OnForm1TradesUpdated;
-        void OnForm1TradesUpdated(string updatedSymbol)
-        {
-            if (updatedSymbol == _symbol) RefreshTradesGrid();
-        }
-        FormClosed += (s, e) => _form1.OnTradesUpdatedEvent -= OnForm1TradesUpdated;
-        Load += (s, e) => RefreshTradesGrid();
-
-        Controls.Add(layout);
-        Controls.Add(toolbar);
-        Controls.Add(tradesGridHost);
-        Controls.Add(crossLog);
-        Controls.Add(optionsGridHost);
-        _crossLog = crossLog;
+        // Options grid (Dock=Right) + trades grid (Dock=Bottom) are added to _twoPanelControl's
+        // OWN Controls collection (built alongside panel 1/2 there) — nothing to add here.
+        Controls.Add(outerLayout);
 
         // historyClient/liveFeed are owned by Form1 for the app's whole lifetime (connecting,
         // subscribing, and disposing them) — not this window.
     }
 
+    // T-Lines drawn on a DailyChartForm's "Hora"/"15 Min" tabs replicate onto this window's
+    // corresponding live panel (1h/RTH) and persist there too — per explicit request, one-way
+    // only. Public (not just wired for THIS window's own "Daily" button) so Form1's own "Daily"
+    // button — which opens a DailyChartForm with no MultiChartForm involved at all — can wire the
+    // same mirroring onto an already-open (or later-opened) live chart for the same symbol; see
+    // Form1.BtnDaily_Click/BtnLiveChart_Click. Just delegates to the panel 1/2 control, which owns
+    // the actual mirroring logic (and the SMA-watch buttons it also keeps in sync).
+    public void AttachDailyMirroring(DailyChartForm dailyForm)
+    {
+        _twoPanelControl.AttachDailyMirroring(dailyForm);
+
+        // Panel 3 (overnightPanel) edge of the "D.PM" toggle — TwoPanelChartsControl's own copy
+        // above only ever touches panel 1/2, same split pattern as the Stk-line/H-Line mesh.
+        dailyForm.OnDailyPmLineToggledEvent += visible =>
+        {
+            if (IsDisposed) return;
+            _ = _overnightPanel?.SetDailyPmLineVisibleAsync(visible);
+        };
+    }
+
     // Feeds a fresh spot price (from Form1's ~6s options-chain polling, not the streaming feed)
     // into all 3 panels' currently-forming candle — used while LEVEL_ONE_EQUITIES is disabled, so
     // the live chart still tracks something closer to real-time than waiting a full minute for
-    // the next CHART_EQUITY bar.
+    // the next CHART_EQUITY bar. Panel 1/2's half is delegated to the control; panel 3 is fed
+    // directly here.
     public void FeedPollingPrice(decimal price, DateTime utcTime)
     {
-        _hourlyPanel?.FeedPollingPrice(price, utcTime);
-        _rthPanel?.FeedPollingPrice(price, utcTime);
+        _twoPanelControl.FeedPollingPrice(price, utcTime);
         _overnightPanel?.FeedPollingPrice(price, utcTime);
     }
 
@@ -1070,14 +607,21 @@ public class MultiChartForm : Form
     // auto-closes at 4pm ET because it expires today.
     public Task MarkExpiredOnRthChartAsync() => _rthPanel?.MarkExpiredAsync() ?? Task.CompletedTask;
 
-    // "ΔS=value" label at trade close — panel 3 (15m RTH+Overnight) only, per explicit request.
-    public Task MarkDeltaSOnOvernightChartAsync(decimal entrySpot, decimal closeSpot, decimal strike) =>
-        _overnightPanel?.MarkDeltaSAsync(entrySpot, closeSpot, strike) ?? Task.CompletedTask;
+    // "ΔS=value" label at trade close — panels 2 (15m RTH) and 3 (15m RTH+Overnight). Originally
+    // panel 3 only; panel 2 added per explicit request.
+    public async Task MarkDeltaSOnOvernightChartAsync(decimal entrySpot, decimal closeSpot, decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkDeltaSAsync(entrySpot, closeSpot, strike);
+        if (_overnightPanel != null) await _overnightPanel.MarkDeltaSAsync(entrySpot, closeSpot, strike);
+    }
 
-    // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, per explicit request. Fired when a
-    // trade (demo or real) opens.
-    public Task MarkStrikeOnOvernightChartAsync(decimal strike) =>
-        _overnightPanel?.MarkStrikeAsync(strike) ?? Task.CompletedTask;
+    // Green "Stk=xxx" line — panels 2 (15m RTH) and 3 (15m RTH+Overnight). Fired when a trade
+    // (demo or real) opens. Originally panel 3 only; panel 2 added per explicit request.
+    public async Task MarkStrikeOnOvernightChartAsync(decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkStrikeAsync(strike);
+        if (_overnightPanel != null) await _overnightPanel.MarkStrikeAsync(strike);
+    }
 
     // White spot-price line — panels 2 (15m RTH) and 3 (15m RTH+Overnight), same marker the
     // Simulator already draws on trade open/close. Fired at both. Originally panel 3 only; panel 2
@@ -1088,33 +632,16 @@ public class MultiChartForm : Form
         if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price);
     }
 
-    // Forwards an already-timestamped WS connect/disconnect/reconnect line from Form1 (which owns
-    // the actual Schwab streamer connection) into this window's small event log — safe to call
-    // from any thread, since streamer reconnects fire from its own background receive-loop thread.
-    public void LogWebSocketEvent(string line)
-    {
-        if (_crossLog == null || IsDisposed) return;
-        // ReplayWebSocketEvents is called right after construction, before Show() — the window
-        // has no handle yet at that point, so IsHandleCreated must NOT gate this (it used to,
-        // which silently dropped every replayed line). InvokeRequired safely returns false when
-        // there's no handle yet, so this still routes through BeginInvoke once one exists.
-        if (IsHandleCreated && InvokeRequired) { BeginInvoke(() => LogWebSocketEvent(line)); return; }
-        _crossLog.AppendText(line + Environment.NewLine);
-    }
-
-    // Replays every WS event Form1 has buffered so far — the streamer connects once when the
-    // FIRST Live Charts window of the session is opened (before this window even exists), so
-    // without this the "Connected" line would otherwise be lost for every window but that first.
-    public void ReplayWebSocketEvents(IEnumerable<string> lines)
-    {
-        foreach (var line in lines) LogWebSocketEvent(line);
-    }
-
     // Today's 9:30 AM ET, in the same "ET wall-clock digits disguised as UTC" fake-epoch units the
     // chart itself uses (ChartPanel.FakeUtcEpochSeconds) — the Piso/Techo reference line's anchor,
     // computed independently of any candle data so it can't race against history loading (see
     // markPisoTechoRefLine in chart.html for the full rationale).
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
+    // Single choke point for panel-3/combined-screenshot crossLog writes — delegates into the
+    // panel 1/2 control's own AppendLog (same premarket 9:30 AM ET filter, same textbox instance),
+    // so this window still shows one unified log across all 3 panels.
+    private void AppendCrossLog(string text) => _twoPanelControl.AppendLog(text);
 
     // Yesterday's last hourly candle (its close) — the Piso/Techo reference line's real anchor,
     // per explicit request ("así estaba implementado"): it should be born at yesterday's close and
@@ -1156,7 +683,7 @@ public class MultiChartForm : Form
     // Pushes the combined 3-chart snapshot to Telegram for the T-Line+SMA20 breakout signal —
     // best-effort, same as every other Telegram push in this app: a failure here must never
     // affect the chart/detection logic itself.
-    private async Task SendTLineSignalTelegramPushAsync(string caption)
+    private async Task SendTLineSignalTelegramPushAsync(string caption, string timeframe)
     {
         if (!Form1.IsTelegramEnabledFor(_symbol)) return;
         try
@@ -1184,7 +711,13 @@ public class MultiChartForm : Form
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "TLineSignal", DateTime.Now));
             if (ok)
+            {
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+                // Attaches this screenshot to the CT record ChartPanel.EvaluateTLineSignal already
+                // resolved (Alza/Baja) — CtRecordStore.OnChanged triggers CtLogWriter to regenerate
+                // the global CT.md with the image now included.
+                CtRecordStore.SetImagePathForMostRecentResolved(_symbol, timeframe, path);
+            }
             else
                 LogTelegramPushFailure(detail);
         }
@@ -1192,6 +725,46 @@ public class MultiChartForm : Form
         {
             // Best-effort — never let a Telegram failure affect the chart/detection logic, but no
             // longer silent: mirrored into crossLog same as every other push failure.
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined 3-chart snapshot to Telegram for a Daily SMA cross watch — same pattern
+    // as SendTLineSignalTelegramPushAsync above.
+    private async Task SendSmaCrossTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_SmaCross_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SmaCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
             LogTelegramPushFailure(ex.Message);
         }
     }
@@ -1223,6 +796,11 @@ public class MultiChartForm : Form
         }
     }
 
+    // Pushes the combined 3-chart snapshot for a Piso/Techo Cruce/Rebote resolution — additional to
+    // ChartPanel's own single-panel push (SendChartToTelegramAsync, fired from the 1h panel itself
+    // for the SAME event), per explicit request. Kept here (not moved into TwoPanelChartsControl's
+    // own copy) so the popup keeps pushing the full 3-panel image exactly as before — see the
+    // comment on the OnPisoTechoResolvedEvent subscription above.
     private async Task SendPisoTechoTelegramPushAsync(string caption)
     {
         if (!Form1.IsTelegramEnabledFor(_symbol)) return;
@@ -1306,8 +884,8 @@ public class MultiChartForm : Form
 
     private void LogTelegramPushFailure(string detail)
     {
-        if (IsDisposed || _crossLog == null) return;
-        BeginInvoke(() => _crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
+        if (IsDisposed) return;
+        BeginInvoke(() => AppendCrossLog($"{DateTime.Now:HH:mm:ss}  [Telegram] Push FAILED — {detail}{Environment.NewLine}"));
     }
 
     // Renders the 3 charts (via WebView2, not a screen capture) and stitches them side by side in
@@ -1325,14 +903,20 @@ public class MultiChartForm : Form
         if (_hourlyPanel == null || _rthPanel == null || _overnightPanel == null) return null;
 
         var panels = new[] { _hourlyPanel, _rthPanel, _overnightPanel };
-        var images = new Bitmap[panels.Length];
+        var images = new Bitmap?[panels.Length];
         try
         {
             for (int i = 0; i < panels.Length; i++)
                 images[i] = await panels[i].CaptureImageAsync();
 
-            var width  = images.Sum(img => img.Width) + PanelGap * (images.Length - 1);
-            var height = images.Max(img => img.Height);
+            // A panel's own capture can time out (see ChartPanel.CaptureImageAsync — a minimized/
+            // non-composited window) instead of throwing — bail out the same way the "any panel
+            // isn't ready" case at the top of this method already does, rather than crashing on a
+            // null Bitmap a few lines down.
+            if (images.Any(img => img == null)) return null;
+
+            var width  = images.Sum(img => img!.Width) + PanelGap * (images.Length - 1);
+            var height = images.Max(img => img!.Height);
             var combined = new Bitmap(width, height);
             using (var g = Graphics.FromImage(combined))
             using (var labelFont = new Font("Segoe UI", 11f, FontStyle.Bold))
@@ -1342,7 +926,7 @@ public class MultiChartForm : Form
                 var x = 0;
                 for (int i = 0; i < images.Length; i++)
                 {
-                    var img = images[i];
+                    var img = images[i]!;
                     g.DrawImage(img, x, 0);
 
                     var labelSize = g.MeasureString(PanelLabels[i], labelFont);

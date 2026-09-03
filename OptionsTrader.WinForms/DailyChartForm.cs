@@ -1,5 +1,8 @@
+using System.Linq;
+using System.Text.Json;
 using Microsoft.Web.WebView2.WinForms;
 using OptionsTrader.Application.DTOs.Streaming;
+using OptionsTrader.Infrastructure.Schwab;
 
 namespace OptionsTrader.WinForms;
 
@@ -15,31 +18,396 @@ namespace OptionsTrader.WinForms;
 // candles instead of hourly ones, with no live streaming/toggle involved at all.
 public class DailyChartForm : Form
 {
+    private Dictionary<int, Button> _smaWatchButtons = new();
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
+    private readonly WebView2 _hourlyWebView = new() { Dock = DockStyle.Fill };
+    private readonly WebView2 _fifteenWebView = new() { Dock = DockStyle.Fill };
     private readonly string _symbol;
     private readonly List<CandleData> _dailyCandles;
+    private readonly SchwabStreamerClient _historyClient;
 
-    public DailyChartForm(string symbol, List<CandleData> dailyCandles)
+    public DailyChartForm(string symbol, List<CandleData> dailyCandles, SchwabStreamerClient historyClient)
     {
         _symbol = symbol;
         _dailyCandles = dailyCandles;
+        _historyClient = historyClient;
 
         Text          = $"{symbol} — Daily";
         Width         = 900;
         Height        = 600;
         StartPosition = FormStartPosition.CenterScreen;
 
-        Controls.Add(_webView);
+        // Owner-drawn so the selected tab's header gets bolded/highlighted — same pattern
+        // MultiChartForm's "Hoy"/"Próxima" tabs use, per explicit request (3 tabs here, easy to
+        // lose track of which one is active since Daily/Hora/15 Min all share one chart layout).
+        var tabControl = new TabControl { Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed };
+        var tabDaily = new TabPage("Daily");
+        var tabHora = new TabPage("Hora");
+        var tab15Min = new TabPage("15 Min");
+        tabDaily.Controls.Add(_webView);
+        tabHora.Controls.Add(_hourlyWebView);
+        tab15Min.Controls.Add(_fifteenWebView);
+        tabControl.TabPages.Add(tabDaily);
+        tabControl.TabPages.Add(tabHora);
+        tabControl.TabPages.Add(tab15Min);
+        tabControl.DrawItem += (s, e) =>
+        {
+            var page = tabControl.TabPages[e.Index];
+            var selected = e.Index == tabControl.SelectedIndex;
+            using var backBrush = new SolidBrush(selected ? Color.FromArgb(230, 244, 255) : tabControl.BackColor);
+            e.Graphics.FillRectangle(backBrush, e.Bounds);
+            using var font = new Font(tabControl.Font, selected ? FontStyle.Bold : FontStyle.Regular);
+            TextRenderer.DrawText(e.Graphics, page.Text, font, e.Bounds, selected ? Color.FromArgb(0, 90, 180) : Color.Black,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        };
+
+        // "Rect" draws (and persists — RectStore) on the Daily tab's own chart. "T-Line" arms BOTH
+        // the Hora and 15 Min tabs at once (persists via TLineStore, tags "DailyHora"/"Daily15Min"
+        // so they never mix with the live chart's own "1h"/"RTH" T-Lines on the same symbol), per
+        // explicit request.
+        var toolbar = new Panel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(6, 4, 6, 4) };
+        var btnRect = new Button { Text = "Rect", Location = new Point(0, 2), Size = new Size(60, 24) };
+        var btnColorRect = new Button { Text = "Color Rect", Location = new Point(66, 2), Size = new Size(80, 24) };
+        var btnTLine = new Button { Text = "T-Line", Location = new Point(150, 2), Size = new Size(60, 24) };
+        btnRect.Click += async (s, e) =>
+        {
+            if (_webView.CoreWebView2 == null) return;
+            var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
+            btnRect.BackColor = result == "true" ? Color.LightGray : SystemColors.Control;
+        };
+        // "Color Rect" — Daily tab only, same 2-click draw as "Rect" but filled red/green
+        // depending on drag direction (see ColorRectPrimitive in chart.html), per explicit request.
+        btnColorRect.Click += async (s, e) =>
+        {
+            if (_webView.CoreWebView2 == null) return;
+            var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
+            btnColorRect.BackColor = result == "true" ? Color.LightSalmon : SystemColors.Control;
+        };
+        btnTLine.Click += async (s, e) =>
+        {
+            if (_hourlyWebView.CoreWebView2 == null || _fifteenWebView.CoreWebView2 == null) return;
+            var result = await _hourlyWebView.CoreWebView2.ExecuteScriptAsync("toggleTLine();");
+            await _fifteenWebView.CoreWebView2.ExecuteScriptAsync("toggleTLine();");
+            btnTLine.BackColor = result == "true" ? Color.Orange : SystemColors.Control;
+        };
+        toolbar.Controls.Add(btnRect);
+        toolbar.Controls.Add(btnColorRect);
+        toolbar.Controls.Add(btnTLine);
+        // chart.html auto-disarms each tool itself once the 2nd click completes a
+        // rectangle/T-Line — reset the button color to match, same pattern the live chart uses.
+        OnRectPlacedEvent += () => btnRect.BackColor = SystemColors.Control;
+        OnColorRectPlacedEvent += () => btnColorRect.BackColor = SystemColors.Control;
+        OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
+
+        // "SMA Watch" — Daily tab only. Unlike Rect/T-Line these aren't 2-click drawing tools:
+        // clicking one directly toggles whether that SMA's live-price cross is being watched (see
+        // SmaDailyWatchStore.cs + ChartPanel.EvaluateSmaCrossWatches, which does the actual
+        // monitoring/Telegram push/event log — this window is just where you arm/disarm it and see
+        // the marker). Stays armed until explicitly removed (this button again, or Delete on the
+        // chart marker), independent of whether this window or the live chart is currently open.
+        var smaWatchButtons = new Dictionary<int, Button>();
+        int x = 216;
+        foreach (var period in new[] { 20, 40, 100, 200 })
+        {
+            var btn = new Button { Text = $"SMA{period}", Location = new Point(x, 2), Size = new Size(60, 24) };
+            x += 66;
+            smaWatchButtons[period] = btn;
+            btn.Click += (s, e) =>
+            {
+                var armed = SmaDailyWatchStore.Load(_symbol).Contains(period);
+                if (armed) SmaDailyWatchStore.Remove(_symbol, period);
+                else SmaDailyWatchStore.Add(_symbol, period);
+                btn.BackColor = armed ? SystemColors.Control : Color.LightYellow;
+                OnSmaWatchChangedEvent?.Invoke(period, !armed);
+                RefreshSmaWatchMarkersAsync();
+            };
+            toolbar.Controls.Add(btn);
+        }
+        _smaWatchButtons = smaWatchButtons;
+
+        // "D.PM" — controls whether the solid yellow Daily SMA20 reference line (ChartPanel.
+        // EvaluateDailyPmAndBb) is drawn on panel 1/2 (tab Charts) and panel 3 (popup), per explicit
+        // request. Persisted per symbol (tickers.json, same store as AWS/Telegram) — reflects the
+        // stored state on open, toggling both saves and fires OnDailyPmLineToggledEvent so whichever
+        // live panels are open react immediately instead of waiting for the next hourly close.
+        var chkDailyPmLine = new CheckBox
+        {
+            Text     = "D.PM",
+            Location = new Point(x, 6),
+            AutoSize = true,
+            Checked  = Form1.IsDailyPmLineEnabledFor(_symbol),
+            ForeColor = Color.FromArgb(0xf5, 0xa6, 0x23) // matches chart.html's smaColors[20]
+        };
+        chkDailyPmLine.CheckedChanged += (s, e) =>
+        {
+            Form1.SetDailyPmLineEnabledFor(_symbol, chkDailyPmLine.Checked);
+            OnDailyPmLineToggledEvent?.Invoke(chkDailyPmLine.Checked);
+        };
+        toolbar.Controls.Add(chkDailyPmLine);
+
+        // "D40"/"D100"/"D200" — same idea as "D.PM" above but for the other Daily SMA periods, and
+        // tab-Charts-only (panel 1/2, never panel 3), per explicit request. Independent checkboxes
+        // (not a radio group) even though normally only one of these (plus D.PM) is shown at once.
+        // Same smaColors map chart.html uses (kept in sync manually — no shared source between C#
+        // and JS for this), so each checkbox's label reads as "this SMA's own color" at a glance.
+        var smaColorsByPeriod = new Dictionary<int, Color>
+        {
+            [40]  = Color.FromArgb(0xef, 0x53, 0x50),
+            [100] = Color.FromArgb(0x26, 0xa6, 0x9a),
+            [200] = Color.FromArgb(0xa2, 0x59, 0xff)
+        };
+        var xDailySma = x + chkDailyPmLine.PreferredSize.Width + 18;
+        foreach (var period in new[] { 40, 100, 200 })
+        {
+            var chk = new CheckBox
+            {
+                Text     = $"D{period}",
+                Location = new Point(xDailySma, 6),
+                AutoSize = true,
+                Checked  = Form1.GetDailySmaLinesEnabledFor(_symbol).Contains(period),
+                ForeColor = smaColorsByPeriod[period]
+            };
+            chk.CheckedChanged += (s, e) =>
+            {
+                Form1.SetDailySmaLineEnabledFor(_symbol, period, chk.Checked);
+                OnDailySmaLineToggledEvent?.Invoke(period, chk.Checked);
+            };
+            toolbar.Controls.Add(chk);
+            xDailySma += chk.PreferredSize.Width + 10;
+        }
+
+        Controls.Add(tabControl);
+        Controls.Add(toolbar);
         Load += async (s, e) => await InitAsync();
+    }
+
+    // Fired when the auto-disarming Rect/T-Line tool finishes placing one, so the toolbar button
+    // color resets — same convention as MultiChartForm's own btnRect/btnTLine wiring.
+    public event Action? OnRectPlacedEvent;
+    public event Action? OnColorRectPlacedEvent;
+    public event Action? OnTLinePlacedEvent;
+
+    // Fired when a T-Line is drawn/deleted on the "Hora" (tag "DailyHora") or "15 Min" (tag
+    // "Daily15Min") tab — MultiChartForm relays these onto the live 1h/RTH panel respectively
+    // (ChartPanel.AddMirroredTLineAsync/RemoveMirroredTLineAsync), per explicit request that
+    // drawings there replicate onto the live chart. One-way only (live -> Daily is NOT mirrored).
+    public event Action<string, long, decimal, long, decimal>? OnTLineDrawnEvent;
+    public event Action<string, long, decimal, long, decimal>? OnTLineDeletedEvent;
+
+    // Fired when an "SMA Watch" toolbar button (or the chart marker's Delete) arms/disarms
+    // monitoring for that period — MultiChartForm relays this to the live 1h panel
+    // (ChartPanel.SetSmaCrossWatchAsync), which does the actual cross detection. Persisted by
+    // SmaDailyWatchStore regardless of whether anything is listening at the moment.
+    public event Action<int, bool>? OnSmaWatchChangedEvent;
+
+    // Fired when the "D.PM" checkbox toggles — TwoPanelChartsControl/MultiChartForm listen so
+    // whichever live panels are currently open show/hide the yellow Daily SMA20 line immediately.
+    public event Action<bool>? OnDailyPmLineToggledEvent;
+
+    // Fired when a "D40"/"D100"/"D200" checkbox toggles — TwoPanelChartsControl listens (tab
+    // Charts only, panel 1/2 — never MultiChartForm/panel 3, per explicit request).
+    public event Action<int, bool>? OnDailySmaLineToggledEvent;
+
+    private async void RefreshSmaWatchMarkersAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var periods = SmaDailyWatchStore.Load(_symbol);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"loadSmaWatches({JsonSerializer.Serialize(periods)});");
     }
 
     private async Task InitAsync()
     {
-        await _webView.EnsureCoreWebView2Async();
+        await InitChartTabAsync(_webView, _dailyCandles, _dailyCandles.Count);
+        await EvaluatePisoTechoAsync();
+
+        // Blue "current price" line, per explicit request — same primitive the 1h/15m RTH panels'
+        // premarket line uses, just anchored on the Daily chart's still-forming "today" bar instead.
+        // Armed here unconditionally; MultiChartForm feeds it the live spot via UpdateLivePrice as
+        // ticks arrive (see OnLiveTick relay) — before the first tick lands, it just stays hidden.
+        await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+
+        // "SMA Watch" persistence — replay whatever's currently armed (button highlight + chart
+        // marker), then listen for deletions via the chart marker's Delete key.
+        var armedSmaWatches = SmaDailyWatchStore.Load(_symbol);
+        foreach (var period in armedSmaWatches)
+            if (_smaWatchButtons.TryGetValue(period, out var btn)) btn.BackColor = Color.LightYellow;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"loadSmaWatches({JsonSerializer.Serialize(armedSmaWatches)});");
+        _webView.CoreWebView2.WebMessageReceived += (s, e) => HandleSmaWatchMessage(e);
+
+        // "Rect" tool persistence (RectStore, tag "Daily") — replay whatever was drawn in a
+        // previous session, then listen for new/deleted ones from now on.
+        var savedRects = RectStore.Load(_symbol, "Daily");
+        var rectsJson = JsonSerializer.Serialize(savedRects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+        await _webView.CoreWebView2.ExecuteScriptAsync($"loadRects({rectsJson});");
+        _webView.CoreWebView2.WebMessageReceived += (s, e) => HandleRectMessage(e, "Daily", () => OnRectPlacedEvent?.Invoke());
+
+        // "Color Rect" tool persistence — same RectStore, separate tag ("DailyColor") so it never
+        // mixes with the plain gray Rect tool above. Color itself is derived from p1 vs p2 at draw
+        // time (see ColorRectPrimitive), so nothing extra needs storing.
+        var savedColorRects = RectStore.Load(_symbol, "DailyColor");
+        var colorRectsJson = JsonSerializer.Serialize(savedColorRects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+        await _webView.CoreWebView2.ExecuteScriptAsync($"loadColorRects({colorRectsJson});");
+        _webView.CoreWebView2.WebMessageReceived += (s, e) => HandleColorRectMessage(e, () => OnColorRectPlacedEvent?.Invoke());
+
+        // "Hora"/"15 Min" tabs — same chart (candles + SMA20/40/100/200 + Bollinger), just at
+        // those two timeframes instead of Daily, per explicit request. "Hora" reuses the same
+        // persisted hourly history GetLastDailyCandles itself aggregates from (HourlyCandleStore) —
+        // no extra fetch needed. "15 Min" has no persisted store, so it's a fresh REST history
+        // fetch + RTH-only aggregation, same call ChartPanel.LoadHistoryAsync makes for its own
+        // 15m RTH panel.
+        var hourlyCandles = HourlyCandleStore.Load(_symbol);
+        await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20);
+        await LoadAndWireTLinesAsync(_hourlyWebView, "DailyHora");
+
+        // Blue "current price" line, per explicit request — same primitive as the Daily tab's own,
+        // but anchored at today's actual session-open time (9:30 AM ET) instead of "today's still-
+        // forming bar", matching the live 1h panel's own convention (ChartPanel.
+        // GetTodaySessionOpenFakeEpoch) since this tab shows real hourly bars, not one-bar-per-day.
+        // Fed the live spot the same way as the Daily tab's line — see UpdateLivePrice.
+        await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync($"startPreMarketLine({GetTodaySessionOpenFakeEpoch()});");
+
+        // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day (same
+        // constraint ChartPanel.LoadHistoryAsync works around) — request 10 (the closest valid
+        // value at/above 8) so there's enough loaded for the 8-day initial zoom.
+        var history = await _historyClient.GetHistoricalCandlesAsync(_symbol, 10);
+        var filtered = CandleAggregation.FilterSession(history, rthOnly: true);
+        var fifteenCandles = CandleAggregation.AggregateToInterval(filtered, 15, rthOnly: true);
+        await InitChartTabAsync(_fifteenWebView, fifteenCandles, 8, showSmas: false, bollingerMiddleSolid: true);
+        await LoadAndWireTLinesAsync(_fifteenWebView, "Daily15Min");
+
+        // Blue "current price" line, per explicit request — same session-open anchor as the Hora
+        // tab's own line (ChartPanel.GetTodaySessionOpenFakeEpoch convention), since this tab also
+        // shows real (15-minute) intraday bars, not one bar per day. Fed by UpdateLivePrice below.
+        await _fifteenWebView.CoreWebView2!.ExecuteScriptAsync($"startPreMarketLine({GetTodaySessionOpenFakeEpoch()});");
+    }
+
+    // "T-Line" tool persistence (TLineStore) for one of the Hora/15 Min tabs — replay whatever was
+    // drawn in a previous session, then listen for new/deleted ones from now on.
+    private async Task LoadAndWireTLinesAsync(WebView2 webView, string tag)
+    {
+        if (webView.CoreWebView2 == null) return;
+        var savedLines = TLineStore.Load(_symbol, tag);
+        var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
+        await webView.CoreWebView2.ExecuteScriptAsync($"loadTLines({linesJson});");
+        webView.CoreWebView2.WebMessageReceived += (s, e) => HandleTLineMessage(e, tag, () => OnTLinePlacedEvent?.Invoke());
+    }
+
+    private void HandleRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string contextTag, Action onPlaced)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "bluerect_add" && type != "bluerect_delete" && type != "rect_placed") return;
+
+            if (type == "rect_placed") { onPlaced(); return; }
+
+            var t1 = root.GetProperty("t1").GetInt64();
+            var p1 = root.GetProperty("p1").GetDecimal();
+            var t2 = root.GetProperty("t2").GetInt64();
+            var p2 = root.GetProperty("p2").GetDecimal();
+            if (type == "bluerect_add") RectStore.Append(_symbol, contextTag, t1, p1, t2, p2);
+            else RectStore.Remove(_symbol, contextTag, t1, p1, t2, p2);
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
+    }
+
+    // "Color Rect" tool — same RectStore, own tag "DailyColor" and own message-type prefix
+    // ("colorrect_*") so it never collides with the plain gray Rect tool's "bluerect_*"/"rect_*"
+    // messages on the same WebMessageReceived stream.
+    private void HandleColorRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, Action onPlaced)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "colorrect_add" && type != "colorrect_delete" && type != "colorrect_placed") return;
+
+            if (type == "colorrect_placed") { onPlaced(); return; }
+
+            var t1 = root.GetProperty("t1").GetInt64();
+            var p1 = root.GetProperty("p1").GetDecimal();
+            var t2 = root.GetProperty("t2").GetInt64();
+            var p2 = root.GetProperty("p2").GetDecimal();
+            if (type == "colorrect_add") RectStore.Append(_symbol, "DailyColor", t1, p1, t2, p2);
+            else RectStore.Remove(_symbol, "DailyColor", t1, p1, t2, p2);
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
+    }
+
+    // Deleting the chart marker (Delete key on it) disarms the watch — same effect as clicking
+    // its toolbar button again, just reachable from the chart itself.
+    private void HandleSmaWatchMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeEl) || typeEl.GetString() != "smawatch_delete") return;
+
+            var period = root.GetProperty("period").GetInt32();
+            SmaDailyWatchStore.Remove(_symbol, period);
+            if (_smaWatchButtons.TryGetValue(period, out var btn)) btn.BackColor = SystemColors.Control;
+            OnSmaWatchChangedEvent?.Invoke(period, false);
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
+    }
+
+    private void HandleTLineMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string tag, Action onPlaced)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "tline" && type != "tline_delete" && type != "tline_placed") return;
+
+            if (type == "tline_placed") { onPlaced(); return; }
+
+            var t1 = root.GetProperty("t1").GetInt64();
+            var p1 = root.GetProperty("p1").GetDecimal();
+            var t2 = root.GetProperty("t2").GetInt64();
+            var p2 = root.GetProperty("p2").GetDecimal();
+            if (type == "tline")
+            {
+                TLineStore.Append(_symbol, tag, t1, p1, t2, p2);
+                OnTLineDrawnEvent?.Invoke(tag, t1, p1, t2, p2);
+            }
+            else
+            {
+                TLineStore.Remove(_symbol, tag, t1, p1, t2, p2);
+                OnTLineDeletedEvent?.Invoke(tag, t1, p1, t2, p2);
+            }
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
+    }
+
+    // Shared setup for each tab's own WebView2 — navigate to chart.html, configure Bollinger (and
+    // optionally SMAs — "15 Min" shows Bollinger only, per explicit request; Daily and Hora show
+    // both), load the given candle history. visibleDays is a day COUNT for Hora/15 Min (matches the
+    // live panels' own convention: configureVisibleDays groups by calendar day regardless of candle
+    // interval) but simply equals the bar count for Daily, where each bar IS one day.
+    private static async Task InitChartTabAsync(WebView2 webView, List<CandleData> candles, int visibleDays, bool showSmas = true, bool bollingerMiddleSolid = false)
+    {
+        await webView.EnsureCoreWebView2Async();
 
         var chartPath = Path.Combine(AppContext.BaseDirectory, "ChartAssets", "chart.html");
         var navDone = new TaskCompletionSource();
-        _webView.CoreWebView2.NavigationCompleted += (s, args) =>
+        webView.CoreWebView2.NavigationCompleted += (s, args) =>
         {
             if (args.IsSuccess) navDone.TrySetResult();
         };
@@ -47,18 +415,95 @@ public class DailyChartForm : Form
         // Same cache-busting query string ChartPanel.LoadHistoryAsync uses — forces a fresh read
         // of chart.html instead of a stale cached copy from an earlier window this session.
         var chartUri = new Uri(chartPath).AbsoluteUri + $"?v={File.GetLastWriteTimeUtc(chartPath).Ticks}";
-        _webView.CoreWebView2.Navigate(chartUri);
+        webView.CoreWebView2.Navigate(chartUri);
         await navDone.Task;
 
-        await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
-        await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+        if (showSmas) await webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
+        // "15 Min" solid — same "PM" (Punto Medio / SMA20) convention the live 15m RTH panel uses
+        // (ChartPanel: "Middle band (SMA20) drawn solid here, vs dashed on the 1h panel"), per
+        // explicit request; Daily/Hora keep it dashed (their default SMA20 line already covers it).
+        await webView.CoreWebView2.ExecuteScriptAsync($"configureBollinger(20, 2, {(bollingerMiddleSolid ? "true" : "false")});");
+        await webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
 
-        // Each daily bar IS one "day" by construction, so "50 days" of visible window is exactly
-        // the 50 bars passed in — same configureVisibleDays/applyVisibleRange machinery the live
-        // panels already use, no separate logic needed here.
-        await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({_dailyCandles.Count});");
+        var json = ChartPanel.ToChartJsonPublic(candles);
+        await webView.CoreWebView2.ExecuteScriptAsync($"loadHistory({json});");
+    }
 
-        var json = ChartPanel.ToChartJsonPublic(_dailyCandles);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"loadHistory({json});");
+    // Ported from ChartPanel.EvaluatePisoTechoPair/EvaluateSingleSmaPisoTecho — SAME criterion
+    // panel 1 uses (fast/slow SMA pairs (20,40) and (100,200), bearish alignment -> that SMA is
+    // "Techo" only while price stays below it, bullish -> "Piso" only while price stays above it),
+    // just evaluated against the Daily series' last CLOSED bar instead of the 1h panel's own
+    // _closedCandles — if the most recent daily candle is TODAY's (still forming, market open),
+    // it's excluded so this reads exactly like panel 1's own pre-market snapshot, not a live value
+    // that would flicker as today's still-forming daily bar moves.
+    private async Task EvaluatePisoTechoAsync()
+    {
+        var closed = _dailyCandles;
+        if (closed.Count > 0)
+        {
+            var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+            var todayEastern = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, eastern));
+            var lastBarDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(closed[^1].Time, eastern));
+            if (lastBarDate >= todayEastern) closed = closed[..^1];
+        }
+
+        (string? Fast, string? Slow) EvaluatePair(int fastPeriod, int slowPeriod)
+        {
+            var fast = Sma(closed, fastPeriod);
+            var slow = Sma(closed, slowPeriod);
+            if (fast == null || slow == null || fast == slow) return (null, null);
+
+            var price = closed[^1].Close;
+            var bearish = fast < slow;
+            return (EvaluateSingleSmaPisoTecho(fast.Value, price, bearish), EvaluateSingleSmaPisoTecho(slow.Value, price, bearish));
+        }
+
+        var (r20, r40) = EvaluatePair(20, 40);
+        var (r100, r200) = EvaluatePair(100, 200);
+
+        await _webView.CoreWebView2.ExecuteScriptAsync(
+            $"markPisoTecho(20, {ToJsStringOrNull(r20)}, 40, {ToJsStringOrNull(r40)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync(
+            $"markPisoTecho(100, {ToJsStringOrNull(r100)}, 200, {ToJsStringOrNull(r200)});");
+    }
+
+    private static decimal? Sma(List<CandleData> closed, int period)
+    {
+        if (closed.Count < period) return null;
+        decimal sum = 0;
+        for (int i = closed.Count - period; i < closed.Count; i++) sum += closed[i].Close;
+        return sum / period;
+    }
+
+    private static string? EvaluateSingleSmaPisoTecho(decimal sma, decimal price, bool bearishAlignment) =>
+        bearishAlignment ? (price < sma ? "Techo" : null) : (price > sma ? "Piso" : null);
+
+    private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
+
+    // Fed by MultiChartForm (hourlyPanel.OnLiveTick relay) — updates the blue "current price" line
+    // to today's live spot, whether that's a premarket tick or a live RTH price. No-op once this
+    // window is closed/disposed.
+    public async Task UpdateLivePrice(decimal price)
+    {
+        if (IsDisposed) return;
+        var priceArg = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (_webView.CoreWebView2 != null)
+            await _webView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
+        if (_hourlyWebView.CoreWebView2 != null)
+            await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
+        if (_fifteenWebView.CoreWebView2 != null)
+            await _fifteenWebView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
+    }
+
+    // Today's 9:30 AM ET (RTH session open), same "ET digits disguised as UTC" fake epoch every
+    // other reference line's anchor uses — see ChartPanel.GetTodaySessionOpenFakeEpoch, which this
+    // mirrors exactly for the Hora tab's own blue price line.
+    private long GetTodaySessionOpenFakeEpoch()
+    {
+        var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, eastern).Date;
+        var sessionOpenEastern = todayEastern.AddHours(9).AddMinutes(30);
+        var sessionOpenUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionOpenEastern, DateTimeKind.Unspecified), eastern);
+        return ChartPanel.FakeUtcEpochSeconds(sessionOpenUtc);
     }
 }

@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -36,6 +37,13 @@ public class ChartPanel : Panel
     // day (the WebView/ChartPanel itself gets fully disposed and recreated on each open) — see
     // EvaluatePisoTechoOnce, called from LoadHistoryAsync's Hourly15 branch.
     private static bool s_pisoTechoAnalyzed;
+    // The ET calendar date s_pisoTechoAnalyzed/s_pisoTechoResult* were last computed for — without
+    // this, "only the first time this process's lifetime" meant a process left running across a
+    // day boundary (this app isn't necessarily restarted daily) kept showing a PRIOR day's frozen
+    // Piso/Techo determination forever, never re-evaluating against the new day's actual premarket
+    // state — confirmed live, AAPL: SMA200 still marked "Techo" from a previous session even though
+    // today's premarket price had already opened above it. See EvaluatePisoTechoOnce.
+    private static DateOnly? s_pisoTechoAnalyzedDate;
     // One independent result PER SMA (not per pair) — within the (20,40) pair, 20 and 40 can each
     // independently say "Piso", "Techo", or null. This matters when price opens BETWEEN the two:
     // e.g. bearish alignment (20 < 40) with 20 < price < 40 means 40 still hasn't been broken
@@ -319,15 +327,69 @@ public class ChartPanel : Panel
         _ => mode.ToString()
     };
 
+    private const string CaptureExceptionLogPath = @"C:\OptionsData\EventLog\handler_exceptions.log";
+    private static readonly object CaptureExceptionLogLock = new();
+
     // Renders this panel's actual chart content via the WebView2 engine itself — NOT a screen
-    // capture — so it works even if the window is minimized, occluded, or off-screen. Used to
-    // build the combined 3-chart trade snapshot in MultiChartForm.
-    public async Task<Bitmap> CaptureImageAsync()
+    // capture. Used to build the combined 3-chart trade snapshot in MultiChartForm.
+    //
+    // CapturePreviewAsync can hang indefinitely (not throw — just never resolve) when the WinForms
+    // window is minimized or otherwise not actually composited — Windows suspends rendering for
+    // non-visible windows, and the WebView2 compositor never produces a frame to capture. Confirmed
+    // live: the market-close snapshot fired on time (16:00 ET) but the resulting PNG didn't land on
+    // disk until ~19:45, the exact same fire-and-forget Task just sitting there the whole time no
+    // one noticed. Wrapped in a timeout so a hung capture times out and gets logged instead of
+    // silently blocking whatever awaited this (a Telegram push, an Open/Close snapshot, an events
+    // .md write) for hours with zero trace of why.
+    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(15);
+
+    public async Task<Bitmap?> CaptureImageAsync()
+    {
+        // Force a repaint and give WebView2's compositor a moment to actually commit the frame
+        // before capturing — confirmed live: the combined-snapshot push fired right after this
+        // panel's own candle-close redraw (updateLastCandle/resetToNewDayCandle) came back BLANK
+        // (no candles at all) while the sibling panels, captured a beat later in the same loop,
+        // came out fine. ExecuteScriptAsync resolving only means the JS call ran, not that the
+        // browser has painted the result yet — capturing immediately after can catch a stale/blank
+        // frame from before the redraw. A single forced repaint + short delay is cheap insurance;
+        // every event this feeds (Telegram pushes, events .md) can tolerate a few extra ms.
+        await _webView.CoreWebView2.ExecuteScriptAsync("forceRepaint();");
+        await Task.Delay(80);
+
+        var captureTask = CapturePreviewBitmapAsync();
+        var completed = await Task.WhenAny(captureTask, Task.Delay(CaptureTimeout));
+        if (completed != captureTask)
+        {
+            LogCaptureException(new TimeoutException(
+                $"CapturePreviewAsync did not resolve within {CaptureTimeout.TotalSeconds}s — window likely minimized/not composited."));
+            return null;
+        }
+        return await captureTask;
+    }
+
+    private async Task<Bitmap> CapturePreviewBitmapAsync()
     {
         using var stream = new MemoryStream();
         await _webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
         stream.Position = 0;
         return new Bitmap(stream);
+    }
+
+    private void LogCaptureException(Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(CaptureExceptionLogPath)!);
+            lock (CaptureExceptionLogLock)
+            {
+                File.AppendAllText(CaptureExceptionLogPath,
+                    $"[{DateTime.Now:O}] ChartPanel.CaptureImageAsync symbol={_symbol} mode={_mode}{Environment.NewLine}{ex}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Best-effort logging — never let a logging failure cascade.
+        }
     }
 
     private void InitializeWebView()
@@ -373,6 +435,20 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Fires when a T-Line's 2nd click completes it — chart.html auto-disarms itself at that
+    // point (single-shot per press), so MultiChartForm listens for this to reset the
+    // corresponding button's color back to normal.
+    public event Action? OnTLinePlacedEvent;
+
+    // Fires when a rectangle's 2nd click completes it — chart.html auto-disarms itself at that
+    // point (single-shot per press), so MultiChartForm listens for this to reset the "Rect"
+    // button's color back to normal. Same pattern as OnTLinePlacedEvent.
+    public event Action? OnRectPlacedEvent;
+
+    // Same idea, for the OTHER "Rect" button (gray filled rectangle, panel 1) — a separate tool
+    // with its own arm/disarm state in chart.html (grayRectArmed), so it needs its own event.
+    public event Action? OnRectGrisPlacedEvent;
+
     // Toggles H-Line drawing mode on/off. While on, every click draws a new red horizontal line
     // from the click point to the right edge of the chart. Same toggle pattern as DZ/SZ.
     public async Task<bool> ToggleHLineModeAsync()
@@ -382,19 +458,22 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
-    // Toggles Text-placement mode on/off. While on, every click writes whatever text was on the
-    // Windows clipboard AT THE MOMENT THIS TOGGLE WAS PRESSED (re-read fresh each press, so
-    // turning it off and back on again picks up the clipboard's current contents) at that click's
-    // point — session-only, never persisted. Same single-button-arms-all-3-panels convention as
-    // H-Line (see MultiChartForm's btnRthTLine sibling button), but no mirroring: each panel only
-    // places text where it was itself clicked.
-    public async Task<bool> ToggleTextModeAsync()
+    // Toggles Text-placement mode on/off. While on, every click writes `text` (captured by the
+    // caller — MultiChartForm's own multiline textbox, not the Windows clipboard, per explicit
+    // request) at that click's point — session-only, never persisted. Same
+    // single-button-arms-all-3-panels convention as H-Line (see MultiChartForm's btnRthTLine
+    // sibling button), but no mirroring: each panel only places text where it was itself clicked.
+    public async Task<bool> ToggleTextModeAsync(string text)
     {
         if (_webView.CoreWebView2 == null) return false;
-        var text = Clipboard.ContainsText() ? Clipboard.GetText() : string.Empty;
         var result = await _webView.CoreWebView2.ExecuteScriptAsync($"toggleTextMode({JsonSerializer.Serialize(text)});");
         return result == "true";
     }
+
+    // Fires when a click while Text-placement mode is armed actually places a label — chart.html
+    // auto-disarms itself at that point (single-shot per press), so MultiChartForm listens for
+    // this to reset the "Text" button's color back to normal on all 3 panels.
+    public event Action? OnTextPlacedEvent;
 
     // Toggles Arrow drawing mode on/off. While on, every pair of clicks draws a line + arrowhead
     // between them — red if the 1st click is above (higher price than) the 2nd, green otherwise.
@@ -460,6 +539,43 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredHLine({time}, {priceStr});");
     }
 
+    // Draws a T-Line on THIS panel AND persists it under this panel's own TLineStore tag ("1h"/
+    // "RTH") — called when a T-Line is drawn on the corresponding DailyChartForm tab ("Hora" ->
+    // this panel in Hourly15 mode, "15 Min" -> this panel in RTH mode), per explicit request that
+    // those replicate onto the live chart (one-way: Daily -> live only, and it should survive the
+    // live chart being closed/reopened on its own, unlike AddMirroredHLineAsync above which is
+    // visual-only since H-Lines aren't stored per-panel).
+    public async Task AddMirroredTLineAsync(long t1, decimal p1, long t2, decimal p2)
+    {
+        TLineStore.Append(_symbol, TLineModeTag, t1, p1, t2, p2);
+        // Same "Potencial CT al Alza/Baja" hint a directly-drawn T-Line gets (see the "tline" case
+        // in CoreWebView2_WebMessageReceived) — without this, EvaluateTLineSignal would still fire
+        // the eventual breakout correctly (it reloads TLineStore fresh every candle close), but the
+        // on-screen hint that tells the user the analysis is "armed" never appeared.
+        UpdateTLineHint(p1, p2);
+        if (_webView.CoreWebView2 == null) return;
+        var p1Str = p1.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var p2Str = p2.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
+    }
+
+    // Removes a mirrored T-Line — called when the ORIGINATING T-Line (drawn on DailyChartForm's
+    // "Hora"/"15 Min" tab) gets deleted there, so the live chart's copy and its TLineStore entry
+    // don't outlive it.
+    public async Task RemoveMirroredTLineAsync(long t1, decimal p1, long t2, decimal p2)
+    {
+        TLineStore.Remove(_symbol, TLineModeTag, t1, p1, t2, p2);
+        // Same disarm a directly-deleted T-Line gets (see the "tline_delete" case in
+        // CoreWebView2_WebMessageReceived) — clears the "Potencial CT" hint and stops
+        // EvaluateTLineSignal from ever firing for this now-gone line.
+        _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync("setTLineHint('');");
+        var p1Str = p1.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var p2Str = p2.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
+    }
+
     // Draws/updates this panel's All-Time High reference line — called on chart open (loaded from
     // AllTimeHighStore) and again on the other 2 panels when the 1h panel persists a new one at the
     // close (see OnAllTimeHighUpdatedEvent).
@@ -488,16 +604,37 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"setBollingerEdgeMarkersVisible({(show ? "true" : "false")});");
     }
 
-    // White line at the underlying spot price the moment a trade is opened or closed — panel 3
-    // (RTH+Overnight) only, per explicit request extending the Simulator's identical marker to the
-    // live app. Same markEntrySpot JS function the Simulator already uses (anchors to whichever
-    // candle is currently last in the series, spans 3 bar-widths). Accumulates, one segment per
-    // call, never auto-removed.
-    public async Task MarkEntrySpotAsync(decimal price)
+    // White line at the underlying spot price the moment a trade is opened or closed — panels 2
+    // (15m RTH) and 3 (RTH+Overnight). Same markEntrySpot JS function the Simulator already uses
+    // (anchors to whichever candle is currently last in the series, spans 3 bar-widths).
+    // Accumulates, one segment per call, never auto-removed.
+    //
+    // entryTime (Eastern wall-clock, same convention as CandleData.Time — see FakeUtcEpochSeconds)
+    // is only passed when REPLAYING a persisted trade from a previous day (see
+    // ReplayPersistedEntryMarkersAsync below) — omitted, it anchors to whichever candle is
+    // currently forming, same as the original live-tick call site always did.
+    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr});");
+        var timeArg = entryTime.HasValue
+            ? new DateTimeOffset(DateTime.SpecifyKind(entryTime.Value, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString()
+            : "undefined";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg});");
+    }
+
+    // Redraws the white entry-spot line for every trade still open on THIS symbol (per
+    // OpenTradesStore, which already survives across day boundaries and app restarts — see
+    // Form1.RestoreOpenTrades/CloseExpiredTradesAsync) — called once after history loads, so a
+    // trade opened yesterday for tomorrow's expiration (Fase 3, the "Próxima" tab) still shows its
+    // ORIGINAL entry line today, alongside today's own if a new one was opened, per explicit
+    // request ("para que se vean ambas si cierra al otro dia").
+    private async Task ReplayPersistedEntryMarkersAsync()
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Fifteen_Full) return;
+        var openTrades = OpenTradesStore.Load().Where(t => t.Symbol == _symbol && t.EntrySpotPrice > 0m);
+        foreach (var trade in openTrades)
+            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime);
     }
 
     // Re-evaluated on every live tick (all 3 panels) — purely visual, flips the ATH line green
@@ -507,6 +644,17 @@ public class ChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync($"updateAllTimeHighBroken({(show ? "true" : "false")});");
+    }
+
+    // The ATH line only clutters the chart when price is nowhere near it — shown automatically
+    // (independent of the toolbar checkbox, which stays a master on/off) only while the live
+    // price is within AthProximityThreshold dollars of the stored ATH value, per explicit request.
+    private const decimal AthProximityThreshold = 5m;
+
+    private async Task MarkAllTimeHighNearAsync(bool near)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateAllTimeHighNear({(near ? "true" : "false")});");
     }
 
     // "ΔS=value" label at trade close — anchored at the trade's strike (same price as its green
@@ -570,6 +718,11 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Fires (up) when a click while green/red arrow mode is armed actually places an arrow —
+    // chart.html auto-disarms itself at that point (single-shot per press), so MultiChartForm
+    // listens for this to reset the corresponding button's color back to normal.
+    public event Action<bool>? OnArrowPlacedEvent;
+
     // Clears every DZ/SZ pair, rectangle, T-Line, H-Line, Arrow and Piso/Techo label drawn on
     // this panel, and turns all drawing modes off. Also wipes the persisted T-Line/vertical-arrow
     // files for this symbol (1h panel only) — a real "clear" should clear what's saved too.
@@ -601,6 +754,23 @@ public class ChartPanel : Panel
     // TLineStore file so they're fully independent instead of sharing one.
     private string TLineModeTag => _mode == ChartPanelMode.Hourly15 ? "1h" : "RTH";
 
+    // Same "Hora"/"15Min" convention EvaluateTLineSignal's own logPeriod and the Telegram-push
+    // timeframe param use — CtRecordStore records need to match up with EvaluateTLineSignal's own
+    // Resolve call, so this stays a single shared source instead of 3 separate inline ternaries.
+    private string CtTimeframeLabel => _mode == ChartPanelMode.Hourly15 ? "Hora" : "15Min";
+
+    // Today's 9:30 AM ET (RTH session open), as the same "ET digits disguised as UTC" fake epoch
+    // every other reference line's anchor uses — see PreMarketLinePrimitive in chart.html, which
+    // needs a FIXED anchor instead of "whatever candle is currently last" to stop the blue
+    // pre-market price line from drifting rightward through the RTH session.
+    private long GetTodaySessionOpenFakeEpoch()
+    {
+        var todayEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).Date;
+        var sessionOpenEastern = todayEastern.AddHours(9).AddMinutes(30);
+        var sessionOpenUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionOpenEastern, DateTimeKind.Unspecified), EasternZone);
+        return FakeUtcEpochSeconds(sessionOpenUtc);
+    }
+
     // Sets the "Potencial CT al Alza/Baja" hint right after a T-Line finishes drawing — direction
     // comes from how the line itself was drawn (technical-analysis convention: a descending line
     // acts as resistance, so breaking it is a bullish signal; an ascending line acts as support,
@@ -615,9 +785,24 @@ public class ChartPanel : Panel
 
     // Reloads this panel's own saved T-Lines (TLineModeTag-scoped) on chart open — shared by
     // Hourly15 and Fifteen_RTH, each fully independent from the other now.
+    // "DailyHora" (for the 1h panel) / "Daily15Min" (for the RTH panel) — T-Lines drawn on
+    // DailyChartForm's corresponding tab. Merged in here (not just relayed live via
+    // MultiChartForm.AttachDailyMirroring) so this panel picks them up correctly regardless of
+    // which window — this live chart or the standalone Daily one — happened to open first; relying
+    // purely on the live-relay path raced against this very load (WebView2 init timing isn't
+    // deterministic enough to guarantee AttachDailyMirroring's backfill runs before this executes).
+    private string DailyTLineTag => _mode == ChartPanelMode.Hourly15 ? "DailyHora" : "Daily15Min";
+
     private async Task LoadSavedTLinesAsync()
     {
         var savedLines = TLineStore.Load(_symbol, TLineModeTag);
+        var dailyLines = TLineStore.Load(_symbol, DailyTLineTag);
+        foreach (var line in dailyLines)
+        {
+            if (savedLines.Contains(line)) continue;
+            TLineStore.Append(_symbol, TLineModeTag, line.T1, line.P1, line.T2, line.P2);
+            savedLines.Add(line);
+        }
         if (savedLines.Count == 0) return;
 
         var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
@@ -652,13 +837,53 @@ public class ChartPanel : Panel
                         // independently by EvaluateTLineSignal (see _tLineSignalFiredFor).
                         TLineStore.Append(_symbol, TLineModeTag, t1, p1, t2, p2);
                         UpdateTLineHint(p1, p2);
+                        // "Pendiente" CT record the moment the line is drawn — per explicit
+                        // request, this is what proves the analysis was actually armed, separate
+                        // from whether it later breaks or not (see EvaluateTLineSignal's own
+                        // CtRecordStore.Resolve call, which updates THIS same record in place).
+                        CtRecordStore.Add(_symbol, CtTimeframeLabel, t1, p1, t2, p2, DateTime.Now);
                     }
                     else
                     {
                         TLineStore.Remove(_symbol, TLineModeTag, t1, p1, t2, p2);
                         _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
+                        // Deleted before it ever resolved — marked, not removed, so the CT log
+                        // still shows the analysis was armed (per explicit request). No-op if it
+                        // already resolved (Resolve already moved it off "Pendiente").
+                        CtRecordStore.MarkDeletedUnresolved(_symbol, CtTimeframeLabel, t1, p1, t2, p2);
                     }
+                    break;
+                }
+                case "tline_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment a T-Line's 2nd click
+                    // completes it — this just tells C# so the corresponding button's color
+                    // resets (see MultiChartForm's btnTLine/btnRthTLine wiring).
+                    OnTLinePlacedEvent?.Invoke();
+                    break;
+                }
+                case "rect_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment a rectangle's 2nd
+                    // click completes it — this just tells C# so the "Rect" button's color resets
+                    // (see MultiChartForm's btnRect wiring).
+                    OnRectPlacedEvent?.Invoke();
+                    break;
+                }
+                case "rectgris_placed":
+                {
+                    // Single-shot counterpart for the gray rect tool — see OnRectGrisPlacedEvent.
+                    OnRectGrisPlacedEvent?.Invoke();
+                    break;
+                }
+                case "text_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment one label is placed
+                    // (see the click handler's textArmed block) — this just tells C# so the
+                    // "Text" button's color resets on all 3 panels, since arming it in the first
+                    // place armed all 3 at once (see MultiChartForm's btnText.Click).
+                    OnTextPlacedEvent?.Invoke();
                     break;
                 }
                 case "rect_add":
@@ -682,6 +907,16 @@ public class ChartPanel : Panel
                     var up = root.GetProperty("up").GetBoolean();
                     if (type == "arrow_add") VerticalArrowStore.Append(_symbol, time, price, up);
                     else VerticalArrowStore.Remove(_symbol, time, price, up);
+                    break;
+                }
+                case "arrow_placed":
+                {
+                    // Single-shot: chart.html auto-disarms itself the moment one arrow is placed
+                    // (see the click handler's greenArrowArmed/redArrowArmed block) — this just
+                    // tells C# so the corresponding button's color resets (see MultiChartForm's
+                    // btnFlechaVerde/btnFlechaRoja wiring).
+                    var up = root.GetProperty("up").GetBoolean();
+                    OnArrowPlacedEvent?.Invoke(up);
                     break;
                 }
                 case "arrow_move":
@@ -735,6 +970,8 @@ public class ChartPanel : Panel
                     OnHLineDrawnEvent?.Invoke(hAddTime, hAddPrice);
                     break;
                 }
+                // "smawatch_delete" removed — this panel no longer loads the 👁 marker (see
+                // SetSmaCrossWatchAsync), so chart.html never has one to click-delete here anymore.
             }
         }
         catch
@@ -918,6 +1155,9 @@ public class ChartPanel : Panel
             var eventDirection = upBreakout ? "Alza" : "Baja";
             EventLogStore.Append(_symbol, logPeriod, "TLineBreakout", eventDirection, caption, justClosed.Close,
                 $"TLine={tLineValue:F2};SMA{TLineSmaPeriod}={sma20.Value:F2}");
+            // Updates the SAME "Pendiente" record CtRecordStore.Add created when this T-Line was
+            // first drawn — never appends a new row (see ChartPanel's own "tline" message case).
+            CtRecordStore.Resolve(_symbol, CtTimeframeLabel, t1, p1, t2, p2, eventDirection, DateTime.Now);
         }
     }
 
@@ -1026,12 +1266,18 @@ public class ChartPanel : Panel
     // needed from here.
     private async Task EvaluatePisoTechoOnce()
     {
-        // Compute only the very first time (this app instance, this process's lifetime); every
-        // later call (chart closed and reopened the same day) just redraws whatever was already
-        // decided, without re-analyzing.
-        if (!s_pisoTechoAnalyzed)
+        // Compute once per ET calendar day (not just once per process lifetime — see
+        // s_pisoTechoAnalyzedDate's own comment); every later call for the SAME day (chart closed
+        // and reopened) just redraws whatever was already decided, without re-analyzing.
+        var todayEastern = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        if (!s_pisoTechoAnalyzed || s_pisoTechoAnalyzedDate != todayEastern)
         {
             s_pisoTechoAnalyzed = true;
+            s_pisoTechoAnalyzedDate = todayEastern;
+            // New day — also let today's actual RTH open re-validate from scratch (see
+            // ValidatePisoTechoAgainstOpen's own once-per-day guard) instead of staying permanently
+            // skipped because some PRIOR day's open already flipped it.
+            s_pisoTechoOpenValidated = false;
 
             var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
             if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0)) // only meaningful pre-market
@@ -1135,6 +1381,12 @@ public class ChartPanel : Panel
 
         result = null;
         s_pisoTechoWatches.RemoveAll(w => w.Period == period);
+        // Visually hiding the label on "broken" is disabled per explicit request — the Piso/Techo
+        // label should stay on screen for the whole RTH session even after price crosses it. All
+        // the internal state above still updates normally (result cleared, watch removed, rebound
+        // tracking below still fires) — only the JS call that hides the on-chart text is skipped.
+        // Re-enable by uncommenting.
+        /*
         // BeginInvoke — this can run from Streamer_OnNewCandle's background (WebSocket) thread
         // (via ValidatePisoTechoAgainstLivePrice, the continuous premarket check), and a direct
         // ExecuteScriptAsync call from that thread silently fails, same threading bug the PM
@@ -1142,19 +1394,54 @@ public class ChartPanel : Panel
         // invalidation.
         if (IsHandleCreated)
             BeginInvoke(async () => await (_webView.CoreWebView2?.ExecuteScriptAsync($"removePisoTechoLabel({period});") ?? Task.CompletedTask));
+        */
         OnPisoTechoLevelRemovedEvent?.Invoke(period);
         if (period == 20 || period == 40) EvaluateFirstReboundLabel();
     }
 
-    // Continuous premarket counterpart to ValidatePisoTechoAgainstOpen — that one only checks ONCE,
-    // against the actual 9:30 RTH open. This runs on every premarket tick instead (same tick that
-    // feeds the blue premarket line), so a Techo the live price already trades above (or a Piso it
-    // already trades below) gets invalidated the moment that happens, instead of waiting for the
-    // open. Safe to call repeatedly — InvalidateIfBrokenByOpen is a no-op per period once its
-    // result is already null, and by the time the real 9:30 open candle arrives
-    // ValidatePisoTechoAgainstOpen just finds nothing left to invalidate for whichever periods
-    // already got caught here.
-    private void ValidatePisoTechoAgainstLivePrice(decimal livePrice)
+    // Snaps the blue premarket line to the ACTUAL RTH open price the moment the market opens,
+    // overriding whatever premarket tick it last froze at. Previously it just stopped being
+    // updated once RTH started (see Streamer_OnNewCandle's premarket-tick guard), freezing at
+    // "the last premarket price" — usually close to the open, but genuinely different from it
+    // whenever price moves sharply in the final seconds before 9:30 (confirmed live: AAPL rallied
+    // to a premarket high right up to 9:29:59, then reversed at the bell, leaving the line sitting
+    // well above the real open). Called once, exactly at the market-open transition, from both
+    // Hourly15 and Fifteen_RTH's own bucket-reset logic (see Streamer_OnNewCandle).
+    private void FinalizePreMarketLineAtOpen(decimal openPrice, DateTime eastern)
+    {
+        var exposedDir = GetBollingerDirection(openPrice);
+        var exposedArg = exposedDir switch
+        {
+            BollingerDirection.Above => "'above'",
+            BollingerDirection.Below => "'below'",
+            _ => "null"
+        };
+        s_preMarketLineState[$"{_symbol}_{_mode}"] = (DateOnly.FromDateTime(eastern), openPrice, exposedDir);
+        BeginInvoke(async () =>
+        {
+            if (_webView.CoreWebView2 == null) return;
+            await _webView.CoreWebView2.ExecuteScriptAsync(
+                $"updatePreMarketLine({openPrice.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {exposedArg});");
+        });
+    }
+
+    // Continuous counterpart to ValidatePisoTechoAgainstOpen — that one only checks ONCE, against
+    // the actual 9:30 RTH open. This runs on every live tick instead, so a Techo the live price
+    // already trades above (or a Piso it already trades below) gets invalidated the moment that
+    // happens, instead of only at the open. Safe to call repeatedly — InvalidateIfBrokenByOpen is a
+    // no-op per period once its result is already null.
+    //
+    // Public (not just called internally for THIS panel's own premarket ticks) so MultiChartForm
+    // can also call it on the HOURLY (1h) panel specifically with panel 2's (Fifteen_RTH) own RTH
+    // price — per explicit request, panel 2's RTH price action is allowed to continuously
+    // invalidate a level all through the session (previously only the 9:30 open snapshot did),
+    // but panel 3 (RTH+Overnight) must never be able to, since its price includes overnight/
+    // extended-hours moves unrelated to the regular session. The SMA these levels are actually
+    // about is always panel 1's own 1h SMA (_closedCandles below) regardless of which panel's
+    // price is being checked — calling this on panel 2's own instance instead would silently
+    // compute a 15m SMA instead of the real 1h one, which is why MultiChartForm routes panel 2's
+    // price THROUGH the hourly panel's own instance rather than calling this on rthPanel directly.
+    public void ValidatePisoTechoAgainstLivePrice(decimal livePrice)
     {
         InvalidateIfBrokenByOpen(20, ref s_pisoTechoResult20, livePrice);
         InvalidateIfBrokenByOpen(40, ref s_pisoTechoResult40, livePrice);
@@ -1198,7 +1485,10 @@ public class ChartPanel : Panel
     private void EvaluateAllTimeHighLive(decimal livePrice, DateTime eastern)
     {
         if (_athValue != null)
+        {
             BeginInvoke(async () => await MarkAllTimeHighBrokenAsync(livePrice > _athValue.Value));
+            BeginInvoke(async () => await MarkAllTimeHighNearAsync(Math.Abs(livePrice - _athValue.Value) < AthProximityThreshold));
+        }
 
         if (_mode != ChartPanelMode.Hourly15) return;
 
@@ -1220,7 +1510,12 @@ public class ChartPanel : Panel
 
         _athEvaluatedAtClose = true;
 
-        if (_athValue != null && _athTodaysHigh.Value <= _athValue.Value) return;
+        // Re-read from disk right here instead of trusting the in-memory _athValue cached at
+        // chart-open time — that cache can be stale/null (e.g. a Load() that happened to land
+        // empty), and comparing against a stale value is exactly what let a lower "today's high"
+        // clobber a real historical ATH. This is the authoritative check.
+        var storedAth = AllTimeHighStore.Load(_symbol);
+        if (storedAth != null && _athTodaysHigh.Value <= storedAth.Value.Value) return;
 
         var newValue = _athTodaysHigh.Value;
         var today = DateOnly.FromDateTime(eastern);
@@ -1492,6 +1787,24 @@ public class ChartPanel : Panel
         return BollingerDirection.None;
     }
 
+    // "Spot fuera de BB" — red text top-center of panel 2 (15m RTH), RTH only, while the live price
+    // is outside this panel's own Bollinger(20,2) band. Purely visual, re-evaluated on every tick.
+    private bool _spotOutsideBBShown;
+
+    private void EvaluateSpotOutsideBollinger(decimal price)
+    {
+        var show = GetBollingerDirection(price) != BollingerDirection.None;
+        if (show == _spotOutsideBBShown) return;
+        _spotOutsideBBShown = show;
+        BeginInvoke(async () => await MarkSpotOutsideBBAsync(show));
+    }
+
+    private async Task MarkSpotOutsideBBAsync(bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateSpotOutsideBB({(show ? "true" : "false")});");
+    }
+
     // Daily Bollinger(20,2) position for `price` — "managed in memory": there's no dedicated Daily
     // ChartPanel, so this aggregates HourlyCandleStore's persisted history (same pipeline
     // EvaluateDailyBounce uses) into daily bars on demand, dropping today's still-forming bar.
@@ -1520,11 +1833,24 @@ public class ChartPanel : Panel
     // WebView2 (see MultiChartForm's Daily button). Toggling Daily in-place on the live 1h panel's
     // own WebView2 hit an unresolved rendering bug (candles stayed invisible until a manual
     // scroll); a brand-new page load doesn't carry over whatever state that bug depended on.
+    // Merges DailyCandleStore (real daily bars from Yahoo, years of depth — see
+    // scripts/backfill_daily.js) with HourlyCandleStore's own daily aggregation (fewer days —
+    // capped at 1500 hourly rows — but includes today's still-forming bar and whatever the app
+    // itself has collected live, which Yahoo's daily bar for "today" won't reflect intraday).
+    // The hourly-aggregated version wins for any day both cover, so the most recent days are
+    // always as fresh as the live 1h panel itself; DailyCandleStore just fills in the depth SMA200
+    // needs beyond what 1500 hourly rows (~214 trading days) can hold on its own.
     public static List<CandleData> GetLastDailyCandles(string symbol, int count)
     {
         var hourly = HourlyCandleStore.Load(symbol);
-        var daily = CandleAggregation.AggregateToDaily(hourly);
-        return daily.Select(d => d.Candle).TakeLast(count).ToList();
+        var fromHourly = CandleAggregation.AggregateToDaily(hourly).Select(d => d.Candle).ToList();
+        var hourlyDates = fromHourly.Select(c => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))).ToHashSet();
+
+        var fromDailyStore = DailyCandleStore.Load(symbol)
+            .Where(c => !hourlyDates.Contains(DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))));
+
+        var merged = fromDailyStore.Concat(fromHourly).OrderBy(c => c.Time).ToList();
+        return merged.TakeLast(count).ToList();
     }
 
     // Fires on every premarket tick (Hourly15 panel only — see Streamer_OnNewCandle) with the
@@ -1546,6 +1872,11 @@ public class ChartPanel : Panel
 
     private void EvaluateVolatilityOpening(decimal livePrice)
     {
+        // "Abriendo la Volatilidad" disabled per explicit request — not used for now. Left commented
+        // (not deleted) so it can be re-enabled later; same pattern as EvaluateBollingerWideningLabel's
+        // own EventLogStore/Telegram block below.
+        return;
+        /*
         if ((!_volatilityOpeningArmedUpper && !_volatilityOpeningArmedLower) || _volatilityOpeningFired) return;
 
         var current = BollingerBandsAt(_closedCandles.Count - 1);
@@ -1577,6 +1908,7 @@ public class ChartPanel : Panel
         BeginInvoke(async () => await SendChartToTelegramAsync(caption));
         EventLogStore.Append(_symbol, "15Min", "VolatilityOpening", direction, caption, livePrice,
             $"BollUpper={current.Value.Upper:F2};BollLower={current.Value.Lower:F2}");
+        */
     }
 
     // "BB" label — 1h and 15m RTH panels, next to "PM". Purely visual, continuous (re-evaluated on
@@ -1636,6 +1968,11 @@ public class ChartPanel : Panel
         BeginInvoke(async () => await MarkBollingerWideningAsync(true, bullish));
         BeginInvoke(() => OnBollingerWideningLevelEvent?.Invoke(true, bullish));
 
+        // "Abriendo Bollinger con Volatilidad" event/log/Telegram — disabled per explicit request
+        // (prescindiendo de este análisis por ahora). The "BB" chart label and the "Expuesto en 3
+        // charts" banner (CheckPmBbAlignment, fed by OnBollingerWideningLevelEvent above) are NOT
+        // affected — only this specific logged/pushed event stops firing. Re-enable by uncommenting.
+        /*
         if (!_bbOpeningLogged)
         {
             _bbOpeningLogged = true;
@@ -1649,6 +1986,7 @@ public class ChartPanel : Panel
             // OnBollingerOpeningEvent wiring / SaveBollingerOpeningSnapshotAsync.
             BeginInvoke(() => OnBollingerOpeningEvent?.Invoke(caption));
         }
+        */
 
         // "Δ" — distance from the live price to whichever band is closer, next to "BB". Only while
         // the price is still actually BETWEEN the two bands (bands widening but not broken out yet)
@@ -1717,6 +2055,305 @@ public class ChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync($"updatePuntoMedio({(bullish ? "true" : "false")}, {(large ? "true" : "false")});");
+    }
+
+    // ==================================================================================
+    // "Cruce de vela con PM" — 15m RTH panel only, per explicit request. Fires when a just-closed
+    // candle's Open sits on one side of the SMA20(15m) ("PM") and its Close on the other, in the
+    // SAME direction PM is currently tilting (green/alcista "PM" label: crossing upward only;
+    // red/bajista: crossing downward only) — i.e. the candle itself crossed through the PM line,
+    // not just touched it. Log-only: written directly to the per-symbol events .md
+    // (EventLogMarkdownWriter, via MultiChartForm so it can attach the combined 3-panel
+    // screenshot) — never Telegram, never crossLog, per explicit request.
+    // ==================================================================================
+
+    public event Action<string>? OnPmCrossEvent;
+
+    // Tracks which side of the current PM(15m) value the live spot was on as of the LAST tick —
+    // null until the first tick that has a valid PM to compare against. Reset at the start of each
+    // new RTH session (see Streamer_OnNewCandle's Fifteen_RTH day-reset branch) so a stale side
+    // from a previous day can never be compared against today's price.
+    private bool? _pmCrossLastSide; // true = spot above PM, false = spot below PM
+
+    // Only the FIRST cross of the RTH session logs — per explicit request, confirmed live (AAPL):
+    // price hovering right at the PM value whipsaws _pmCrossLastSide back and forth on ticks that
+    // barely move (e.g. 313.00/312.99/313.00), logging the "same" cross dozens of times in one
+    // session. Reset alongside _pmCrossLastSide at the day boundary above.
+    private bool _pmCrossFiredToday;
+
+    // Live (tick-by-tick) counterpart — fires the EXACT moment the spot price crosses through the
+    // current PM(15m) value, not just once a candle closes above/below it (the original version,
+    // replaced per explicit request: "necesito que sea en el momento en que lo cruza... no que la
+    // vela cierra por encima"). Only fires in the direction PM is currently tilting (spot crossing
+    // UPWARD while PM is alcista, DOWNWARD while bajista) — a cross the "wrong" way just updates
+    // the tracked side silently, no event.
+    private void EvaluatePmCross(decimal livePrice)
+    {
+        if (_pmCrossFiredToday) return;
+
+        var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
+        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
+        if (smaNow == null) { _pmCrossLastSide = null; return; } // no PM yet — nothing to track against
+
+        var side = livePrice > smaNow.Value;
+        var previousSide = _pmCrossLastSide;
+        _pmCrossLastSide = side;
+
+        if (previousSide == null || previousSide == side) return; // first tick, or no crossing this tick
+        if (smaEarlier == null || smaNow == smaEarlier) return; // no clear PM tilt yet — can't judge direction
+
+        var pmBullish = smaNow > smaEarlier;
+        var crossedUpward = side; // side==true means spot is now ABOVE PM, i.e. just crossed upward
+        if (crossedUpward != pmBullish) return; // crossed the "wrong" way relative to PM's current tilt
+
+        _pmCrossFiredToday = true;
+        var direction = pmBullish ? "alza" : "baja";
+        var caption = $"Cruce de Spot con PM ({direction}) — Spot {livePrice:F2} = PM {smaNow.Value:F2}";
+        BeginInvoke(() => OnPmCrossEvent?.Invoke(caption));
+    }
+
+    // ==================================================================================
+    // "D.PM" / "BB" (Daily) — 1h panel only, per explicit request. Same idea as PM/BB above but
+    // computed from the DAILY chart (the same SMA20/Bollinger the "Daily" toggle button shows),
+    // not this panel's own hourly candles. Managed entirely in memory here — no dedicated Daily
+    // ChartPanel exists (see GetLastDailyCandles's own comment) — by aggregating
+    // HourlyCandleStore's persisted history the same way GetDailyBollingerDirection does, except
+    // TODAY's still-forming bar is included with the live price instead of dropped, since that's
+    // the whole point of "today vs N days ago".
+    //
+    // Recomputed only when an hourly candle on THIS panel closes (see Streamer_OnNewCandle's
+    // Hourly15 branch) — not on every tick — since it re-reads HourlyCandleStore from disk each
+    // time; per explicit request, daily-timeframe data doesn't need tick-level freshness anyway.
+    // ==================================================================================
+
+    private void EvaluateDailyPmAndBb(decimal livePrice)
+    {
+        if (_mode != ChartPanelMode.Hourly15) return;
+
+        var hourly = HourlyCandleStore.Load(_symbol);
+        var daily = CandleAggregation.AggregateToDaily(hourly);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        var closes = daily.Where(d => d.Date < today).Select(d => d.Candle.Close).ToList();
+        closes.Add(livePrice); // today's still-forming bar, using the live price as its close
+
+        var lastIdx = closes.Count - 1;
+
+        // D.PM: today's SMA20 (live) vs SMA20 from 2 closed days ago.
+        var smaToday = DailySma(closes, VolatilityBollingerPeriod, lastIdx);
+        var smaTwoDaysAgo = DailySma(closes, VolatilityBollingerPeriod, lastIdx - 2);
+        if (smaToday != null && smaTwoDaysAgo != null && smaToday != smaTwoDaysAgo)
+        {
+            var pmBullish = smaToday > smaTwoDaysAgo;
+            BeginInvoke(async () => await MarkDailyPuntoMedioAsync(pmBullish));
+        }
+        if (smaToday != null)
+            BeginInvoke(() => OnDailyPmValueEvent?.Invoke(smaToday.Value));
+
+        // Same Daily-timeframe SMA line as D.PM above, generalized to 40/100/200 — tab Charts only
+        // (panel 1/2), per explicit request. Kept as a separate event from OnDailyPmValueEvent
+        // (which stays 20-only, still drawn on all 3 panels via MarkDailyPmLineAsync) rather than
+        // merging them, so the existing D.PM/popup behavior can't regress.
+        foreach (var period in new[] { 40, 100, 200 })
+        {
+            var smaTodayN = DailySma(closes, period, lastIdx);
+            if (smaTodayN != null)
+                BeginInvoke(() => OnDailySmaLineValueEvent?.Invoke(period, smaTodayN.Value));
+        }
+
+        // BB (Daily): today's Bollinger(20,2) (live) vs yesterday's closed bands — "open" when the
+        // TOTAL width (upper - lower) is bigger than yesterday's, same "genuine expansion" test
+        // ArmVolatilityOpeningWatch/EvaluateBollingerWideningLabel already use elsewhere in this
+        // file. Requiring BOTH bands to individually move outward on the SAME single-day delta (the
+        // original version here) was stricter than that convention and false-negatived whenever
+        // only one side moved while the total width still grew.
+        var bandsToday = DailyBollingerBandsAt(closes, VolatilityBollingerPeriod, lastIdx);
+        var bandsYesterday = DailyBollingerBandsAt(closes, VolatilityBollingerPeriod, lastIdx - 1);
+        if (bandsToday != null && bandsYesterday != null)
+        {
+            var widthToday = bandsToday.Value.Upper - bandsToday.Value.Lower;
+            var widthYesterday = bandsYesterday.Value.Upper - bandsYesterday.Value.Lower;
+            var open = widthToday > widthYesterday;
+            BeginInvoke(async () => await MarkDailyBbAsync(open));
+        }
+    }
+
+    private static decimal? DailySma(List<decimal> closes, int period, int endIndex)
+    {
+        if (endIndex < period - 1 || endIndex >= closes.Count) return null;
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += closes[i];
+        return sum / period;
+    }
+
+    private static (decimal Upper, decimal Lower)? DailyBollingerBandsAt(List<decimal> closes, int period, int endIndex)
+    {
+        if (endIndex < period - 1 || endIndex >= closes.Count) return null;
+
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += closes[i];
+        var mean = sum / period;
+
+        decimal sqSum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+        {
+            var d = closes[i] - mean;
+            sqSum += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / period));
+
+        return (mean + VolatilityBollingerMult * stdDev, mean - VolatilityBollingerMult * stdDev);
+    }
+
+    // ==================================================================================
+    // SMA cross watch (Daily) — armed from DailyChartForm's "SMA Watch" buttons (see
+    // SmaDailyWatchStore.cs), monitored here for as long as this (1h) panel stays open. Fires
+    // once per arm the moment the live price crosses from one side of that SMA to the other —
+    // "cruce", not just getting close — same one-shot-per-watch convention as EvaluateTLineSignal
+    // (_tLineSignalFiredFor). Independent of whether DailyChartForm itself is currently open; only
+    // the live 1h panel needs to be, per explicit request.
+    // ==================================================================================
+
+    private readonly HashSet<int> _smaWatchPeriods = new();
+    private readonly Dictionary<int, bool> _smaWatchLastSide = new(); // period -> true(above)/false(below)
+    private readonly HashSet<int> _smaWatchHasBaseline = new();
+    private readonly HashSet<int> _smaWatchFiredFor = new();
+
+    // Fires (caption) when a watched SMA gets crossed — MultiChartForm relays this to Telegram
+    // (with the usual 3-panel screenshot) and appends it to EventLogStore, same pattern as
+    // OnTLineSignalEvent/OnPisoTechoWatchEvent.
+    public event Action<string>? OnSmaCrossEvent;
+
+    // Called by MultiChartForm when a watch is armed/disarmed from DailyChartForm (or loaded from
+    // SmaDailyWatchStore at panel open). Arming (re-)baselines from scratch — even a period that
+    // already fired once can fire again if re-armed after being removed.
+    public void SetSmaCrossWatch(int period, bool armed)
+    {
+        if (armed)
+        {
+            _smaWatchPeriods.Add(period);
+            _smaWatchHasBaseline.Remove(period);
+            _smaWatchFiredFor.Remove(period);
+        }
+        else
+        {
+            _smaWatchPeriods.Remove(period);
+            _smaWatchHasBaseline.Remove(period);
+            _smaWatchLastSide.Remove(period);
+            _smaWatchFiredFor.Remove(period);
+        }
+    }
+
+    // Arms/disarms a watch from DailyChartForm (the only place this can be armed from now, per
+    // explicit request) — persists via SmaDailyWatchStore (same store both windows share) and
+    // updates this panel's OWN detection state. Does NOT draw the 👁 marker here anymore: the watch
+    // evaluates the DAILY-timeframe SMA (see EvaluateSmaCrossWatches below), which is a different
+    // value than this panel's own hourly SMA line — a marker positioned at this panel's hourly SMA
+    // point was showing at the wrong price level entirely. The marker now only ever draws on
+    // DailyChartForm's own chart, where the SMA it's positioned against actually matches.
+    public async Task SetSmaCrossWatchAsync(int period, bool armed)
+    {
+        if (armed) SmaDailyWatchStore.Add(_symbol, period);
+        else SmaDailyWatchStore.Remove(_symbol, period);
+        SetSmaCrossWatch(period, armed);
+        await Task.CompletedTask;
+    }
+
+    private void EvaluateSmaCrossWatches(decimal livePrice)
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _smaWatchPeriods.Count == 0) return;
+
+        var hourly = HourlyCandleStore.Load(_symbol);
+        var daily = CandleAggregation.AggregateToDaily(hourly);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        var closes = daily.Where(d => d.Date < today).Select(d => d.Candle.Close).ToList();
+        closes.Add(livePrice); // today's still-forming bar, using the live price as its close
+        var lastIdx = closes.Count - 1;
+
+        foreach (var period in _smaWatchPeriods)
+        {
+            if (_smaWatchFiredFor.Contains(period)) continue;
+
+            var sma = DailySma(closes, period, lastIdx);
+            if (sma == null) continue; // not enough daily history yet for this period
+
+            var above = livePrice > sma.Value;
+            if (!_smaWatchHasBaseline.Contains(period))
+            {
+                // First evaluation after arming — just record which side we started on, no fire
+                // (there's no "previous side" yet to have crossed FROM).
+                _smaWatchHasBaseline.Add(period);
+                _smaWatchLastSide[period] = above;
+                continue;
+            }
+
+            if (_smaWatchLastSide[period] == above) continue; // same side — no cross yet
+            _smaWatchLastSide[period] = above;
+
+            _smaWatchFiredFor.Add(period);
+            var direction = above ? "al alza" : "a la baja";
+            var caption = $"{_symbol} cruzó SMA{period} (Diario) {direction} — spot {livePrice:F2}, SMA{period} {sma.Value:F2}";
+            var eventDirection = above ? "Alza" : "Baja";
+            EventLogStore.Append(_symbol, "Daily", "SmaCross", eventDirection, caption, livePrice, $"SMA{period}={sma.Value:F2}");
+            OnSmaCrossEvent?.Invoke(caption);
+        }
+    }
+
+    // Fires (smaValue) every time EvaluateDailyPmAndBb recomputes the Daily SMA20 (1h panel only) —
+    // MultiChartForm relays this to all 3 panels (MarkDailyPmLineAsync), same "sibling relay"
+    // pattern as the mirrored H-Lines, so the solid yellow "PM" reference line shows on every
+    // panel, not just the one that computed it.
+    public event Action<decimal>? OnDailyPmValueEvent;
+
+    public async Task MarkDailyPmLineAsync(decimal price, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyPmLine({anchorFakeEpoch}, {priceStr});");
+    }
+
+    // Shows/hides the Daily "PM" (SMA20) solid yellow line — DailyChartForm's "D.PM" checkbox, per
+    // explicit request. Same show/hide-only convention as SetBollingerEdgeMarkersVisibleAsync — the
+    // underlying value keeps updating on every hourly close either way (EvaluateDailyPmAndBb),
+    // this only toggles the draw.
+    public async Task SetDailyPmLineVisibleAsync(bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setDailyPmLineVisible({(show ? "true" : "false")});");
+    }
+
+    // Fires (period, smaValue) every time EvaluateDailyPmAndBb recomputes the Daily SMA40/100/200
+    // (1h panel only) — generalized counterpart to OnDailyPmValueEvent above, but tab-Charts-only
+    // (panel 1/2), per explicit request; unlike D.PM this is NOT relayed to panel 3.
+    public event Action<int, decimal>? OnDailySmaLineValueEvent;
+
+    // Same solid-line convention as MarkDailyPmLineAsync, colored to match that period's own SMA
+    // (chart.html's smaColors) instead of always yellow — normally only one of these (plus D.PM) is
+    // shown at a time, per explicit request.
+    public async Task MarkDailySmaLineAsync(int period, decimal price, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailySmaLine({period}, {anchorFakeEpoch}, {priceStr});");
+    }
+
+    public async Task SetDailySmaLineVisibleAsync(int period, bool show)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setDailySmaLineVisible({period}, {(show ? "true" : "false")});");
+    }
+
+    private async Task MarkDailyPuntoMedioAsync(bool bullish)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateDailyPuntoMedio({(bullish ? "true" : "false")});");
+    }
+
+    private async Task MarkDailyBbAsync(bool open)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateDailyBb({(open ? "true" : "false")});");
     }
 
     // Extrapolates the T-Line's price at any given time, not just between its 2 anchor points —
@@ -1817,23 +2454,20 @@ public class ChartPanel : Panel
     // H-Lines above, this is a plain always-shown reference (no "already broken" check, no
     // premarket-timing deferral) — a built-in price line (see markPrevDayClose in chart.html), so
     // it's safe to call once per chart open with no extra state to track.
-    private async Task DrawPrevDayCloseAsync(List<CandleData> candles)
+    //
+    // Called with NO arguments on all 3 panels now — chart.html computes the anchor itself
+    // directly from allCandles (findPrevDayLastCandle, RTH-filtered via isRthTime so the 15m
+    // RTH+Overnight panel's overnight ticks don't count), which can never disagree with what's
+    // actually rendered there. Every version of "anchored on the wrong candle" bug so far (a
+    // phantom extra bucket at the 4pm boundary, HourlyCandleStore contamination, a stale "last
+    // loaded candle" used as today before today's first tick landed, etc.) was really some panel's
+    // own aggregation quietly drifting from what C# computed separately — removing the second
+    // source of truth removes the whole bug class at once instead of chasing each new way it could
+    // drift.
+    private async Task DrawPrevDayCloseAsync()
     {
-        if (candles.Count == 0 || _webView.CoreWebView2 == null) return;
-
-        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
-        var byDate = candles
-            .Select(c => (Candle: c, Date: DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))))
-            .Where(x => x.Date < today)
-            .ToList();
-        if (byDate.Count == 0) return;
-
-        var prevDate = byDate.Max(x => x.Date);
-        var lastBar = byDate.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
-
-        var timeArg  = FakeUtcEpochSeconds(lastBar.Time);
-        var priceStr = lastBar.Close.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markPrevDayClose({timeArg}, {priceStr});");
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("markPrevDayClose();");
     }
 
     // Loads the WebView2 + historical seed only — connecting/subscribing the shared streamer is
@@ -1876,7 +2510,7 @@ public class ChartPanel : Panel
             _webView.CoreWebView2.Navigate(chartUri);
             await navDone.Task;
 
-            // SMA 20/40/100/200 overlay — only on the 1h panel for now.
+            // SMA 20/40/100/200 overlay — 1h panel (solid).
             if (_mode == ChartPanelMode.Hourly15)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
@@ -1915,7 +2549,13 @@ public class ChartPanel : Panel
             // can be deleted from ANY of the 3 panels, not just 1h/RTH+Overnight.
             if (_mode == ChartPanelMode.Fifteen_RTH)
             {
-                // Middle band (SMA20) drawn solid here (vs dashed on the 1h panel), per explicit request.
+                // SMA 20/40/100/200 overlay REMOVED, per explicit request — this panel only shows
+                // its own BB (below) and the Piso/Techo dashed reference lines mirrored from panel 1
+                // (MarkPisoTechoRefLineAsync), not a full SMA overlay. That was a regression from an
+                // earlier session's change that added configureSmas(...) here; reverted.
+
+                // Middle band (SMA20) drawn solid here (vs dashed on the 1h panel) — this IS part of
+                // BB, stays.
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2, true);");
 
                 // White markers over the current upper/lower Bollinger band values, bounded to the
@@ -1933,15 +2573,18 @@ public class ChartPanel : Panel
             }
 
             // Pre-market blue line (1h and 15m RTH panels): only if the chart is opened before
-            // 9:30 AM ET that day — anchors at whatever candle is currently the last one loaded
-            // (yesterday's close) and tracks live price until the market opens, then freezes (see
-            // Streamer_OnNewCandle). Not persisted; a later re-open restarts the whole thing.
+            // 9:30 AM ET that day — anchored at today's actual session-open time (NOT "whatever
+            // candle is currently last", which kept dragging the line rightward through RTH as new
+            // candles formed — confirmed live, TSLA) and tracks live price until the market opens,
+            // then freezes (see Streamer_OnNewCandle). Not persisted; a later re-open restarts the
+            // whole thing.
             if (_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15)
             {
                 var nowEastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
+                var sessionOpenArg = GetTodaySessionOpenFakeEpoch();
                 if (nowEastern.TimeOfDay < new TimeSpan(9, 30, 0))
                 {
-                    await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({sessionOpenArg});");
                 }
                 else if (s_preMarketLineState.TryGetValue($"{_symbol}_{_mode}", out var savedLine)
                          && savedLine.Date == DateOnly.FromDateTime(nowEastern))
@@ -1954,7 +2597,7 @@ public class ChartPanel : Panel
                         BollingerDirection.Below => "'below'",
                         _ => "null"
                     };
-                    await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
+                    await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({sessionOpenArg});");
                     await _webView.CoreWebView2.ExecuteScriptAsync(
                         $"updatePreMarketLine({savedLine.Price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {savedExposedArg});");
                 }
@@ -1983,11 +2626,23 @@ public class ChartPanel : Panel
                 }
             }
 
-            // Default zoom on open: 1h panel shows the last 7 days, the two 15m panels show the
-            // last 3 — full history is still loaded underneath for SMA/Bollinger, this only
-            // limits the initial visible window (user can still scroll/zoom out manually).
-            var visibleDays = _mode == ChartPanelMode.Hourly15 ? 7 : 3;
+            // Default zoom on open: 1h panel shows the last 10 days, the 15m RTH+Overnight panel
+            // shows the last 3 — full history is still loaded underneath for SMA/Bollinger, this
+            // only limits the initial visible window (user can still scroll/zoom out manually).
+            var visibleDays = _mode == ChartPanelMode.Hourly15 ? 10 : 3;
             await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
+
+            // Panel 2 (15m RTH) only, per explicit request: shows a fixed bar count initially
+            // (instead of the calendar-day zoom above) — whether the chart is opened premarket or
+            // already mid-RTH — then a fixed sliding window of that same width keeps following new
+            // candles as they form live, no jarring resize between the two. 2.5 RTH trading days *
+            // 26 bars/day (6.5h session / 15min) = 65 bars. See configureRthSlideWindow/
+            // configureInitialBarCount in chart.html.
+            if (_mode == ChartPanelMode.Fifteen_RTH)
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureInitialBarCount(65);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureRthSlideWindow(65);");
+            }
 
             // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day.
             // 1h panel shows the full 10 days; the two 15m panels show the last 3 days.
@@ -2016,6 +2671,21 @@ public class ChartPanel : Panel
                     HourlyCandleStore.ReplaceDates(_symbol, aggregated);
                     aggregated = HourlyCandleStore.Load(_symbol);
                     EvaluateDailyBounce(aggregated);
+
+                    // "D.PM"/"BB" (Daily) — normally only recomputed on this panel's own hourly
+                    // candle close (live), which never happens premarket/weekend/before the first
+                    // close of the day, leaving the label blank until then. Fire once here too,
+                    // right after loading, using the last known close (most recent hourly bar) as
+                    // a stand-in for "today's live price" — per explicit request, so something
+                    // shows immediately on open regardless of market hours, even if it's slightly
+                    // stale until the first real live tick/candle close corrects it.
+                    EvaluateDailyPmAndBb(aggregated[^1].Close);
+
+                    // "SMA Watch" — replay whatever was armed in a previous session (via
+                    // DailyChartForm, possibly with that window closed since) so monitoring
+                    // resumes as soon as this live panel opens, per explicit request.
+                    foreach (var period in SmaDailyWatchStore.Load(_symbol))
+                        SetSmaCrossWatch(period, true);
                 }
 
                 if (aggregated.Count > 0)
@@ -2077,8 +2747,21 @@ public class ChartPanel : Panel
                             EvaluateTLineSignal(last);
                     }
 
+                    // "PM"/"BB" (hourly) — normally only recomputed on a live tick
+                    // (Streamer_OnNewCandle/UpdateLivePriceFromExternalSource), which never fires
+                    // outside market hours (weekends, or premarket before the feed's first tick) —
+                    // leaving the labels blank until then. Fire once here too, using the last
+                    // closed candle's own close as a stand-in for "live price", same fix as
+                    // "D.PM"/"BB" (Daily) above, per explicit request.
+                    if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_RTH)
+                    {
+                        EvaluatePuntoMedioSlope();
+                        EvaluateBollingerWideningLabel(last.Close);
+                    }
+
                     await EvaluatePrevDayHiLoAsync(aggregated);
-                    await DrawPrevDayCloseAsync(aggregated);
+                    await DrawPrevDayCloseAsync();
+                    await ReplayPersistedEntryMarkersAsync();
                 }
             }
         }
@@ -2220,6 +2903,9 @@ public class ChartPanel : Panel
                     _liveBucketIndex = CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
                     _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
                     var freshBucket = _liveBucket;
+                    _pmCrossLastSide = null; // new session — don't compare today's first tick against yesterday's last known side
+                    _pmCrossFiredToday = false;
+                    FinalizePreMarketLineAtOpen(candle.Open, eastern);
                     BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                     return;
                 }
@@ -2233,6 +2919,7 @@ public class ChartPanel : Panel
                 if (_mode == ChartPanelMode.Hourly15)
                 {
                     _closedCandles.Add(_liveBucket);
+                    EvaluateDailyPmAndBb(candle.Close); // "D.PM"/"BB" — recomputed once per hourly close, see method comment
 
                     // At market open, the first live tick of the day always looks like "a new
                     // bucket" compared to whatever _liveBucket was seeded with from history
@@ -2263,6 +2950,7 @@ public class ChartPanel : Panel
                         // This transition IS today's market open (the outgoing bucket was
                         // yesterday's) — candle.Open below is the actual RTH opening price.
                         ValidatePisoTechoAgainstOpen(candle.Open);
+                        FinalizePreMarketLineAtOpen(candle.Open, eastern);
                         isHourlyNewDayFirstBucket = true;
                     }
                 }
@@ -2302,11 +2990,14 @@ public class ChartPanel : Panel
         {
             EvaluateVolatilityOpening(candle.Close);
             EvaluateBollingerWideningLabel(candle.Close);
+            EvaluateSpotOutsideBollinger(candle.Close);
+            EvaluatePmCross(candle.Close);
         }
         else if (_mode == ChartPanelMode.Hourly15)
         {
             EvaluatePisoTechoGapLive(candle.Close);
             EvaluateBollingerWideningLabel(candle.Close);
+            EvaluateSmaCrossWatches(candle.Close);
         }
     }
 
@@ -2396,11 +3087,14 @@ public class ChartPanel : Panel
         {
             EvaluateVolatilityOpening(price);
             EvaluateBollingerWideningLabel(price);
+            EvaluateSpotOutsideBollinger(price);
+            EvaluatePmCross(price);
         }
         else if (_mode == ChartPanelMode.Hourly15)
         {
             EvaluatePisoTechoGapLive(price);
             EvaluateBollingerWideningLabel(price);
+            EvaluateSmaCrossWatches(price);
         }
     }
 
@@ -2418,6 +3112,30 @@ public class ChartPanel : Panel
         if (!_headerShowsDisconnected) return;
         _headerShowsDisconnected = false;
         BeginInvoke(() => _header.Text = NormalHeaderText());
+        LogStreamerConnectionEvent("Reconnected");
+    }
+
+    // Same log file Form1's own polling-exception logging writes to (LogPollingException) — per
+    // explicit request, so a WebSocket disconnect/reconnect and a "Polling stopped due to error"
+    // can be timestamp-compared afterward to see whether they're actually correlated.
+    private static readonly string StreamerConnectionLogPath = @"C:\OptionsData\EventLog\polling_exceptions.log";
+    private static readonly object StreamerConnectionLogLock = new();
+
+    private void LogStreamerConnectionEvent(string eventText)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(StreamerConnectionLogPath)!);
+            lock (StreamerConnectionLogLock)
+            {
+                File.AppendAllText(StreamerConnectionLogPath,
+                    $"[{DateTime.Now:O}] ChartPanel symbol={_symbol} mode={_mode} — {eventText}{Environment.NewLine}{new string('-', 80)}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Best-effort logging — never let a logging failure cascade.
+        }
     }
 
     private void Streamer_OnDisconnected(string message)
@@ -2425,6 +3143,7 @@ public class ChartPanel : Panel
         if (_closing || !IsHandleCreated) return;
         _headerShowsDisconnected = true;
         BeginInvoke(() => _header.Text = $"{_symbol} — {ModeLabel(_mode)} — {message}");
+        LogStreamerConnectionEvent($"Disconnected — {message}");
     }
 
     // Serializes the payload as JSON and calls the given JS function with it — used for both

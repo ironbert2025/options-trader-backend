@@ -261,6 +261,11 @@ public class TimeframeViewerForm : Form
             }
 
             using var combined = await sourcePanel.CaptureImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el chart (timeout — ¿ventana minimizada?).");
+                return;
+            }
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);
@@ -475,6 +480,11 @@ public class TimeframeViewerForm : Form
             }
 
             using var combined = await alert.SourcePanel.CaptureImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el chart (timeout — ¿ventana minimizada?).");
+                return;
+            }
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);
@@ -519,6 +529,11 @@ public class TimeframeViewerForm : Form
             }
 
             using var combined = await alert.SourcePanel.CaptureImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el chart (timeout — ¿ventana minimizada?).");
+                return;
+            }
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);

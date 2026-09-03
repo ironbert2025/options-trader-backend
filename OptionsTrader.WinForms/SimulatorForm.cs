@@ -397,8 +397,26 @@ public class SimulatorForm : Form
             await _rthChart.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
         _pnlSmaEvents.Controls.Add(chkBollingerEdges);
 
+        // 15m RTH's own T-Line — independent from the 1h one above (own toggle, own Clear, own
+        // signal), same multi-line-per-panel model the live app now uses.
+        var btnRthTLine = new Button { Text = "T-Line RTH", Location = new Point(420, 0), Size = new Size(80, 24) };
+        btnRthTLine.Click += async (s, e) =>
+        {
+            var on = await _rthChart.ToggleTLineModeAsync();
+            btnRthTLine.BackColor = on ? Color.Orange : SystemColors.Control;
+        };
+        var btnRthClear = new Button { Text = "Clear", Location = new Point(504, 0), Size = new Size(60, 24) };
+        btnRthClear.Click += async (s, e) =>
+        {
+            await _rthChart.ClearTLineAsync();
+            btnRthTLine.BackColor = SystemColors.Control;
+        };
+        _pnlSmaEvents.Controls.Add(btnRthTLine);
+        _pnlSmaEvents.Controls.Add(btnRthClear);
+
         _hourlyChart.OnCrossSequenceEvent += msg => LogSimEvent(msg);
         _hourlyChart.OnTLineSignalEvent   += msg => LogSimEvent(msg);
+        _rthChart.OnTLineSignalEvent      += msg => LogSimEvent(msg);
 
         // Demand Zone rebote (RTH+Overnight chart) — logged to the on-screen text log AND to the
         // same persisted events_log.csv the live app's Cross-SMA/T-Line/Daily-bounce events use,
@@ -494,6 +512,11 @@ public class SimulatorForm : Form
 
         void Append() => _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
         if (InvokeRequired) BeginInvoke(Append); else Append();
+
+        // Permanent record of this replay — see SimEventLogMarkdownWriter for the rundate vs
+        // datadate distinction. runDate is "today" regardless of what step is currently loaded;
+        // dataDate is _simDate, the historical day whose ticks were loaded for this replay.
+        SimEventLogMarkdownWriter.AppendEvent(_symbol, DateOnly.FromDateTime(DateTime.Now), _simDate, timestamp, message);
     }
 
     private void BuildGoToTimeButtons()
@@ -533,6 +556,21 @@ public class SimulatorForm : Form
         }
     }
 
+    // Shared by TryJumpToSelectedTime ("Ir a hora") and LoadSelectedDay (lands on 9:30 ET on load,
+    // per explicit request) — _steps are ~6s poll snapshots, not exactly on the minute, so
+    // "closest" (not "exact match") is what actually lands on the requested time.
+    private int FindClosestStepIndex(DateTime targetUtc, out TimeSpan closestDiff)
+    {
+        var closestIndex = 0;
+        closestDiff = TimeSpan.MaxValue;
+        for (int i = 0; i < _steps.Count; i++)
+        {
+            var diff = (_steps[i].Time - targetUtc).Duration();
+            if (diff < closestDiff) { closestDiff = diff; closestIndex = i; }
+        }
+        return closestIndex;
+    }
+
     // Jumps to whichever loaded step is closest to hour:minute on the currently loaded
     // _simDate — steps are ~6s poll snapshots, not exactly on the minute, so "closest" (not
     // "exact match") is what actually lands on the requested 15-min candle.
@@ -544,12 +582,16 @@ public class SimulatorForm : Form
         var targetEastern = _simDate.ToDateTime(new TimeOnly(hour, minute));
         var targetUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(targetEastern, DateTimeKind.Unspecified), EasternZone);
 
-        var closestIndex = 0;
-        var closestDiff = TimeSpan.MaxValue;
-        for (int i = 0; i < _steps.Count; i++)
+        var closestIndex = FindClosestStepIndex(targetUtc, out var closestDiff);
+
+        // Same "recording gap" case StepOneMinute logs — if the closest available step is far from
+        // the requested hour:minute (a real hole in the recorded data, not just polling
+        // granularity), say so instead of silently landing somewhere unexpected.
+        if (closestDiff > TimeSpan.FromMinutes(10))
         {
-            var diff = (_steps[i].Time - targetUtc).Duration();
-            if (diff < closestDiff) { closestDiff = diff; closestIndex = i; }
+            LogSimEvent(
+                $"[Hueco de datos] No hay registros cerca de {hour:D2}:{minute:D2} — el paso disponible más cercano es " +
+                $"{EasternTime(_steps[closestIndex].Time):HH:mm:ss} ({closestDiff.TotalMinutes:F0} min de diferencia).");
         }
 
         _currentIndex = closestIndex;
@@ -604,12 +646,39 @@ public class SimulatorForm : Form
         // two 15m panels) — see ChartPanel.LoadHistoryAsync's visibleDays.
         _hourlyCandles   = SimulationDataLoader.LoadHourlyCandlesWithContext(symbol, date);
         _intradayCandles = SimulationDataLoader.LoadUnderlyingCandlesWithContext(symbol, date, contextDays: 3);
-        _currentIndex = _steps.Count > 0 ? 0 : -1;
+
+        // Lands on the RTH open (9:30:00 ET) instead of index 0 (the day's first recorded step,
+        // which is often well before 9:30 — premarket ticks) per explicit request. Same
+        // closest-step search TryJumpToSelectedTime uses for "Ir a hora".
+        int? openGapWarningIndex = null;
+        TimeSpan openGapWarningDiff = default;
+        if (_steps.Count > 0)
+        {
+            var marketOpenEastern = date.ToDateTime(new TimeOnly(9, 30));
+            var marketOpenUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(marketOpenEastern, DateTimeKind.Unspecified), EasternZone);
+            var closestIndex = FindClosestStepIndex(marketOpenUtc, out var closestDiff);
+            _currentIndex = closestIndex;
+            if (closestDiff > TimeSpan.FromMinutes(10))
+            {
+                openGapWarningIndex = closestIndex;
+                openGapWarningDiff = closestDiff;
+            }
+        }
+        else
+        {
+            _currentIndex = -1;
+        }
 
         _dgvTrades.Rows.Clear();
         _openSimTrades.Clear();
 
         _txtEventLog.Clear();
+        if (openGapWarningIndex is { } gapIdx)
+        {
+            LogSimEvent(
+                $"[Hueco de datos] No hay registros cerca de 09:30 — el paso disponible más cercano es " +
+                $"{EasternTime(_steps[gapIdx].Time):HH:mm:ss} ({openGapWarningDiff.TotalMinutes:F0} min de diferencia).");
+        }
         EvaluateDailyBounce();
         EvaluatePisoTecho();
 
@@ -659,6 +728,78 @@ public class SimulatorForm : Form
 
         var direction = bouncedUp ? "al alza" : "a la baja";
         LogSimEvent($"Rebote {direction} en Diario");
+    }
+
+    // Ported from ChartPanel.EvaluateDailyPmAndBb — "D.PM"/"BB" (Daily) labels + solid yellow
+    // reference line on the 1h panel, relayed to the RTH/RTH+Overnight panels same as the
+    // Piso/Techo line, so the simulator replicates exactly what the live app would be showing at
+    // this point in the replayed session. Recomputed every step (cheap in-memory math over
+    // _hourlyCandles, already fully loaded — no disk I/O concern the live version has to throttle
+    // for), using the step's own spot price as "today"'s (i.e. _simDate's) still-forming close.
+    private void EvaluateDailyPmAndBb(decimal livePrice)
+    {
+        var daily = CandleAggregation.AggregateToDaily(_hourlyCandles).Where(d => d.Date < _simDate).ToList();
+        var closes = daily.Select(d => d.Candle.Close).ToList();
+        closes.Add(livePrice);
+
+        var lastIdx = closes.Count - 1;
+        const int period = 20;
+        const decimal mult = 2m;
+
+        var smaToday = DailySma(closes, period, lastIdx);
+        var smaTwoDaysAgo = DailySma(closes, period, lastIdx - 2);
+        if (smaToday != null && smaTwoDaysAgo != null && smaToday != smaTwoDaysAgo)
+        {
+            var pmBullish = smaToday > smaTwoDaysAgo;
+            _ = _hourlyChart.MarkDailyPuntoMedioAsync(pmBullish);
+        }
+
+        var bandsToday = DailyBollingerBandsAt(closes, period, lastIdx, mult);
+        var bandsYesterday = DailyBollingerBandsAt(closes, period, lastIdx - 1, mult);
+        if (bandsToday != null && bandsYesterday != null)
+        {
+            var widthToday = bandsToday.Value.Upper - bandsToday.Value.Lower;
+            var widthYesterday = bandsYesterday.Value.Upper - bandsYesterday.Value.Lower;
+            var open = widthToday > widthYesterday;
+            _ = _hourlyChart.MarkDailyBbAsync(open);
+        }
+
+        if (smaToday != null)
+        {
+            var sessionStart = GetSessionStartFakeEpoch();
+            _ = _hourlyChart.MarkDailyPmLineAsync(smaToday.Value, sessionStart);
+            _ = _rthChart.MarkDailyPmLineAsync(smaToday.Value, sessionStart);
+            _ = _fullChart.MarkDailyPmLineAsync(smaToday.Value, sessionStart);
+        }
+    }
+
+    private static decimal? DailySma(List<decimal> closes, int period, int endIndex)
+    {
+        if (endIndex < period - 1 || endIndex >= closes.Count) return null;
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += closes[i];
+        return sum / period;
+    }
+
+    private static (decimal Upper, decimal Lower)? DailyBollingerBandsAt(List<decimal> closes, int period, int endIndex, decimal mult)
+    {
+        if (endIndex < period - 1 || endIndex >= closes.Count) return null;
+
+        decimal sum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+            sum += closes[i];
+        var mean = sum / period;
+
+        decimal sqSum = 0;
+        for (int i = endIndex - period + 1; i <= endIndex; i++)
+        {
+            var d = closes[i] - mean;
+            sqSum += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sqSum / period));
+
+        return (mean + mult * stdDev, mean - mult * stdDev);
     }
 
     // Ported from ChartPanel.EvaluatePisoTechoPair, once per day load (not per step) — evaluates
@@ -827,6 +968,20 @@ public class SimulatorForm : Form
         {
             if (_currentIndex + 1 >= _steps.Count) return;
             targetIndex = _currentIndex + 1;
+
+            // This isn't just "granularity below 1/min" — it's a genuine RECORDING GAP (the app
+            // wasn't polling/running for a real stretch of the session, e.g. crashed or was
+            // closed), so the next available step can be hours later instead of ~1 minute. Without
+            // this, one "+1 Min" click silently jumps the whole gap with no indication anything
+            // unusual happened — looked exactly like a bug report ("clicked +1 Min and the whole
+            // day filled in"). Log it so it reads as a known data limitation instead.
+            var gap = _steps[targetIndex].Time - _steps[_currentIndex].Time;
+            if (gap > TimeSpan.FromMinutes(5))
+            {
+                LogSimEvent(
+                    $"[Hueco de datos] Sin registros entre {EasternTime(_steps[_currentIndex].Time):HH:mm:ss} y " +
+                    $"{EasternTime(_steps[targetIndex].Time):HH:mm:ss} ({gap.TotalMinutes:F0} min) — avanzando al siguiente paso disponible.");
+            }
         }
 
         for (int i = _currentIndex + 1; i < targetIndex; i++)
@@ -889,6 +1044,8 @@ public class SimulatorForm : Form
         _ = _rthChart.CargarHastaPasoAsync(rthCandles, visibleDays: 3);
         _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
             intradayUpToNow, 15, rthOnly: false), visibleDays: 3);
+
+        EvaluateDailyPmAndBb(step.UnderlyingPrice);
 
         RefreshOpenSimTradesPnL(step);
     }
@@ -1106,7 +1263,10 @@ public class SimulatorForm : Form
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
         _ = _fullChart.MarkStrikeAsync(strike);
 
-        // White spot-price line at the moment of entry — panel 3 only, bounded to that one candle.
+        // White spot-price line at the moment of entry — panels 2 and 3, bounded to that one
+        // candle, mirroring the live app (MultiChartForm.MarkEntrySpotOnOvernightChartAsync —
+        // originally panel 3 only, panel 2 added later; the simulator hadn't been kept in sync).
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice);
         _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
@@ -1183,7 +1343,8 @@ public class SimulatorForm : Form
         row.ReadOnly = true;
         _openSimTrades.Remove(trade);
 
-        // White spot-price line at the moment of close — same marker as the entry one.
+        // White spot-price line at the moment of close — same marker as the entry one, panels 2 and 3.
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice);
         _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.

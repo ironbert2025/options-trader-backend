@@ -19,11 +19,20 @@ internal static class CandleAggregation
         var rthStart = new TimeSpan(9, 30, 0);
         var rthEnd   = new TimeSpan(16, 0, 0);
 
+        // Upper bound is EXCLUSIVE — a candle labeled exactly 16:00:00 ET represents the minute
+        // starting AT close ([16:00, 16:01)), not the closing minute itself ([15:59, 16:00), whose
+        // own Close is already the true 4pm print). Letting the boundary instant through used to
+        // create a genuine extra bucket past the last real one when aggregating (its own near-
+        // duplicate "close", 1 bucket later) — confirmed live (NVDA/AAPL 1h; AAPL 15m RTH), and it
+        // wrecked the prev-day-close reference line's anchor both times, in 2 different ways
+        // (HourlyRthBucketOf's eastern.Hour slotting, and AggregateToInterval's continuous
+        // elapsed-minutes bucketing) — fixing it here at the source covers every bucketing scheme
+        // built on top of this filter instead of patching each one separately.
         return candles
             .Where(c =>
             {
                 var eastern = TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone);
-                return eastern.TimeOfDay >= rthStart && eastern.TimeOfDay <= rthEnd;
+                return eastern.TimeOfDay >= rthStart && eastern.TimeOfDay < rthEnd;
             })
             .ToList();
     }
@@ -87,11 +96,17 @@ internal static class CandleAggregation
         };
     }
 
-    // slot 0 = the 9:30-10:00 bucket, slot N (10-15) = the N:00-(N+1):00 bucket.
+    // slot 0 = the 9:30-10:00 bucket, slot N (10-15) = the N:00-(N+1):00 bucket. The exact 16:00:00
+    // ET closing print (eastern.Hour == 16) must fold into slot 15 (15:00-16:00), not spawn its own
+    // slot 16 — FilterSession's rthOnly upper bound (<= 16:00:00) lets that one instant through, and
+    // without this clamp it became a genuine separate 1-minute "bucket" on disk (confirmed live,
+    // NVDA 08-26: a real 20:00Z/16:00 ET row alongside the true 19:00Z/15:00 ET hour), which then
+    // anchored the prev-day-close reference line on that phantom sliver candle instead of the real
+    // last full-hour bar.
     private static (DateOnly Date, int Slot) HourlyRthBucketOf(DateTime utcTime)
     {
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
-        var slot = eastern.TimeOfDay < new TimeSpan(10, 0, 0) ? 0 : eastern.Hour;
+        var slot = eastern.TimeOfDay < new TimeSpan(10, 0, 0) ? 0 : Math.Min(eastern.Hour, 15);
         return (DateOnly.FromDateTime(eastern), slot);
     }
 

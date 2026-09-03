@@ -13,7 +13,8 @@ public record PersistedTrade(
     DateOnly ExpirationDate,
     string   Level,
     string   PnlTarget,
-    decimal  EntrySpotPrice = 0m);
+    decimal  EntrySpotPrice = 0m,
+    bool     IsDemo = true);
 
 // One instance runs per ticker (SPY, QQQ, DIA, ...) as a SEPARATE PROCESS, and they all share this
 // one file — Add/Remove used to be a plain Load-then-Save with no cross-process locking, so two

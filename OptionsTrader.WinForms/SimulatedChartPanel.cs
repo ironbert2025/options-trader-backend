@@ -22,6 +22,16 @@ public class SimulatedChartPanel : Panel
     private WebView2 _webView = null!;
     private TaskCompletionSource? _readyTcs;
 
+    // CargarHastaPasoAsync is called fire-and-forget (SimulatorForm never awaits it) on every ◀/▶,
+    // "+1 Min", and "Ir a hora" click — a rapid sequence of clicks can have an OLDER call still
+    // awaiting (e.g. _readyTcs, or the loadHistory script call itself) when a NEWER one is issued,
+    // and if that older call happens to finish LAST, it clobbers the chart with stale/smaller data
+    // — reported as "jumped to 12:30 but the chart only filled to 11am" and "+1 Min then rendered
+    // a much bigger jump than 1 minute" (a stale earlier full-day or different-time render winning
+    // the race). Each call captures its own generation number and bails out at every await point
+    // once a newer call has started, instead of letting a stale one apply its (older) result.
+    private int _renderGeneration;
+
     public SimulatedChartPanel(string title, ChartPanelMode mode)
     {
         _mode = mode;
@@ -131,7 +141,10 @@ public class SimulatedChartPanel : Panel
     // ones — see ChartPanel.LoadHistoryAsync) so the simulator reads the same as a real chart.
     public async Task CargarHastaPasoAsync(List<CandleData> candles, int visibleDays)
     {
+        var myGeneration = ++_renderGeneration;
+
         if (_readyTcs != null) await _readyTcs.Task;
+        if (myGeneration != _renderGeneration) return; // superseded while waiting for the WebView to be ready
         if (_webView.CoreWebView2 == null || candles.Count == 0) return;
 
         if (!_visibleDaysSet)
@@ -139,11 +152,14 @@ public class SimulatedChartPanel : Panel
             await _webView.CoreWebView2.ExecuteScriptAsync($"configureVisibleDays({visibleDays});");
             _visibleDaysSet = true;
         }
+        if (myGeneration != _renderGeneration) return;
         await RunScriptAsync("loadHistory", candles);
+        if (myGeneration != _renderGeneration) return; // a newer step/jump landed while this one was still sending
 
         if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full || _mode == ChartPanelMode.Fifteen_RTH)
             EvaluateNewlyClosedCandles(candles);
 
+        if (myGeneration != _renderGeneration) return;
         await DrawPrevDayCloseAsync(candles);
     }
 
@@ -581,13 +597,16 @@ public class SimulatedChartPanel : Panel
     }
 
     // ==================================================================================
-    // T-Line + SMA20 breakout — ported from ChartPanel. Only 1 T-Line, in memory only (no
-    // TLineStore — nothing about a practice T-Line should survive closing the simulator).
+    // T-Line + SMA20 breakout — ported from ChartPanel, now matching Live's multi-line,
+    // per-panel-independent model: any number of T-Lines can be drawn on this instance (1h and
+    // 15m RTH both get their own toggle from SimulatorForm), each evaluated independently
+    // (_tLineSignalFiredFor is a HashSet, not a single bool). Still in-memory only — no
+    // TLineStore, nothing about a practice T-Line should survive closing the simulator.
     // ==================================================================================
 
     private const int TLineSmaPeriod = 20;
-    private (long T1, decimal P1, long T2, decimal P2)? _tLine;
-    private bool _tLineSignalFired;
+    private readonly List<(long T1, decimal P1, long T2, decimal P2)> _tLines = new();
+    private readonly HashSet<(long T1, decimal P1, long T2, decimal P2)> _tLineSignalFiredFor = new();
     private bool _tLineArmed;
 
     public async Task<bool> ToggleTLineModeAsync()
@@ -602,8 +621,8 @@ public class SimulatedChartPanel : Panel
     {
         if (_webView.CoreWebView2 == null) return;
         await _webView.CoreWebView2.ExecuteScriptAsync("clearDrawings();");
-        _tLine = null;
-        _tLineSignalFired = false;
+        _tLines.Clear();
+        _tLineSignalFiredFor.Clear();
     }
 
     // ==================================================================================
@@ -807,21 +826,12 @@ public class SimulatedChartPanel : Panel
 
             if (type == "tline")
             {
-                if (_tLine != null)
-                {
-                    _ = _webView.CoreWebView2?.ExecuteScriptAsync("removeLastTLine();");
-                    MessageBox.Show(
-                        "Ya existe una T-Line dibujada. Borrala (Clear) antes de dibujar una nueva.",
-                        "T-Line ya existe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-                _tLine = (t1, p1, t2, p2);
-                _tLineSignalFired = false;
+                _tLines.Add((t1, p1, t2, p2));
             }
             else
             {
-                _tLine = null;
-                _tLineSignalFired = false;
+                _tLines.Remove((t1, p1, t2, p2));
+                _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
             }
         }
         catch
@@ -832,29 +842,38 @@ public class SimulatedChartPanel : Panel
 
     private void EvaluateTLineSignal(CandleData justClosed)
     {
-        if (_tLineSignalFired || _tLine == null) return;
-
-        var (t1, p1, t2, p2) = _tLine.Value;
-        var candleTimeSec = new DateTimeOffset(DateTime.SpecifyKind(justClosed.Time, DateTimeKind.Utc)).ToUnixTimeSeconds();
-        var tLineValue = TLineValueAt(t1, p1, t2, p2, candleTimeSec);
+        if (_tLines.Count == 0) return;
 
         if (_closedCandles.Count < TLineSmaPeriod) return;
         var sma20 = Sma(TLineSmaPeriod, _closedCandles.Count - 1);
         if (sma20 == null) return;
 
-        var upBreakout = justClosed.Open < tLineValue
-            && justClosed.High > tLineValue && justClosed.High > sma20.Value
-            && justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
+        var candleTimeSec = new DateTimeOffset(DateTime.SpecifyKind(justClosed.Time, DateTimeKind.Utc)).ToUnixTimeSeconds();
+        var timeframeLabel = _mode == ChartPanelMode.Hourly15 ? "Hora" : "15Min RTH";
 
-        var downBreakout = justClosed.Open > tLineValue
-            && justClosed.Low < tLineValue && justClosed.Low < sma20.Value
-            && justClosed.Close < tLineValue && justClosed.Close < sma20.Value;
+        // Every T-Line on this panel is evaluated independently — each fires its own signal at
+        // most once (see _tLineSignalFiredFor), same as ChartPanel's live equivalent.
+        foreach (var line in _tLines.ToList())
+        {
+            if (_tLineSignalFiredFor.Contains(line)) continue;
 
-        if (!upBreakout && !downBreakout) return;
+            var (t1, p1, t2, p2) = line;
+            var tLineValue = TLineValueAt(t1, p1, t2, p2, candleTimeSec);
 
-        _tLineSignalFired = true;
-        var direction = upBreakout ? "al alza" : "a la baja";
-        OnTLineSignalEvent?.Invoke($"CT {direction} en Hora — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})");
+            var upBreakout = justClosed.Open < tLineValue
+                && justClosed.High > tLineValue && justClosed.High > sma20.Value
+                && justClosed.Close > tLineValue && justClosed.Close > sma20.Value;
+
+            var downBreakout = justClosed.Open > tLineValue
+                && justClosed.Low < tLineValue && justClosed.Low < sma20.Value
+                && justClosed.Close < tLineValue && justClosed.Close < sma20.Value;
+
+            if (!upBreakout && !downBreakout) continue;
+
+            _tLineSignalFiredFor.Add(line);
+            var direction = upBreakout ? "al alza" : "a la baja";
+            OnTLineSignalEvent?.Invoke($"CT {direction} en {timeframeLabel} — cierre {justClosed.Close:F2} (T-Line {tLineValue:F2}, SMA{TLineSmaPeriod} {sma20.Value:F2})");
+        }
     }
 
     private static decimal TLineValueAt(long t1, decimal p1, long t2, decimal p2, long atTime)
@@ -975,6 +994,28 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"updatePuntoMedio({(bullish ? "true" : "false")}, {(large ? "true" : "false")});");
     }
 
+    // "D.PM"/"BB" (Daily) + yellow reference line — same JS calls ChartPanel's live version uses.
+    // Computed by SimulatorForm (which has the symbol/_hourlyCandles/_simDate this panel doesn't
+    // carry) — see SimulatorForm.EvaluateDailyPmAndBb — this panel just forwards to chart.html.
+    public async Task MarkDailyPuntoMedioAsync(bool bullish)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateDailyPuntoMedio({(bullish ? "true" : "false")});");
+    }
+
+    public async Task MarkDailyBbAsync(bool open)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateDailyBb({(open ? "true" : "false")});");
+    }
+
+    public async Task MarkDailyPmLineAsync(decimal price, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyPmLine({anchorFakeEpoch}, {priceStr});");
+    }
+
     // ==================================================================================
     // "BB" (bands currently widening) + "Δ" (distance to nearest band) — ported from ChartPanel.
     // EvaluateBollingerWideningLabel. Purely visual, continuous, independent of the armed/fired
@@ -1054,7 +1095,7 @@ public class SimulatedChartPanel : Panel
             _crossArmedPeriods.Clear();
             _crossActivePeriod = null;
             _crossFinished = false;
-            _tLineSignalFired = false;
+            _tLineSignalFiredFor.Clear();
             foreach (var zone in _demandZones) { zone.Entered = false; zone.Done = false; }
             foreach (var zone in _supplyZones) { zone.Entered = false; zone.Done = false; }
             foreach (var watch in _pisoTechoWatches) watch.Done = false;
