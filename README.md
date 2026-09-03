@@ -26,7 +26,7 @@ Options Trader is an intraday options trading system made up of three components
 
 The WinForms app talks **directly to the Schwab API** for market data and order execution; it does not go through the in-house API. The ASP.NET Core API is only used for **login** and to **save trades and screenshots** to the database / S3.
 
-![Architecture diagram](docs/images/architecture-diagram.png)
+![Architecture diagram](docs/images/architecture-diagram.svg)
 
 > **Note on evaluation scope (TFM/master's thesis):** regardless of the fact that a complete options trading platform has been built — backend, frontend, API, and Cloud resources on AWS (EC2, SQL Server, S3) — it is proposed that **BigSchool evaluate as the TFM only the Windows desktop application (WinForms)**, since reviewing the entire platform would be excessively laborious and time-consuming. The complete system can equally be tested (see section f for credentials), but the evaluation should focus on the Windows App.
 
