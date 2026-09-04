@@ -34,7 +34,9 @@ public static class TickPriceStore
                 var isNew = !File.Exists(path);
                 using var writer = new StreamWriter(path, append: true);
                 if (isNew) writer.WriteLine(Header);
-                writer.WriteLine($"{eastern:yyyy-MM-dd HH:mm:ss},{price.ToString(CultureInfo.InvariantCulture)}");
+                // Time-of-day only — the date is already in the file name (see
+                // SimulationDataLoader.LoadUnderlyingTicks, the only reader).
+                writer.WriteLine($"{eastern:HH:mm:ss},{price.ToString(CultureInfo.InvariantCulture)}");
             }
         }
         catch
