@@ -133,8 +133,8 @@ public class DailyChartForm : Form
         var chkDailyPmLine = new CheckBox
         {
             Text     = "D.PM",
-            Location = new Point(x, 6),
             AutoSize = true,
+            Anchor   = AnchorStyles.Top | AnchorStyles.Right,
             Checked  = Form1.IsDailyPmLineEnabledFor(_symbol),
             ForeColor = Color.FromArgb(0xf5, 0xa6, 0x23) // matches chart.html's smaColors[20]
         };
@@ -156,14 +156,14 @@ public class DailyChartForm : Form
             [100] = Color.FromArgb(0x26, 0xa6, 0x9a),
             [200] = Color.FromArgb(0xa2, 0x59, 0xff)
         };
-        var xDailySma = x + chkDailyPmLine.PreferredSize.Width + 18;
+        var dailySmaCheckboxes = new List<CheckBox> { chkDailyPmLine };
         foreach (var period in new[] { 40, 100, 200 })
         {
             var chk = new CheckBox
             {
                 Text     = $"D{period}",
-                Location = new Point(xDailySma, 6),
                 AutoSize = true,
+                Anchor   = AnchorStyles.Top | AnchorStyles.Right,
                 Checked  = Form1.GetDailySmaLinesEnabledFor(_symbol).Contains(period),
                 ForeColor = smaColorsByPeriod[period]
             };
@@ -173,8 +173,25 @@ public class DailyChartForm : Form
                 OnDailySmaLineToggledEvent?.Invoke(period, chk.Checked);
             };
             toolbar.Controls.Add(chk);
-            xDailySma += chk.PreferredSize.Width + 10;
+            dailySmaCheckboxes.Add(chk);
         }
+
+        // Pinned to the toolbar's far right edge (D.PM, D40, D100, D200 left-to-right), Anchor=Right
+        // keeps them there if the window is resized — positioned here (after all 4 are created, so
+        // PreferredSize is known) and re-run on every toolbar resize.
+        void LayoutDailySmaCheckboxesRight()
+        {
+            var xRight = toolbar.ClientSize.Width - toolbar.Padding.Right;
+            for (int i = dailySmaCheckboxes.Count - 1; i >= 0; i--)
+            {
+                var w = dailySmaCheckboxes[i].PreferredSize.Width;
+                xRight -= w;
+                dailySmaCheckboxes[i].Location = new Point(xRight, 6);
+                xRight -= 10;
+            }
+        }
+        toolbar.SizeChanged += (s, e) => LayoutDailySmaCheckboxesRight();
+        LayoutDailySmaCheckboxesRight();
 
         Controls.Add(tabControl);
         Controls.Add(toolbar);
