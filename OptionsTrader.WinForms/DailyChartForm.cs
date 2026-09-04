@@ -106,12 +106,12 @@ public class DailyChartForm : Form
         // the marker). Stays armed until explicitly removed (this button again, or Delete on the
         // chart marker), independent of whether this window or the live chart is currently open.
         var smaWatchButtons = new Dictionary<int, Button>();
-        int x = 216;
+        var smaWatchButtonsInOrder = new List<Button>();
         foreach (var period in new[] { 20, 40, 100, 200 })
         {
-            var btn = new Button { Text = $"SMA{period}", Location = new Point(x, 2), Size = new Size(60, 24) };
-            x += 66;
+            var btn = new Button { Size = new Size(60, 24), Text = $"SMA{period}" };
             smaWatchButtons[period] = btn;
+            smaWatchButtonsInOrder.Add(btn);
             btn.Click += (s, e) =>
             {
                 var armed = SmaDailyWatchStore.Load(_symbol).Contains(period);
@@ -124,6 +124,25 @@ public class DailyChartForm : Form
             toolbar.Controls.Add(btn);
         }
         _smaWatchButtons = smaWatchButtons;
+
+        // Centered horizontally in the toolbar (instead of a fixed left offset right after
+        // Rect/Color Rect/T-Line), per explicit request — clamped so it never creeps left of those
+        // 3 buttons even on a narrow window. Re-run on every toolbar resize, same pattern as the
+        // right-anchored D.PM/D40/D100/D200 group below.
+        const int smaWatchGroupWidth = 4 * 60 + 3 * 6; // 4 buttons, 60px each, 6px gaps
+        const int leftBoundary = 216; // right after btnTLine (150 + 60 + 6)
+        void LayoutSmaWatchButtonsCentered()
+        {
+            var xStart = Math.Max(leftBoundary, (toolbar.ClientSize.Width - smaWatchGroupWidth) / 2);
+            var bx = xStart;
+            foreach (var btn in smaWatchButtonsInOrder)
+            {
+                btn.Location = new Point(bx, 2);
+                bx += 66;
+            }
+        }
+        toolbar.SizeChanged += (s, e) => LayoutSmaWatchButtonsCentered();
+        LayoutSmaWatchButtonsCentered();
 
         // "D.PM" — controls whether the solid yellow Daily SMA20 reference line (ChartPanel.
         // EvaluateDailyPmAndBb) is drawn on panel 1/2 (tab Charts) and panel 3 (popup), per explicit
