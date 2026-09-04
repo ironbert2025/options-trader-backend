@@ -1312,6 +1312,27 @@ public class TwoPanelChartsControl : UserControl
         BackfillMirroredTLines("DailyHora", "1h", _hourlyPanel);
         BackfillMirroredTLines("Daily15Min", "RTH", _rthPanel);
 
+        // H-Line backfill — no live-side store to dedup against (the live chart's own H-Line was
+        // never persisted, see HLineStore's own comment), so this can duplicate a line already
+        // mirrored earlier if AttachDailyMirroring runs again for the same symbol (e.g. the Charts
+        // tab disconnects/reconnects while the Daily popup stays open) — acceptable, rare edge case.
+        foreach (var (time, price) in HLineStore.Load(_symbol))
+        {
+            _ = _hourlyPanel?.AddMirroredHLineAsync(time, price);
+            _ = _rthPanel?.AddMirroredHLineAsync(time, price);
+        }
+
+        dailyForm.OnHLineDrawnEvent += (time, price) =>
+        {
+            _ = _hourlyPanel?.AddMirroredHLineAsync(time, price);
+            _ = _rthPanel?.AddMirroredHLineAsync(time, price);
+        };
+        dailyForm.OnHLineDeletedEvent += price =>
+        {
+            _ = _hourlyPanel?.RemoveHLineAsync(price);
+            _ = _rthPanel?.RemoveHLineAsync(price);
+        };
+
         dailyForm.OnTLineDrawnEvent += (tag, t1, p1, t2, p2) =>
         {
             if (tag == "DailyHora") { if (_hourlyPanel != null) _ = _hourlyPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }
