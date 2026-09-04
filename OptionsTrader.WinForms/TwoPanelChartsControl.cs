@@ -79,9 +79,14 @@ public class TwoPanelChartsControl : UserControl
     // Independent from Form1's own 4-way "Trade" radios (Options Quotes tab) — a strike clicked
     // here always opens WITH target, per explicit request. Always starts on Demo+Target on connect
     // (not persisted), separate instance per TwoPanelChartsControl (only one ever exists at a time).
+    // "Simulation" — same target/PnL behavior as the other 2 (always with target, auto-closes at
+    // target), but the trade never touches TradeHistoryStore/OpenTradesStore/screenshots — see
+    // RecordEntryAsync/CloseTradeRowAsync's isSimulation handling in Form1.cs.
+    private readonly RadioButton _rbChartsSimulation = new() { Text = "Simulation", AutoSize = true, ForeColor = Color.Black, Font = new Font("Segoe UI", 8F) };
     private readonly RadioButton _rbChartsDemoTarget = new() { Text = "Demo-Target", Checked = true, AutoSize = true, ForeColor = Color.DarkOrange, Font = new Font("Segoe UI", 8F, FontStyle.Bold) };
     private readonly RadioButton _rbChartsRealTarget  = new() { Text = "Real-Target", AutoSize = true, ForeColor = Color.Green, Font = new Font("Segoe UI", 8F) };
     private bool _useRealTrade;
+    private bool _useSimulation;
 
     private ChartPanel? _hourlyPanel;
     private ChartPanel? _rthPanel;
@@ -1079,7 +1084,7 @@ public class TwoPanelChartsControl : UserControl
             var rowType = row.Tag?.ToString();
             var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
             if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
-            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade);
+            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade, _useSimulation);
         };
 
         // "Próxima" tab strike clicks — same idea as _dgvOptions.CellClick above, but forwards into
@@ -1092,7 +1097,7 @@ public class TwoPanelChartsControl : UserControl
             var rowType = row.Tag?.ToString();
             var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
             if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
-            _form1.TriggerQuoteStrikeClickNext(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade);
+            _form1.TriggerQuoteStrikeClickNext(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade, _useSimulation);
         };
 
         _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
@@ -1122,7 +1127,7 @@ public class TwoPanelChartsControl : UserControl
             new DataGridViewTextBoxColumn { Name = "colTradePnLMinLive",    HeaderText = "Min PnL%",     Width = 60, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradePnLMaxLive",    HeaderText = "Max PnL%",     Width = 60, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradeMoneynessLive", HeaderText = "OTM/ITM",      Width = 55, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeDemoRealLive", HeaderText = "Demo/Real",    Width = 65, ReadOnly = true });
+            new DataGridViewTextBoxColumn { Name = "colTradeDemoRealLive", HeaderText = "Demo/Real",    Width = 78, ReadOnly = true });
         foreach (DataGridViewColumn col in _dgvTrades.Columns)
             col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
@@ -1158,25 +1163,33 @@ public class TwoPanelChartsControl : UserControl
             _dgvTrades.Width  = (int)(usableWidth * 0.9);
             _dgvTrades.Height = usableHeight;
 
-            // Charts tab's own Demo-Target/Real-Target radios sit in the 10% freed up to the
-            // right of the grid — independent of Form1's 4-way "Trade" radios (Options Quotes tab).
+            // Charts tab's own Simulation/Demo-Target/Real-Target radios sit in the 10% freed up
+            // to the right of the grid — independent of Form1's 4-way "Trade" radios (Options
+            // Quotes tab).
             var radiosX = _dgvTrades.Right + 6;
-            _rbChartsDemoTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 2);
-            _rbChartsRealTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 22);
+            _rbChartsSimulation.Location = new Point(radiosX, tradesGridHost.Padding.Top + 2);
+            _rbChartsDemoTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 22);
+            _rbChartsRealTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 42);
         }
         tradesGridHost.SizeChanged += (s, e) => ResizeTradesGrid();
         tradesGridHost.Controls.Add(_dgvTrades);
+        tradesGridHost.Controls.Add(_rbChartsSimulation);
         tradesGridHost.Controls.Add(_rbChartsDemoTarget);
         tradesGridHost.Controls.Add(_rbChartsRealTarget);
+        _rbChartsSimulation.CheckedChanged += (s, e) =>
+        {
+            _rbChartsSimulation.Font = new Font(_rbChartsSimulation.Font, _rbChartsSimulation.Checked ? FontStyle.Bold : FontStyle.Regular);
+            if (_rbChartsSimulation.Checked) _useSimulation = true;
+        };
         _rbChartsDemoTarget.CheckedChanged += (s, e) =>
         {
             _rbChartsDemoTarget.Font = new Font(_rbChartsDemoTarget.Font, _rbChartsDemoTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsDemoTarget.Checked) _useRealTrade = false;
+            if (_rbChartsDemoTarget.Checked) { _useRealTrade = false; _useSimulation = false; }
         };
         _rbChartsRealTarget.CheckedChanged += (s, e) =>
         {
             _rbChartsRealTarget.Font = new Font(_rbChartsRealTarget.Font, _rbChartsRealTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsRealTarget.Checked) _useRealTrade = true;
+            if (_rbChartsRealTarget.Checked) { _useRealTrade = true; _useSimulation = false; }
         };
         ResizeTradesGrid();
 
@@ -1212,8 +1225,10 @@ public class TwoPanelChartsControl : UserControl
                     // constructor) — copied in above like every other cell, but overridden here with
                     // its own fixed color since Form1 never styles it (nothing shows it there).
                     var demoRealCell = mirrorRow.Cells["colTradeDemoRealLive"];
-                    demoRealCell.Style.ForeColor = string.Equals(demoRealCell.Value?.ToString(), "Real", StringComparison.OrdinalIgnoreCase)
-                        ? Color.Green : Color.Orange;
+                    var demoRealValue = demoRealCell.Value?.ToString();
+                    demoRealCell.Style.ForeColor =
+                        string.Equals(demoRealValue, "Simulation", StringComparison.OrdinalIgnoreCase) ? Color.Black :
+                        string.Equals(demoRealValue, "Real", StringComparison.OrdinalIgnoreCase) ? Color.Green : Color.Orange;
                 }
                 if (scrollRowToRestore >= 0 && _dgvTrades.Rows.Count > 0)
                     _dgvTrades.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, _dgvTrades.Rows.Count - 1);
