@@ -1434,17 +1434,7 @@ public partial class Form1 : Form
             // cycle's fresh values instead of the previous cycle's — otherwise the "Próxima" tab
             // was always exactly one poll behind.
             //
-            // Invoked per-subscriber with its own try/catch instead of a single direct
-            // ?.Invoke(...) — a plain multicast invoke stops calling LATER subscribers the moment
-            // an EARLIER one throws (confirmed live: NFLX's Charts-tab options grid silently never
-            // refreshed — a stale/disposed subscriber elsewhere in the invocation list, registered
-            // before it, was throwing every single poll cycle and killing the rest of that cycle's
-            // invocation, with no exception ever surfacing anywhere to explain why).
-            foreach (var handler in (OnQuotesUpdatedEvent?.GetInvocationList() ?? Array.Empty<Delegate>()))
-            {
-                try { ((Action<string>)handler)(_selectedTicker.Symbol); }
-                catch (Exception ex) { LogLine($"{DateTime.Now:HH:mm:ss} [OnQuotesUpdatedEvent] Subscriber threw: {ex.Message}", Color.OrangeRed); }
-            }
+            RaiseQuotesUpdated(_selectedTicker.Symbol);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
@@ -1732,6 +1722,17 @@ public partial class Form1 : Form
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return;
         DgvTrades_CellClick(this, new DataGridViewCellEventArgs(dgvTrades.Columns["colTradeClose"].Index, rowIndex));
+    }
+
+    // Same idea as TriggerTradeCloseClick — lets the Charts tab's own mirrored trades grid forward
+    // a Strike-cell click into Form1's real ForceStrikeInQuotesGrid (pinning that Type/Strike so it
+    // keeps showing in dgvQuotes even after it goes ITM), positional row lookup since the mirror is
+    // always rebuilt in the same row order as dgvTrades.
+    internal void TriggerForceStrikeInQuotesGrid(string symbol, int rowIndex)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
+        if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return;
+        ForceStrikeInQuotesGrid(dgvTrades.Rows[rowIndex]);
     }
 
     // Distinct background so an automatic (bot-driven) demo trade is visually different from a
@@ -3252,9 +3253,32 @@ public partial class Form1 : Form
         _forcedStrikes.Add((type, strike));
 
         if (_selectedTicker != null && _lastAllQuotes.Count > 0)
+        {
             (_lastOtmCalls, _lastOtmPuts) = PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
                 selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
                 forcedStrikes: _forcedStrikes);
+
+            // Refresh the Charts tab's own mirrored options grid immediately too (it reads the same
+            // _lastOtmCalls/_lastOtmPuts via GetQuoteSnapshot) — without this it would only pick up
+            // the forced strike on the next poll cycle, a few seconds later.
+            RaiseQuotesUpdated(_selectedTicker.Symbol);
+        }
+    }
+
+    // Fires OnQuotesUpdatedEvent (Live Chart popup + Charts tab mirrored options grids) with its
+    // own try/catch per subscriber instead of a single direct ?.Invoke(...) — a plain multicast
+    // invoke stops calling LATER subscribers the moment an EARLIER one throws (confirmed live:
+    // NFLX's Charts-tab options grid silently never refreshed — a stale/disposed subscriber
+    // elsewhere in the invocation list, registered before it, was throwing every single poll cycle
+    // and killing the rest of that cycle's invocation, with no exception ever surfacing anywhere to
+    // explain why).
+    private void RaiseQuotesUpdated(string symbol)
+    {
+        foreach (var handler in (OnQuotesUpdatedEvent?.GetInvocationList() ?? Array.Empty<Delegate>()))
+        {
+            try { ((Action<string>)handler)(symbol); }
+            catch (Exception ex) { LogLine($"{DateTime.Now:HH:mm:ss} [OnQuotesUpdatedEvent] Subscriber threw: {ex.Message}", Color.OrangeRed); }
+        }
     }
 
     private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType)

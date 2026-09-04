@@ -1142,7 +1142,13 @@ public class TwoPanelChartsControl : UserControl
         // Form1's own grid for the same row.
         _dgvTrades.CellClick += (s, e) =>
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != _dgvTrades.Columns["colTradeCloseLive"]!.Index) return;
+            if (e.RowIndex < 0) return;
+            if (e.ColumnIndex == _dgvTrades.Columns["colTradeStrikeLive"]!.Index)
+            {
+                _form1.TriggerForceStrikeInQuotesGrid(_symbol, e.RowIndex);
+                return;
+            }
+            if (e.ColumnIndex != _dgvTrades.Columns["colTradeCloseLive"]!.Index) return;
             if (!string.IsNullOrEmpty(_dgvTrades.Rows[e.RowIndex].Cells["colTradeExitTimeLive"].Value?.ToString())) return;
             _form1.TriggerTradeCloseClick(_symbol, e.RowIndex);
         };
