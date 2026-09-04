@@ -189,7 +189,10 @@ internal static class SimulationDataLoader
         {
             var parts = lines[i].Split(',');
             if (parts.Length < 2) continue;
-            if (!DateTime.TryParse(parts[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out var eastTime)) continue;
+            // Time-of-day only (both TickPriceStore and LevelOneTickStore) — the date already
+            // comes from the file name, combined with the parsed time-of-day here.
+            if (!TimeSpan.TryParse(parts[0], CultureInfo.InvariantCulture, out var timeOfDay)) continue;
+            var eastTime = date.ToDateTime(TimeOnly.MinValue) + timeOfDay;
             if (!decimal.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var price)) continue;
             // A missing/mis-mapped field on the wire shows up as a 0 price — LevelOneTickStore
             // saves every tick regardless (by design, for later comparison), but the live chart

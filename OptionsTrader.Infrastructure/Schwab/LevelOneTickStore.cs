@@ -35,8 +35,9 @@ public static class LevelOneTickStore
                 using var writer = new StreamWriter(path, append: true);
                 if (isNew) writer.WriteLine(Header);
                 // Millisecond precision (unlike TickPriceStore's whole-second timestamps) — this
-                // feed can update several times per second.
-                writer.WriteLine($"{eastern:yyyy-MM-dd HH:mm:ss.fff},{price.ToString(CultureInfo.InvariantCulture)}");
+                // feed can update several times per second. Time-of-day only — the date is already
+                // in the file name (see SimulationDataLoader.LoadUnderlyingTicks, the only reader).
+                writer.WriteLine($"{eastern:HH:mm:ss.fff},{price.ToString(CultureInfo.InvariantCulture)}");
             }
         }
         catch
