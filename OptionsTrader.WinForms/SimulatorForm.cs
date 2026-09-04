@@ -679,6 +679,9 @@ public class SimulatorForm : Form
                 $"[Hueco de datos] No hay registros cerca de 09:30 — el paso disponible más cercano es " +
                 $"{EasternTime(_steps[gapIdx].Time):HH:mm:ss} ({openGapWarningDiff.TotalMinutes:F0} min de diferencia).");
         }
+        _simSmaWatchHasBaseline.Clear();
+        _simSmaWatchLastSide.Clear();
+        _simSmaWatchFiredFor.Clear();
         EvaluateDailyBounce();
         EvaluatePisoTecho();
 
@@ -692,6 +695,50 @@ public class SimulatorForm : Form
 
         UpdateStepButtons();
         RenderCurrentStep();
+    }
+
+    // Ported from ChartPanel.EvaluateSmaCrossWatches — reads the SAME real SmaDailyWatchStore the
+    // Live Chart's Daily popup arms (not a Simulator-specific store), so watches armed for real
+    // trading also fire while replaying any day. Per-day state, reset in LoadSelectedDay so each
+    // simulated day starts unbiased. Log-only (LogSimEvent), no Telegram/EventLogStore — same
+    // convention as every other Simulator signal except Demand/Supply Zone rebound.
+    private readonly HashSet<int> _simSmaWatchHasBaseline = new();
+    private readonly Dictionary<int, bool> _simSmaWatchLastSide = new();
+    private readonly HashSet<int> _simSmaWatchFiredFor = new();
+
+    private void EvaluateSmaCrossWatches(decimal livePrice)
+    {
+        var periods = SmaDailyWatchStore.Load(_symbol);
+        if (periods.Count == 0) return;
+
+        var daily = CandleAggregation.AggregateToDaily(_hourlyCandles).Where(d => d.Date < _simDate).ToList();
+        var closes = daily.Select(d => d.Candle.Close).ToList();
+        closes.Add(livePrice);
+        var lastIdx = closes.Count - 1;
+
+        foreach (var period in periods)
+        {
+            if (_simSmaWatchFiredFor.Contains(period)) continue;
+
+            var sma = DailySma(closes, period, lastIdx);
+            if (sma == null) continue;
+
+            var above = livePrice > sma.Value;
+            if (!_simSmaWatchHasBaseline.Contains(period))
+            {
+                _simSmaWatchHasBaseline.Add(period);
+                _simSmaWatchLastSide[period] = above;
+                continue;
+            }
+
+            if (_simSmaWatchLastSide[period] == above) continue;
+            _simSmaWatchLastSide[period] = above;
+
+            _simSmaWatchFiredFor.Add(period);
+            var direction = above ? "al alza" : "a la baja";
+            var pisoTechoLabel = above ? "Techo" : "Piso";
+            LogSimEvent($"{_symbol} rompió el {pisoTechoLabel} SMA{period} (Diario) {direction} — spot {livePrice:F2}, SMA{period} {sma.Value:F2}");
+        }
     }
 
     // Ported from ChartPanel.EvaluateDailyBounce, once per load (not per step) — checks the last
@@ -1046,6 +1093,7 @@ public class SimulatorForm : Form
             intradayUpToNow, 15, rthOnly: false), visibleDays: 3);
 
         EvaluateDailyPmAndBb(step.UnderlyingPrice);
+        EvaluateSmaCrossWatches(step.UnderlyingPrice);
 
         RefreshOpenSimTradesPnL(step);
     }
