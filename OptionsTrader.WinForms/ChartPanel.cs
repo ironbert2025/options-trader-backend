@@ -2293,7 +2293,11 @@ public class ChartPanel : Panel
 
             _smaWatchFiredFor.Add(period);
             var direction = above ? "al alza" : "a la baja";
-            var caption = $"{_symbol} cruzó SMA{period} (Diario) {direction} — spot {livePrice:F2}, SMA{period} {sma.Value:F2}";
+            // Same convention as the Piso/Techo system: a cross UP through the SMA means it was
+            // acting as resistance (Techo) and just broke; a cross DOWN means it was acting as
+            // support (Piso).
+            var pisoTechoLabel = above ? "Techo" : "Piso";
+            var caption = $"{_symbol} rompió el {pisoTechoLabel} SMA{period} (Diario) {direction} — spot {livePrice:F2}, SMA{period} {sma.Value:F2}";
             var eventDirection = above ? "Alza" : "Baja";
             EventLogStore.Append(_symbol, "Daily", "SmaCross", eventDirection, caption, livePrice, $"SMA{period}={sma.Value:F2}");
             OnSmaCrossEvent?.Invoke(caption);
