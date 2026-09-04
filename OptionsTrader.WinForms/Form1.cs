@@ -1327,6 +1327,26 @@ public partial class Form1 : Form
         _csvLoggerNext = null;
     }
 
+    // Trims a polling cycle's full chain down to what's actually ever read back from the CSV: the
+    // live grid never shows more than a handful of OTM strikes (Counts filter caps at 14) and no
+    // ITM strikes except a trade's own forced one, IvHistorialWriter only needs the single ATM
+    // strike (always the closest strike overall, so always included here), and the Simulator
+    // replays through the same grid filter — none of them need the full StrikeCount*2 chain that
+    // used to get written every cycle. Per side (Call/Put) independently: the 5 closest ITM strikes
+    // + 6 closest OTM strikes to spot. Does NOT affect allQuotes/allQuotesNext themselves — those
+    // still feed the grid and UpdateTradesPnL's full-chain PnL lookup, unchanged.
+    private static List<OptionQuoteDto> TrimQuotesForCsv(List<OptionQuoteDto> quotes)
+    {
+        var result = new List<OptionQuoteDto>();
+        foreach (var optionType in new[] { OptionType.Call, OptionType.Put })
+        {
+            var sideQuotes = quotes.Where(q => q.OptionType == optionType).ToList();
+            result.AddRange(sideQuotes.Where(q => q.InTheMoney).OrderBy(q => Math.Abs(q.StrikePrice - q.SpotPrice)).Take(5));
+            result.AddRange(sideQuotes.Where(q => !q.InTheMoney).OrderBy(q => Math.Abs(q.StrikePrice - q.SpotPrice)).Take(6));
+        }
+        return result;
+    }
+
     private async Task FetchAndUpdateQuotesAsync()
     {
         if (_selectedTicker == null) return;
@@ -1372,7 +1392,7 @@ public partial class Form1 : Form
             // Primary chain (current ExpDate)
             if (chkSaveToCsv.Checked)
             {
-                _csvLogger?.AppendRows(allQuotes);
+                _csvLogger?.AppendRows(TrimQuotesForCsv(allQuotes));
                 // Try right away (not just on the 5-min scheduler tick) so the IVR/IVP opening
                 // snapshot is captured on the very poll where the 9:30-9:35 window fills in.
                 TryAppendIvHistorialSnapshot();
@@ -1400,7 +1420,7 @@ public partial class Form1 : Form
             if (!chkHideNextExpDate.Checked)
             {
                 if (chkSaveToCsv.Checked)
-                    _csvLoggerNext?.AppendRows(allQuotesNext);
+                    _csvLoggerNext?.AppendRows(TrimQuotesForCsv(allQuotesNext));
 
                 _lastAllQuotesNext = allQuotesNext;
                 (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
