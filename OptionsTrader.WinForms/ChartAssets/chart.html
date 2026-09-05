@@ -226,7 +226,20 @@
 
   // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
   // the user hasn't manually panned/zoomed since the last time we set it — see userHasInteracted.
+  //
+  // EXCEPTION, per explicit request: panel 2's RTH slide window (rthSlideWindowBars) ALWAYS
+  // reapplies once today's RTH session has started, even after a manual pan/zoom. The user can
+  // still freely move the chart in premarket (and even mid-RTH), but from the next live candle
+  // onward the window resumes following — "from" is a fixed index (today's first RTH bar minus
+  // the configured context) and "to" is always the latest bar, so this isn't a jarring snap: "to"
+  // simply keeps advancing one bar per tick exactly like it would with no interaction at all,
+  // converging on the intended 26-today + context = rthSlideWindowBars view by the 4pm close
+  // regardless of when the user last touched the chart.
   function reapplyVisibleRangeIfLive() {
+    if (rthSlideWindowBars) {
+      const slideRange = computeRthSlideRange(displaySeries());
+      if (slideRange) { applyVisibleRange(false); return; }
+    }
     if ((!visibleDays && !rthSlideWindowBars && !initialBarCount) || userHasInteracted) return;
     applyVisibleRange(false);
   }
