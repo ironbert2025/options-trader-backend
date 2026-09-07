@@ -1327,6 +1327,26 @@ public partial class Form1 : Form
         _csvLoggerNext = null;
     }
 
+    // Trims a polling cycle's full chain down to what's actually ever read back from the CSV: the
+    // live grid never shows more than a handful of OTM strikes (Counts filter caps at 14) and no
+    // ITM strikes except a trade's own forced one, IvHistorialWriter only needs the single ATM
+    // strike (always the closest strike overall, so always included here), and the Simulator
+    // replays through the same grid filter — none of them need the full StrikeCount*2 chain that
+    // used to get written every cycle. Per side (Call/Put) independently: the 5 closest ITM strikes
+    // + 6 closest OTM strikes to spot. Does NOT affect allQuotes/allQuotesNext themselves — those
+    // still feed the grid and UpdateTradesPnL's full-chain PnL lookup, unchanged.
+    private static List<OptionQuoteDto> TrimQuotesForCsv(List<OptionQuoteDto> quotes)
+    {
+        var result = new List<OptionQuoteDto>();
+        foreach (var optionType in new[] { OptionType.Call, OptionType.Put })
+        {
+            var sideQuotes = quotes.Where(q => q.OptionType == optionType).ToList();
+            result.AddRange(sideQuotes.Where(q => q.InTheMoney).OrderBy(q => Math.Abs(q.StrikePrice - q.SpotPrice)).Take(5));
+            result.AddRange(sideQuotes.Where(q => !q.InTheMoney).OrderBy(q => Math.Abs(q.StrikePrice - q.SpotPrice)).Take(6));
+        }
+        return result;
+    }
+
     private async Task FetchAndUpdateQuotesAsync()
     {
         if (_selectedTicker == null) return;
@@ -1372,7 +1392,7 @@ public partial class Form1 : Form
             // Primary chain (current ExpDate)
             if (chkSaveToCsv.Checked)
             {
-                _csvLogger?.AppendRows(allQuotes);
+                _csvLogger?.AppendRows(TrimQuotesForCsv(allQuotes));
                 // Try right away (not just on the 5-min scheduler tick) so the IVR/IVP opening
                 // snapshot is captured on the very poll where the 9:30-9:35 window fills in.
                 TryAppendIvHistorialSnapshot();
@@ -1400,7 +1420,7 @@ public partial class Form1 : Form
             if (!chkHideNextExpDate.Checked)
             {
                 if (chkSaveToCsv.Checked)
-                    _csvLoggerNext?.AppendRows(allQuotesNext);
+                    _csvLoggerNext?.AppendRows(TrimQuotesForCsv(allQuotesNext));
 
                 _lastAllQuotesNext = allQuotesNext;
                 (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
@@ -1414,17 +1434,7 @@ public partial class Form1 : Form
             // cycle's fresh values instead of the previous cycle's — otherwise the "Próxima" tab
             // was always exactly one poll behind.
             //
-            // Invoked per-subscriber with its own try/catch instead of a single direct
-            // ?.Invoke(...) — a plain multicast invoke stops calling LATER subscribers the moment
-            // an EARLIER one throws (confirmed live: NFLX's Charts-tab options grid silently never
-            // refreshed — a stale/disposed subscriber elsewhere in the invocation list, registered
-            // before it, was throwing every single poll cycle and killing the rest of that cycle's
-            // invocation, with no exception ever surfacing anywhere to explain why).
-            foreach (var handler in (OnQuotesUpdatedEvent?.GetInvocationList() ?? Array.Empty<Delegate>()))
-            {
-                try { ((Action<string>)handler)(_selectedTicker.Symbol); }
-                catch (Exception ex) { LogLine($"{DateTime.Now:HH:mm:ss} [OnQuotesUpdatedEvent] Subscriber threw: {ex.Message}", Color.OrangeRed); }
-            }
+            RaiseQuotesUpdated(_selectedTicker.Symbol);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
@@ -1636,12 +1646,17 @@ public partial class Form1 : Form
 
     // Set by TriggerQuoteStrikeClick right before replaying DgvQuotes_CellClick, read-and-reset as
     // the first thing that handler does (same pattern as _pendingTradeSendToApi) — lets a click
-    // coming from the Charts tab's own 2 radio buttons (Demo+Target / Real+Target, always WITH
-    // target) override the 4-way Options-Quotes-tab radios for that one click, without touching
-    // what a real click on Options Quotes itself does. null = no override (real click).
+    // coming from the Charts tab's own 3 radio buttons (Simulation / Demo+Target / Real+Target,
+    // always WITH target) override the 4-way Options-Quotes-tab radios for that one click, without
+    // touching what a real click on Options Quotes itself does. null = no override (real click).
     private bool? _chartsTabTradeOverride;
+    // Read-and-reset alongside _chartsTabTradeOverride — when true, takes priority over it: opens a
+    // trade exactly like Demo+Target (grid row, target auto-close, white entry/close lines on the
+    // charts) but never touches TradeHistoryStore/OpenTradesStore/screenshots — see
+    // RecordEntryAsync/CloseTradeRowAsync's isSimulation handling.
+    private bool _chartsTabTradeIsSimulation;
 
-    internal void TriggerQuoteStrikeClick(string symbol, string rowType, string strikeText, bool sendToApi = true, bool useRealTrade = false)
+    internal void TriggerQuoteStrikeClick(string symbol, string rowType, string strikeText, bool sendToApi = true, bool useRealTrade = false, bool isSimulation = false)
     {
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         for (int i = 0; i < dgvQuotes.Rows.Count; i++)
@@ -1651,6 +1666,7 @@ public partial class Form1 : Form
             if (row.Cells["colStrikePrice"].Value?.ToString() != strikeText) continue;
             _pendingTradeSendToApi = sendToApi;
             _chartsTabTradeOverride = useRealTrade;
+            _chartsTabTradeIsSimulation = isSimulation;
             DgvQuotes_CellClick(this, new DataGridViewCellEventArgs(dgvQuotes.Columns["colStrikePrice"].Index, i));
             return;
         }
@@ -1660,11 +1676,12 @@ public partial class Form1 : Form
     // (dgvQuotesNext, next expiration — e.g. tomorrow for a daily ExpDate code). Unlike
     // TriggerQuoteStrikeClick, this doesn't replay Form1's own DgvQuotes_CellClick (dgvQuotesNext
     // has no click handler of its own on Form1 — its Strike column isn't even a button there) —
-    // instead it dispatches directly, always WITH target (per the Charts tab's own 2-way
-    // Demo+Target/Real+Target radios — this is the only caller, dgvQuotesNext has no other click
-    // path), using NextGridColumns and forcing expDateOverride to tomorrow's resolved date so the
-    // trade is persisted (and, for a REAL order, the OCC symbol built) against the correct expiration.
-    internal void TriggerQuoteStrikeClickNext(string symbol, string rowType, string strikeText, bool sendToApi = true, bool useRealTrade = false)
+    // instead it dispatches directly, always WITH target (per the Charts tab's own 3-way
+    // Simulation/Demo+Target/Real+Target radios — this is the only caller, dgvQuotesNext has no
+    // other click path), using NextGridColumns and forcing expDateOverride to tomorrow's resolved
+    // date so the trade is persisted (and, for a REAL order, the OCC symbol built) against the
+    // correct expiration.
+    internal void TriggerQuoteStrikeClickNext(string symbol, string rowType, string strikeText, bool sendToApi = true, bool useRealTrade = false, bool isSimulation = false)
     {
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         for (int i = 0; i < dgvQuotesNext.Rows.Count; i++)
@@ -1675,7 +1692,9 @@ public partial class Form1 : Form
             if (IsRowTradeBlocked(row, "colCallBidNext", "colPutBidNext")) return;
 
             var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
-            if (useRealTrade)
+            if (isSimulation)
+                _ = OpenSimulationTradeFromRow(row, NextGridColumns, nextExpDate);
+            else if (useRealTrade)
                 _ = PlaceRealTradeFromRowAsync(row, NextGridColumns, withTarget: true, sendToApi, nextExpDate);
             else
                 _ = OpenSimulatedTradeFromRow(row, NextGridColumns, sendToApi, nextExpDate);
@@ -1703,6 +1722,17 @@ public partial class Form1 : Form
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return;
         DgvTrades_CellClick(this, new DataGridViewCellEventArgs(dgvTrades.Columns["colTradeClose"].Index, rowIndex));
+    }
+
+    // Same idea as TriggerTradeCloseClick — lets the Charts tab's own mirrored trades grid forward
+    // a Strike-cell click into Form1's real ForceStrikeInQuotesGrid (pinning that Type/Strike so it
+    // keeps showing in dgvQuotes even after it goes ITM), positional row lookup since the mirror is
+    // always rebuilt in the same row order as dgvTrades.
+    internal void TriggerForceStrikeInQuotesGrid(string symbol, int rowIndex)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
+        if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return;
+        ForceStrikeInQuotesGrid(dgvTrades.Rows[rowIndex]);
     }
 
     // Distinct background so an automatic (bot-driven) demo trade is visually different from a
@@ -2109,12 +2139,19 @@ public partial class Form1 : Form
         _pendingTradeSendToApi = true;
         var chartsOverride = _chartsTabTradeOverride;
         _chartsTabTradeOverride = null;
+        var chartsIsSimulation = _chartsTabTradeIsSimulation;
+        _chartsTabTradeIsSimulation = false;
 
         // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
         if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
 
-        // A click coming from the Charts tab's own Demo+Target/Real+Target radios always carries
-        // target — bypasses the 4-way Options-Quotes radios below entirely for this one click.
+        // A click coming from the Charts tab's own Simulation/Demo+Target/Real+Target radios always
+        // carries target — bypasses the 4-way Options-Quotes radios below entirely for this one click.
+        if (chartsIsSimulation)
+        {
+            _ = OpenSimulationTrade(e.RowIndex);
+            return;
+        }
         if (chartsOverride.HasValue)
         {
             if (chartsOverride.Value)
@@ -2149,6 +2186,29 @@ public partial class Form1 : Form
 
     private async void OpenSimulatedTrade(int rowIndex, bool sendToApi = true) =>
         await OpenSimulatedTradeFromRow(dgvQuotes.Rows[rowIndex], TodayGridColumns, sendToApi, expDateOverride: null);
+
+    // "Simulation" (Charts tab only) — same target/PnL behavior as a Demo trade (auto-closes at
+    // target), but never touches TradeHistoryStore/OpenTradesStore/screenshots. Never sends to the
+    // API (sendToApi: false) and passes isSimulation through to RecordEntryAsync so the trade id
+    // stays 0 — that alone makes CloseTradeRowAsync's existing tradeId != 0 gates skip
+    // OpenTradesStore/CloseTradeInApiAsync automatically. No Refuerzo (Demo-only).
+    private async Task OpenSimulationTrade(int rowIndex) =>
+        await OpenSimulationTradeFromRow(dgvQuotes.Rows[rowIndex], TodayGridColumns, expDateOverride: null);
+
+    private async Task OpenSimulationTradeFromRow(DataGridViewRow row, OptionsGridColumns cols, DateOnly? expDateOverride)
+    {
+        var rowType   = row.Tag?.ToString() ?? "CALL";
+        var strike    = row.Cells[cols.Strike].Value?.ToString() ?? string.Empty;
+        var contracts = row.Cells[cols.Contracts].Value?.ToString() ?? "0";
+        var level     = row.Cells[cols.Level].Value?.ToString() ?? string.Empty;
+        var symbol    = _selectedTicker?.Symbol ?? "UNK";
+
+        var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
+        if (ask <= 0) return;
+
+        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Simulation", isDemo: true,
+            suppressAutoClose: false, sendToApi: false, expDateOverride: expDateOverride, isSimulation: true);
+    }
 
     private async Task OpenSimulatedTradeFromRow(DataGridViewRow row, OptionsGridColumns cols, bool sendToApi, DateOnly? expDateOverride)
     {
@@ -2262,7 +2322,7 @@ public partial class Form1 : Form
     private async Task<(int TradeId, DataGridViewRow Row)> RecordEntryAsync(string symbol, string rowType, string strike, string level,
         decimal bid, decimal ask, string contracts, string entryLabel, bool isDemo, bool suppressAutoClose = false,
         string? accountHash = null, string? occSymbol = null, int quantity = 0, decimal? overrideTargetPct = null, bool sendToApi = true,
-        DateOnly? expDateOverride = null)
+        DateOnly? expDateOverride = null, bool isSimulation = false)
     {
         decimal targetPct;
         if (overrideTargetPct.HasValue) targetPct = overrideTargetPct.Value;
@@ -2295,7 +2355,7 @@ public partial class Form1 : Form
         SetTradeTypeColor(newRow, rowType);
         if (decimal.TryParse(strike, out var strikeForMoneyness))
             SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
-        newRow.Cells["colTradeDemoReal"].Value = isDemo ? "Demo" : "Real";
+        newRow.Cells["colTradeDemoReal"].Value = isSimulation ? "Simulation" : (isDemo ? "Demo" : "Real");
 
         // Premium = riesgo máximo de la posición = precio de entrada * 100 (por contrato) *
         // cantidad de contratos. "ask" ya es el valor usado como EntryPrice acá mismo (ver
@@ -2310,7 +2370,13 @@ public partial class Form1 : Form
 
         int.TryParse(level, out var levelInt);
         int.TryParse(contracts, out var contractsInt);
-        var tradeId = await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo, sendToApi);
+        // Simulation trades never call SaveTradeToApiAsync at all — no TradeHistoryStore.Add, so
+        // the trade never shows up in History. tradeId stays 0, which is the same sentinel the app
+        // already uses for "never reached persistence" — CloseTradeRowAsync's existing tradeId != 0
+        // gates then skip OpenTradesStore.Remove/CloseTradeInApiAsync automatically, no extra code
+        // needed there.
+        var tradeId = isSimulation ? 0
+            : await SaveTradeToApiAsync(symbol, rowType, strike, ask, contractsInt, levelInt, targetPct, entryTime, isDemo, sendToApi);
         // expDateOverride carries the clicked-tab's own expiration (e.g. "Próxima" tab on the Live
         // Chart's tabbed options grid — see TriggerQuoteStrikeClickNext) instead of always the
         // ticker's default resolved date, so a trade opened for tomorrow's chain is persisted with
@@ -2320,19 +2386,20 @@ public partial class Form1 : Form
             ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice);
         PadWithBlankRows(dgvTrades, 4);
 
-        OpenTradesStore.Add(new PersistedTrade(
-            TradeId:        tradeId,
-            Symbol:         symbol,
-            OptionType:     rowType,
-            StrikePrice:    strike,
-            EntryPrice:     ask,
-            Contracts:      contracts,
-            EntryTime:      entryTime,
-            ExpirationDate: expDate,
-            Level:          level,
-            PnlTarget:      targetPct.ToString("F0"),
-            EntrySpotPrice: _lastSpotPrice,
-            IsDemo:         isDemo));
+        if (!isSimulation)
+            OpenTradesStore.Add(new PersistedTrade(
+                TradeId:        tradeId,
+                Symbol:         symbol,
+                OptionType:     rowType,
+                StrikePrice:    strike,
+                EntryPrice:     ask,
+                Contracts:      contracts,
+                EntryTime:      entryTime,
+                ExpirationDate: expDate,
+                Level:          level,
+                PnlTarget:      targetPct.ToString("F0"),
+                EntrySpotPrice: _lastSpotPrice,
+                IsDemo:         isDemo));
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
         // through here. Awaited (with a repaint delay) BEFORE the entry snapshot below, same
@@ -2356,7 +2423,8 @@ public partial class Form1 : Form
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
         }
 
-        _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
+        if (!isSimulation)
+            _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
 
         OnTradesUpdatedEvent?.Invoke(symbol);
         return (tradeId, newRow);
@@ -3185,9 +3253,32 @@ public partial class Form1 : Form
         _forcedStrikes.Add((type, strike));
 
         if (_selectedTicker != null && _lastAllQuotes.Count > 0)
+        {
             (_lastOtmCalls, _lastOtmPuts) = PopulateQuotesGrid(dgvQuotes, _lastAllQuotes, _selectedTicker, applyCountsFilter: true,
                 selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
                 forcedStrikes: _forcedStrikes);
+
+            // Refresh the Charts tab's own mirrored options grid immediately too (it reads the same
+            // _lastOtmCalls/_lastOtmPuts via GetQuoteSnapshot) — without this it would only pick up
+            // the forced strike on the next poll cycle, a few seconds later.
+            RaiseQuotesUpdated(_selectedTicker.Symbol);
+        }
+    }
+
+    // Fires OnQuotesUpdatedEvent (Live Chart popup + Charts tab mirrored options grids) with its
+    // own try/catch per subscriber instead of a single direct ?.Invoke(...) — a plain multicast
+    // invoke stops calling LATER subscribers the moment an EARLIER one throws (confirmed live:
+    // NFLX's Charts-tab options grid silently never refreshed — a stale/disposed subscriber
+    // elsewhere in the invocation list, registered before it, was throwing every single poll cycle
+    // and killing the rest of that cycle's invocation, with no exception ever surfacing anywhere to
+    // explain why).
+    private void RaiseQuotesUpdated(string symbol)
+    {
+        foreach (var handler in (OnQuotesUpdatedEvent?.GetInvocationList() ?? Array.Empty<Delegate>()))
+        {
+            try { ((Action<string>)handler)(symbol); }
+            catch (Exception ex) { LogLine($"{DateTime.Now:HH:mm:ss} [OnQuotesUpdatedEvent] Subscriber threw: {ex.Message}", Color.OrangeRed); }
+        }
     }
 
     private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType)
@@ -3196,6 +3287,9 @@ public partial class Form1 : Form
         var nowStr    = now.ToString("HH:mm:ss");
         var type      = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
         var cBid      = row.Cells["colTradeCBid"].Value?.ToString() ?? string.Empty;
+        // Simulation trades never got a screenshot/store record on entry (see RecordEntryAsync) —
+        // skip the matching close-side snapshot/upload/Telegram work below for the same reason.
+        var isSimulation = string.Equals(row.Cells["colTradeDemoReal"].Value?.ToString(), "Simulation", StringComparison.OrdinalIgnoreCase);
 
         // Confirmed fill price of the real SELL_TO_CLOSE order (MANUAL close only). Null means
         // either this isn't a real-broker MANUAL close, or the fill wasn't confirmed in time —
@@ -3348,6 +3442,11 @@ public partial class Form1 : Form
                 await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDeltaChartsTab);
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
         }
+
+        // Simulation trades stop here — grid/PnL and the white entry/close lines above are all they
+        // get. No screenshot, no S3/Telegram, no daily-log entry — see RecordEntryAsync's matching
+        // isSimulation skip on the entry side.
+        if (isSimulation) return;
 
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
         // and the Telegram push below, instead of each capturing its own copy.

@@ -69,6 +69,7 @@ public class DailyChartForm : Form
         var btnRect = new Button { Text = "Rect", Location = new Point(0, 2), Size = new Size(60, 24) };
         var btnColorRect = new Button { Text = "Color Rect", Location = new Point(66, 2), Size = new Size(80, 24) };
         var btnTLine = new Button { Text = "T-Line", Location = new Point(150, 2), Size = new Size(60, 24) };
+        var btnHLine = new Button { Text = "H-Line", Location = new Point(216, 2), Size = new Size(60, 24) };
         btnRect.Click += async (s, e) =>
         {
             if (_webView.CoreWebView2 == null) return;
@@ -90,11 +91,26 @@ public class DailyChartForm : Form
             await _fifteenWebView.CoreWebView2.ExecuteScriptAsync("toggleTLine();");
             btnTLine.BackColor = result == "true" ? Color.Orange : SystemColors.Control;
         };
+        // "H-Line" — arms BOTH the Hora and 15 Min tabs at once (same convention as T-Line above),
+        // but unlike T-Line the line itself is a SINGLE shared line: drawing/deleting it on either
+        // tab mirrors it onto the other one right here (see HandleHLineMessage), then relays out to
+        // this same symbol's Charts-tab panel 1 (1h) AND panel 2 (15m RTH) via
+        // TwoPanelChartsControl.AttachDailyMirroring, per explicit request.
+        btnHLine.Click += async (s, e) =>
+        {
+            if (_hourlyWebView.CoreWebView2 == null || _fifteenWebView.CoreWebView2 == null) return;
+            var result = await _hourlyWebView.CoreWebView2.ExecuteScriptAsync("toggleHLine();");
+            await _fifteenWebView.CoreWebView2.ExecuteScriptAsync("toggleHLine();");
+            btnHLine.BackColor = result == "true" ? Color.Red : SystemColors.Control;
+        };
         toolbar.Controls.Add(btnRect);
         toolbar.Controls.Add(btnColorRect);
         toolbar.Controls.Add(btnTLine);
+        toolbar.Controls.Add(btnHLine);
         // chart.html auto-disarms each tool itself once the 2nd click completes a
         // rectangle/T-Line — reset the button color to match, same pattern the live chart uses.
+        // H-Line is a single click-to-place (not 2-click), so chart.html never auto-disarms it —
+        // it stays armed until clicked again, same as the live chart's own H-Line button.
         OnRectPlacedEvent += () => btnRect.BackColor = SystemColors.Control;
         OnColorRectPlacedEvent += () => btnColorRect.BackColor = SystemColors.Control;
         OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
@@ -106,12 +122,12 @@ public class DailyChartForm : Form
         // the marker). Stays armed until explicitly removed (this button again, or Delete on the
         // chart marker), independent of whether this window or the live chart is currently open.
         var smaWatchButtons = new Dictionary<int, Button>();
-        int x = 216;
+        var smaWatchButtonsInOrder = new List<Button>();
         foreach (var period in new[] { 20, 40, 100, 200 })
         {
-            var btn = new Button { Text = $"SMA{period}", Location = new Point(x, 2), Size = new Size(60, 24) };
-            x += 66;
+            var btn = new Button { Size = new Size(60, 24), Text = $"SMA{period}" };
             smaWatchButtons[period] = btn;
+            smaWatchButtonsInOrder.Add(btn);
             btn.Click += (s, e) =>
             {
                 var armed = SmaDailyWatchStore.Load(_symbol).Contains(period);
@@ -125,6 +141,25 @@ public class DailyChartForm : Form
         }
         _smaWatchButtons = smaWatchButtons;
 
+        // Centered horizontally in the toolbar (instead of a fixed left offset right after
+        // Rect/Color Rect/T-Line), per explicit request — clamped so it never creeps left of those
+        // 3 buttons even on a narrow window. Re-run on every toolbar resize, same pattern as the
+        // right-anchored D.PM/D40/D100/D200 group below.
+        const int smaWatchGroupWidth = 4 * 60 + 3 * 6; // 4 buttons, 60px each, 6px gaps
+        const int leftBoundary = 282; // right after btnHLine (216 + 60 + 6)
+        void LayoutSmaWatchButtonsCentered()
+        {
+            var xStart = Math.Max(leftBoundary, (toolbar.ClientSize.Width - smaWatchGroupWidth) / 2);
+            var bx = xStart;
+            foreach (var btn in smaWatchButtonsInOrder)
+            {
+                btn.Location = new Point(bx, 2);
+                bx += 66;
+            }
+        }
+        toolbar.SizeChanged += (s, e) => LayoutSmaWatchButtonsCentered();
+        LayoutSmaWatchButtonsCentered();
+
         // "D.PM" — controls whether the solid yellow Daily SMA20 reference line (ChartPanel.
         // EvaluateDailyPmAndBb) is drawn on panel 1/2 (tab Charts) and panel 3 (popup), per explicit
         // request. Persisted per symbol (tickers.json, same store as AWS/Telegram) — reflects the
@@ -133,8 +168,8 @@ public class DailyChartForm : Form
         var chkDailyPmLine = new CheckBox
         {
             Text     = "D.PM",
-            Location = new Point(x, 6),
             AutoSize = true,
+            Anchor   = AnchorStyles.Top | AnchorStyles.Right,
             Checked  = Form1.IsDailyPmLineEnabledFor(_symbol),
             ForeColor = Color.FromArgb(0xf5, 0xa6, 0x23) // matches chart.html's smaColors[20]
         };
@@ -156,14 +191,14 @@ public class DailyChartForm : Form
             [100] = Color.FromArgb(0x26, 0xa6, 0x9a),
             [200] = Color.FromArgb(0xa2, 0x59, 0xff)
         };
-        var xDailySma = x + chkDailyPmLine.PreferredSize.Width + 18;
+        var dailySmaCheckboxes = new List<CheckBox> { chkDailyPmLine };
         foreach (var period in new[] { 40, 100, 200 })
         {
             var chk = new CheckBox
             {
                 Text     = $"D{period}",
-                Location = new Point(xDailySma, 6),
                 AutoSize = true,
+                Anchor   = AnchorStyles.Top | AnchorStyles.Right,
                 Checked  = Form1.GetDailySmaLinesEnabledFor(_symbol).Contains(period),
                 ForeColor = smaColorsByPeriod[period]
             };
@@ -173,8 +208,25 @@ public class DailyChartForm : Form
                 OnDailySmaLineToggledEvent?.Invoke(period, chk.Checked);
             };
             toolbar.Controls.Add(chk);
-            xDailySma += chk.PreferredSize.Width + 10;
+            dailySmaCheckboxes.Add(chk);
         }
+
+        // Pinned to the toolbar's far right edge (D.PM, D40, D100, D200 left-to-right), Anchor=Right
+        // keeps them there if the window is resized — positioned here (after all 4 are created, so
+        // PreferredSize is known) and re-run on every toolbar resize.
+        void LayoutDailySmaCheckboxesRight()
+        {
+            var xRight = toolbar.ClientSize.Width - toolbar.Padding.Right;
+            for (int i = dailySmaCheckboxes.Count - 1; i >= 0; i--)
+            {
+                var w = dailySmaCheckboxes[i].PreferredSize.Width;
+                xRight -= w;
+                dailySmaCheckboxes[i].Location = new Point(xRight, 6);
+                xRight -= 10;
+            }
+        }
+        toolbar.SizeChanged += (s, e) => LayoutDailySmaCheckboxesRight();
+        LayoutDailySmaCheckboxesRight();
 
         Controls.Add(tabControl);
         Controls.Add(toolbar);
@@ -193,6 +245,14 @@ public class DailyChartForm : Form
     // drawings there replicate onto the live chart. One-way only (live -> Daily is NOT mirrored).
     public event Action<string, long, decimal, long, decimal>? OnTLineDrawnEvent;
     public event Action<string, long, decimal, long, decimal>? OnTLineDeletedEvent;
+
+    // Fired when the H-Line is drawn/deleted on either the "Hora" or "15 Min" tab (it's a single
+    // shared line, already mirrored between the two tabs right here — see HandleHLineMessage).
+    // TwoPanelChartsControl.AttachDailyMirroring relays these onto BOTH the live 1h and 15m RTH
+    // panels (ChartPanel.AddMirroredHLineAsync/RemoveHLineAsync), per explicit request. One-way
+    // only (live -> Daily is NOT mirrored).
+    public event Action<long, decimal>? OnHLineDrawnEvent;
+    public event Action<decimal>? OnHLineDeletedEvent;
 
     // Fired when an "SMA Watch" toolbar button (or the chart marker's Delete) arms/disarms
     // monitoring for that period — MultiChartForm relays this to the live 1h panel
@@ -279,6 +339,8 @@ public class DailyChartForm : Form
         // tab's own line (ChartPanel.GetTodaySessionOpenFakeEpoch convention), since this tab also
         // shows real (15-minute) intraday bars, not one bar per day. Fed by UpdateLivePrice below.
         await _fifteenWebView.CoreWebView2!.ExecuteScriptAsync($"startPreMarketLine({GetTodaySessionOpenFakeEpoch()});");
+
+        await LoadAndWireHLinesAsync();
     }
 
     // "T-Line" tool persistence (TLineStore) for one of the Hora/15 Min tabs — replay whatever was
@@ -290,6 +352,63 @@ public class DailyChartForm : Form
         var linesJson = JsonSerializer.Serialize(savedLines.Select(l => new { t1 = l.T1, p1 = l.P1, t2 = l.T2, p2 = l.P2 }));
         await webView.CoreWebView2.ExecuteScriptAsync($"loadTLines({linesJson});");
         webView.CoreWebView2.WebMessageReceived += (s, e) => HandleTLineMessage(e, tag, () => OnTLinePlacedEvent?.Invoke());
+    }
+
+    // "H-Line" tool persistence (HLineStore, one shared line for both tabs) — replay whatever was
+    // drawn in a previous session onto BOTH tabs, then listen for new/deleted ones on each.
+    private async Task LoadAndWireHLinesAsync()
+    {
+        var saved = HLineStore.Load(_symbol);
+        foreach (var (time, price) in saved)
+        {
+            var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (_hourlyWebView.CoreWebView2 != null)
+                await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"addMirroredHLine({time}, {priceStr});");
+            if (_fifteenWebView.CoreWebView2 != null)
+                await _fifteenWebView.CoreWebView2.ExecuteScriptAsync($"addMirroredHLine({time}, {priceStr});");
+        }
+
+        if (_hourlyWebView.CoreWebView2 != null)
+            _hourlyWebView.CoreWebView2.WebMessageReceived += (s, e) => HandleHLineMessage(e, _fifteenWebView);
+        if (_fifteenWebView.CoreWebView2 != null)
+            _fifteenWebView.CoreWebView2.WebMessageReceived += (s, e) => HandleHLineMessage(e, _hourlyWebView);
+    }
+
+    // otherWebView is whichever of Hora/15 Min did NOT originate this message — the line gets
+    // mirrored there too (addMirroredHLine/removeHLine never postMessage back out, so this can't
+    // ping-pong), then relayed out to the live Charts-tab panels via OnHLineDrawnEvent/
+    // OnHLineDeletedEvent.
+    private void HandleHLineMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, WebView2 otherWebView)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "hline_add" && type != "hline_delete") return;
+
+            if (type == "hline_add")
+            {
+                var t = root.GetProperty("time").GetInt64();
+                var p = root.GetProperty("price").GetDecimal();
+                HLineStore.Append(_symbol, t, p);
+                var priceStr = p.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                _ = otherWebView.CoreWebView2?.ExecuteScriptAsync($"addMirroredHLine({t}, {priceStr});");
+                OnHLineDrawnEvent?.Invoke(t, p);
+            }
+            else
+            {
+                var p = root.GetProperty("price").GetDecimal();
+                HLineStore.Remove(_symbol, p);
+                var priceStr = p.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                _ = otherWebView.CoreWebView2?.ExecuteScriptAsync($"removeHLine({priceStr});");
+                OnHLineDeletedEvent?.Invoke(p);
+            }
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
     }
 
     private void HandleRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string contextTag, Action onPlaced)

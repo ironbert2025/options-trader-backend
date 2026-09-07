@@ -79,9 +79,14 @@ public class TwoPanelChartsControl : UserControl
     // Independent from Form1's own 4-way "Trade" radios (Options Quotes tab) — a strike clicked
     // here always opens WITH target, per explicit request. Always starts on Demo+Target on connect
     // (not persisted), separate instance per TwoPanelChartsControl (only one ever exists at a time).
+    // "Simulation" — same target/PnL behavior as the other 2 (always with target, auto-closes at
+    // target), but the trade never touches TradeHistoryStore/OpenTradesStore/screenshots — see
+    // RecordEntryAsync/CloseTradeRowAsync's isSimulation handling in Form1.cs.
+    private readonly RadioButton _rbChartsSimulation = new() { Text = "Simulation", AutoSize = true, ForeColor = Color.Black, Font = new Font("Segoe UI", 8F) };
     private readonly RadioButton _rbChartsDemoTarget = new() { Text = "Demo-Target", Checked = true, AutoSize = true, ForeColor = Color.DarkOrange, Font = new Font("Segoe UI", 8F, FontStyle.Bold) };
     private readonly RadioButton _rbChartsRealTarget  = new() { Text = "Real-Target", AutoSize = true, ForeColor = Color.Green, Font = new Font("Segoe UI", 8F) };
     private bool _useRealTrade;
+    private bool _useSimulation;
 
     private ChartPanel? _hourlyPanel;
     private ChartPanel? _rthPanel;
@@ -238,6 +243,27 @@ public class TwoPanelChartsControl : UserControl
         }
         _hourlyPanel = hourlyPanel;
         _rthPanel    = rthPanel;
+
+        // Finviz analyst Target Price — panel 2 (15m RTH) only, individual stocks only
+        // (FinvizTargetPriceService's own whitelist silently no-ops for everything else, e.g. the
+        // ETFs). This is scraping, not an official API, so it's deliberately NOT tied to the app's
+        // normal 6s options-polling cadence — fetched once on connect, then refreshed on its own
+        // low-frequency timer, out of courtesy to Finviz.
+        async void RefreshTargetPrice()
+        {
+            if (_rthPanel == null || IsDisposed) return;
+            var price = await FinvizTargetPriceService.GetTargetPriceAsync(_symbol);
+            if (!IsDisposed) _ = _rthPanel.SetTargetPriceAsync(price);
+        }
+        // HandleCreated (not called directly here) — the RTH panel's WebView2/CoreWebView2 isn't
+        // ready yet at construction time, so an immediate call would silently no-op (SetTargetPriceAsync
+        // bails out while CoreWebView2 is null) and the label wouldn't appear until the first
+        // 30-minute timer tick.
+        HandleCreated += (s, e) => RefreshTargetPrice();
+        var targetPriceTimer = new System.Windows.Forms.Timer { Interval = 30 * 60 * 1000 }; // 30 min
+        targetPriceTimer.Tick += (s, e) => RefreshTargetPrice();
+        targetPriceTimer.Start();
+        Disposed += (s, e) => { targetPriceTimer.Stop(); targetPriceTimer.Dispose(); };
 
         // Stk-line/H-Line/ATH mirroring BETWEEN panel 1 and panel 2 — lives here (not just in
         // MultiChartForm) because this control is also used standalone (Form1's "Charts" tab has
@@ -1079,7 +1105,7 @@ public class TwoPanelChartsControl : UserControl
             var rowType = row.Tag?.ToString();
             var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
             if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
-            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade);
+            _form1.TriggerQuoteStrikeClick(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade, _useSimulation);
         };
 
         // "Próxima" tab strike clicks — same idea as _dgvOptions.CellClick above, but forwards into
@@ -1092,7 +1118,7 @@ public class TwoPanelChartsControl : UserControl
             var rowType = row.Tag?.ToString();
             var strikeText = row.Cells["colStrikeLive"].Value?.ToString();
             if (string.IsNullOrEmpty(rowType) || string.IsNullOrEmpty(strikeText)) return;
-            _form1.TriggerQuoteStrikeClickNext(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade);
+            _form1.TriggerQuoteStrikeClickNext(_symbol, rowType, strikeText, Form1.IsAwsEnabledFor(_symbol), _useRealTrade, _useSimulation);
         };
 
         _form1.OnQuotesUpdatedEvent += OnForm1QuotesUpdated;
@@ -1122,7 +1148,7 @@ public class TwoPanelChartsControl : UserControl
             new DataGridViewTextBoxColumn { Name = "colTradePnLMinLive",    HeaderText = "Min PnL%",     Width = 60, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradePnLMaxLive",    HeaderText = "Max PnL%",     Width = 60, ReadOnly = true },
             new DataGridViewTextBoxColumn { Name = "colTradeMoneynessLive", HeaderText = "OTM/ITM",      Width = 55, ReadOnly = true },
-            new DataGridViewTextBoxColumn { Name = "colTradeDemoRealLive", HeaderText = "Demo/Real",    Width = 65, ReadOnly = true });
+            new DataGridViewTextBoxColumn { Name = "colTradeDemoRealLive", HeaderText = "Demo/Real",    Width = 78, ReadOnly = true });
         foreach (DataGridViewColumn col in _dgvTrades.Columns)
             col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
@@ -1137,7 +1163,13 @@ public class TwoPanelChartsControl : UserControl
         // Form1's own grid for the same row.
         _dgvTrades.CellClick += (s, e) =>
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != _dgvTrades.Columns["colTradeCloseLive"]!.Index) return;
+            if (e.RowIndex < 0) return;
+            if (e.ColumnIndex == _dgvTrades.Columns["colTradeStrikeLive"]!.Index)
+            {
+                _form1.TriggerForceStrikeInQuotesGrid(_symbol, e.RowIndex);
+                return;
+            }
+            if (e.ColumnIndex != _dgvTrades.Columns["colTradeCloseLive"]!.Index) return;
             if (!string.IsNullOrEmpty(_dgvTrades.Rows[e.RowIndex].Cells["colTradeExitTimeLive"].Value?.ToString())) return;
             _form1.TriggerTradeCloseClick(_symbol, e.RowIndex);
         };
@@ -1158,25 +1190,33 @@ public class TwoPanelChartsControl : UserControl
             _dgvTrades.Width  = (int)(usableWidth * 0.9);
             _dgvTrades.Height = usableHeight;
 
-            // Charts tab's own Demo-Target/Real-Target radios sit in the 10% freed up to the
-            // right of the grid — independent of Form1's 4-way "Trade" radios (Options Quotes tab).
+            // Charts tab's own Simulation/Demo-Target/Real-Target radios sit in the 10% freed up
+            // to the right of the grid — independent of Form1's 4-way "Trade" radios (Options
+            // Quotes tab).
             var radiosX = _dgvTrades.Right + 6;
-            _rbChartsDemoTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 2);
-            _rbChartsRealTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 22);
+            _rbChartsSimulation.Location = new Point(radiosX, tradesGridHost.Padding.Top + 2);
+            _rbChartsDemoTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 22);
+            _rbChartsRealTarget.Location = new Point(radiosX, tradesGridHost.Padding.Top + 42);
         }
         tradesGridHost.SizeChanged += (s, e) => ResizeTradesGrid();
         tradesGridHost.Controls.Add(_dgvTrades);
+        tradesGridHost.Controls.Add(_rbChartsSimulation);
         tradesGridHost.Controls.Add(_rbChartsDemoTarget);
         tradesGridHost.Controls.Add(_rbChartsRealTarget);
+        _rbChartsSimulation.CheckedChanged += (s, e) =>
+        {
+            _rbChartsSimulation.Font = new Font(_rbChartsSimulation.Font, _rbChartsSimulation.Checked ? FontStyle.Bold : FontStyle.Regular);
+            if (_rbChartsSimulation.Checked) _useSimulation = true;
+        };
         _rbChartsDemoTarget.CheckedChanged += (s, e) =>
         {
             _rbChartsDemoTarget.Font = new Font(_rbChartsDemoTarget.Font, _rbChartsDemoTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsDemoTarget.Checked) _useRealTrade = false;
+            if (_rbChartsDemoTarget.Checked) { _useRealTrade = false; _useSimulation = false; }
         };
         _rbChartsRealTarget.CheckedChanged += (s, e) =>
         {
             _rbChartsRealTarget.Font = new Font(_rbChartsRealTarget.Font, _rbChartsRealTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsRealTarget.Checked) _useRealTrade = true;
+            if (_rbChartsRealTarget.Checked) { _useRealTrade = true; _useSimulation = false; }
         };
         ResizeTradesGrid();
 
@@ -1212,8 +1252,10 @@ public class TwoPanelChartsControl : UserControl
                     // constructor) — copied in above like every other cell, but overridden here with
                     // its own fixed color since Form1 never styles it (nothing shows it there).
                     var demoRealCell = mirrorRow.Cells["colTradeDemoRealLive"];
-                    demoRealCell.Style.ForeColor = string.Equals(demoRealCell.Value?.ToString(), "Real", StringComparison.OrdinalIgnoreCase)
-                        ? Color.Green : Color.Orange;
+                    var demoRealValue = demoRealCell.Value?.ToString();
+                    demoRealCell.Style.ForeColor =
+                        string.Equals(demoRealValue, "Simulation", StringComparison.OrdinalIgnoreCase) ? Color.Black :
+                        string.Equals(demoRealValue, "Real", StringComparison.OrdinalIgnoreCase) ? Color.Green : Color.Orange;
                 }
                 if (scrollRowToRestore >= 0 && _dgvTrades.Rows.Count > 0)
                     _dgvTrades.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, _dgvTrades.Rows.Count - 1);
@@ -1296,6 +1338,27 @@ public class TwoPanelChartsControl : UserControl
         // this again later (e.g. the live chart gets closed and reopened) doesn't duplicate rows.
         BackfillMirroredTLines("DailyHora", "1h", _hourlyPanel);
         BackfillMirroredTLines("Daily15Min", "RTH", _rthPanel);
+
+        // H-Line backfill — no live-side store to dedup against (the live chart's own H-Line was
+        // never persisted, see HLineStore's own comment), so this can duplicate a line already
+        // mirrored earlier if AttachDailyMirroring runs again for the same symbol (e.g. the Charts
+        // tab disconnects/reconnects while the Daily popup stays open) — acceptable, rare edge case.
+        foreach (var (time, price) in HLineStore.Load(_symbol))
+        {
+            _ = _hourlyPanel?.AddMirroredHLineAsync(time, price);
+            _ = _rthPanel?.AddMirroredHLineAsync(time, price);
+        }
+
+        dailyForm.OnHLineDrawnEvent += (time, price) =>
+        {
+            _ = _hourlyPanel?.AddMirroredHLineAsync(time, price);
+            _ = _rthPanel?.AddMirroredHLineAsync(time, price);
+        };
+        dailyForm.OnHLineDeletedEvent += price =>
+        {
+            _ = _hourlyPanel?.RemoveHLineAsync(price);
+            _ = _rthPanel?.RemoveHLineAsync(price);
+        };
 
         dailyForm.OnTLineDrawnEvent += (tag, t1, p1, t2, p2) =>
         {
