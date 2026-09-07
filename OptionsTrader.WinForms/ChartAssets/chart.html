@@ -18,6 +18,10 @@
      hideExposureBanner below. Plain overlay text, not a canvas primitive: no time/price anchor,
      no selection, just a static top-of-chart notice. -->
 <div id="exposureBanner" style="position:absolute; left:0; right:0; top:4px; text-align:center; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b; display:none;"></div>
+<!-- Finviz analyst Target Price (panel 2 / 15m RTH only, individual stocks only — see
+     FinvizTargetPriceService.cs). Same plain-overlay pattern as exposureBanner above, just
+     anchored top-right instead of top-center. See showTargetPrice/hideTargetPrice below. -->
+<div id="targetPriceLabel" style="position:absolute; right:52px; top:4px; text-align:right; pointer-events:auto; cursor:pointer; z-index:20; font: bold 12px sans-serif; color:#26a69a; background:rgba(0,0,0,0.55); padding:1px 4px; border-radius:3px; display:none;"></div>
 <script>
   const container = document.getElementById('chart');
 
@@ -226,7 +230,20 @@
 
   // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
   // the user hasn't manually panned/zoomed since the last time we set it — see userHasInteracted.
+  //
+  // EXCEPTION, per explicit request: panel 2's RTH slide window (rthSlideWindowBars) ALWAYS
+  // reapplies once today's RTH session has started, even after a manual pan/zoom. The user can
+  // still freely move the chart in premarket (and even mid-RTH), but from the next live candle
+  // onward the window resumes following — "from" is a fixed index (today's first RTH bar minus
+  // the configured context) and "to" is always the latest bar, so this isn't a jarring snap: "to"
+  // simply keeps advancing one bar per tick exactly like it would with no interaction at all,
+  // converging on the intended 26-today + context = rthSlideWindowBars view by the 4pm close
+  // regardless of when the user last touched the chart.
   function reapplyVisibleRangeIfLive() {
+    if (rthSlideWindowBars) {
+      const slideRange = computeRthSlideRange(displaySeries());
+      if (slideRange) { applyVisibleRange(false); return; }
+    }
     if ((!visibleDays && !rthSlideWindowBars && !initialBarCount) || userHasInteracted) return;
     applyVisibleRange(false);
   }
@@ -2530,6 +2547,47 @@
   function hideExposureBanner() {
     document.getElementById('exposureBanner').style.display = 'none';
   }
+
+  // Finviz analyst Target Price — set from C# (ChartPanel.SetTargetPriceAsync) after
+  // FinvizTargetPriceService fetches it, panel 2 (15m RTH) only, individual stocks only. Hidden
+  // whenever the fetch fails/returns nothing, rather than showing a stale or wrong value.
+  //
+  // Clicking the label toggles a full-width green reference line at that price — shown by
+  // default (per explicit request), session-only (no persistence, resets to shown on next chart
+  // open, same as the rest of this panel's session-only toggles). targetPriceLineVisible tracks
+  // the user's own on/off choice separately from targetPriceValue itself, so a later 30-min
+  // refresh (new price, or the label re-showing) keeps whatever the user last chose instead of
+  // forcing it back on.
+  let targetPriceValue = null;
+  let targetPriceLineVisible = true;
+  let targetPricePriceLine = null;
+
+  function renderTargetPriceLine() {
+    if (targetPricePriceLine) { candleSeries.removePriceLine(targetPricePriceLine); targetPricePriceLine = null; }
+    if (targetPriceValue == null || !targetPriceLineVisible) return;
+    targetPricePriceLine = candleSeries.createPriceLine({
+      price: targetPriceValue, color: '#00e676', lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'Target'
+    });
+  }
+
+  function showTargetPrice(text, price) {
+    const el = document.getElementById('targetPriceLabel');
+    el.textContent = text;
+    el.style.display = 'block';
+    targetPriceValue = price;
+    renderTargetPriceLine();
+  }
+  function hideTargetPrice() {
+    document.getElementById('targetPriceLabel').style.display = 'none';
+    targetPriceValue = null;
+    renderTargetPriceLine();
+  }
+
+  document.getElementById('targetPriceLabel').addEventListener('click', () => {
+    targetPriceLineVisible = !targetPriceLineVisible;
+    renderTargetPriceLine();
+  });
 
   // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
   // analysis) — periodA/periodB identify which pair (20+40 or 100+200). textA/textB are each
