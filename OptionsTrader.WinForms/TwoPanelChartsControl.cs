@@ -244,6 +244,27 @@ public class TwoPanelChartsControl : UserControl
         _hourlyPanel = hourlyPanel;
         _rthPanel    = rthPanel;
 
+        // Finviz analyst Target Price — panel 2 (15m RTH) only, individual stocks only
+        // (FinvizTargetPriceService's own whitelist silently no-ops for everything else, e.g. the
+        // ETFs). This is scraping, not an official API, so it's deliberately NOT tied to the app's
+        // normal 6s options-polling cadence — fetched once on connect, then refreshed on its own
+        // low-frequency timer, out of courtesy to Finviz.
+        async void RefreshTargetPrice()
+        {
+            if (_rthPanel == null || IsDisposed) return;
+            var price = await FinvizTargetPriceService.GetTargetPriceAsync(_symbol);
+            if (!IsDisposed) _ = _rthPanel.SetTargetPriceAsync(price);
+        }
+        // HandleCreated (not called directly here) — the RTH panel's WebView2/CoreWebView2 isn't
+        // ready yet at construction time, so an immediate call would silently no-op (SetTargetPriceAsync
+        // bails out while CoreWebView2 is null) and the label wouldn't appear until the first
+        // 30-minute timer tick.
+        HandleCreated += (s, e) => RefreshTargetPrice();
+        var targetPriceTimer = new System.Windows.Forms.Timer { Interval = 30 * 60 * 1000 }; // 30 min
+        targetPriceTimer.Tick += (s, e) => RefreshTargetPrice();
+        targetPriceTimer.Start();
+        Disposed += (s, e) => { targetPriceTimer.Stop(); targetPriceTimer.Dispose(); };
+
         // Stk-line/H-Line/ATH mirroring BETWEEN panel 1 and panel 2 — lives here (not just in
         // MultiChartForm) because this control is also used standalone (Form1's "Charts" tab has
         // no MultiChartForm/panel 3 at all) — confirmed live: an H-Line drawn on panel 1 there

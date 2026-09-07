@@ -595,6 +595,51 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"setAllTimeHighVisible({(show ? "true" : "false")});");
     }
 
+    // Finviz analyst Target Price text, top-right of this panel (see FinvizTargetPriceService.cs
+    // and TwoPanelChartsControl, the only caller — panel 2/15m RTH, individual stocks only).
+    // price: null hides the label instead of showing a stale/wrong value (fetch failed, or the
+    // symbol isn't in FinvizTargetPriceService's supported list).
+    public async Task SetTargetPriceAsync(decimal? price)
+    {
+        // Waits for CoreWebView2 instead of bailing out if it isn't ready yet — the initial call
+        // (TwoPanelChartsControl's HandleCreated) races ahead of this panel's own WebView2 init.
+        // EnsureCoreWebView2Async is idempotent/cheap once already initialized.
+        await _webView.EnsureCoreWebView2Async();
+        if (_webView.CoreWebView2 == null)
+        {
+            DebugLog($"SetTargetPriceAsync: symbol={_symbol} mode={_mode} CoreWebView2 STILL null after EnsureCoreWebView2Async");
+            return;
+        }
+
+        // CoreWebView2 existing isn't enough — that same initial call also races ahead of THIS
+        // panel's own LoadHistoryAsync actually navigating to chart.html and finishing its
+        // top-level <script> execution (Navigate() + NavigationCompleted can take a while: history
+        // fetch, indicator setup). Calling showTargetPrice/hideTargetPrice before that finishes
+        // throws "not defined" (ExecuteScriptAsync just returns null, no exception surfaces to
+        // C#) and, since this is only ever called again 30 minutes later, the label silently never
+        // appears for the rest of that window. Poll for the function actually existing first,
+        // short retry — chart.html finishes loading well within a couple seconds in practice.
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            var ready = await _webView.CoreWebView2.ExecuteScriptAsync("typeof showTargetPrice === 'function'");
+            if (ready == "true") break;
+            if (attempt == 19)
+            {
+                DebugLog($"SetTargetPriceAsync: symbol={_symbol} mode={_mode} gave up waiting for showTargetPrice to be defined");
+                return;
+            }
+            await Task.Delay(250);
+        }
+
+        if (price == null)
+        {
+            await _webView.CoreWebView2.ExecuteScriptAsync("hideTargetPrice();");
+            return;
+        }
+        var text = $"TargetP= {price.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"showTargetPrice({JsonSerializer.Serialize(text)});");
+    }
+
     // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,
     // per explicit request. The underlying calculation keeps running either way (see
     // enableBollingerEdgeMarkers/recalculateBollinger in chart.html); this only toggles the draw.

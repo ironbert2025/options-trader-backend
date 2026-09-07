@@ -18,6 +18,10 @@
      hideExposureBanner below. Plain overlay text, not a canvas primitive: no time/price anchor,
      no selection, just a static top-of-chart notice. -->
 <div id="exposureBanner" style="position:absolute; left:0; right:0; top:4px; text-align:center; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b; display:none;"></div>
+<!-- Finviz analyst Target Price (panel 2 / 15m RTH only, individual stocks only — see
+     FinvizTargetPriceService.cs). Same plain-overlay pattern as exposureBanner above, just
+     anchored top-right instead of top-center. See showTargetPrice/hideTargetPrice below. -->
+<div id="targetPriceLabel" style="position:absolute; right:52px; top:4px; text-align:right; pointer-events:none; z-index:20; font: bold 12px sans-serif; color:#26a69a; background:rgba(0,0,0,0.55); padding:1px 4px; border-radius:3px; display:none;"></div>
 <script>
   const container = document.getElementById('chart');
 
@@ -2542,6 +2546,18 @@
   }
   function hideExposureBanner() {
     document.getElementById('exposureBanner').style.display = 'none';
+  }
+
+  // Finviz analyst Target Price — set from C# (ChartPanel.SetTargetPriceAsync) after
+  // FinvizTargetPriceService fetches it, panel 2 (15m RTH) only, individual stocks only. Hidden
+  // whenever the fetch fails/returns nothing, rather than showing a stale or wrong value.
+  function showTargetPrice(text) {
+    const el = document.getElementById('targetPriceLabel');
+    el.textContent = text;
+    el.style.display = 'block';
+  }
+  function hideTargetPrice() {
+    document.getElementById('targetPriceLabel').style.display = 'none';
   }
 
   // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
