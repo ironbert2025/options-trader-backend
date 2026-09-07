@@ -3384,6 +3384,56 @@
   const bollingerEdgeMarkerPrimitive = new BollingerEdgeMarkerPrimitive();
   let bollingerEdgeMarkerAttached = false;
 
+  // Frozen "at the open" snapshot of the same upper/lower band values the live white marker above
+  // tracks — captured once per day, the moment the day's first RTH candle appears (per explicit
+  // request, to compare the band's slope in-session against wherever it started at 9:30). Drawn as
+  // a short DASHED tick anchored only over that one 9:30 candle's width — never moves again for
+  // the rest of the session, unlike the live marker which re-anchors to the last 2 candles on
+  // every recalculation.
+  let openBandSnapshot = null; // { day, time, upperPrice, lowerPrice }
+
+  class BollingerOpenSnapshotPrimitive {
+    constructor() { this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || !bollingerEdgeMarkersVisible || !openBandSnapshot) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                const x = safeTimeToCoordinate(ts, openBandSnapshot.time);
+                if (x == null) return;
+                const halfWidth = 15; // px each side — a short anchor tick, not a full-width line
+                const drawTick = (price) => {
+                  const y = candleSeries.priceToCoordinate(price);
+                  if (y == null) return;
+                  ctx.strokeStyle = '#ffffff';
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
+                  ctx.beginPath();
+                  ctx.moveTo((x - halfWidth) * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo((x + halfWidth) * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                  ctx.setLineDash([]);
+                };
+                drawTick(openBandSnapshot.upperPrice);
+                drawTick(openBandSnapshot.lowerPrice);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const bollingerOpenSnapshotPrimitive = new BollingerOpenSnapshotPrimitive();
+  let bollingerOpenSnapshotAttached = false;
+
   function configureBollinger(period, deviations, middleSolid) {
     bollingerConfig = { period: period, mult: deviations };
     if (!bollingerSeries) {
@@ -3441,6 +3491,25 @@
       bollingerEdgeMarkerPrimitive._lower = {
         prev: { time: prevLower.time, price: prevLower.value }, curr: { time: currLower.time, price: currLower.value }
       };
+
+      // Frozen "at the open" snapshot — captured once per day, the moment the day's first RTH
+      // candle appears in upperData/lowerData (panel 2 is RTH-only, so its first entry for a new
+      // day IS the 9:30 candle). Re-runs every recalculation but only actually updates the
+      // snapshot when the day changes, so it stays fixed at whatever the band read the very first
+      // time that candle showed up — not re-captured on every later tick of that same still-
+      // forming candle, and never touched again once the day moves past it.
+      const lastDay = dayStartOf(upperData[upperData.length - 1].time);
+      if (!openBandSnapshot || openBandSnapshot.day !== lastDay) {
+        const todayStartIdx = upperData.findIndex(d => dayStartOf(d.time) === lastDay);
+        if (todayStartIdx !== -1) {
+          openBandSnapshot = {
+            day: lastDay, time: upperData[todayStartIdx].time,
+            upperPrice: upperData[todayStartIdx].value, lowerPrice: lowerData[todayStartIdx].value
+          };
+          if (!bollingerOpenSnapshotAttached) { candleSeries.attachPrimitive(bollingerOpenSnapshotPrimitive); bollingerOpenSnapshotAttached = true; }
+        }
+      }
+
       forceRepaint();
     }
   }
@@ -3729,6 +3798,7 @@
     historyLoadedOnce = false;
     userHasInteracted = false;
     lastAppliedRange = null;
+    openBandSnapshot = null;
   }
 
   function loadHistory(candles) {
