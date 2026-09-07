@@ -636,8 +636,9 @@ public class ChartPanel : Panel
             await _webView.CoreWebView2.ExecuteScriptAsync("hideTargetPrice();");
             return;
         }
-        var text = $"TargetP= {price.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"showTargetPrice({JsonSerializer.Serialize(text)});");
+        var priceStr = price.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+        var text = $"TargetP= {priceStr}";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"showTargetPrice({JsonSerializer.Serialize(text)}, {priceStr});");
     }
 
     // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,
