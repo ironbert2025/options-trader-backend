@@ -579,6 +579,13 @@ public class MultiChartForm : Form
     // same mirroring onto an already-open (or later-opened) live chart for the same symbol; see
     // Form1.BtnDaily_Click/BtnLiveChart_Click. Just delegates to the panel 1/2 control, which owns
     // the actual mirroring logic (and the SMA-watch buttons it also keeps in sync).
+    // Form1's status-bar "ATH: xxx" label calls this (via _liveChartForms) to also force panel 3's
+    // ATH line, alongside TwoPanelChartsControl.SetAllTimeHighForceVisibleAsync for panel 1/2.
+    public async Task SetAllTimeHighForceVisibleAsync(bool force)
+    {
+        if (_overnightPanel != null) await _overnightPanel.SetAllTimeHighForceVisibleAsync(force);
+    }
+
     public void AttachDailyMirroring(DailyChartForm dailyForm)
     {
         _twoPanelControl.AttachDailyMirroring(dailyForm);

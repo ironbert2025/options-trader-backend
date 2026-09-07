@@ -143,6 +143,15 @@ public class TwoPanelChartsControl : UserControl
     // Shared H-Line/Text toolbar controls (panel 2's toolbar) — public so MultiChartForm can wire
     // an additional handler that also toggles panel 3, matching original combined behavior.
     public CheckBox AthCheckBox { get; }
+
+    // Independent from AthCheckBox above — Form1's status-bar "ATH: xxx" label calls this directly
+    // (not a UI control here) to force the ATH line to show on panel 1/2 regardless of price
+    // proximity. MultiChartForm exposes its own wrapper to also relay this onto panel 3.
+    public async Task SetAllTimeHighForceVisibleAsync(bool force)
+    {
+        if (_hourlyPanel != null) await _hourlyPanel.SetAllTimeHighForceVisibleAsync(force);
+        if (_rthPanel != null) await _rthPanel.SetAllTimeHighForceVisibleAsync(force);
+    }
     public Button HLineButton { get; }
     public Button TextButton { get; }
     public TextBox ChartTextTextBox { get; }

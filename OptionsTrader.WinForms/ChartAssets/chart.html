@@ -1609,7 +1609,11 @@
   // otherwise silently reset a user's "hidden"/"far away" state back to visible.
   let athVisible = true;
   let athNear = false;
-  function athComputeVisible() { return athVisible && athNear; }
+  // Independent force-show, driven by Form1's status-bar "ATH: xxx" label (separate from the
+  // toolbar checkbox above) — per explicit request, this one ignores proximity entirely and just
+  // shows the line regardless of athNear, without touching the checkbox's own on/off state.
+  let athForceVisible = false;
+  function athComputeVisible() { return athForceVisible || (athVisible && athNear); }
 
   function markAllTimeHigh(price) {
     if (athPriceLine) candleSeries.removePriceLine(athPriceLine);
@@ -1632,6 +1636,13 @@
   // every tick from C#. Re-applies the combined visibility (checkbox AND proximity) each time.
   function updateAllTimeHighNear(near) {
     athNear = near;
+    if (!athPriceLine) return;
+    const visible = athComputeVisible();
+    athPriceLine.applyOptions({ lineVisible: visible, axisLabelVisible: visible });
+  }
+
+  function setAllTimeHighForceVisible(force) {
+    athForceVisible = force;
     if (!athPriceLine) return;
     const visible = athComputeVisible();
     athPriceLine.applyOptions({ lineVisible: visible, axisLabelVisible: visible });

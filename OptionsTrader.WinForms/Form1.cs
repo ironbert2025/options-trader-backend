@@ -770,6 +770,7 @@ public partial class Form1 : Form
 
         _selectedTicker = clicked.Tag as TickerEntry;
         UpdateEarningsStatusLabel();
+        UpdateAllTimeHighStatusLabel();
         _forcedStrikes.Clear();
 
         // Reset to blank placeholder rows — real quotes arrive once Start Polling/Fetch Quotes
@@ -814,6 +815,42 @@ public partial class Form1 : Form
 
         lblEarningsRemaining.ForeColor = color;
         lblEarningsRemaining.Font = new Font(statusStrip1.Font, style);
+    }
+
+    // Shows the persisted All-Time High for the selected symbol (AllTimeHighStore, same value the
+    // chart's own "ATH" checkbox draws) next to the earnings labels in the status bar — refreshed
+    // only on ticker selection (same as UpdateEarningsStatusLabel; the ATH itself only ever changes
+    // once/day at the 4pm close, so this doesn't need to be live). Blank if no ATH has been
+    // persisted yet for this symbol.
+    private void UpdateAllTimeHighStatusLabel()
+    {
+        var ath = _selectedTicker != null ? AllTimeHighStore.Load(_selectedTicker.Symbol) : null;
+        lblAllTimeHigh.Text = ath != null ? $"ATH: {ath.Value.Value:F2}" : string.Empty;
+        SetAllTimeHighLabelStyle();
+    }
+
+    // Own state, independent of the Charts tab/popup toolbar's "ATH" checkbox (which only shows
+    // the line when the price is also near it — see chart.html's athNear). This is a plain force
+    // override: bold+green while forced on, regular+gray while off.
+    private bool _athForceVisible;
+
+    private void SetAllTimeHighLabelStyle()
+    {
+        lblAllTimeHigh.ForeColor = _athForceVisible ? Color.Green : SystemColors.GrayText;
+        lblAllTimeHigh.Font = new Font(statusStrip1.Font, _athForceVisible ? FontStyle.Bold : FontStyle.Regular);
+    }
+
+    // Clicking "ATH: xxx.xx" in the status bar force-shows/hides the ATH line on whichever of
+    // panel 1/2 (Charts tab) and panel 3 (Live Chart popup) are currently open for this symbol —
+    // independent of the "ATH" checkbox's own on/off + proximity-gated behavior. No-op (state
+    // still flips for next time) if neither is open — nothing to actually push it to yet.
+    private void LblAllTimeHigh_Click(object? sender, EventArgs e)
+    {
+        _athForceVisible = !_athForceVisible;
+        SetAllTimeHighLabelStyle();
+        if (_chartsTabForm != null) _ = _chartsTabForm.SetAllTimeHighForceVisibleAsync(_athForceVisible);
+        if (_selectedTicker != null && _liveChartForms.TryGetValue(_selectedTicker.Symbol, out var liveChart) && !liveChart.IsDisposed)
+            _ = liveChart.SetAllTimeHighForceVisibleAsync(_athForceVisible);
     }
 
     private void RestoreOpenTrades(string symbol)

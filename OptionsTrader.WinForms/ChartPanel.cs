@@ -595,6 +595,14 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"setAllTimeHighVisible({(show ? "true" : "false")});");
     }
 
+    // Independent from SetAllTimeHighVisibleAsync above (the toolbar checkbox) — forces the ATH
+    // line to show regardless of price proximity, driven by Form1's status-bar "ATH: xxx" label.
+    public async Task SetAllTimeHighForceVisibleAsync(bool force)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setAllTimeHighForceVisible({(force ? "true" : "false")});");
+    }
+
     // Finviz analyst Target Price text, top-right of this panel (see FinvizTargetPriceService.cs
     // and TwoPanelChartsControl, the only caller — panel 2/15m RTH, individual stocks only).
     // price: null hides the label instead of showing a stale/wrong value (fetch failed, or the
