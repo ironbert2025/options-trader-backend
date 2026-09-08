@@ -2106,6 +2106,17 @@ public partial class Form1 : Form
         e.Handled = true;
     }
 
+    // Same RTH-open gate as SchwabStreamerClient.IsAtOrAfterMarketOpen, duplicated here since this
+    // machine's mirror-to-disk path (SetUpLiveFeedAsync) runs independently of the hub's own save
+    // calls. "Eastern Standard Time" is the Windows TZ id for the whole US Eastern zone
+    // (DST-aware despite the name), same convention used elsewhere in this codebase.
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+    private static bool IsAtOrAfterMarketOpen(DateTime utcTime)
+    {
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc), EasternZone);
+        return eastern.TimeOfDay >= new TimeSpan(9, 30, 0);
+    }
+
     // A row's tradable bid is the Call Bid for CALL rows and the Put Bid for PUT rows.
     // A zero (or missing) bid means the option is illiquid — its Strike button must be disabled.
     private static bool IsRowBidZero(DataGridViewRow row, string callBidColName, string putBidColName)
@@ -2982,9 +2993,11 @@ public partial class Form1 : Form
             // This machine never touches Schwab or the hub machine's C:\OptionsData — without
             // this, it has no local tick history at all, so its own Simulator/4-ETF Simulator
             // windows have nothing to replay. Mirror every relayed candle/tick straight to this
-            // machine's own disk, same folder structure the hub itself writes to.
-            remoteHubClient.OnNewCandle    += (symbol, candle) => TickPriceStore.Append(symbol, candle.Time, candle.Close);
-            remoteHubClient.OnLevelOneTick += (symbol, price, time) => LevelOneTickStore.Append(symbol, time, price);
+            // machine's own disk, same folder structure the hub itself writes to — only from RTH
+            // open (9:30 ET) onward, per explicit request, matching the same gate applied at the
+            // hub's own SchwabStreamerClient.HandleMessage save calls.
+            remoteHubClient.OnNewCandle    += (symbol, candle) => { if (IsAtOrAfterMarketOpen(candle.Time)) TickPriceStore.Append(symbol, candle.Time, candle.Close); };
+            remoteHubClient.OnLevelOneTick += (symbol, price, time) => { if (IsAtOrAfterMarketOpen(time)) LevelOneTickStore.Append(symbol, time, price); };
 
             await remoteHubClient.ConnectAsync(LiveHubPort, remoteHost);
 
