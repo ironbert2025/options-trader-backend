@@ -124,6 +124,16 @@
   let visibleDays = null;
   function configureVisibleDays(days) { visibleDays = days; }
 
+  // Simulator only — the actual replayed day, in the same fake-epoch convention as candle times.
+  // Passed down explicitly instead of inferring "today" from the last loaded candle's date: right
+  // at 9:30:00 open on an RTH-only panel, today's first candle doesn't exist in the data yet, so
+  // "most recent date present" was still yesterday for one render, one step long — confirmed live
+  // to make the Bollinger open-snapshot capture below grab yesterday's data instead of today's,
+  // self-correcting only once the next step produced today's first candle. Optional: stays null
+  // (unused) for the live chart, which has no equivalent ambiguity.
+  let knownSimDay = null;
+  function configureSimDay(fakeEpochSeconds) { knownSimDay = dayStartOf(fakeEpochSeconds); }
+
   // 15m RTH panel only, per explicit request: once today's RTH session has actually started, keep
   // a window whose LEFT edge is FIXED (today's first RTH bar, minus a bit of yesterday's context)
   // while the RIGHT edge grows with each new candle — so the frame doesn't slide as the day goes,
@@ -3384,13 +3394,12 @@
   const bollingerEdgeMarkerPrimitive = new BollingerEdgeMarkerPrimitive();
   let bollingerEdgeMarkerAttached = false;
 
-  // Frozen "at the open" snapshot of the same upper/lower band values the live white marker above
-  // tracks — captured once per day, the moment the day's first RTH candle appears (per explicit
-  // request, to compare the band's slope in-session against wherever it started at 9:30). Drawn as
-  // a short DASHED tick anchored only over that one 9:30 candle's width — never moves again for
-  // the rest of the session, unlike the live marker which re-anchors to the last 2 candles on
-  // every recalculation.
-  let openBandSnapshot = null; // { day, time, upperPrice, lowerPrice }
+  // Frozen "at the open" snapshot of the SAME 2-point sloped segment the live white marker above
+  // draws (previous candle -> 9:30 candle) — captured once per day, the moment the day's first RTH
+  // candle appears (per explicit request, to compare the band's slope in-session against whatever
+  // its actual angle was at the open, on both bands). Never moves again for the rest of the
+  // session, unlike the live marker which re-anchors to the last 2 candles on every recalculation.
+  let openBandSnapshot = null; // { day, upper:{prev,curr}, lower:{prev,curr} } — prev/curr are {time,price}
 
   class BollingerOpenSnapshotPrimitive {
     constructor() { this._chart = null; }
@@ -3402,28 +3411,49 @@
         renderer() {
           return {
             draw(target) {
-              if (!self._chart || !bollingerEdgeMarkersVisible || !openBandSnapshot) return;
-              target.useBitmapCoordinateSpace(scope => {
-                const ctx = scope.context;
-                const ts = self._chart.timeScale();
-                const x = safeTimeToCoordinate(ts, openBandSnapshot.time);
-                if (x == null) return;
-                const halfWidth = 15; // px each side — a short anchor tick, not a full-width line
-                const drawTick = (price) => {
-                  const y = candleSeries.priceToCoordinate(price);
-                  if (y == null) return;
-                  ctx.strokeStyle = '#ffffff';
-                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
-                  ctx.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
-                  ctx.beginPath();
-                  ctx.moveTo((x - halfWidth) * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
-                  ctx.lineTo((x + halfWidth) * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
-                  ctx.stroke();
-                  ctx.setLineDash([]);
-                };
-                drawTick(openBandSnapshot.upperPrice);
-                drawTick(openBandSnapshot.lowerPrice);
-              });
+              // Wrapped in try/catch — an uncaught exception here (inside a Series Primitive's
+              // draw(), invoked synchronously from forceRepaint()'s candleSeries.applyOptions({}))
+              // was found to permanently freeze Lightweight Charts' internal render loop for the
+              // WHOLE pane (all series/primitives, not just this one) once thrown — confirmed live
+              // in the Simulator, where every candle/marker froze mid-day right around the first
+              // 9:30 capture and never updated again despite stepping continuing normally.
+              try {
+                if (!self._chart || !bollingerEdgeMarkersVisible || !openBandSnapshot) return;
+                target.useBitmapCoordinateSpace(scope => {
+                  const ctx = scope.context;
+                  const ts = self._chart.timeScale();
+                  // The raw prev->curr segment is only 1 candle wide (~2-3px at normal zoom) —
+                  // correct but visually imperceptible, especially dashed. Extend it symmetrically
+                  // by halfWidth px around its own midpoint ALONG THE SAME SLOPE instead of clipping
+                  // to the literal 2 candle positions, so the real computed angle stays intact while
+                  // the line is actually visible (confirmed live: un-extended, it drew every frame
+                  // per diagnostic logging but was indistinguishable from nothing on screen).
+                  const halfWidth = 15;
+                  const drawOne = (segment) => {
+                    if (!segment) return;
+                    const x1Raw = safeTimeToCoordinate(ts, segment.prev.time);
+                    const x2Raw = safeTimeToCoordinate(ts, segment.curr.time);
+                    if (x1Raw == null || x2Raw == null) return;
+                    const y1 = candleSeries.priceToCoordinate(segment.prev.price);
+                    const y2 = candleSeries.priceToCoordinate(segment.curr.price);
+                    if (y1 == null || y2 == null) return;
+                    const midX = (x1Raw + x2Raw) / 2, midY = (y1 + y2) / 2;
+                    const dx = x2Raw - x1Raw, dy = y2 - y1;
+                    const len = Math.hypot(dx, dy) || 1;
+                    const ux = dx / len, uy = dy / len; // unit vector along the real slope
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo((midX - ux * halfWidth) * scope.horizontalPixelRatio, (midY - uy * halfWidth) * scope.verticalPixelRatio);
+                    ctx.lineTo((midX + ux * halfWidth) * scope.horizontalPixelRatio, (midY + uy * halfWidth) * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                  };
+                  drawOne(openBandSnapshot.upper);
+                  drawOne(openBandSnapshot.lower);
+                });
+              } catch { /* never let a draw failure kill the pane's render loop */ }
             }
           };
         }
@@ -3498,17 +3528,36 @@
       // snapshot when the day changes, so it stays fixed at whatever the band read the very first
       // time that candle showed up — not re-captured on every later tick of that same still-
       // forming candle, and never touched again once the day moves past it.
-      const lastDay = dayStartOf(upperData[upperData.length - 1].time);
-      if (!openBandSnapshot || openBandSnapshot.day !== lastDay) {
-        const todayStartIdx = upperData.findIndex(d => dayStartOf(d.time) === lastDay);
-        if (todayStartIdx !== -1) {
-          openBandSnapshot = {
-            day: lastDay, time: upperData[todayStartIdx].time,
-            upperPrice: upperData[todayStartIdx].value, lowerPrice: lowerData[todayStartIdx].value
-          };
-          if (!bollingerOpenSnapshotAttached) { candleSeries.attachPrimitive(bollingerOpenSnapshotPrimitive); bollingerOpenSnapshotAttached = true; }
+      try {
+        // Prefer the explicitly-known simulated day (set via configureSimDay) over inferring it
+        // from the last loaded candle — see configureSimDay's comment for why that inference is
+        // unreliable right at 9:30:00 open. Falls back to the old inference for the live chart,
+        // which never calls configureSimDay.
+        const lastDay = knownSimDay ?? dayStartOf(upperData[upperData.length - 1].time);
+        if (!openBandSnapshot || openBandSnapshot.day !== lastDay) {
+          // Per explicit request: the frozen angle is the PRIOR day's own last 2 candles (right
+          // before ITS close) — i.e. exactly what the live marker was still showing in the instant
+          // before today's first candle existed — NOT prior-day-last vs today-first, which spans
+          // the overnight gap and can show a misleadingly steep angle unrelated to either day's
+          // actual intraday slope.
+          const todayStartIdx = upperData.findIndex(d => dayStartOf(d.time) === lastDay);
+          if (todayStartIdx > 1) {
+            const prevIdx = todayStartIdx - 1, prevPrevIdx = todayStartIdx - 2;
+            openBandSnapshot = {
+              day: lastDay,
+              upper: {
+                prev: { time: upperData[prevPrevIdx].time, price: upperData[prevPrevIdx].value },
+                curr: { time: upperData[prevIdx].time, price: upperData[prevIdx].value }
+              },
+              lower: {
+                prev: { time: lowerData[prevPrevIdx].time, price: lowerData[prevPrevIdx].value },
+                curr: { time: lowerData[prevIdx].time, price: lowerData[prevIdx].value }
+              }
+            };
+            if (!bollingerOpenSnapshotAttached) { candleSeries.attachPrimitive(bollingerOpenSnapshotPrimitive); bollingerOpenSnapshotAttached = true; }
+          }
         }
-      }
+      } catch { /* never let the snapshot capture block the rest of recalculateBollinger */ }
 
       forceRepaint();
     }

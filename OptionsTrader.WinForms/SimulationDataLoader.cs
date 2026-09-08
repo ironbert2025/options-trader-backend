@@ -189,9 +189,21 @@ internal static class SimulationDataLoader
         {
             var parts = lines[i].Split(',');
             if (parts.Length < 2) continue;
-            // Time-of-day only (both TickPriceStore and LevelOneTickStore) — the date already
-            // comes from the file name, combined with the parsed time-of-day here.
-            if (!TimeSpan.TryParse(parts[0], CultureInfo.InvariantCulture, out var timeOfDay)) continue;
+            // Time-of-day only (both TickPriceStore and LevelOneTickStore, post date-column-drop
+            // migration) — the date already comes from the file name, combined with the parsed
+            // time-of-day here. Falls back to parsing the OLD "yyyy-MM-dd HH:mm:ss.fff" format
+            // (just take its TimeOfDay) for any file that has a mix of both — confirmed live on
+            // AAPL_L1Ticks_20260904.csv, where the still-running (not yet rebuilt) live-capture
+            // process kept appending old-format rows for hours after the one-time migration
+            // converted the file's rows that existed up to that point. Without this fallback,
+            // TimeSpan.TryParse silently drops every old-format row, which starved the Simulator's
+            // intraday chart of ~97% of that day's ticks (everything after ~9:10 AM never loaded).
+            TimeSpan timeOfDay;
+            if (!TimeSpan.TryParse(parts[0], CultureInfo.InvariantCulture, out timeOfDay))
+            {
+                if (!DateTime.TryParse(parts[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out var oldFormatDateTime)) continue;
+                timeOfDay = oldFormatDateTime.TimeOfDay;
+            }
             var eastTime = date.ToDateTime(TimeOnly.MinValue) + timeOfDay;
             if (!decimal.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var price)) continue;
             // A missing/mis-mapped field on the wire shows up as a 0 price — LevelOneTickStore

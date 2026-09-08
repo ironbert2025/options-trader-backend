@@ -1087,13 +1087,13 @@ public class SimulatorForm : Form
             : (long?)null;
 
         _ = _hourlyChart.CargarHastaPasoAsync(
-            CandleAggregation.AggregateToHourlyRthBuckets(hourlyUpToNow), visibleDays: 7);
-        _ = _rthChart.CargarHastaPasoAsync(rthCandles, visibleDays: 3);
+            CandleAggregation.AggregateToHourlyRthBuckets(hourlyUpToNow), visibleDays: 7, _simDate);
+        _ = _rthChart.CargarHastaPasoAsync(rthCandles, visibleDays: 3, _simDate);
         _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
-            intradayUpToNow, 15, rthOnly: false), visibleDays: 3);
+            intradayUpToNow, 15, rthOnly: false), visibleDays: 3, _simDate);
 
-        EvaluateDailyPmAndBb(step.UnderlyingPrice);
-        EvaluateSmaCrossWatches(step.UnderlyingPrice);
+        try { EvaluateDailyPmAndBb(step.UnderlyingPrice); } catch (Exception ex) { LogSimEvent($"[Diag] EvaluateDailyPmAndBb threw: {ex}"); }
+        try { EvaluateSmaCrossWatches(step.UnderlyingPrice); } catch (Exception ex) { LogSimEvent($"[Diag] EvaluateSmaCrossWatches threw: {ex}"); }
 
         RefreshOpenSimTradesPnL(step);
     }
