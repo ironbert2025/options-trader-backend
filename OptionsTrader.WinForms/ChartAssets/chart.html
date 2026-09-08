@@ -3070,7 +3070,17 @@
     const approxCharsPerLine = Math.max(1, Math.floor(ClickTextMaxWidthCss / 7));
     for (let i = clickTextPrimitive._labels.length - 1; i >= 0; i--) {
       const l = clickTextPrimitive._labels[i];
-      const x = safeTimeToCoordinate(ts, l.time);
+      // Same snap-to-nearest-real-candle fallback the draw() call uses — without it, a label
+      // placed at a time that doesn't land on a loaded bar would render fine (draw() already
+      // snaps) but never be selectable/deletable here.
+      let x = safeTimeToCoordinate(ts, l.time);
+      if (x == null && allCandles.length > 0) {
+        let floor = null;
+        for (let j = allCandles.length - 1; j >= 0; j--) {
+          if (allCandles[j].time <= l.time) { floor = allCandles[j].time; break; }
+        }
+        x = safeTimeToCoordinate(ts, floor ?? allCandles[0].time);
+      }
       const y = candleSeries.priceToCoordinate(l.price);
       if (x == null || y == null) continue;
       const words = l.text.split(/\s+/).filter(w => w.length > 0);
