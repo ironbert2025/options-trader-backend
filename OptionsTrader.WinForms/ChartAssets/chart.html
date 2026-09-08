@@ -2989,8 +2989,27 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
+                // Same snap-to-nearest-real-candle fallback used by PrevDayCloseLinePrimitive/
+                // RectGrisPrimitive/HLine — a click's time (from subscribeClick's coordinateToTime
+                // fallback when param.time is undefined, e.g. a click that lands between bars) can
+                // be a value that doesn't land on a loaded bar, making timeToCoordinate return null
+                // (or throw) even though the click itself was perfectly valid. Without this, the
+                // label gets pushed into _labels fine (button correctly disarms) but silently never
+                // renders — confirmed live as "Text tool arms/disarms normally, nothing appears."
+                const safeX = (t) => {
+                  try {
+                    const x = safeTimeToCoordinate(ts, t);
+                    if (x != null) return x;
+                  } catch { /* fall through to snap */ }
+                  if (allCandles.length === 0) return null;
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= t) { floor = allCandles[i].time; break; }
+                  }
+                  try { return safeTimeToCoordinate(ts, floor ?? allCandles[0].time); } catch { return null; }
+                };
                 self._labels.forEach(l => {
-                  const x = safeTimeToCoordinate(ts, l.time);
+                  const x = safeX(l.time);
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (x == null || y == null) return;
 
