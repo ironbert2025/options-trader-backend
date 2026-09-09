@@ -90,6 +90,9 @@ public class SimulatedChartPanel : Panel
                 // forming candle's width — also enabled on the live chart's own 15m RTH panel.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerEdgeMarkers();");
 
+                // Light gray fill between the bands — per explicit request, panel 2 (15m RTH) only.
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
+
                 // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
                 // arms DZ/SZ itself), but the mirrored copy is still independently selectable/
                 // deletable there, and that deletion needs to reach C# to relay to the sibling.

@@ -3370,6 +3370,61 @@
   let bollingerEdgeMarkersVisible = true;
   function setBollingerEdgeMarkersVisible(show) { bollingerEdgeMarkersVisible = show; forceRepaint(); }
 
+  // Panel 2 (15m RTH) only, both Simulator and Live Chart, per explicit request: a light gray fill
+  // between the upper and lower Bollinger bands, so the band's width reads at a glance instead of
+  // having to trace two separate lines. Enabled via enableBollingerFill(), same convention as
+  // enableBollingerEdgeMarkers() above.
+  let bollingerFillEnabled = false;
+  function enableBollingerFill() { bollingerFillEnabled = true; }
+
+  class BollingerFillPrimitive {
+    constructor() { this._upperPoints = []; this._lowerPoints = []; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              try {
+                if (!self._chart || self._upperPoints.length === 0) return;
+                target.useBitmapCoordinateSpace(scope => {
+                  const ctx = scope.context;
+                  const ts = self._chart.timeScale();
+                  ctx.beginPath();
+                  let started = false;
+                  for (let i = 0; i < self._upperPoints.length; i++) {
+                    const p = self._upperPoints[i];
+                    const x = safeTimeToCoordinate(ts, p.time);
+                    const y = candleSeries.priceToCoordinate(p.price);
+                    if (x == null || y == null) continue;
+                    const px = x * scope.horizontalPixelRatio, py = y * scope.verticalPixelRatio;
+                    if (!started) { ctx.moveTo(px, py); started = true; } else { ctx.lineTo(px, py); }
+                  }
+                  for (let i = self._lowerPoints.length - 1; i >= 0; i--) {
+                    const p = self._lowerPoints[i];
+                    const x = safeTimeToCoordinate(ts, p.time);
+                    const y = candleSeries.priceToCoordinate(p.price);
+                    if (x == null || y == null) continue;
+                    ctx.lineTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  }
+                  if (!started) return;
+                  ctx.closePath();
+                  ctx.fillStyle = 'rgba(150, 150, 150, 0.12)';
+                  ctx.fill();
+                });
+              } catch { /* never let a draw failure kill the pane's render loop */ }
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const bollingerFillPrimitive = new BollingerFillPrimitive();
+  let bollingerFillAttached = false;
+
   // Each band's marker is a 2-point segment (previous candle -> forming candle), NOT a fixed-width
   // horizontal mark — so its slope visually shows the band opening outward, moving sideways, or
   // closing inward between those two candles, which a horizontal-only mark couldn't show.
@@ -3533,6 +3588,12 @@
     bollingerSeries.upper.setData(upperData);
     bollingerSeries.middle.setData(midData);
     bollingerSeries.lower.setData(lowerData);
+
+    if (bollingerFillEnabled) {
+      if (!bollingerFillAttached) { candleSeries.attachPrimitive(bollingerFillPrimitive); bollingerFillAttached = true; }
+      bollingerFillPrimitive._upperPoints = upperData.map(d => ({ time: d.time, price: d.value }));
+      bollingerFillPrimitive._lowerPoints = lowerData.map(d => ({ time: d.time, price: d.value }));
+    }
 
     // White edge markers (see enableBollingerEdgeMarkers) — a 2-point segment from the PREVIOUS
     // candle's band value to the forming candle's, re-set every recalculation, so its slope shows

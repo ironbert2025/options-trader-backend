@@ -2621,6 +2621,9 @@ public class ChartPanel : Panel
                 // request extending it to the live app.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerEdgeMarkers();");
 
+                // Light gray fill between the bands — per explicit request, panel 2 (15m RTH) only.
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
+
                 if (!_webMessageHandlerAttached)
                 {
                     _webMessageHandlerAttached = true;
