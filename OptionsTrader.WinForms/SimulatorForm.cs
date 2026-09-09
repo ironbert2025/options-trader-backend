@@ -19,6 +19,18 @@ public class SimulatorForm : Form
     private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
 
+    // Shows the actual tick time currently rendered on the charts — per explicit request, so the
+    // independent Real Time candle clock (_tickPlayTimer) is visibly moving even though it isn't
+    // tied to the options grid's own (coarser) step advance, which otherwise looks like nothing is
+    // happening between grid updates. Updated by both the normal step-driven render and the
+    // Real Time tick clock (see RenderChartsUpToTime), so it's accurate outside Real Time too.
+    // Directly below the DZ/SZ button (_pnlDzSz at (590,202), size (440,30) -> bottom=232).
+    private readonly Label _lblTickClock = new()
+    {
+        Location = new Point(590, 234), Size = new Size(180, 20),
+        Font = new Font("Segoe UI", 9F, FontStyle.Bold), ForeColor = Color.Orange
+    };
+
     // "Play" auto-advances through _steps at the selected cadence, same effect as clicking ▶
     // repeatedly (each tick goes through RenderCurrentStep — PnL, Min/Max, auto-close, chart/grid
     // refresh — nothing skipped). Manual ◀/▶/"+1 Min" are disabled while playing to avoid racing
@@ -26,7 +38,21 @@ public class SimulatorForm : Form
     private readonly System.Windows.Forms.Timer _playTimer = new();
     private bool _isPlaying;
     private int _ticksPerSecond = 10;
-    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(1050, 4), Size = new Size(110, 96) };
+    // "Real Time" replays at the ACTUAL recorded pace (the real gap between consecutive _steps,
+    // e.g. ~4-6s depending on the poll interval when this day was captured) instead of a fixed
+    // ticks/sec rate — per explicit request, so both the options chain and the candle rendering
+    // (already driven off the same step.Time) advance exactly as fast as the original recording
+    // did, gaps and all, with no cap even for a large recording gap.
+    private bool _realTimeMode;
+    private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(1050, 4), Size = new Size(110, 114) };
+
+    // Independent chart-only clock for Real Time Play — walks _intradayCandles (the raw, roughly
+    // per-tick underlying prices, much finer-grained than _steps' options-chain snapshots) at the
+    // real recorded gap between consecutive ticks, so the candles visibly form at the same pace
+    // they were actually captured — separate from _playTimer, which keeps driving the options
+    // grid at the options chain's own (coarser) recorded pace. Only active during Real Time Play.
+    private readonly System.Windows.Forms.Timer _tickPlayTimer = new();
+    private int _tickPlayIndex = -1;
 
     // Width matches Form1's real dgvQuotes (566) — see BuildChainColumns' per-column widths.
     private readonly DataGridView _dgvChain = new()
@@ -150,6 +176,7 @@ public class SimulatorForm : Form
         Controls.Add(_btnAdelante);
         Controls.Add(_btnPlus1Min);
         Controls.Add(_lblStep);
+        Controls.Add(_lblTickClock);
         Controls.Add(_dgvChain);
         Controls.Add(_grpCounts);
         Controls.Add(_grpContracts);
@@ -172,6 +199,7 @@ public class SimulatorForm : Form
         _btnAdelante.Click  += (s, e) => Step(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
         _playTimer.Tick     += PlayTimer_Tick;
+        _tickPlayTimer.Tick += TickPlayTimer_Tick;
         _dgvChain.CellClick     += DgvChain_CellClick;
         _dgvChain.CellPainting  += DgvChain_CellPainting;
         _dgvChain.CellFormatting += DgvChain_CellFormatting;
@@ -209,30 +237,58 @@ public class SimulatorForm : Form
         _pnlDzSz.Controls.Add(btnDzSz);
     }
 
-    // 4 fixed speeds for "Play" (ticks/sec) — 10 is the default (fastest/most steps per real
-    // second). Changing this while playing updates _playTimer's interval immediately, no need to
-    // pause first.
+    // "Real Time" (real recorded pace, per-step gap) plus 4 fixed speeds for "Play" (ticks/sec) —
+    // 10 is the default fixed speed (fastest/most steps per real second). Changing this while
+    // playing updates _playTimer's interval immediately, no need to pause first. TicksPerSecond is
+    // null for the Real Time entry (handled separately — see ApplyPlayTimerInterval).
     private void BuildSpeedControls()
     {
-        var speeds = new (string Label, int TicksPerSecond)[] { ("1 tick/seg", 1), ("3 tick/seg", 3), ("5 tick/seg", 5), ("10 tick/seg", 10) };
+        var speeds = new (string Label, int? TicksPerSecond)[]
+        {
+            ("Real Time", null), ("1 tick/seg", 1), ("3 tick/seg", 3), ("5 tick/seg", 5), ("10 tick/seg", 10)
+        };
         for (int i = 0; i < speeds.Length; i++)
         {
             var (label, ticksPerSecond) = speeds[i];
             var rb = new RadioButton
             {
                 Text     = label,
-                Checked  = ticksPerSecond == _ticksPerSecond,
+                Checked  = ticksPerSecond == null ? _realTimeMode : (!_realTimeMode && ticksPerSecond == _ticksPerSecond),
                 AutoSize = true,
                 Location = new Point(6, 18 + i * 18)
             };
             rb.CheckedChanged += (s, e) =>
             {
                 if (!rb.Checked) return;
-                _ticksPerSecond = ticksPerSecond;
-                if (_isPlaying) _playTimer.Interval = 1000 / _ticksPerSecond;
+                var wasRealTime = _realTimeMode;
+                _realTimeMode = ticksPerSecond == null;
+                if (ticksPerSecond != null) _ticksPerSecond = ticksPerSecond.Value;
+                if (_isPlaying)
+                {
+                    ApplyPlayTimerInterval();
+                    if (_realTimeMode && !wasRealTime) StartTickPlayClock();
+                    else if (!_realTimeMode && wasRealTime)
+                    {
+                        _tickPlayTimer.Stop();
+                        if (_currentIndex >= 0) RenderChartsUpToTime(_steps[_currentIndex].Time); // re-sync off wherever the tick clock left the charts
+                    }
+                }
             };
             _grpSpeed.Controls.Add(rb);
         }
+    }
+
+    // Real Time: the actual gap (ms) between the CURRENT step and the next one, exactly as
+    // recorded — no cap, per explicit request, so a genuine recording gap (e.g. the app was closed
+    // for a stretch) plays back as that same real pause instead of being smoothed over. Timer.
+    // Interval must be a positive int; a zero/negative gap (two steps sharing the same timestamp,
+    // or the ordering having any float slop) floors to 1ms rather than throwing.
+    private void ApplyPlayTimerInterval()
+    {
+        if (!_realTimeMode) { _playTimer.Interval = 1000 / _ticksPerSecond; return; }
+        if (_currentIndex < 0 || _currentIndex >= _steps.Count - 1) { _playTimer.Interval = 1000 / _ticksPerSecond; return; }
+        var gapMs = (int)(_steps[_currentIndex + 1].Time - _steps[_currentIndex].Time).TotalMilliseconds;
+        _playTimer.Interval = Math.Max(1, gapMs);
     }
 
     private void TogglePlay()
@@ -246,8 +302,9 @@ public class SimulatorForm : Form
         if (_currentIndex < 0 || _currentIndex >= _steps.Count - 1) return; // nothing left to play
         _isPlaying = true;
         _btnPlayPause.Text = "Pause";
-        _playTimer.Interval = 1000 / _ticksPerSecond;
+        ApplyPlayTimerInterval();
         _playTimer.Start();
+        if (_realTimeMode) StartTickPlayClock();
         UpdateStepButtons();
     }
 
@@ -257,14 +314,47 @@ public class SimulatorForm : Form
         _isPlaying = false;
         _btnPlayPause.Text = "Play";
         _playTimer.Stop();
+        _tickPlayTimer.Stop();
         UpdateStepButtons();
+    }
+
+    // Seeds _tickPlayIndex at (or just after) the current step's own time, so Real Time Play
+    // resumes the candle clock from wherever the options-step clock currently is instead of
+    // jumping back to the start of the day, then arms the first tick-to-tick interval.
+    private void StartTickPlayClock()
+    {
+        if (_currentIndex < 0) return;
+        var uptoUtc = _steps[_currentIndex].Time;
+        _tickPlayIndex = _intradayCandles.FindLastIndex(c => c.Time <= uptoUtc);
+        ApplyTickPlayTimerInterval();
+        _tickPlayTimer.Start();
+    }
+
+    // Same "real recorded gap, no cap" idea as ApplyPlayTimerInterval, but walking
+    // _intradayCandles (the raw underlying ticks) instead of _steps.
+    private void ApplyTickPlayTimerInterval()
+    {
+        if (_tickPlayIndex < 0 || _tickPlayIndex >= _intradayCandles.Count - 1) { _tickPlayTimer.Stop(); return; }
+        var gapMs = (int)(_intradayCandles[_tickPlayIndex + 1].Time - _intradayCandles[_tickPlayIndex].Time).TotalMilliseconds;
+        _tickPlayTimer.Interval = Math.Max(1, gapMs);
+    }
+
+    private void TickPlayTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_tickPlayIndex >= _intradayCandles.Count - 1) { _tickPlayTimer.Stop(); return; }
+        _tickPlayIndex++;
+        RenderChartsUpToTime(_intradayCandles[_tickPlayIndex].Time);
+        ApplyTickPlayTimerInterval();
     }
 
     private void PlayTimer_Tick(object? sender, EventArgs e)
     {
         if (_currentIndex >= _steps.Count - 1) { PausePlay(); return; }
         Step(1);
-        if (_currentIndex >= _steps.Count - 1) PausePlay(); // reached the last available step
+        if (_currentIndex >= _steps.Count - 1) { PausePlay(); return; } // reached the last available step
+        // Real Time: re-time for the NEXT gap now that we just advanced — each step can be a
+        // different real duration away from the one after it.
+        if (_realTimeMode) ApplyPlayTimerInterval();
     }
 
     // Same options as Form1's grpCounts (3-10, In Range) and grpContracts (1-6, PositionSize),
@@ -1072,8 +1162,29 @@ public class SimulatorForm : Form
             row.Cells["colContracts"].Value = GetSimContractsValue(ask);
         }
 
-        var hourlyUpToNow   = _hourlyCandles.Where(c => c.Time <= step.Time).ToList();
-        var intradayUpToNow = _intradayCandles.Where(c => c.Time <= step.Time).ToList();
+        // In Real Time Play, the chart candles are driven independently by _tickPlayTimer (at the
+        // raw tick recording's own pace) instead of by this options-step advance — per explicit
+        // request, the options grid and the candle rendering are two separate clocks in that mode.
+        // Re-rendering charts here too would fight the tick clock, snapping candles back to
+        // whatever this (coarser) step's time is every few seconds. Manual stepping (not Play)
+        // always renders charts normally even with Real Time selected.
+        if (!_realTimeMode || !_isPlaying)
+            RenderChartsUpToTime(step.Time);
+
+        try { EvaluateDailyPmAndBb(step.UnderlyingPrice); } catch (Exception ex) { LogSimEvent($"[Diag] EvaluateDailyPmAndBb threw: {ex}"); }
+        try { EvaluateSmaCrossWatches(step.UnderlyingPrice); } catch (Exception ex) { LogSimEvent($"[Diag] EvaluateSmaCrossWatches threw: {ex}"); }
+
+        RefreshOpenSimTradesPnL(step);
+    }
+
+    // Extracted from RenderCurrentStep so the independent tick-driven Real Time chart clock
+    // (_tickPlayTimer) can push chart updates without touching the options grid/PnL at all.
+    private void RenderChartsUpToTime(DateTime uptoUtc)
+    {
+        _lblTickClock.Text = $"Vela: {EasternTime(uptoUtc):HH:mm:ss}";
+
+        var hourlyUpToNow   = _hourlyCandles.Where(c => c.Time <= uptoUtc).ToList();
+        var intradayUpToNow = _intradayCandles.Where(c => c.Time <= uptoUtc).ToList();
 
         var rthCandles = CandleAggregation.AggregateToInterval(
             CandleAggregation.FilterSession(intradayUpToNow, rthOnly: true), 15, rthOnly: true);
@@ -1091,11 +1202,6 @@ public class SimulatorForm : Form
         _ = _rthChart.CargarHastaPasoAsync(rthCandles, visibleDays: 3, _simDate);
         _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
             intradayUpToNow, 15, rthOnly: false), visibleDays: 3, _simDate);
-
-        try { EvaluateDailyPmAndBb(step.UnderlyingPrice); } catch (Exception ex) { LogSimEvent($"[Diag] EvaluateDailyPmAndBb threw: {ex}"); }
-        try { EvaluateSmaCrossWatches(step.UnderlyingPrice); } catch (Exception ex) { LogSimEvent($"[Diag] EvaluateSmaCrossWatches threw: {ex}"); }
-
-        RefreshOpenSimTradesPnL(step);
     }
 
     // ----- Demo trades (practice only — separate from real/demo trades in Form1) -----
