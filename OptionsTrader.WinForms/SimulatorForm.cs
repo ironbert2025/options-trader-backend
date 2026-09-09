@@ -16,6 +16,13 @@ public class SimulatorForm : Form
     private readonly Button _btnPlayPause = new() { Text = "Play", Location = new Point(324, 8), Size = new Size(70, 24), Enabled = false };
     private readonly Button _btnAtras    = new() { Text = "◀ Atrás", Location = new Point(8, 40), Size = new Size(90, 26), Enabled = false };
     private readonly Button _btnAdelante = new() { Text = "Adelante ▶", Location = new Point(102, 40), Size = new Size(90, 26), Enabled = false };
+
+    // Second pair of ◀/▶, independent of the grid-driven ones above — per explicit request, these
+    // step the candle-clock (see StepTick) one raw tick at a time, with the options grid following
+    // along to whichever step is closest to that tick's own time.
+    // Directly below the "Vela: HH:mm:ss" label (_lblTickClock at (590,234), size (180,20)).
+    private readonly Button _btnTickAtras    = new() { Text = "◀ Vela", Location = new Point(590, 256), Size = new Size(70, 26), Enabled = false };
+    private readonly Button _btnTickAdelante = new() { Text = "Vela ▶", Location = new Point(664, 256), Size = new Size(70, 26), Enabled = false };
     private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
 
@@ -174,6 +181,8 @@ public class SimulatorForm : Form
         Controls.Add(_btnPlayPause);
         Controls.Add(_btnAtras);
         Controls.Add(_btnAdelante);
+        Controls.Add(_btnTickAtras);
+        Controls.Add(_btnTickAdelante);
         Controls.Add(_btnPlus1Min);
         Controls.Add(_lblStep);
         Controls.Add(_lblTickClock);
@@ -197,6 +206,8 @@ public class SimulatorForm : Form
         _btnPlayPause.Click += (s, e) => TogglePlay();
         _btnAtras.Click     += (s, e) => Step(-1);
         _btnAdelante.Click  += (s, e) => Step(1);
+        _btnTickAtras.Click    += (s, e) => StepTick(-1);
+        _btnTickAdelante.Click += (s, e) => StepTick(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
         _playTimer.Tick     += PlayTimer_Tick;
         _tickPlayTimer.Tick += TickPlayTimer_Tick;
@@ -736,6 +747,7 @@ public class SimulatorForm : Form
         // two 15m panels) — see ChartPanel.LoadHistoryAsync's visibleDays.
         _hourlyCandles   = SimulationDataLoader.LoadHourlyCandlesWithContext(symbol, date);
         _intradayCandles = SimulationDataLoader.LoadUnderlyingCandlesWithContext(symbol, date, contextDays: 3);
+        _tickPlayIndex   = -1; // stale index into the OLD day's _intradayCandles — reseed lazily (StepTick/StartTickPlayClock) against the new one
 
         // Lands on the RTH open (9:30:00 ET) instead of index 0 (the day's first recorded step,
         // which is often well before 9:30 — premarket ticks) per explicit request. Same
@@ -1136,9 +1148,34 @@ public class SimulatorForm : Form
         _btnAdelante.Enabled  = !_isPlaying && _currentIndex >= 0 && _currentIndex < _steps.Count - 1;
         _btnPlus1Min.Enabled  = _btnAdelante.Enabled;
         _btnPlayPause.Enabled = _isPlaying || (_currentIndex >= 0 && _currentIndex < _steps.Count - 1);
+
+        // Same "disabled while Play is running" rule as the grid-driven pair — Real Time Play
+        // already owns _tickPlayIndex via its own timer; a manual click mid-Play would race it.
+        _btnTickAtras.Enabled    = !_isPlaying && _intradayCandles.Count > 0 && _tickPlayIndex != 0;
+        _btnTickAdelante.Enabled = !_isPlaying && _intradayCandles.Count > 0 && _tickPlayIndex != _intradayCandles.Count - 1;
     }
 
     private void RenderCurrentStep()
+    {
+        RenderGridForStep();
+        if (_currentIndex < 0) return;
+        var step = _steps[_currentIndex];
+
+        // In Real Time Play, the chart candles are driven independently by _tickPlayTimer (at the
+        // raw tick recording's own pace) instead of by this options-step advance — per explicit
+        // request, the options grid and the candle rendering are two separate clocks in that mode.
+        // Re-rendering charts here too would fight the tick clock, snapping candles back to
+        // whatever this (coarser) step's time is every few seconds. Manual stepping (not Play)
+        // always renders charts normally even with Real Time selected.
+        if (!_realTimeMode || !_isPlaying)
+            RenderChartsUpToTime(step.Time);
+    }
+
+    // Grid/PnL half of RenderCurrentStep — extracted so StepTick (the independent candle-clock
+    // ◀/▶ buttons) can drive the grid off the tick clock's OWN position without also re-rendering
+    // the charts off _currentIndex's (coarser) step time, which would immediately undo whatever
+    // candle position StepTick just moved to.
+    private void RenderGridForStep()
     {
         UpdateStepButtons();
         if (_currentIndex < 0 || _ticker == null)
@@ -1162,19 +1199,38 @@ public class SimulatorForm : Form
             row.Cells["colContracts"].Value = GetSimContractsValue(ask);
         }
 
-        // In Real Time Play, the chart candles are driven independently by _tickPlayTimer (at the
-        // raw tick recording's own pace) instead of by this options-step advance — per explicit
-        // request, the options grid and the candle rendering are two separate clocks in that mode.
-        // Re-rendering charts here too would fight the tick clock, snapping candles back to
-        // whatever this (coarser) step's time is every few seconds. Manual stepping (not Play)
-        // always renders charts normally even with Real Time selected.
-        if (!_realTimeMode || !_isPlaying)
-            RenderChartsUpToTime(step.Time);
-
         try { EvaluateDailyPmAndBb(step.UnderlyingPrice); } catch (Exception ex) { LogSimEvent($"[Diag] EvaluateDailyPmAndBb threw: {ex}"); }
         try { EvaluateSmaCrossWatches(step.UnderlyingPrice); } catch (Exception ex) { LogSimEvent($"[Diag] EvaluateSmaCrossWatches threw: {ex}"); }
 
         RefreshOpenSimTradesPnL(step);
+    }
+
+    // ◀/▶ for the independent candle clock (same _tickPlayIndex/_intradayCandles Real Time Play
+    // already uses) — per explicit request, a separate pair of buttons that step the CHART one
+    // tick at a time, with the options grid following along to whichever step is closest to (at or
+    // before) that tick's own time, instead of the grid driving everything like the normal ◀/▶.
+    private void StepTick(int direction)
+    {
+        if (_intradayCandles.Count == 0) return;
+        if (_tickPlayIndex < 0)
+        {
+            // Not seeded yet (e.g. right after Cargar, before any Real Time Play) — start from
+            // wherever the options-step clock currently is, same seeding StartTickPlayClock uses.
+            var uptoUtc = _currentIndex >= 0 ? _steps[_currentIndex].Time : _intradayCandles[0].Time;
+            _tickPlayIndex = _intradayCandles.FindLastIndex(c => c.Time <= uptoUtc);
+            if (_tickPlayIndex < 0) _tickPlayIndex = 0;
+        }
+
+        var next = _tickPlayIndex + direction;
+        if (next < 0 || next >= _intradayCandles.Count) return;
+        _tickPlayIndex = next;
+
+        var tickTime = _intradayCandles[_tickPlayIndex].Time;
+        RenderChartsUpToTime(tickTime);
+
+        var targetStepIndex = _steps.FindLastIndex(s => s.Time <= tickTime);
+        _currentIndex = targetStepIndex >= 0 ? targetStepIndex : 0;
+        RenderGridForStep();
     }
 
     // Extracted from RenderCurrentStep so the independent tick-driven Real Time chart clock
