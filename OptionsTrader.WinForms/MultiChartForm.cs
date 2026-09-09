@@ -633,10 +633,10 @@ public class MultiChartForm : Form
     // White spot-price line — panels 2 (15m RTH) and 3 (15m RTH+Overnight), same marker the
     // Simulator already draws on trade open/close. Fired at both. Originally panel 3 only; panel 2
     // added per explicit request.
-    public async Task MarkEntrySpotOnOvernightChartAsync(decimal price)
+    public async Task MarkEntrySpotOnOvernightChartAsync(decimal price, string color = "#ffffff")
     {
-        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price);
-        if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price);
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color);
+        if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price, color: color);
     }
 
     // Today's 9:30 AM ET, in the same "ET wall-clock digits disguised as UTC" fake-epoch units the

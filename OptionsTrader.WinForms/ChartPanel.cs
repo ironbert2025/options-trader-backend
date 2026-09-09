@@ -667,14 +667,14 @@ public class ChartPanel : Panel
     // is only passed when REPLAYING a persisted trade from a previous day (see
     // ReplayPersistedEntryMarkersAsync below) — omitted, it anchors to whichever candle is
     // currently forming, same as the original live-tick call site always did.
-    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null)
+    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null, string color = "#ffffff")
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var timeArg = entryTime.HasValue
             ? new DateTimeOffset(DateTime.SpecifyKind(entryTime.Value, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString()
             : "undefined";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)});");
     }
 
     // Redraws the white entry-spot line for every trade still open on THIS symbol (per
@@ -688,7 +688,7 @@ public class ChartPanel : Panel
         if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Fifteen_Full) return;
         var openTrades = OpenTradesStore.Load().Where(t => t.Symbol == _symbol && t.EntrySpotPrice > 0m);
         foreach (var trade in openTrades)
-            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime);
+            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime, trade.EntrySpotColor);
     }
 
     // Re-evaluated on every live tick (all 3 panels) — purely visual, flips the ATH line green

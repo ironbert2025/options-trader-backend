@@ -1206,7 +1206,12 @@ public class SimulatorForm : Form
 
     // ----- Demo trades (practice only — separate from real/demo trades in Form1) -----
 
-    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid, bool SuppressAutoClose);
+    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid, bool SuppressAutoClose, string SpotColor);
+
+    // Same alternating white/yellow-per-trade convention as Form1.NextEntrySpotColor — total
+    // count across the session, not "how many currently open".
+    private int _entrySpotColorCounter;
+    private string NextEntrySpotColor() => (++_entrySpotColorCounter % 2 == 1) ? "#ffffff" : "#ffeb3b";
     private readonly List<OpenSimTrade> _openSimTrades = new();
 
     // step.Time / trade.EntryTime are real UTC (same convention as CandleData.Time, needed so the
@@ -1411,17 +1416,19 @@ public class SimulatorForm : Form
 
         gridRow.Cells["colSimCBid"].Style.ForeColor = Color.Orange;
 
-        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid, suppressAutoClose));
+        var entrySpotColor = NextEntrySpotColor();
+        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid, suppressAutoClose, entrySpotColor));
         SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
         _ = _fullChart.MarkStrikeAsync(strike);
 
-        // White spot-price line at the moment of entry — panels 2 and 3, bounded to that one
-        // candle, mirroring the live app (MultiChartForm.MarkEntrySpotOnOvernightChartAsync —
-        // originally panel 3 only, panel 2 added later; the simulator hadn't been kept in sync).
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice);
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
+        // White (or yellow, per that trade's assigned color) spot-price line at the moment of
+        // entry — panels 2 and 3, bounded to that one candle, mirroring the live app
+        // (MultiChartForm.MarkEntrySpotOnOvernightChartAsync — originally panel 3 only, panel 2
+        // added later; the simulator hadn't been kept in sync).
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor);
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
         var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
@@ -1497,9 +1504,10 @@ public class SimulatorForm : Form
         row.ReadOnly = true;
         _openSimTrades.Remove(trade);
 
-        // White spot-price line at the moment of close — same marker as the entry one, panels 2 and 3.
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice);
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice);
+        // Spot-price line at the moment of close — same color assigned to this trade at open,
+        // same marker as the entry one, panels 2 and 3.
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor);
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");

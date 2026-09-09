@@ -23,7 +23,8 @@ namespace OptionsTrader.WinForms;
 file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose = false,
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
     DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m,
-    int? ReinforcementGroupId = null, bool IsReinforcementResult = false);
+    int? ReinforcementGroupId = null, bool IsReinforcementResult = false,
+    string EntrySpotColor = "#ffffff");
 
 public partial class Form1 : Form
 {
@@ -82,6 +83,15 @@ public partial class Form1 : Form
     private TimeframeViewerForm? _timeframeViewerForm;
 
     private decimal _lastSpotPrice;
+
+    // Alternates white/yellow per TRADE opened this session (not per line) — both a trade's open
+    // and close white/yellow spot-price line share the same color, so consecutive trades' pairs
+    // are visually distinguishable on the chart. Per explicit request: total count across the
+    // whole session, not "how many currently open" — 1st trade white, 2nd yellow, 3rd white, ...
+    // In-memory only (not persisted across restarts — a trade still open across a restart keeps
+    // whatever color OpenTradesStore already saved for it, see TradeRowTag.EntrySpotColor).
+    private int _entrySpotColorCounter;
+    private string NextEntrySpotColor() => (++_entrySpotColorCounter % 2 == 1) ? "#ffffff" : "#ffeb3b";
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
     private List<BrokerAccountDto> _accounts = new();
@@ -903,7 +913,7 @@ public partial class Form1 : Form
                     string.Empty, "Close");
 
                 var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice);
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
                 restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
@@ -2430,8 +2440,9 @@ public partial class Form1 : Form
         // ticker's default resolved date, so a trade opened for tomorrow's chain is persisted with
         // tomorrow's ExpirationDate, not today's.
         var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
+        var entrySpotColor = NextEntrySpotColor();
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
-            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice);
+            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice, EntrySpotColor: entrySpotColor);
         PadWithBlankRows(dgvTrades, 4);
 
         if (!isSimulation)
@@ -2447,7 +2458,8 @@ public partial class Form1 : Form
                 Level:          level,
                 PnlTarget:      targetPct.ToString("F0"),
                 EntrySpotPrice: _lastSpotPrice,
-                IsDemo:         isDemo));
+                IsDemo:         isDemo,
+                EntrySpotColor: entrySpotColor));
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
         // through here. Awaited (with a repaint delay) BEFORE the entry snapshot below, same
@@ -2457,7 +2469,7 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
         {
             await chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
-            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice);
+            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice, entrySpotColor);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -2468,7 +2480,7 @@ public partial class Form1 : Form
         {
             if (decimal.TryParse(strike, out var strikeValForChartsTab))
                 await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, entrySpotColor);
         }
 
         if (!isSimulation)
@@ -3477,10 +3489,12 @@ public partial class Form1 : Form
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
-        // White spot-price line at close — same marker drawn on entry, mirrors the Simulator.
+        // White (or yellow, per that trade's assigned color — see NextEntrySpotColor) spot-price
+        // line at close — same marker drawn on entry, mirrors the Simulator.
+        var closeSpotColor = tag?.EntrySpotColor ?? "#ffffff";
         if (_lastSpotPrice > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
         {
-            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice);
+            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice, closeSpotColor);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -3490,7 +3504,7 @@ public partial class Form1 : Form
         {
             if (tag is { EntrySpotPrice: > 0 } && decimal.TryParse(strike, out var strikeForDeltaChartsTab))
                 await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDeltaChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, closeSpotColor);
         }
 
         // Simulation trades stop here — grid/PnL and the white entry/close lines above are all they

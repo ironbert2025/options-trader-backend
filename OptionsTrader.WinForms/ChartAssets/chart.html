@@ -1931,7 +1931,7 @@
   // which is what previously made the line stretch across most of the visible chart instead of
   // sitting over just the one candle). Accumulates, one segment per trade opened — never removed.
   class EntrySpotLinePrimitive {
-    constructor() { this._lines = []; this._chart = null; } // [{ time, price }, ...]
+    constructor() { this._lines = []; this._chart = null; } // [{ time, price, color }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1954,7 +1954,7 @@
                   // entry candle itself, and the space where the next (future) one will form.
                   const x1 = (centerXRaw - barSpacing * 1.5) * scope.horizontalPixelRatio;
                   const x2 = (centerXRaw + barSpacing * 1.5) * scope.horizontalPixelRatio;
-                  ctx.strokeStyle = '#ffffff';
+                  ctx.strokeStyle = l.color || '#ffffff';
                   ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                   ctx.beginPath();
                   ctx.moveTo(x1, y * scope.verticalPixelRatio);
@@ -1982,7 +1982,11 @@
   // it, same fallback HLinePrimitive uses, since a raw C# timestamp essentially never lands on an
   // exact candle boundary. This is what lets BOTH entry lines show (yesterday's and today's) when a
   // trade opened yesterday is still open today.
-  function markEntrySpot(price, time) {
+  // color: per explicit request, each TRADE (not each line) gets one color assigned when it opens
+  // — both its open and close line share that color — alternating white/yellow per trade across
+  // the whole session, so consecutive trades' open/close pairs are visually distinguishable from
+  // each other. Defaults to white for any caller that doesn't pass one (old persisted trades).
+  function markEntrySpot(price, time, color) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
     let anchorTime = allCandles[allCandles.length - 1].time;
@@ -1997,7 +2001,7 @@
     // LoadHistoryAsync (e.g. reopening the Live Chart window), which would otherwise push a fresh
     // duplicate segment each time instead of just re-establishing the same one.
     const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price);
-    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price });
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff' });
     forceRepaint();
   }
 

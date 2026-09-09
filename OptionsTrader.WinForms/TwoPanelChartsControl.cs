@@ -112,9 +112,9 @@ public class TwoPanelChartsControl : UserControl
     // MarkEntrySpotOnOvernightChartAsync — the Charts tab has no equivalent since it's a whole
     // separate MultiChartForm-less control Form1 never fed this into). Same underlying primitive/
     // persistence (OpenTradesStore) as the popup, just reached through this control directly.
-    public async Task MarkEntrySpotOnRthChartAsync(decimal price)
+    public async Task MarkEntrySpotOnRthChartAsync(decimal price, string color = "#ffffff")
     {
-        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price);
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color);
     }
 
     // Green "Stk=xxx" line at trade open — panel 2 (15m RTH) only, same pattern as

@@ -224,11 +224,11 @@ public class SimulatedChartPanel : Panel
     // forming right when the trade opens), same convention MarkStrikeAsync/the premarket line
     // already use, and computes the candle-width span itself from the chart's own bar spacing.
     // Accumulates, one segment per trade, never auto-removed.
-    public async Task MarkEntrySpotAsync(decimal price)
+    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff")
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)});");
     }
 
     // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,
