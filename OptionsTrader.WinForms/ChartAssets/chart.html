@@ -3420,7 +3420,7 @@
   // candle appears (per explicit request, to compare the band's slope in-session against whatever
   // its actual angle was at the open, on both bands). Never moves again for the rest of the
   // session, unlike the live marker which re-anchors to the last 2 candles on every recalculation.
-  let openBandSnapshot = null; // { day, upper:{prev,curr}, lower:{prev,curr} } — prev/curr are {time,price}
+  let openBandSnapshot = null; // { day, upper:{anchor,prev,curr}, lower:{anchor,prev,curr} } — all {time,price}
 
   class BollingerOpenSnapshotPrimitive {
     constructor() { this._chart = null; }
@@ -3452,22 +3452,27 @@
                   const halfWidth = 15;
                   const drawOne = (segment) => {
                     if (!segment) return;
+                    // Slope comes from the prior day's own last 2 candles (prev->curr), but the
+                    // marker itself is drawn CENTERED at today's 9:30 candle (anchor) — not at
+                    // yesterday's position. Only the ANGLE is borrowed from yesterday, per explicit
+                    // request; visually it must still sit at the open, matching the original design.
                     const x1Raw = safeTimeToCoordinate(ts, segment.prev.time);
                     const x2Raw = safeTimeToCoordinate(ts, segment.curr.time);
-                    if (x1Raw == null || x2Raw == null) return;
+                    const anchorX = safeTimeToCoordinate(ts, segment.anchor.time);
+                    if (x1Raw == null || x2Raw == null || anchorX == null) return;
                     const y1 = candleSeries.priceToCoordinate(segment.prev.price);
                     const y2 = candleSeries.priceToCoordinate(segment.curr.price);
-                    if (y1 == null || y2 == null) return;
-                    const midX = (x1Raw + x2Raw) / 2, midY = (y1 + y2) / 2;
+                    const anchorY = candleSeries.priceToCoordinate(segment.anchor.price);
+                    if (y1 == null || y2 == null || anchorY == null) return;
                     const dx = x2Raw - x1Raw, dy = y2 - y1;
                     const len = Math.hypot(dx, dy) || 1;
-                    const ux = dx / len, uy = dy / len; // unit vector along the real slope
+                    const ux = dx / len, uy = dy / len; // unit vector along yesterday's slope
                     ctx.strokeStyle = '#ffffff';
                     ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                     ctx.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
                     ctx.beginPath();
-                    ctx.moveTo((midX - ux * halfWidth) * scope.horizontalPixelRatio, (midY - uy * halfWidth) * scope.verticalPixelRatio);
-                    ctx.lineTo((midX + ux * halfWidth) * scope.horizontalPixelRatio, (midY + uy * halfWidth) * scope.verticalPixelRatio);
+                    ctx.moveTo((anchorX - ux * halfWidth) * scope.horizontalPixelRatio, (anchorY - uy * halfWidth) * scope.verticalPixelRatio);
+                    ctx.lineTo((anchorX + ux * halfWidth) * scope.horizontalPixelRatio, (anchorY + uy * halfWidth) * scope.verticalPixelRatio);
                     ctx.stroke();
                     ctx.setLineDash([]);
                   };
@@ -3564,13 +3569,17 @@
           const todayStartIdx = upperData.findIndex(d => dayStartOf(d.time) === lastDay);
           if (todayStartIdx > 1) {
             const prevIdx = todayStartIdx - 1, prevPrevIdx = todayStartIdx - 2;
+            // anchor = today's 9:30 candle (where the marker is actually drawn); prev/curr = the
+            // prior day's own last 2 candles (where the SLOPE comes from only — see drawOne).
             openBandSnapshot = {
               day: lastDay,
               upper: {
+                anchor: { time: upperData[todayStartIdx].time, price: upperData[todayStartIdx].value },
                 prev: { time: upperData[prevPrevIdx].time, price: upperData[prevPrevIdx].value },
                 curr: { time: upperData[prevIdx].time, price: upperData[prevIdx].value }
               },
               lower: {
+                anchor: { time: lowerData[todayStartIdx].time, price: lowerData[todayStartIdx].value },
                 prev: { time: lowerData[prevPrevIdx].time, price: lowerData[prevPrevIdx].value },
                 curr: { time: lowerData[prevIdx].time, price: lowerData[prevIdx].value }
               }
