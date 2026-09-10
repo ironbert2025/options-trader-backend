@@ -950,6 +950,12 @@ public partial class Form1 : Form
         }
 
         RestoreOpenSimulationTrades(symbol, today);
+
+        // RestoreOpenTrades/RestoreOpenSimulationTrades mutate dgvTrades directly, unlike
+        // RecordEntryAsync/CloseTradeRowAsync — neither raises this on its own, so the Charts tab's
+        // own mirrored _dgvTrades (TwoPanelChartsControl.RefreshTradesGrid, wired to this event)
+        // never found out if it was already connected for this symbol before the restore ran.
+        OnTradesUpdatedEvent?.Invoke(symbol);
     }
 
     // "Trade Simulation" trades (Charts tab) — same still-open/expired split as RestoreOpenTrades
