@@ -1187,7 +1187,8 @@ public class SimulatorForm : Form
         var step = _steps[_currentIndex];
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
-        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes);
+        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts,
+            forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
 
         // PopulateQuotesGrid computes its own Conts column from the REAL (persisted)
         // ContractsSettingsStore — override it here with the simulator's own local Contracts
@@ -1476,6 +1477,13 @@ public class SimulatorForm : Form
         _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid, suppressAutoClose, entrySpotColor));
         SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
+        // Pin AND highlight this strike in _dgvChain for the rest of the loaded day, same as the
+        // Charts tab's own quotes grid (Form1._chartsTabHighlightedStrikes) — per explicit request,
+        // same gray/light-green-per-cell convention, reusing _forcedStrikes since its "never
+        // removed, cleared only on day load" lifecycle already matches what's needed here. Auto-
+        // added right at open instead of requiring the extra click ForceStrikeInChainGrid needs.
+        _forcedStrikes.Add((rowType, strike));
+
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
         _ = _fullChart.MarkStrikeAsync(strike);
 
@@ -1642,6 +1650,6 @@ public class SimulatorForm : Form
 
         if (_currentIndex >= 0)
             Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
-                selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes);
+                selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
     }
 }

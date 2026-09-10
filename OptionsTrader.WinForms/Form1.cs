@@ -1857,10 +1857,16 @@ public partial class Form1 : Form
     // Static (no Form1 instance state) so it's reusable from SimulatorForm's own grid too —
     // selectedCounts/callOnly/putOnly used to live on Form1's fields/checkboxes, now explicit
     // parameters instead (same values, callers just pass them through).
+    // highlightedStrikes: separate from forcedStrikes (which only force-includes a row past the
+    // OTM filter) — per explicit request, colors that row gray (OTM) or light green (ITM) on every
+    // cell except Strike. Optional and defaults to null so every EXISTING caller (Form1's own
+    // dgvQuotes/dgvQuotesNext — the Options Quotes tab) is unaffected; only the Simulator's
+    // _dgvChain passes it, reusing its own _forcedStrikes set for both purposes.
     internal static (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
         DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false,
         string? selectedCounts = null, bool callOnly = false, bool putOnly = false,
-        IEnumerable<(string Type, decimal Strike)>? forcedStrikes = null)
+        IEnumerable<(string Type, decimal Strike)>? forcedStrikes = null,
+        HashSet<(string Type, decimal Strike)>? highlightedStrikes = null)
     {
         decimal.TryParse(ticker.Low,  out var rangeLow);
         decimal.TryParse(ticker.High, out var rangeHigh);
@@ -1969,7 +1975,10 @@ public partial class Form1 : Form
                 FormatStrike(call.StrikePrice),
                 string.Empty, string.Empty, string.Empty,
                 contracts, level);
-            grid.Rows[grid.Rows.Count - 1].Tag = "CALL";
+            var newCallRow = grid.Rows[grid.Rows.Count - 1];
+            newCallRow.Tag = "CALL";
+            if (highlightedStrikes != null && highlightedStrikes.Contains(("CALL", call.StrikePrice)))
+                HighlightQuoteRow(newCallRow, call.InTheMoney);
         }
 
         foreach (var put in otmPuts)
@@ -1985,7 +1994,10 @@ public partial class Form1 : Form
                 FormatStrike(put.StrikePrice),
                 put.Bid.ToString("F2"), put.Ask.ToString("F2"), sprd,
                 contracts, level);
-            grid.Rows[grid.Rows.Count - 1].Tag = "PUT";
+            var newPutRow = grid.Rows[grid.Rows.Count - 1];
+            newPutRow.Tag = "PUT";
+            if (highlightedStrikes != null && highlightedStrikes.Contains(("PUT", put.StrikePrice)))
+                HighlightQuoteRow(newPutRow, put.InTheMoney);
         }
 
         PadWithBlankRows(grid, 8);
@@ -2083,6 +2095,20 @@ public partial class Form1 : Form
         PadWithBlankRows(grid, 8);
         if (scrollRowToRestore >= 0 && grid.Rows.Count > 0)
             grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollRowToRestore, grid.Rows.Count - 1);
+    }
+
+    // Colors every cell in a quotes-grid row gray (OTM) or light green (ITM) except Strike (which
+    // keeps its normal Call/Put color) — same convention as TwoPanelChartsControl's _dgvOptions
+    // CellFormatting highlight, just applied directly at population time here since PopulateQuotesGrid
+    // (unlike PopulateSingleSideOptionsGrid) has no separate CellFormatting handler to hook into.
+    private static void HighlightQuoteRow(DataGridViewRow row, bool inTheMoney)
+    {
+        var color = inTheMoney ? Color.LightGreen : Color.LightGray;
+        foreach (DataGridViewCell cell in row.Cells)
+        {
+            if (cell.OwningColumn?.Name == "colStrikePrice") continue;
+            cell.Style.BackColor = color;
+        }
     }
 
     // Fills the grid with empty rows up to targetTotal so it still looks like a full table
