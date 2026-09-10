@@ -86,6 +86,22 @@
     }
     if (visible.length === 0) return original();
 
+    // Panel 2 (RTH slide window) only: the visible WIDTH deliberately keeps some of the prior
+    // day's bars on-screen as context (see computeRthSlideRange), but per explicit request the
+    // HEIGHT should fit tightly to just today's session candles — those context bars can swing
+    // wider than today's range and were wasting vertical space, squeezing today's candles down
+    // even though the width framing was already correct. Once today's RTH session has started,
+    // narrow the min/max computation to today's bars only; the context bars stay visible
+    // horizontally, they just stop influencing the price scale.
+    if (rthSlideWindowBars) {
+      const lastDay = dayStartOf(series[series.length - 1].time);
+      const todayStartIdx = series.findIndex(c => dayStartOf(c.time) === lastDay && isRthTime(c.time));
+      if (todayStartIdx !== -1) {
+        const sessionOnly = series.slice(todayStartIdx).filter(c => visible.includes(c));
+        if (sessionOnly.length > 0) visible = sessionOnly;
+      }
+    }
+
     // Genuinely the most-recent bar's close, by time — not just series[series.length - 1], which
     // assumes the array is already correctly ordered (see aggregateToDaily's own note on why that
     // assumption isn't trusted anymore).
@@ -897,6 +913,19 @@
     const textIdx = clickTextPrimitive._labels.findIndex(l => l.selected);
     if (textIdx !== -1) {
       clickTextPrimitive._labels.splice(textIdx, 1);
+      forceRepaint();
+      return;
+    }
+
+    // Frozen "at the open" Bollinger snapshot marker — per explicit request. Unlike the tools
+    // above, this is a single per-day object with no click-to-select state (nothing else to pick
+    // between), so Delete just clears it outright as a last-resort fallback, only reached if none
+    // of the selectable tools above already handled the key press this call. Session-only, no
+    // persistence to clean up — reappears fresh the next time recalculateBollinger() crosses into
+    // a new day.
+    if (openBandSnapshot) {
+      openBandSnapshotDismissedDay = openBandSnapshot.day;
+      openBandSnapshot = null;
       forceRepaint();
     }
   });
@@ -1966,13 +1995,13 @@
                   // Put, same "C" glyph convention PrevDayCloseLinePrimitive already uses.
                   if (l.isClose) {
                     ctx.fillStyle = l.color || '#ffffff';
-                    ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                    ctx.font = `${9 * scope.verticalPixelRatio}px sans-serif`; // smaller, per explicit request
                     ctx.textAlign = 'left';
                     ctx.textBaseline = l.isCall ? 'bottom' : 'top';
                     const labelY = l.isCall
-                      ? y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio
-                      : y * scope.verticalPixelRatio + 2 * scope.verticalPixelRatio;
-                    ctx.fillText('C', x2 + 4 * scope.horizontalPixelRatio, labelY);
+                      ? y * scope.verticalPixelRatio - 1 * scope.verticalPixelRatio
+                      : y * scope.verticalPixelRatio + 1 * scope.verticalPixelRatio;
+                    ctx.fillText('C', x2 + 2 * scope.horizontalPixelRatio, labelY);
                   }
                 });
               });
@@ -3526,6 +3555,11 @@
   // its actual angle was at the open, on both bands). Never moves again for the rest of the
   // session, unlike the live marker which re-anchors to the last 2 candles on every recalculation.
   let openBandSnapshot = null; // { day, upper:{anchor,prev,curr}, lower:{anchor,prev,curr} } — all {time,price}
+  // Set to the day it was deleted for (Delete key, see the keydown handler) — recalculateBollinger()
+  // checks this before re-capturing, so a deleted marker stays gone for the rest of THAT day instead
+  // of reappearing on the very next tick (openBandSnapshot being null alone can't distinguish "never
+  // captured yet" from "deliberately deleted"). Cleared on day change (see resetViewForNewDay).
+  let openBandSnapshotDismissedDay = null;
 
   class BollingerOpenSnapshotPrimitive {
     constructor() { this._chart = null; }
@@ -3675,7 +3709,7 @@
         // unreliable right at 9:30:00 open. Falls back to the old inference for the live chart,
         // which never calls configureSimDay.
         const lastDay = knownSimDay ?? dayStartOf(upperData[upperData.length - 1].time);
-        if (!openBandSnapshot || openBandSnapshot.day !== lastDay) {
+        if ((!openBandSnapshot || openBandSnapshot.day !== lastDay) && openBandSnapshotDismissedDay !== lastDay) {
           // Per explicit request: the frozen angle is the PRIOR day's own last 2 candles (right
           // before ITS close) — i.e. exactly what the live marker was still showing in the instant
           // before today's first candle existed — NOT prior-day-last vs today-first, which spans
@@ -3993,6 +4027,7 @@
     userHasInteracted = false;
     lastAppliedRange = null;
     openBandSnapshot = null;
+    openBandSnapshotDismissedDay = null;
   }
 
   function loadHistory(candles) {
