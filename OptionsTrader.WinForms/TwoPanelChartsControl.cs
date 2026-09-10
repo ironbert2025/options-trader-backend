@@ -1255,7 +1255,15 @@ public class TwoPanelChartsControl : UserControl
         {
             var sourceGrid = _form1.GetTradesGrid(_symbol);
             if (sourceGrid == null) return;
-            if (_dgvTrades.IsDisposed || !_dgvTrades.IsHandleCreated) return;
+            if (_dgvTrades.IsDisposed) return;
+            // This is wired to the whole control's own HandleCreated (below), not _dgvTrades's —
+            // on first connect, that can fire before _dgvTrades's own handle exists yet, which used
+            // to silently skip the refresh (BeginInvoke needs a handle) with nothing ever retrying
+            // it: a trade already open before the Charts tab was connected this session (restored
+            // on ticker select, or opened earlier) would show in Form1's own grid but never mirror
+            // here until some LATER trade open/close fired OnTradesUpdatedEvent again. Force the
+            // handle into existence instead of bailing — same idiom BeginInvoke needs anyway.
+            if (!_dgvTrades.IsHandleCreated) _ = _dgvTrades.Handle;
             _dgvTrades.BeginInvoke(() =>
             {
                 var scrollRowToRestore = _dgvTrades.Rows.Count > 0 ? _dgvTrades.FirstDisplayedScrollingRowIndex : -1;
