@@ -897,8 +897,6 @@ public partial class Form1 : Form
             .Where(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        if (saved.Count == 0) return;
-
         var today = DateOnly.FromDateTime(DateTime.Today);
 
         foreach (var t in saved)
