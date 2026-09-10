@@ -24,7 +24,7 @@ file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose 
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
     DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m,
     int? ReinforcementGroupId = null, bool IsReinforcementResult = false,
-    string EntrySpotColor = "#ffffff");
+    string EntrySpotColor = "#ffffff", Guid? LocalId = null);
 
 public partial class Form1 : Form
 {
@@ -949,6 +949,56 @@ public partial class Form1 : Form
 
                 // LogLine($"{DateTime.Now:HH:mm:ss} Restored open trade ({t.OptionType}) Strike: {t.StrikePrice}  Entry: {t.EntryPrice:F2}  Contracts: {t.Contracts}", Color.Cyan);
             }
+        }
+
+        RestoreOpenSimulationTrades(symbol, today);
+    }
+
+    // "Trade Simulation" trades (Charts tab) — same still-open/expired split as RestoreOpenTrades
+    // above, just against SimulationTradesStore and matched by LocalId (their tradeId is always 0,
+    // shared by every simulation trade, so it can't identify a row the way TradeId does above).
+    private void RestoreOpenSimulationTrades(string symbol, DateOnly today)
+    {
+        var saved = SimulationTradesStore.Load()
+            .Where(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (saved.Count == 0) return;
+
+        foreach (var t in saved)
+        {
+            bool alreadyShown = dgvTrades.Rows
+                .Cast<DataGridViewRow>()
+                .Any(r => r.Tag is TradeRowTag tag && tag.LocalId == t.LocalId);
+            if (alreadyShown) continue;
+
+            if (t.ExpirationDate < today)
+            {
+                // Expired unattended — just drop it, no close-out needed (never reached the
+                // API/TradeHistoryStore on entry either, see RecordEntryAsync's isSimulation skip).
+                SimulationTradesStore.Remove(t.LocalId);
+                continue;
+            }
+
+            decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
+            var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m), 2);
+
+            dgvTrades.Rows.Add(
+                t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
+                string.Empty, t.EntryPrice.ToString("F2"), t.Contracts,
+                t.EntryPrice.ToString("F2"), t.EntryPrice.ToString("F2"), tBid.ToString("F2"),
+                "0.00", "0.00", t.PnlTarget,
+                string.Empty, "Close");
+
+            var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
+            restoredRow.Tag = new TradeRowTag(0, t.EntryTime, ExpirationDate: t.ExpirationDate,
+                EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor, LocalId: t.LocalId);
+            restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
+            restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+            restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
+            restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
+            SetTradeTypeColor(restoredRow, t.OptionType);
+            restoredRow.Cells["colTradeDemoReal"].Value = "Simulation";
         }
     }
 
@@ -2527,8 +2577,13 @@ public partial class Form1 : Form
         // tomorrow's ExpirationDate, not today's.
         var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         var entrySpotColor = NextEntrySpotColor();
+        // Simulation trades get their own LocalId (their tradeId stays 0, shared by every
+        // simulation trade, so it can't identify one in SimulationTradesStore) — see that store's
+        // own comment.
+        var simulationLocalId = isSimulation ? Guid.NewGuid() : (Guid?)null;
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
-            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice, EntrySpotColor: entrySpotColor);
+            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice, EntrySpotColor: entrySpotColor,
+            LocalId: simulationLocalId);
         PadWithBlankRows(dgvTrades, 4);
 
         if (!isSimulation)
@@ -2545,6 +2600,24 @@ public partial class Form1 : Form
                 PnlTarget:      targetPct.ToString("F0"),
                 EntrySpotPrice: _lastSpotPrice,
                 IsDemo:         isDemo,
+                EntrySpotColor: entrySpotColor));
+        else
+            // Per explicit request: unlike Real/Demo trades, "Trade Simulation" trades still
+            // don't touch TradeHistoryStore/the API/screenshots — but DO persist locally now, so
+            // one still open at end of day (not expired) reappears tomorrow when the symbol is
+            // reselected, same as Real/Demo (see RestoreOpenTrades).
+            SimulationTradesStore.Add(new PersistedSimulationTrade(
+                LocalId:        simulationLocalId!.Value,
+                Symbol:         symbol,
+                OptionType:     rowType,
+                StrikePrice:    strike,
+                EntryPrice:     ask,
+                Contracts:      contracts,
+                EntryTime:      entryTime,
+                ExpirationDate: expDate,
+                Level:          level,
+                PnlTarget:      targetPct.ToString("F0"),
+                EntrySpotPrice: _lastSpotPrice,
                 EntrySpotColor: entrySpotColor));
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
@@ -3545,6 +3618,8 @@ public partial class Form1 : Form
         // Remove from local persistence
         if (tradeId != 0)
             OpenTradesStore.Remove(tradeId);
+        if (isSimulation && tag?.LocalId is { } simulationLocalIdToRemove)
+            SimulationTradesStore.Remove(simulationLocalIdToRemove);
 
         // Close trade (API PATCH if tradeId is a real API id, always updates TradeHistoryStore
         // locally regardless — see CloseTradeInApiAsync)
