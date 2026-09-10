@@ -2946,12 +2946,39 @@ public partial class Form1 : Form
             _chartsTabForm = chartsControl;
             _chartsHost!.Controls.Add(chartsControl);
 
+            // Currently-open trades (Real/Demo/Simulation) for this symbol never got their
+            // strike/entry-spot markers drawn on THIS control — RecordEntryAsync only draws them
+            // if the Charts tab was already connected at the moment the trade opened, and
+            // RestoreOpenTrades/RestoreOpenSimulationTrades don't touch any chart at all. Catch up
+            // now that the panels actually exist, per explicit request ("que se vea en tab charts").
+            _ = RemarkOpenTradesOnChartsTabAsync(chartsControl, symbol);
+
             _btnChartsConnect!.Text = "Disconnect";
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Could not open the embedded charts:\n\n{ex}",
                 "Charts Tab Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // See ConnectChartsTabAsync's call site above. Only rows still open (no ExitTime) for this
+    // symbol — a closed trade's marker was already drawn (or missed) at the time it actually
+    // closed, nothing to catch up there.
+    private async Task RemarkOpenTradesOnChartsTabAsync(TwoPanelChartsControl chartsControl, string symbol)
+    {
+        var openRows = dgvTrades.Rows.Cast<DataGridViewRow>()
+            .Where(r => r.Tag is TradeRowTag && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
+            .ToList();
+
+        foreach (var row in openRows)
+        {
+            if (row.Tag is not TradeRowTag tag) continue;
+            if (!decimal.TryParse(row.Cells["colTradeStrike"].Value?.ToString(), out var strike)) continue;
+
+            await chartsControl.MarkStrikeOnRthChartAsync(strike);
+            if (tag.EntrySpotPrice > 0)
+                await chartsControl.MarkEntrySpotOnRthChartAsync(tag.EntrySpotPrice, tag.EntrySpotColor);
         }
     }
 
