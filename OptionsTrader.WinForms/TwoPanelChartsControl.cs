@@ -112,9 +112,9 @@ public class TwoPanelChartsControl : UserControl
     // MarkEntrySpotOnOvernightChartAsync — the Charts tab has no equivalent since it's a whole
     // separate MultiChartForm-less control Form1 never fed this into). Same underlying primitive/
     // persistence (OpenTradesStore) as the popup, just reached through this control directly.
-    public async Task MarkEntrySpotOnRthChartAsync(decimal price)
+    public async Task MarkEntrySpotOnRthChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false)
     {
-        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price);
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall);
     }
 
     // Green "Stk=xxx" line at trade open — panel 2 (15m RTH) only, same pattern as
@@ -143,6 +143,15 @@ public class TwoPanelChartsControl : UserControl
     // Shared H-Line/Text toolbar controls (panel 2's toolbar) — public so MultiChartForm can wire
     // an additional handler that also toggles panel 3, matching original combined behavior.
     public CheckBox AthCheckBox { get; }
+
+    // Independent from AthCheckBox above — Form1's status-bar "ATH: xxx" label calls this directly
+    // (not a UI control here) to force the ATH line to show on panel 1/2 regardless of price
+    // proximity. MultiChartForm exposes its own wrapper to also relay this onto panel 3.
+    public async Task SetAllTimeHighForceVisibleAsync(bool force)
+    {
+        if (_hourlyPanel != null) await _hourlyPanel.SetAllTimeHighForceVisibleAsync(force);
+        if (_rthPanel != null) await _rthPanel.SetAllTimeHighForceVisibleAsync(force);
+    }
     public Button HLineButton { get; }
     public Button TextButton { get; }
     public TextBox ChartTextTextBox { get; }
@@ -921,10 +930,27 @@ public class TwoPanelChartsControl : UserControl
             {
                 if (e.RowIndex < 0) return;
                 var row = grid.Rows[e.RowIndex];
+                var strikeCol = grid.Columns["colStrikeLive"]!.Index;
                 var sprdCol  = grid.Columns["colSprdLive"]!.Index;
                 var bidCol   = grid.Columns["colBidLive"]!.Index;
                 var askCol   = grid.Columns["colAskLive"]!.Index;
                 var rangeCol = grid.Columns["colRangeLive"]!.Index;
+
+                // Per explicit request: a strike opened from THIS grid stays highlighted for the
+                // rest of the session — gray while OTM, light green while ITM — on every cell
+                // except Strike itself (which keeps its normal Call/Put color, per explicit
+                // request). Takes priority over the Bid/Range rules below, which would otherwise
+                // fight this override on every repaint. InTheMoney is stashed on the Strike cell's
+                // Tag at population time (PopulateSingleSideOptionsGrid) — read fresh from THAT
+                // cell (not e.Value) since it isn't tied to whichever column is currently painting.
+                if (e.ColumnIndex != strikeCol && row.Tag is string rowType &&
+                    decimal.TryParse(row.Cells["colStrikeLive"].Value?.ToString(), out var rowStrike) &&
+                    _form1.IsChartsTabStrikeHighlighted(rowType, rowStrike))
+                {
+                    var inTheMoney = row.Cells["colStrikeLive"].Tag is true;
+                    e.CellStyle.BackColor = inTheMoney ? Color.LightGreen : Color.LightGray;
+                    return;
+                }
 
                 if (e.ColumnIndex == sprdCol)
                 {
@@ -1071,7 +1097,8 @@ public class TwoPanelChartsControl : UserControl
             _dgvOptions.BeginInvoke(() =>
             {
                 Form1.PopulateSingleSideOptionsGrid(
-                    _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker);
+                    _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker,
+                    _form1.GetChartsTabHighlightedStrikes());
 
                 // "Próxima" tab: only present while Form1 itself shows the next-expiration chain
                 // (mirrors chkHideNextExpDate) — added/removed here instead of once at startup so

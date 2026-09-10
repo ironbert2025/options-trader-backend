@@ -579,6 +579,13 @@ public class MultiChartForm : Form
     // same mirroring onto an already-open (or later-opened) live chart for the same symbol; see
     // Form1.BtnDaily_Click/BtnLiveChart_Click. Just delegates to the panel 1/2 control, which owns
     // the actual mirroring logic (and the SMA-watch buttons it also keeps in sync).
+    // Form1's status-bar "ATH: xxx" label calls this (via _liveChartForms) to also force panel 3's
+    // ATH line, alongside TwoPanelChartsControl.SetAllTimeHighForceVisibleAsync for panel 1/2.
+    public async Task SetAllTimeHighForceVisibleAsync(bool force)
+    {
+        if (_overnightPanel != null) await _overnightPanel.SetAllTimeHighForceVisibleAsync(force);
+    }
+
     public void AttachDailyMirroring(DailyChartForm dailyForm)
     {
         _twoPanelControl.AttachDailyMirroring(dailyForm);
@@ -626,10 +633,10 @@ public class MultiChartForm : Form
     // White spot-price line — panels 2 (15m RTH) and 3 (15m RTH+Overnight), same marker the
     // Simulator already draws on trade open/close. Fired at both. Originally panel 3 only; panel 2
     // added per explicit request.
-    public async Task MarkEntrySpotOnOvernightChartAsync(decimal price)
+    public async Task MarkEntrySpotOnOvernightChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false)
     {
-        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price);
-        if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price);
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall);
+        if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall);
     }
 
     // Today's 9:30 AM ET, in the same "ET wall-clock digits disguised as UTC" fake-epoch units the

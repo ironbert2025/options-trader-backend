@@ -128,6 +128,19 @@ internal static class CandleAggregation
         return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(startEastern, DateTimeKind.Unspecified), EasternZone);
     }
 
+    // Same idea as HourlyRthBucketStartUtc but for 15-minute RTH buckets (anchored at 9:30 AM ET,
+    // same convention AggregateToInterval's rthOnly BucketAnchor uses) — lets a live tick determine
+    // whether it belongs to the SAME still-forming 15-min bar as before, or a new one just started.
+    public static DateTime FifteenMinRthBucketStartUtc(DateTime utcTime)
+    {
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        var sessionOpenEastern = eastern.Date.AddHours(9).AddMinutes(30);
+        var minutesSinceOpen = Math.Max(0, (eastern - sessionOpenEastern).TotalMinutes);
+        var bucketIndex = (int)Math.Floor(minutesSinceOpen / 15);
+        var bucketStartEastern = sessionOpenEastern.AddMinutes(bucketIndex * 15);
+        return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(bucketStartEastern, DateTimeKind.Unspecified), EasternZone);
+    }
+
     // Groups hourly (or any intraday) candles into one bar per ET calendar day — same rule as
     // chart.html's aggregateToDaily (Open = first bar's open, Close = last bar's close, High/Low
     // = extremes across the day). Used by the daily-bounce-off-SMA20 analysis (ChartPanel), which

@@ -90,6 +90,9 @@ public class SimulatedChartPanel : Panel
                 // forming candle's width — also enabled on the live chart's own 15m RTH panel.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerEdgeMarkers();");
 
+                // Light gray fill between the bands — per explicit request, panel 2 (15m RTH) only.
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
+
                 // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
                 // arms DZ/SZ itself), but the mirrored copy is still independently selectable/
                 // deletable there, and that deletion needs to reach C# to relay to the sibling.
@@ -124,6 +127,7 @@ public class SimulatedChartPanel : Panel
     // pan/zoom state would stick and get reapplied to the new day's candles, visually misplacing
     // them (e.g. the new day's 9:30 candle landing wherever the old view's edge used to be).
     // Stepping ◀/▶ within the same day must NOT call this — that's what preserves pan/zoom there.
+
     public async Task ResetViewForNewDayAsync()
     {
         if (_readyTcs != null) await _readyTcs.Task;
@@ -139,7 +143,7 @@ public class SimulatedChartPanel : Panel
     //
     // visibleDays matches the live chart's own default zoom (7 for the 1h panel, 3 for the 15m
     // ones — see ChartPanel.LoadHistoryAsync) so the simulator reads the same as a real chart.
-    public async Task CargarHastaPasoAsync(List<CandleData> candles, int visibleDays)
+    public async Task CargarHastaPasoAsync(List<CandleData> candles, int visibleDays, DateOnly simDate)
     {
         var myGeneration = ++_renderGeneration;
 
@@ -153,6 +157,15 @@ public class SimulatedChartPanel : Panel
             _visibleDaysSet = true;
         }
         if (myGeneration != _renderGeneration) return;
+
+        // The literal fake-epoch encoding of simDate's own Y/M/D (no timezone conversion needed —
+        // chart.html's dayStartOf() just extracts the date digits back out, so this only has to
+        // carry the right digits, not a real instant). See configureSimDay's own comment for why
+        // the Bollinger open-snapshot capture needs this instead of inferring "today" from candles.
+        var simDayFakeEpoch = new DateTimeOffset(simDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).ToUnixTimeSeconds();
+        await _webView.CoreWebView2.ExecuteScriptAsync($"configureSimDay({simDayFakeEpoch});");
+        if (myGeneration != _renderGeneration) return;
+
         await RunScriptAsync("loadHistory", candles);
         if (myGeneration != _renderGeneration) return; // a newer step/jump landed while this one was still sending
 
@@ -160,27 +173,37 @@ public class SimulatedChartPanel : Panel
             EvaluateNewlyClosedCandles(candles);
 
         if (myGeneration != _renderGeneration) return;
-        await DrawPrevDayCloseAsync(candles);
+        await DrawPrevDayCloseAsync(candles, myGeneration, simDate);
     }
 
     // Dashed red reference line at the previous day's close — ported from ChartPanel's identical
-    // copy. "Today" here is the most recent date present in `candles` (the simulated day at the
-    // current step), not the real wall-clock date — so this stays correct no matter which
-    // historical day is being replayed. Safe to call every step (markPrevDayClose in chart.html
-    // replaces the previous line instead of accumulating).
-    private async Task DrawPrevDayCloseAsync(List<CandleData> candles)
+    // copy. `simDate` is the actual replayed day (passed down from SimulatorForm's own _simDate),
+    // NOT inferred from the candle list's own max date — inferring it that way used to break right
+    // at 9:30:00 open on RTH-only panels (Fifteen_RTH/Hourly15): at that exact instant, before any
+    // of today's RTH candle exists yet, the "most recent date present" in `candles` was still
+    // YESTERDAY, so "the day before that" silently fell back two days instead of one (e.g. showing
+    // 09-02's close instead of 09-03's), self-correcting only once the next step produced today's
+    // first RTH candle. Using the real simDate sidesteps that boundary case entirely.
+    //
+    // Takes the caller's generation number and re-checks it right before actually sending the
+    // script — CargarHastaPasoAsync already checks it before calling this, but that only guards
+    // against STARTING a stale draw, not against one that already started (e.g. from a previous
+    // simulated day's still-in-flight render) landing out of order and overwriting a newer,
+    // correct one.
+    private async Task DrawPrevDayCloseAsync(List<CandleData> candles, int myGeneration, DateOnly simDate)
     {
         if (candles.Count == 0 || _webView.CoreWebView2 == null) return;
 
-        var byDate = candles
+        var prior = candles
             .Select(c => (Candle: c, Date: DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone))))
+            .Where(x => x.Date < simDate)
             .ToList();
-        var simDay = byDate.Max(x => x.Date);
-        var prior = byDate.Where(x => x.Date < simDay).ToList();
         if (prior.Count == 0) return;
 
         var prevDate = prior.Max(x => x.Date);
         var lastBar = prior.Where(x => x.Date == prevDate).OrderBy(x => x.Candle.Time).Last().Candle;
+
+        if (myGeneration != _renderGeneration) return;
 
         var timeArg  = ToFakeUtcEpochSeconds(lastBar.Time);
         var priceStr = lastBar.Close.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -202,11 +225,53 @@ public class SimulatedChartPanel : Panel
     // forming right when the trade opens), same convention MarkStrikeAsync/the premarket line
     // already use, and computes the candle-width span itself from the chart's own bar spacing.
     // Accumulates, one segment per trade, never auto-removed.
-    public async Task MarkEntrySpotAsync(decimal price)
+    // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
+    // Call, below for a Put) — omitted for the open call.
+    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr});");
+        var isCloseStr = isClose ? "true" : "false";
+        var isCallStr = isCall ? "true" : "false";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr});");
+    }
+
+    // Blue premarket spot-price line — panels 1 (Hourly15) and 2 (Fifteen_RTH) only, per explicit
+    // request, same startPreMarketLine/updatePreMarketLine primitive the live chart uses.
+    // anchorFakeEpoch is the simulated day's own 9:30 ET open (see ToFakeUtcEpochSeconds), pinning
+    // the line's left edge there instead of wherever the last-loaded candle happens to be.
+    public async Task StartPreMarketLineAsync(long anchorFakeEpoch)
+    {
+        // Awaits WebView2 readiness first — called from LoadSelectedDay right after construction/
+        // a fresh day load, when InitializeAsync's own CoreWebView2 setup can still be in flight.
+        // Without this, the CoreWebView2-null check below just silently no-ops, arming never
+        // actually happens, and every later updatePreMarketLineAuto call is a no-op forever (its
+        // own JS-side guard requires _armed) — confirmed live as "premarket line never appears".
+        if (_readyTcs != null) await _readyTcs.Task;
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({anchorFakeEpoch});");
+    }
+
+    // updatePreMarketLineAuto computes the "Expuesto" direction JS-side (against whatever
+    // recalculateBollinger() already has for THIS panel), so the Simulator doesn't need its own
+    // copy of the live chart's GetBollingerDirection math in C#.
+    public async Task UpdatePreMarketLineAsync(decimal price)
+    {
+        if (_readyTcs != null) await _readyTcs.Task;
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLineAuto({priceStr});");
+    }
+
+    // "Spot fuera de BB" red label — panel 15m RTH only, RTH hours only, per explicit request
+    // ("igual que en tab charts panel 2"). Same JS-side Bollinger comparison as
+    // UpdatePreMarketLineAsync's "Expuesto" — see computeBollingerExposedDirection.
+    public async Task UpdateSpotOutsideBBAsync(decimal price)
+    {
+        if (_readyTcs != null) await _readyTcs.Task;
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateSpotOutsideBBAuto({priceStr});");
     }
 
     // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,

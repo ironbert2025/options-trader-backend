@@ -595,6 +595,14 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"setAllTimeHighVisible({(show ? "true" : "false")});");
     }
 
+    // Independent from SetAllTimeHighVisibleAsync above (the toolbar checkbox) — forces the ATH
+    // line to show regardless of price proximity, driven by Form1's status-bar "ATH: xxx" label.
+    public async Task SetAllTimeHighForceVisibleAsync(bool force)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setAllTimeHighForceVisible({(force ? "true" : "false")});");
+    }
+
     // Finviz analyst Target Price text, top-right of this panel (see FinvizTargetPriceService.cs
     // and TwoPanelChartsControl, the only caller — panel 2/15m RTH, individual stocks only).
     // price: null hides the label instead of showing a stale/wrong value (fetch failed, or the
@@ -659,14 +667,18 @@ public class ChartPanel : Panel
     // is only passed when REPLAYING a persisted trade from a previous day (see
     // ReplayPersistedEntryMarkersAsync below) — omitted, it anchors to whichever candle is
     // currently forming, same as the original live-tick call site always did.
-    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null)
+    // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
+    // Call, below for a Put) — omitted for the open call and for replayed still-open trades.
+    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null, string color = "#ffffff", bool isClose = false, bool isCall = false)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var timeArg = entryTime.HasValue
             ? new DateTimeOffset(DateTime.SpecifyKind(entryTime.Value, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString()
             : "undefined";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg});");
+        var isCloseStr = isClose ? "true" : "false";
+        var isCallStr = isCall ? "true" : "false";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr});");
     }
 
     // Redraws the white entry-spot line for every trade still open on THIS symbol (per
@@ -680,7 +692,7 @@ public class ChartPanel : Panel
         if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Fifteen_Full) return;
         var openTrades = OpenTradesStore.Load().Where(t => t.Symbol == _symbol && t.EntrySpotPrice > 0m);
         foreach (var trade in openTrades)
-            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime);
+            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime, trade.EntrySpotColor);
     }
 
     // Re-evaluated on every live tick (all 3 panels) — purely visual, flips the ATH line green
@@ -2612,6 +2624,9 @@ public class ChartPanel : Panel
                 // forming candle's width — same marker the Simulator already draws, per explicit
                 // request extending it to the live app.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerEdgeMarkers();");
+
+                // Light gray fill between the bands — per explicit request, panel 2 (15m RTH) only.
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
 
                 if (!_webMessageHandlerAttached)
                 {
