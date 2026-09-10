@@ -50,7 +50,7 @@ public class SimulatorForm : Form
     // ticks/sec rate — per explicit request, so both the options chain and the candle rendering
     // (already driven off the same step.Time) advance exactly as fast as the original recording
     // did, gaps and all, with no cap even for a large recording gap.
-    private bool _realTimeMode;
+    private bool _realTimeMode = true; // default speed selection, per explicit request
     private readonly GroupBox _grpSpeed = new() { Text = "Speed", Location = new Point(1050, 4), Size = new Size(110, 114) };
 
     // Independent chart-only clock for Real Time Play — walks _intradayCandles (the raw, roughly
@@ -329,16 +329,44 @@ public class SimulatorForm : Form
         UpdateStepButtons();
     }
 
+    // Wall-clock anchor for Real Time drift correction — see TickPlayTimer_Tick's own comment.
+    // Reset every time the tick clock (re)starts, so "elapsed" always means "since THIS Play/
+    // resume", not across a Pause.
+    private DateTime _realTimeWallClockStart;
+    private DateTime _realTimeDataStart;
+
     // Seeds _tickPlayIndex at (or just after) the current step's own time, so Real Time Play
     // resumes the candle clock from wherever the options-step clock currently is instead of
     // jumping back to the start of the day, then arms the first tick-to-tick interval.
     private void StartTickPlayClock()
     {
         if (_currentIndex < 0) return;
-        var uptoUtc = _steps[_currentIndex].Time;
-        _tickPlayIndex = _intradayCandles.FindLastIndex(c => c.Time <= uptoUtc);
+        _tickPlayIndex = FindClosestIntradayCandleIndex(_steps[_currentIndex].Time);
+        _realTimeWallClockStart = DateTime.UtcNow;
+        _realTimeDataStart = _tickPlayIndex >= 0 ? _intradayCandles[_tickPlayIndex].Time : _steps[_currentIndex].Time;
         ApplyTickPlayTimerInterval();
         _tickPlayTimer.Start();
+    }
+
+    // Shared by StartTickPlayClock and StepTick's own seeding. FindLastIndex(<=) alone can badly
+    // misfire here: _steps' times are truncated to the second (no milliseconds), while
+    // _intradayCandles' raw ticks carry real sub-second timestamps (e.g. "09:30:00.166") — the
+    // exact instant uptoUtc lands on (say 13:30:00.000) is almost never an exact tick, and if
+    // today's first tick is a moment AFTER it (166ms later), <= excludes it entirely, silently
+    // falling back to the last context day's closing tick — hours or days earlier — which then
+    // made the "gap to the next tick" span the whole overnight/multi-day hole instead of a normal
+    // few seconds. Confirmed live: seeded index landed on stale context data, Interval computed as
+    // 62,981,282ms (~17.5 hours). Picking whichever neighbor (floor or ceiling) is actually closer
+    // to uptoUtc fixes this regardless of which side of a tick uptoUtc falls on.
+    private int FindClosestIntradayCandleIndex(DateTime uptoUtc)
+    {
+        var floorIdx = _intradayCandles.FindLastIndex(c => c.Time <= uptoUtc);
+        var ceilIdx  = _intradayCandles.FindIndex(c => c.Time >= uptoUtc);
+        if (floorIdx < 0) return ceilIdx;
+        if (ceilIdx < 0) return floorIdx;
+        var floorDiff = (uptoUtc - _intradayCandles[floorIdx].Time).Duration();
+        var ceilDiff  = (_intradayCandles[ceilIdx].Time - uptoUtc).Duration();
+        return ceilDiff < floorDiff ? ceilIdx : floorIdx;
     }
 
     // Same "real recorded gap, no cap" idea as ApplyPlayTimerInterval, but walking
@@ -350,10 +378,26 @@ public class SimulatorForm : Form
         _tickPlayTimer.Interval = Math.Max(1, gapMs);
     }
 
+    // A WinForms Timer's own imprecision plus any UI-thread work between ticks (repainting the
+    // options grid, WebView2 IPC round-trips, etc.) both delay when this callback actually fires —
+    // blindly advancing by exactly 1 index per fire lets that delay accumulate into a growing,
+    // permanent lag with no correlation to the real wall clock (confirmed live: "se ve en cámara
+    // lenta"). Instead, resync against ACTUAL elapsed wall-clock time every tick — jump forward
+    // however many ticks SHOULD have elapsed by now, not just 1, so a late-firing timer catches
+    // back up instead of compounding drift.
     private void TickPlayTimer_Tick(object? sender, EventArgs e)
     {
         if (_tickPlayIndex >= _intradayCandles.Count - 1) { _tickPlayTimer.Stop(); return; }
-        _tickPlayIndex++;
+
+        var targetDataTime = _realTimeDataStart + (DateTime.UtcNow - _realTimeWallClockStart);
+        var newIndex = _tickPlayIndex;
+        while (newIndex + 1 < _intradayCandles.Count && _intradayCandles[newIndex + 1].Time <= targetDataTime)
+            newIndex++;
+        // Guarantee forward progress even if the wall clock hasn't caught up to the next tick yet
+        // (e.g. this fired slightly early) — still show something moving rather than sit idle.
+        if (newIndex == _tickPlayIndex) newIndex++;
+        _tickPlayIndex = newIndex;
+
         RenderChartsUpToTime(_intradayCandles[_tickPlayIndex].Time);
         ApplyTickPlayTimerInterval();
     }
@@ -1218,7 +1262,7 @@ public class SimulatorForm : Form
             // Not seeded yet (e.g. right after Cargar, before any Real Time Play) — start from
             // wherever the options-step clock currently is, same seeding StartTickPlayClock uses.
             var uptoUtc = _currentIndex >= 0 ? _steps[_currentIndex].Time : _intradayCandles[0].Time;
-            _tickPlayIndex = _intradayCandles.FindLastIndex(c => c.Time <= uptoUtc);
+            _tickPlayIndex = FindClosestIntradayCandleIndex(uptoUtc);
             if (_tickPlayIndex < 0) _tickPlayIndex = 0;
         }
 

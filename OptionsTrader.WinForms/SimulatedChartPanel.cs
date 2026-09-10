@@ -127,6 +127,7 @@ public class SimulatedChartPanel : Panel
     // pan/zoom state would stick and get reapplied to the new day's candles, visually misplacing
     // them (e.g. the new day's 9:30 candle landing wherever the old view's edge used to be).
     // Stepping ◀/▶ within the same day must NOT call this — that's what preserves pan/zoom there.
+
     public async Task ResetViewForNewDayAsync()
     {
         if (_readyTcs != null) await _readyTcs.Task;
