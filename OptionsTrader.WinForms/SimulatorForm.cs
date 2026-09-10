@@ -1347,6 +1347,15 @@ public class SimulatorForm : Form
                 _ = _rthChart.UpdatePreMarketLineAsync(todaysFirstRthCandle.Open);
             }
         }
+
+        // "Spot fuera de BB" red label — panel 2 (15m RTH) only, RTH hours only, per explicit
+        // request ("igual que en tab charts panel 2"). intradayUpToNow's own last tick is the
+        // current simulated spot; no context-day contamination risk here (unlike the premarket
+        // case above) since today's RTH ticks are always the most recent chronologically once RTH
+        // has started.
+        var rthTimeOfDay = EasternTime(uptoUtc).TimeOfDay;
+        if (rthTimeOfDay >= new TimeSpan(9, 30, 0) && rthTimeOfDay < new TimeSpan(16, 0, 0) && intradayUpToNow.Count > 0)
+            _ = _rthChart.UpdateSpotOutsideBBAsync(intradayUpToNow[^1].Close);
     }
 
     // ----- Demo trades (practice only — separate from real/demo trades in Form1) -----

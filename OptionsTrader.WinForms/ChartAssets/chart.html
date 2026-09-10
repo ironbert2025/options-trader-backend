@@ -2725,6 +2725,12 @@
     forceRepaint();
   }
 
+  // Simulator convenience — reuses computeBollingerExposedDirection (already wired for the
+  // premarket "Expuesto" label) instead of duplicating the GetBollingerDirection comparison in C#.
+  function updateSpotOutsideBBAuto(price) {
+    updateSpotOutsideBB(computeBollingerExposedDirection(price) !== null);
+  }
+
   // "Δ0.42" — sits right next to "BB" (bottom-left, offset further over). Shown while price is
   // still between the widening Bollinger Bands (see ChartPanel.EvaluateBollingerWideningLabel) —
   // the live distance to whichever band is closer. Hidden the moment BB itself hides, or price

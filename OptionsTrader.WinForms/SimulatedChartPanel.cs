@@ -263,6 +263,17 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLineAuto({priceStr});");
     }
 
+    // "Spot fuera de BB" red label — panel 15m RTH only, RTH hours only, per explicit request
+    // ("igual que en tab charts panel 2"). Same JS-side Bollinger comparison as
+    // UpdatePreMarketLineAsync's "Expuesto" — see computeBollingerExposedDirection.
+    public async Task UpdateSpotOutsideBBAsync(decimal price)
+    {
+        if (_readyTcs != null) await _readyTcs.Task;
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updateSpotOutsideBBAuto({priceStr});");
+    }
+
     // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,
     // per explicit request. The underlying calculation keeps running either way; this only toggles
     // the draw.
