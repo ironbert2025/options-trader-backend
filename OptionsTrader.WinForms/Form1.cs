@@ -24,7 +24,7 @@ file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose 
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
     DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m,
     int? ReinforcementGroupId = null, bool IsReinforcementResult = false,
-    string EntrySpotColor = "#ffffff", Guid? LocalId = null);
+    string EntrySpotColor = "#ffffff", Guid? LocalId = null, string? EntryImagePath = null);
 
 public partial class Form1 : Form
 {
@@ -2644,6 +2644,16 @@ public partial class Form1 : Form
 
         if (!isSimulation)
             _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
+        else
+        {
+            // Simulation trades still skip the S3 upload (see UploadEntryChartSnapshotAsync's own
+            // comment), but the entry image is kept locally on the row's tag — per explicit
+            // request, a same-day 0DTE simulation trade that expires unattended pushes BOTH the
+            // entry and close snapshots to Telegram (see CloseTradeRowAsync), and needs this one.
+            var entryImagePath = await SaveTradeChartSnapshotAsync(symbol, rowType, "Entry");
+            if (newRow.Tag is TradeRowTag tagWithEntryImage)
+                newRow.Tag = tagWithEntryImage with { EntryImagePath = entryImagePath };
+        }
 
         OnTradesUpdatedEvent?.Invoke(symbol);
         return (tradeId, newRow);
@@ -3682,7 +3692,17 @@ public partial class Form1 : Form
         // id, so that gate was silently blocking this push for 100% of trades — an unintended side
         // effect of the bypass, not something anyone actually wanted disabled. Fixed by dropping the
         // gate entirely; the function's own checks (imagePath/bot token) still apply.
-        _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
+        // A same-day (0DTE) Simulation trade that expires unattended (never manually closed) gets
+        // its own richer push instead of the normal single-image one — per explicit request, BOTH
+        // the entry and close snapshots, captioned to make clear it's a Simulation-only expiration
+        // (no real/demo money or API trade involved).
+        var isSameDaySimulationExpiry = isSimulation && closeType == "EXPIRED"
+            && tag != null && tag.ExpirationDate == DateOnly.FromDateTime(tag.EntryTime);
+        if (isSameDaySimulationExpiry)
+            _ = SendSimulationExpiredTelegramPushAsync(symbol, type, strike, entryPrice, exitBid, pnlVal, pnlPctVal,
+                tag!.EntryImagePath, closeChartPath);
+        else
+            _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
         // Simulation trades stop here — the Telegram push above is now the one exception (per
         // explicit request); everything below (TradeLog screenshot, S3 upload, daily-log entry)
@@ -3796,6 +3816,46 @@ public partial class Form1 : Form
             var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, imagePath, caption);
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "TradeClose", DateTime.Now));
+        }
+        catch
+        {
+            // Best-effort — never let a Telegram/network failure affect the already-closed trade.
+        }
+    }
+
+    // Same-day (0DTE) Simulation trade that expired unattended (never manually closed) — per
+    // explicit request, pushes BOTH the entry and close chart snapshots (Telegram has no
+    // multi-photo caption API, so this sends two separate photo messages, entry first) with a
+    // caption that's explicit about this being a Simulation-only expiration, not a real/demo trade.
+    private async Task SendSimulationExpiredTelegramPushAsync(
+        string symbol, string optionType, string strike, decimal entryPrice, decimal exitPrice,
+        decimal pnl, decimal pnlPercent, string? entryImagePath, string? closeImagePath)
+    {
+        try
+        {
+            if (entryImagePath == null && closeImagePath == null) return; // nothing to attach
+
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+
+            var pnlSign = pnl >= 0 ? "+" : string.Empty;
+            var caption =
+                $"⚠️ {symbol} {optionType} {strike} — Trade Simulación EXPIRÓ sin cerrar (0DTE)\n" +
+                $"Entry: {entryPrice:F2}  Exit: {exitPrice:F2}\n" +
+                $"PnL: {pnlSign}{pnl:F2} ({pnlSign}{pnlPercent:F1}%)";
+
+            if (entryImagePath != null)
+            {
+                var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, entryImagePath, caption);
+                if (ok && messageId.HasValue)
+                    TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "SimulationExpired", DateTime.Now));
+            }
+            if (closeImagePath != null)
+            {
+                var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, closeImagePath, caption);
+                if (ok && messageId.HasValue)
+                    TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "SimulationExpired", DateTime.Now));
+            }
         }
         catch
         {
