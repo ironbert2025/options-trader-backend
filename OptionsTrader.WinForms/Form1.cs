@@ -3594,13 +3594,10 @@ public partial class Form1 : Form
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, closeSpotColor, isClose: true, isCall: closeIsCall);
         }
 
-        // Simulation trades stop here — grid/PnL and the white entry/close lines above are all they
-        // get. No screenshot, no S3/Telegram, no daily-log entry — see RecordEntryAsync's matching
-        // isSimulation skip on the entry side.
-        if (isSimulation) return;
-
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
-        // and the Telegram push below, instead of each capturing its own copy.
+        // and the Telegram push below, instead of each capturing its own copy. Simulation trades
+        // get this far too (per explicit request, they now DO push to Telegram on close) even
+        // though they skip everything after the isSimulation gate further down.
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
@@ -3611,6 +3608,12 @@ public partial class Form1 : Form
         // effect of the bypass, not something anyone actually wanted disabled. Fixed by dropping the
         // gate entirely; the function's own checks (imagePath/bot token) still apply.
         _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
+
+        // Simulation trades stop here — the Telegram push above is now the one exception (per
+        // explicit request); everything below (TradeLog screenshot, S3 upload, daily-log entry)
+        // still only applies to real/demo trades — see RecordEntryAsync's matching isSimulation
+        // skip on the entry side (no S3/daily-log there either).
+        if (isSimulation) return;
 
         // Screenshot TradeLog (Trades + Logger section of the form) — scroll the just-closed row
         // into view first, per explicit request, so it's actually visible in the capture even if
