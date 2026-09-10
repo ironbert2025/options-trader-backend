@@ -124,6 +124,16 @@
   let visibleDays = null;
   function configureVisibleDays(days) { visibleDays = days; }
 
+  // Simulator only — the actual replayed day, in the same fake-epoch convention as candle times.
+  // Passed down explicitly instead of inferring "today" from the last loaded candle's date: right
+  // at 9:30:00 open on an RTH-only panel, today's first candle doesn't exist in the data yet, so
+  // "most recent date present" was still yesterday for one render, one step long — confirmed live
+  // to make the Bollinger open-snapshot capture below grab yesterday's data instead of today's,
+  // self-correcting only once the next step produced today's first candle. Optional: stays null
+  // (unused) for the live chart, which has no equivalent ambiguity.
+  let knownSimDay = null;
+  function configureSimDay(fakeEpochSeconds) { knownSimDay = dayStartOf(fakeEpochSeconds); }
+
   // 15m RTH panel only, per explicit request: once today's RTH session has actually started, keep
   // a window whose LEFT edge is FIXED (today's first RTH bar, minus a bit of yesterday's context)
   // while the RIGHT edge grows with each new candle — so the frame doesn't slide as the day goes,
@@ -230,20 +240,12 @@
 
   // Reapplies the default range (refreshing the right-edge margin as new candles arrive) only if
   // the user hasn't manually panned/zoomed since the last time we set it — see userHasInteracted.
-  //
-  // EXCEPTION, per explicit request: panel 2's RTH slide window (rthSlideWindowBars) ALWAYS
-  // reapplies once today's RTH session has started, even after a manual pan/zoom. The user can
-  // still freely move the chart in premarket (and even mid-RTH), but from the next live candle
-  // onward the window resumes following — "from" is a fixed index (today's first RTH bar minus
-  // the configured context) and "to" is always the latest bar, so this isn't a jarring snap: "to"
-  // simply keeps advancing one bar per tick exactly like it would with no interaction at all,
-  // converging on the intended 26-today + context = rthSlideWindowBars view by the 4pm close
-  // regardless of when the user last touched the chart.
+  // Reverted per explicit request: panel 2's RTH slide window used to ALWAYS reapply here even
+  // after a manual pan/zoom, snapping the view back instead of respecting it. Now it behaves like
+  // every other panel — once the user pans/zooms manually, the view stays exactly where they left
+  // it and new candles simply extend the series to the right (Lightweight Charts' own autoscale
+  // keeps the price axis from clipping them), instead of the window auto-sliding underneath them.
   function reapplyVisibleRangeIfLive() {
-    if (rthSlideWindowBars) {
-      const slideRange = computeRthSlideRange(displaySeries());
-      if (slideRange) { applyVisibleRange(false); return; }
-    }
     if ((!visibleDays && !rthSlideWindowBars && !initialBarCount) || userHasInteracted) return;
     applyVisibleRange(false);
   }
@@ -1609,7 +1611,11 @@
   // otherwise silently reset a user's "hidden"/"far away" state back to visible.
   let athVisible = true;
   let athNear = false;
-  function athComputeVisible() { return athVisible && athNear; }
+  // Independent force-show, driven by Form1's status-bar "ATH: xxx" label (separate from the
+  // toolbar checkbox above) — per explicit request, this one ignores proximity entirely and just
+  // shows the line regardless of athNear, without touching the checkbox's own on/off state.
+  let athForceVisible = false;
+  function athComputeVisible() { return athForceVisible || (athVisible && athNear); }
 
   function markAllTimeHigh(price) {
     if (athPriceLine) candleSeries.removePriceLine(athPriceLine);
@@ -1632,6 +1638,13 @@
   // every tick from C#. Re-applies the combined visibility (checkbox AND proximity) each time.
   function updateAllTimeHighNear(near) {
     athNear = near;
+    if (!athPriceLine) return;
+    const visible = athComputeVisible();
+    athPriceLine.applyOptions({ lineVisible: visible, axisLabelVisible: visible });
+  }
+
+  function setAllTimeHighForceVisible(force) {
+    athForceVisible = force;
     if (!athPriceLine) return;
     const visible = athComputeVisible();
     athPriceLine.applyOptions({ lineVisible: visible, axisLabelVisible: visible });
@@ -1918,7 +1931,7 @@
   // which is what previously made the line stretch across most of the visible chart instead of
   // sitting over just the one candle). Accumulates, one segment per trade opened — never removed.
   class EntrySpotLinePrimitive {
-    constructor() { this._lines = []; this._chart = null; } // [{ time, price }, ...]
+    constructor() { this._lines = []; this._chart = null; } // [{ time, price, color, isClose, isCall }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1941,12 +1954,26 @@
                   // entry candle itself, and the space where the next (future) one will form.
                   const x1 = (centerXRaw - barSpacing * 1.5) * scope.horizontalPixelRatio;
                   const x2 = (centerXRaw + barSpacing * 1.5) * scope.horizontalPixelRatio;
-                  ctx.strokeStyle = '#ffffff';
+                  ctx.strokeStyle = l.color || '#ffffff';
                   ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                   ctx.beginPath();
                   ctx.moveTo(x1, y * scope.verticalPixelRatio);
                   ctx.lineTo(x2, y * scope.verticalPixelRatio);
                   ctx.stroke();
+
+                  // "C" (close) marker — per explicit request, only on the CLOSE line, never the
+                  // open one. Sits just past the line's right end: above for a Call, below for a
+                  // Put, same "C" glyph convention PrevDayCloseLinePrimitive already uses.
+                  if (l.isClose) {
+                    ctx.fillStyle = l.color || '#ffffff';
+                    ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = l.isCall ? 'bottom' : 'top';
+                    const labelY = l.isCall
+                      ? y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio
+                      : y * scope.verticalPixelRatio + 2 * scope.verticalPixelRatio;
+                    ctx.fillText('C', x2 + 4 * scope.horizontalPixelRatio, labelY);
+                  }
                 });
               });
             }
@@ -1969,7 +1996,13 @@
   // it, same fallback HLinePrimitive uses, since a raw C# timestamp essentially never lands on an
   // exact candle boundary. This is what lets BOTH entry lines show (yesterday's and today's) when a
   // trade opened yesterday is still open today.
-  function markEntrySpot(price, time) {
+  // color: per explicit request, each TRADE (not each line) gets one color assigned when it opens
+  // — both its open and close line share that color — alternating white/yellow per trade across
+  // the whole session, so consecutive trades' open/close pairs are visually distinguishable from
+  // each other. Defaults to white for any caller that doesn't pass one (old persisted trades).
+  // isClose/isCall: per explicit request, the CLOSE line only (never open) gets a "C" label just
+  // past its right end — above for a Call, below for a Put (see EntrySpotLinePrimitive.draw()).
+  function markEntrySpot(price, time, color, isClose, isCall) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
     let anchorTime = allCandles[allCandles.length - 1].time;
@@ -1980,11 +2013,13 @@
       }
       anchorTime = floor ?? allCandles[0].time;
     }
-    // Dedup by (anchorTime, price) — ReplayPersistedEntryMarkersAsync calls this again on every
-    // LoadHistoryAsync (e.g. reopening the Live Chart window), which would otherwise push a fresh
-    // duplicate segment each time instead of just re-establishing the same one.
-    const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price);
-    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price });
+    // Dedup by (anchorTime, price, isClose) — ReplayPersistedEntryMarkersAsync calls this again on
+    // every LoadHistoryAsync (e.g. reopening the Live Chart window), which would otherwise push a
+    // fresh duplicate segment each time instead of just re-establishing the same one. isClose is
+    // part of the key so an open and a close landing on the same candle/price (rare, but possible)
+    // don't get treated as the same line and silently drop the close's "C" label.
+    const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price && !!l.isClose === !!isClose);
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall });
     forceRepaint();
   }
 
@@ -2082,6 +2117,23 @@
     preMarketLinePrimitive._price = price;
     preMarketLinePrimitive._exposed = exposed || null;
     forceRepaint();
+  }
+
+  // 'above'/'below'/null — whether price has broken outside THIS panel's own Bollinger Band(20,2),
+  // reusing whatever recalculateBollinger() already computed (see lastBollingerUpper/Lower) instead
+  // of duplicating that math in C#. Same "exposed" semantics ChartPanel.GetBollingerDirection uses
+  // for the live chart's own premarket line.
+  function computeBollingerExposedDirection(price) {
+    if (lastBollingerUpper == null || lastBollingerLower == null) return null;
+    if (price > lastBollingerUpper) return 'above';
+    if (price < lastBollingerLower) return 'below';
+    return null;
+  }
+
+  // Simulator convenience — same call site as updatePreMarketLine, minus having to separately
+  // compute/pass the exposed direction from C#.
+  function updatePreMarketLineAuto(price) {
+    updatePreMarketLine(price, computeBollingerExposedDirection(price));
   }
 
   // ---- Arrow tool: line + arrowhead between 2 clicks — red if the 1st click is ABOVE (higher
@@ -2673,6 +2725,12 @@
     forceRepaint();
   }
 
+  // Simulator convenience — reuses computeBollingerExposedDirection (already wired for the
+  // premarket "Expuesto" label) instead of duplicating the GetBollingerDirection comparison in C#.
+  function updateSpotOutsideBBAuto(price) {
+    updateSpotOutsideBB(computeBollingerExposedDirection(price) !== null);
+  }
+
   // "Δ0.42" — sits right next to "BB" (bottom-left, offset further over). Shown while price is
   // still between the widening Bollinger Bands (see ChartPanel.EvaluateBollingerWideningLabel) —
   // the live distance to whichever band is closer. Hidden the moment BB itself hides, or price
@@ -2968,8 +3026,27 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const ts = self._chart.timeScale();
+                // Same snap-to-nearest-real-candle fallback used by PrevDayCloseLinePrimitive/
+                // RectGrisPrimitive/HLine — a click's time (from subscribeClick's coordinateToTime
+                // fallback when param.time is undefined, e.g. a click that lands between bars) can
+                // be a value that doesn't land on a loaded bar, making timeToCoordinate return null
+                // (or throw) even though the click itself was perfectly valid. Without this, the
+                // label gets pushed into _labels fine (button correctly disarms) but silently never
+                // renders — confirmed live as "Text tool arms/disarms normally, nothing appears."
+                const safeX = (t) => {
+                  try {
+                    const x = safeTimeToCoordinate(ts, t);
+                    if (x != null) return x;
+                  } catch { /* fall through to snap */ }
+                  if (allCandles.length === 0) return null;
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= t) { floor = allCandles[i].time; break; }
+                  }
+                  try { return safeTimeToCoordinate(ts, floor ?? allCandles[0].time); } catch { return null; }
+                };
                 self._labels.forEach(l => {
-                  const x = safeTimeToCoordinate(ts, l.time);
+                  const x = safeX(l.time);
                   const y = candleSeries.priceToCoordinate(l.price);
                   if (x == null || y == null) return;
 
@@ -3030,7 +3107,17 @@
     const approxCharsPerLine = Math.max(1, Math.floor(ClickTextMaxWidthCss / 7));
     for (let i = clickTextPrimitive._labels.length - 1; i >= 0; i--) {
       const l = clickTextPrimitive._labels[i];
-      const x = safeTimeToCoordinate(ts, l.time);
+      // Same snap-to-nearest-real-candle fallback the draw() call uses — without it, a label
+      // placed at a time that doesn't land on a loaded bar would render fine (draw() already
+      // snaps) but never be selectable/deletable here.
+      let x = safeTimeToCoordinate(ts, l.time);
+      if (x == null && allCandles.length > 0) {
+        let floor = null;
+        for (let j = allCandles.length - 1; j >= 0; j--) {
+          if (allCandles[j].time <= l.time) { floor = allCandles[j].time; break; }
+        }
+        x = safeTimeToCoordinate(ts, floor ?? allCandles[0].time);
+      }
       const y = candleSeries.priceToCoordinate(l.price);
       if (x == null || y == null) continue;
       const words = l.text.split(/\s+/).filter(w => w.length > 0);
@@ -3311,6 +3398,11 @@
   // ---- Bollinger Bands overlay (optional — only enabled on panels that call configureBollinger) ----
 
   let bollingerConfig = null; // { period, mult }
+  // Stashed by recalculateBollinger() — read by computeBollingerExposedDirection() (Simulator's
+  // premarket-line "Expuesto" indicator) instead of duplicating the Bollinger math in C#, since
+  // it's already computed here every cycle anyway.
+  let lastBollingerUpper = null;
+  let lastBollingerLower = null;
   let bollingerSeries = null; // { upper, middle, lower }
 
   // Panel 2 (15m RTH), both Simulator and Live Chart: white markers over the CURRENT Bollinger
@@ -3327,6 +3419,61 @@
   // even while hidden (cheap, and means it's already up to date the moment it's shown again).
   let bollingerEdgeMarkersVisible = true;
   function setBollingerEdgeMarkersVisible(show) { bollingerEdgeMarkersVisible = show; forceRepaint(); }
+
+  // Panel 2 (15m RTH) only, both Simulator and Live Chart, per explicit request: a light gray fill
+  // between the upper and lower Bollinger bands, so the band's width reads at a glance instead of
+  // having to trace two separate lines. Enabled via enableBollingerFill(), same convention as
+  // enableBollingerEdgeMarkers() above.
+  let bollingerFillEnabled = false;
+  function enableBollingerFill() { bollingerFillEnabled = true; }
+
+  class BollingerFillPrimitive {
+    constructor() { this._upperPoints = []; this._lowerPoints = []; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              try {
+                if (!self._chart || self._upperPoints.length === 0) return;
+                target.useBitmapCoordinateSpace(scope => {
+                  const ctx = scope.context;
+                  const ts = self._chart.timeScale();
+                  ctx.beginPath();
+                  let started = false;
+                  for (let i = 0; i < self._upperPoints.length; i++) {
+                    const p = self._upperPoints[i];
+                    const x = safeTimeToCoordinate(ts, p.time);
+                    const y = candleSeries.priceToCoordinate(p.price);
+                    if (x == null || y == null) continue;
+                    const px = x * scope.horizontalPixelRatio, py = y * scope.verticalPixelRatio;
+                    if (!started) { ctx.moveTo(px, py); started = true; } else { ctx.lineTo(px, py); }
+                  }
+                  for (let i = self._lowerPoints.length - 1; i >= 0; i--) {
+                    const p = self._lowerPoints[i];
+                    const x = safeTimeToCoordinate(ts, p.time);
+                    const y = candleSeries.priceToCoordinate(p.price);
+                    if (x == null || y == null) continue;
+                    ctx.lineTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  }
+                  if (!started) return;
+                  ctx.closePath();
+                  ctx.fillStyle = 'rgba(150, 150, 150, 0.12)';
+                  ctx.fill();
+                });
+              } catch { /* never let a draw failure kill the pane's render loop */ }
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const bollingerFillPrimitive = new BollingerFillPrimitive();
+  let bollingerFillAttached = false;
 
   // Each band's marker is a 2-point segment (previous candle -> forming candle), NOT a fixed-width
   // horizontal mark — so its slope visually shows the band opening outward, moving sideways, or
@@ -3373,6 +3520,81 @@
   const bollingerEdgeMarkerPrimitive = new BollingerEdgeMarkerPrimitive();
   let bollingerEdgeMarkerAttached = false;
 
+  // Frozen "at the open" snapshot of the SAME 2-point sloped segment the live white marker above
+  // draws (previous candle -> 9:30 candle) — captured once per day, the moment the day's first RTH
+  // candle appears (per explicit request, to compare the band's slope in-session against whatever
+  // its actual angle was at the open, on both bands). Never moves again for the rest of the
+  // session, unlike the live marker which re-anchors to the last 2 candles on every recalculation.
+  let openBandSnapshot = null; // { day, upper:{anchor,prev,curr}, lower:{anchor,prev,curr} } — all {time,price}
+
+  class BollingerOpenSnapshotPrimitive {
+    constructor() { this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              // Wrapped in try/catch — an uncaught exception here (inside a Series Primitive's
+              // draw(), invoked synchronously from forceRepaint()'s candleSeries.applyOptions({}))
+              // was found to permanently freeze Lightweight Charts' internal render loop for the
+              // WHOLE pane (all series/primitives, not just this one) once thrown — confirmed live
+              // in the Simulator, where every candle/marker froze mid-day right around the first
+              // 9:30 capture and never updated again despite stepping continuing normally.
+              try {
+                if (!self._chart || !bollingerEdgeMarkersVisible || !openBandSnapshot) return;
+                target.useBitmapCoordinateSpace(scope => {
+                  const ctx = scope.context;
+                  const ts = self._chart.timeScale();
+                  // The raw prev->curr segment is only 1 candle wide (~2-3px at normal zoom) —
+                  // correct but visually imperceptible, especially dashed. Extend it symmetrically
+                  // by halfWidth px around its own midpoint ALONG THE SAME SLOPE instead of clipping
+                  // to the literal 2 candle positions, so the real computed angle stays intact while
+                  // the line is actually visible (confirmed live: un-extended, it drew every frame
+                  // per diagnostic logging but was indistinguishable from nothing on screen).
+                  const halfWidth = 15;
+                  const drawOne = (segment) => {
+                    if (!segment) return;
+                    // Slope comes from the prior day's own last 2 candles (prev->curr), but the
+                    // marker itself is drawn CENTERED at today's 9:30 candle (anchor) — not at
+                    // yesterday's position. Only the ANGLE is borrowed from yesterday, per explicit
+                    // request; visually it must still sit at the open, matching the original design.
+                    const x1Raw = safeTimeToCoordinate(ts, segment.prev.time);
+                    const x2Raw = safeTimeToCoordinate(ts, segment.curr.time);
+                    const anchorX = safeTimeToCoordinate(ts, segment.anchor.time);
+                    if (x1Raw == null || x2Raw == null || anchorX == null) return;
+                    const y1 = candleSeries.priceToCoordinate(segment.prev.price);
+                    const y2 = candleSeries.priceToCoordinate(segment.curr.price);
+                    const anchorY = candleSeries.priceToCoordinate(segment.anchor.price);
+                    if (y1 == null || y2 == null || anchorY == null) return;
+                    const dx = x2Raw - x1Raw, dy = y2 - y1;
+                    const len = Math.hypot(dx, dy) || 1;
+                    const ux = dx / len, uy = dy / len; // unit vector along yesterday's slope
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo((anchorX - ux * halfWidth) * scope.horizontalPixelRatio, (anchorY - uy * halfWidth) * scope.verticalPixelRatio);
+                    ctx.lineTo((anchorX + ux * halfWidth) * scope.horizontalPixelRatio, (anchorY + uy * halfWidth) * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                  };
+                  drawOne(openBandSnapshot.upper);
+                  drawOne(openBandSnapshot.lower);
+                });
+              } catch { /* never let a draw failure kill the pane's render loop */ }
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const bollingerOpenSnapshotPrimitive = new BollingerOpenSnapshotPrimitive();
+  let bollingerOpenSnapshotAttached = false;
+
   function configureBollinger(period, deviations, middleSolid) {
     bollingerConfig = { period: period, mult: deviations };
     if (!bollingerSeries) {
@@ -3398,6 +3620,8 @@
         bollingerEdgeMarkerPrimitive._upper = null;
         bollingerEdgeMarkerPrimitive._lower = null;
       }
+      lastBollingerUpper = null;
+      lastBollingerLower = null;
       return;
     }
     const upperData = [], midData = [], lowerData = [];
@@ -3416,6 +3640,14 @@
     bollingerSeries.upper.setData(upperData);
     bollingerSeries.middle.setData(midData);
     bollingerSeries.lower.setData(lowerData);
+    lastBollingerUpper = upperData[upperData.length - 1].value;
+    lastBollingerLower = lowerData[lowerData.length - 1].value;
+
+    if (bollingerFillEnabled) {
+      if (!bollingerFillAttached) { candleSeries.attachPrimitive(bollingerFillPrimitive); bollingerFillAttached = true; }
+      bollingerFillPrimitive._upperPoints = upperData.map(d => ({ time: d.time, price: d.value }));
+      bollingerFillPrimitive._lowerPoints = lowerData.map(d => ({ time: d.time, price: d.value }));
+    }
 
     // White edge markers (see enableBollingerEdgeMarkers) — a 2-point segment from the PREVIOUS
     // candle's band value to the forming candle's, re-set every recalculation, so its slope shows
@@ -3430,6 +3662,48 @@
       bollingerEdgeMarkerPrimitive._lower = {
         prev: { time: prevLower.time, price: prevLower.value }, curr: { time: currLower.time, price: currLower.value }
       };
+
+      // Frozen "at the open" snapshot — captured once per day, the moment the day's first RTH
+      // candle appears in upperData/lowerData (panel 2 is RTH-only, so its first entry for a new
+      // day IS the 9:30 candle). Re-runs every recalculation but only actually updates the
+      // snapshot when the day changes, so it stays fixed at whatever the band read the very first
+      // time that candle showed up — not re-captured on every later tick of that same still-
+      // forming candle, and never touched again once the day moves past it.
+      try {
+        // Prefer the explicitly-known simulated day (set via configureSimDay) over inferring it
+        // from the last loaded candle — see configureSimDay's comment for why that inference is
+        // unreliable right at 9:30:00 open. Falls back to the old inference for the live chart,
+        // which never calls configureSimDay.
+        const lastDay = knownSimDay ?? dayStartOf(upperData[upperData.length - 1].time);
+        if (!openBandSnapshot || openBandSnapshot.day !== lastDay) {
+          // Per explicit request: the frozen angle is the PRIOR day's own last 2 candles (right
+          // before ITS close) — i.e. exactly what the live marker was still showing in the instant
+          // before today's first candle existed — NOT prior-day-last vs today-first, which spans
+          // the overnight gap and can show a misleadingly steep angle unrelated to either day's
+          // actual intraday slope.
+          const todayStartIdx = upperData.findIndex(d => dayStartOf(d.time) === lastDay);
+          if (todayStartIdx > 1) {
+            const prevIdx = todayStartIdx - 1, prevPrevIdx = todayStartIdx - 2;
+            // anchor = today's 9:30 candle (where the marker is actually drawn); prev/curr = the
+            // prior day's own last 2 candles (where the SLOPE comes from only — see drawOne).
+            openBandSnapshot = {
+              day: lastDay,
+              upper: {
+                anchor: { time: upperData[todayStartIdx].time, price: upperData[todayStartIdx].value },
+                prev: { time: upperData[prevPrevIdx].time, price: upperData[prevPrevIdx].value },
+                curr: { time: upperData[prevIdx].time, price: upperData[prevIdx].value }
+              },
+              lower: {
+                anchor: { time: lowerData[todayStartIdx].time, price: lowerData[todayStartIdx].value },
+                prev: { time: lowerData[prevPrevIdx].time, price: lowerData[prevPrevIdx].value },
+                curr: { time: lowerData[prevIdx].time, price: lowerData[prevIdx].value }
+              }
+            };
+            if (!bollingerOpenSnapshotAttached) { candleSeries.attachPrimitive(bollingerOpenSnapshotPrimitive); bollingerOpenSnapshotAttached = true; }
+          }
+        }
+      } catch { /* never let the snapshot capture block the rest of recalculateBollinger */ }
+
       forceRepaint();
     }
   }
@@ -3718,6 +3992,7 @@
     historyLoadedOnce = false;
     userHasInteracted = false;
     lastAppliedRange = null;
+    openBandSnapshot = null;
   }
 
   function loadHistory(candles) {

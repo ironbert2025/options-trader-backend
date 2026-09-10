@@ -19,6 +19,7 @@ partial class Form1
         lblStatusUser = new ToolStripStatusLabel();
         lblEarningsDate = new ToolStripStatusLabel();
         lblEarningsRemaining = new ToolStripStatusLabel();
+        lblAllTimeHigh = new ToolStripStatusLabel();
         tabControl = new TabControl();
         tabQuotes = new TabPage();
         tabCharts = new TabPage();
@@ -1630,7 +1631,7 @@ partial class Form1
         //
         // statusStrip1
         //
-        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser, lblEarningsDate, lblEarningsRemaining });
+        statusStrip1.Items.AddRange(new ToolStripItem[] { lblStatusUser, lblEarningsDate, lblEarningsRemaining, lblAllTimeHigh });
         statusStrip1.Location = new Point(0, 578);
         statusStrip1.Name = "statusStrip1";
         statusStrip1.Size = new Size(1181, 22);
@@ -1651,6 +1652,13 @@ partial class Form1
         //
         lblEarningsRemaining.Name = "lblEarningsRemaining";
         lblEarningsRemaining.Size = new Size(0, 17);
+        //
+        // lblAllTimeHigh
+        //
+        lblAllTimeHigh.Name = "lblAllTimeHigh";
+        lblAllTimeHigh.Margin = new Padding(12, 3, 0, 2);
+        lblAllTimeHigh.Size = new Size(0, 17);
+        lblAllTimeHigh.Click += LblAllTimeHigh_Click;
         //
         // Form1
         //
@@ -1704,6 +1712,7 @@ partial class Form1
     private ToolStripStatusLabel lblStatusUser;
     private ToolStripStatusLabel lblEarningsDate;
     private ToolStripStatusLabel lblEarningsRemaining;
+    private ToolStripStatusLabel lblAllTimeHigh;
     private TabControl tabControl;
     private TabPage tabCharts;
     private TabPage tabQuotes;

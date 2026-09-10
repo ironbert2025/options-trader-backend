@@ -52,6 +52,18 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     private static readonly TimeSpan WatchdogCheckInterval = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan WatchdogStaleThreshold = TimeSpan.FromSeconds(60);
 
+    // Per explicit request: only persist raw ticks/L1 ticks to disk from RTH open (9:30 ET)
+    // onward — a connection made before the open (premarket) must still drive the live chart via
+    // RaiseOnNewCandle/RaiseOnLevelOneTick as usual, just not write premarket data to the tick
+    // stores. "Eastern Standard Time" is the Windows TZ id for the whole US Eastern zone
+    // (DST-aware despite the name), same convention used elsewhere in this codebase.
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+    private static bool IsAtOrAfterMarketOpen(DateTime utcTime)
+    {
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc), EasternZone);
+        return eastern.TimeOfDay >= new TimeSpan(9, 30, 0);
+    }
+
     // Completed by HandleMessage when the LOGIN response arrives, so ConnectAsync can wait for
     // an actual server-side ack instead of just firing the LOGIN request and returning immediately
     // — sending ADD before LOGIN is acknowledged gets rejected with "STREAM CONNECTION NOT FOUND".
@@ -489,8 +501,10 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                         };
                         // Phase 1 of the future offline simulator: capture every live price update
                         // (time + price) per symbol/day now, so there's historical tick data to
-                        // replay once that's built (phase 2, later).
-                        TickPriceStore.Append(symbol, candle.Time, candle.Close);
+                        // replay once that's built (phase 2, later). Only from RTH open onward —
+                        // see IsAtOrAfterMarketOpen.
+                        if (IsAtOrAfterMarketOpen(candle.Time))
+                            TickPriceStore.Append(symbol, candle.Time, candle.Close);
 
                         RaiseOnNewCandle(symbol, candle);
                     }
@@ -507,11 +521,13 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                             ? DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime
                             : DateTime.UtcNow;
 
-                        // Save the raw tick regardless (for tomorrow's comparison against real
-                        // prices), but only drive the live chart off it when it looks like a real
-                        // trade price — a missing/mis-mapped field would otherwise show as a
+                        // Save the raw tick (for tomorrow's comparison against real prices), but
+                        // only from RTH open onward — see IsAtOrAfterMarketOpen — and only drive
+                        // the live chart off it when it looks like a real trade price, regardless
+                        // of the save gate; a missing/mis-mapped field would otherwise show as a
                         // price of 0 on the chart.
-                        LevelOneTickStore.Append(symbol, tradeTime, lastPrice);
+                        if (IsAtOrAfterMarketOpen(tradeTime))
+                            LevelOneTickStore.Append(symbol, tradeTime, lastPrice);
                         if (lastPrice > 0)
                             RaiseOnLevelOneTick(symbol, lastPrice, tradeTime);
                     }

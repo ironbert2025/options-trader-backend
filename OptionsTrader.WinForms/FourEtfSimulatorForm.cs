@@ -460,7 +460,7 @@ public class FourEtfSimulatorForm : Form
         {
             var candlesUpToNow = CandlesUpTo(_candlesBySymbol[symbol], stepTime);
             var fifteenMin = CandleAggregation.AggregateToInterval(candlesUpToNow, 15, rthOnly: false);
-            _ = _charts[symbol].CargarHastaPasoAsync(fifteenMin, visibleDays: 3);
+            _ = _charts[symbol].CargarHastaPasoAsync(fifteenMin, visibleDays: 3, _simDate);
 
             var lastTick = candlesUpToNow.Count > 0 ? candlesUpToNow[^1].Time : (DateTime?)null;
             _timeLabels[symbol].Text = lastTick is { } t

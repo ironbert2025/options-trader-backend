@@ -26,6 +26,15 @@ public class DailyChartForm : Form
     private readonly List<CandleData> _dailyCandles;
     private readonly SchwabStreamerClient _historyClient;
 
+    // The currently-forming bar for each tab, kept updated live by UpdateLivePrice (per explicit
+    // request — this popup used to only ever show fully-CLOSED days/hours/15-min bars, with the
+    // in-progress one frozen at whatever it looked like when the window opened, so you couldn't
+    // see it visually approaching a Piso/Techo level in real time). Null until InitAsync loads the
+    // initial data for that tab.
+    private CandleData? _lastDailyCandle;
+    private CandleData? _lastHourlyCandle;
+    private CandleData? _lastFifteenCandle;
+
     public DailyChartForm(string symbol, List<CandleData> dailyCandles, SchwabStreamerClient historyClient)
     {
         _symbol = symbol;
@@ -278,6 +287,7 @@ public class DailyChartForm : Form
     private async Task InitAsync()
     {
         await InitChartTabAsync(_webView, _dailyCandles, _dailyCandles.Count);
+        _lastDailyCandle = _dailyCandles.Count > 0 ? _dailyCandles[^1] : null;
         await EvaluatePisoTechoAsync();
 
         // Blue "current price" line, per explicit request — same primitive the 1h/15m RTH panels'
@@ -317,6 +327,7 @@ public class DailyChartForm : Form
         // 15m RTH panel.
         var hourlyCandles = HourlyCandleStore.Load(_symbol);
         await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20);
+        _lastHourlyCandle = hourlyCandles.Count > 0 ? hourlyCandles[^1] : null;
         await LoadAndWireTLinesAsync(_hourlyWebView, "DailyHora");
 
         // Blue "current price" line, per explicit request — same primitive as the Daily tab's own,
@@ -333,6 +344,7 @@ public class DailyChartForm : Form
         var filtered = CandleAggregation.FilterSession(history, rthOnly: true);
         var fifteenCandles = CandleAggregation.AggregateToInterval(filtered, 15, rthOnly: true);
         await InitChartTabAsync(_fifteenWebView, fifteenCandles, 8, showSmas: false, bollingerMiddleSolid: true);
+        _lastFifteenCandle = fifteenCandles.Count > 0 ? fifteenCandles[^1] : null;
         await LoadAndWireTLinesAsync(_fifteenWebView, "Daily15Min");
 
         // Blue "current price" line, per explicit request — same session-open anchor as the Hora
@@ -600,8 +612,11 @@ public class DailyChartForm : Form
     private static string ToJsStringOrNull(string? value) => value == null ? "null" : $"'{value}'";
 
     // Fed by MultiChartForm (hourlyPanel.OnLiveTick relay) — updates the blue "current price" line
-    // to today's live spot, whether that's a premarket tick or a live RTH price. No-op once this
-    // window is closed/disposed.
+    // to today's live spot, whether that's a premarket tick or a live RTH price. Also now updates
+    // the actual still-forming candle on each tab (per explicit request — this popup used to only
+    // ever show fully-CLOSED days/hours/15-min bars, so you couldn't see the in-progress one
+    // visually approaching a Piso/Techo level in real time). No-op once this window is
+    // closed/disposed.
     public async Task UpdateLivePrice(decimal price)
     {
         if (IsDisposed) return;
@@ -612,6 +627,55 @@ public class DailyChartForm : Form
             await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
         if (_fifteenWebView.CoreWebView2 != null)
             await _fifteenWebView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLine({priceArg}, null);");
+
+        var nowUtc = DateTime.UtcNow;
+
+        // Daily: the bucket itself never changes mid-session (a new day only starts if this
+        // window is left open across midnight, not worth handling), so just extend the existing
+        // bar's High/Low/Close in place.
+        if (_lastDailyCandle != null && _webView.CoreWebView2 != null)
+        {
+            _lastDailyCandle.High  = Math.Max(_lastDailyCandle.High, price);
+            _lastDailyCandle.Low   = Math.Min(_lastDailyCandle.Low, price);
+            _lastDailyCandle.Close = price;
+            await _webView.CoreWebView2.ExecuteScriptAsync($"updateLastCandle({ChartPanel.ToChartJsonPublic(_lastDailyCandle)});");
+        }
+
+        // Hora/15 Min: the bucket DOES change during a session (every hour / every 15 min), so
+        // check whether the live tick still belongs to the currently-tracked bar or starts a new
+        // one — same bucket-start convention AggregateToHourlyRthBuckets/AggregateToInterval use,
+        // so a later full reload always agrees with what was shown live.
+        if (_hourlyWebView.CoreWebView2 != null)
+        {
+            var bucketStart = CandleAggregation.HourlyRthBucketStartUtc(nowUtc);
+            if (_lastHourlyCandle != null && _lastHourlyCandle.Time == bucketStart)
+            {
+                _lastHourlyCandle.High  = Math.Max(_lastHourlyCandle.High, price);
+                _lastHourlyCandle.Low   = Math.Min(_lastHourlyCandle.Low, price);
+                _lastHourlyCandle.Close = price;
+            }
+            else
+            {
+                _lastHourlyCandle = new CandleData { Time = bucketStart, Open = price, High = price, Low = price, Close = price };
+            }
+            await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"updateLastCandle({ChartPanel.ToChartJsonPublic(_lastHourlyCandle)});");
+        }
+
+        if (_fifteenWebView.CoreWebView2 != null)
+        {
+            var bucketStart = CandleAggregation.FifteenMinRthBucketStartUtc(nowUtc);
+            if (_lastFifteenCandle != null && _lastFifteenCandle.Time == bucketStart)
+            {
+                _lastFifteenCandle.High  = Math.Max(_lastFifteenCandle.High, price);
+                _lastFifteenCandle.Low   = Math.Min(_lastFifteenCandle.Low, price);
+                _lastFifteenCandle.Close = price;
+            }
+            else
+            {
+                _lastFifteenCandle = new CandleData { Time = bucketStart, Open = price, High = price, Low = price, Close = price };
+            }
+            await _fifteenWebView.CoreWebView2.ExecuteScriptAsync($"updateLastCandle({ChartPanel.ToChartJsonPublic(_lastFifteenCandle)});");
+        }
     }
 
     // Today's 9:30 AM ET (RTH session open), same "ET digits disguised as UTC" fake epoch every
