@@ -1561,9 +1561,11 @@ public class SimulatorForm : Form
         _openSimTrades.Remove(trade);
 
         // Spot-price line at the moment of close — same color assigned to this trade at open,
-        // same marker as the entry one, panels 2 and 3.
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor);
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor);
+        // same marker as the entry one, panels 2 and 3. isClose: true adds the "C" label (above
+        // for a Call, below for a Put), per explicit request.
+        var closeIsCall = trade.OptionType.Equals("CALL", StringComparison.OrdinalIgnoreCase);
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall);
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");

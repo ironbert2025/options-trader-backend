@@ -1931,7 +1931,7 @@
   // which is what previously made the line stretch across most of the visible chart instead of
   // sitting over just the one candle). Accumulates, one segment per trade opened — never removed.
   class EntrySpotLinePrimitive {
-    constructor() { this._lines = []; this._chart = null; } // [{ time, price, color }, ...]
+    constructor() { this._lines = []; this._chart = null; } // [{ time, price, color, isClose, isCall }, ...]
     attached(param) { this._chart = param.chart; }
     updateAllViews() {}
     paneViews() {
@@ -1960,6 +1960,20 @@
                   ctx.moveTo(x1, y * scope.verticalPixelRatio);
                   ctx.lineTo(x2, y * scope.verticalPixelRatio);
                   ctx.stroke();
+
+                  // "C" (close) marker — per explicit request, only on the CLOSE line, never the
+                  // open one. Sits just past the line's right end: above for a Call, below for a
+                  // Put, same "C" glyph convention PrevDayCloseLinePrimitive already uses.
+                  if (l.isClose) {
+                    ctx.fillStyle = l.color || '#ffffff';
+                    ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = l.isCall ? 'bottom' : 'top';
+                    const labelY = l.isCall
+                      ? y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio
+                      : y * scope.verticalPixelRatio + 2 * scope.verticalPixelRatio;
+                    ctx.fillText('C', x2 + 4 * scope.horizontalPixelRatio, labelY);
+                  }
                 });
               });
             }
@@ -1986,7 +2000,9 @@
   // — both its open and close line share that color — alternating white/yellow per trade across
   // the whole session, so consecutive trades' open/close pairs are visually distinguishable from
   // each other. Defaults to white for any caller that doesn't pass one (old persisted trades).
-  function markEntrySpot(price, time, color) {
+  // isClose/isCall: per explicit request, the CLOSE line only (never open) gets a "C" label just
+  // past its right end — above for a Call, below for a Put (see EntrySpotLinePrimitive.draw()).
+  function markEntrySpot(price, time, color, isClose, isCall) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
     let anchorTime = allCandles[allCandles.length - 1].time;
@@ -1997,11 +2013,13 @@
       }
       anchorTime = floor ?? allCandles[0].time;
     }
-    // Dedup by (anchorTime, price) — ReplayPersistedEntryMarkersAsync calls this again on every
-    // LoadHistoryAsync (e.g. reopening the Live Chart window), which would otherwise push a fresh
-    // duplicate segment each time instead of just re-establishing the same one.
-    const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price);
-    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff' });
+    // Dedup by (anchorTime, price, isClose) — ReplayPersistedEntryMarkersAsync calls this again on
+    // every LoadHistoryAsync (e.g. reopening the Live Chart window), which would otherwise push a
+    // fresh duplicate segment each time instead of just re-establishing the same one. isClose is
+    // part of the key so an open and a close landing on the same candle/price (rare, but possible)
+    // don't get treated as the same line and silently drop the close's "C" label.
+    const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price && !!l.isClose === !!isClose);
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall });
     forceRepaint();
   }
 

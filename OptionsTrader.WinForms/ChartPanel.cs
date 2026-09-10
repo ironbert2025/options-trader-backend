@@ -667,14 +667,18 @@ public class ChartPanel : Panel
     // is only passed when REPLAYING a persisted trade from a previous day (see
     // ReplayPersistedEntryMarkersAsync below) — omitted, it anchors to whichever candle is
     // currently forming, same as the original live-tick call site always did.
-    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null, string color = "#ffffff")
+    // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
+    // Call, below for a Put) — omitted for the open call and for replayed still-open trades.
+    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null, string color = "#ffffff", bool isClose = false, bool isCall = false)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var timeArg = entryTime.HasValue
             ? new DateTimeOffset(DateTime.SpecifyKind(entryTime.Value, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString()
             : "undefined";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)});");
+        var isCloseStr = isClose ? "true" : "false";
+        var isCallStr = isCall ? "true" : "false";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr});");
     }
 
     // Redraws the white entry-spot line for every trade still open on THIS symbol (per

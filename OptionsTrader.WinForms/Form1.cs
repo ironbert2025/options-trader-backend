@@ -3552,9 +3552,10 @@ public partial class Form1 : Form
         // White (or yellow, per that trade's assigned color — see NextEntrySpotColor) spot-price
         // line at close — same marker drawn on entry, mirrors the Simulator.
         var closeSpotColor = tag?.EntrySpotColor ?? "#ffffff";
+        var closeIsCall = type.Equals("CALL", StringComparison.OrdinalIgnoreCase);
         if (_lastSpotPrice > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
         {
-            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice, closeSpotColor);
+            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice, closeSpotColor, isClose: true, isCall: closeIsCall);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -3564,7 +3565,7 @@ public partial class Form1 : Form
         {
             if (tag is { EntrySpotPrice: > 0 } && decimal.TryParse(strike, out var strikeForDeltaChartsTab))
                 await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDeltaChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, closeSpotColor);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, closeSpotColor, isClose: true, isCall: closeIsCall);
         }
 
         // Simulation trades stop here — grid/PnL and the white entry/close lines above are all they
