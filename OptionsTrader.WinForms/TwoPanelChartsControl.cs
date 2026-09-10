@@ -930,10 +930,27 @@ public class TwoPanelChartsControl : UserControl
             {
                 if (e.RowIndex < 0) return;
                 var row = grid.Rows[e.RowIndex];
+                var strikeCol = grid.Columns["colStrikeLive"]!.Index;
                 var sprdCol  = grid.Columns["colSprdLive"]!.Index;
                 var bidCol   = grid.Columns["colBidLive"]!.Index;
                 var askCol   = grid.Columns["colAskLive"]!.Index;
                 var rangeCol = grid.Columns["colRangeLive"]!.Index;
+
+                // Per explicit request: a strike opened from THIS grid stays highlighted for the
+                // rest of the session — gray while OTM, light green while ITM — on every cell
+                // except Strike itself (which keeps its normal Call/Put color, per explicit
+                // request). Takes priority over the Bid/Range rules below, which would otherwise
+                // fight this override on every repaint. InTheMoney is stashed on the Strike cell's
+                // Tag at population time (PopulateSingleSideOptionsGrid) — read fresh from THAT
+                // cell (not e.Value) since it isn't tied to whichever column is currently painting.
+                if (e.ColumnIndex != strikeCol && row.Tag is string rowType &&
+                    decimal.TryParse(row.Cells["colStrikeLive"].Value?.ToString(), out var rowStrike) &&
+                    _form1.IsChartsTabStrikeHighlighted(rowType, rowStrike))
+                {
+                    var inTheMoney = row.Cells["colStrikeLive"].Tag is true;
+                    e.CellStyle.BackColor = inTheMoney ? Color.LightGreen : Color.LightGray;
+                    return;
+                }
 
                 if (e.ColumnIndex == sprdCol)
                 {
@@ -1080,7 +1097,8 @@ public class TwoPanelChartsControl : UserControl
             _dgvOptions.BeginInvoke(() =>
             {
                 Form1.PopulateSingleSideOptionsGrid(
-                    _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker);
+                    _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker,
+                    _form1.GetChartsTabHighlightedStrikes());
 
                 // "Próxima" tab: only present while Form1 itself shows the next-expiration chain
                 // (mirrors chkHideNextExpDate) — added/removed here instead of once at startup so

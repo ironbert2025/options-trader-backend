@@ -116,6 +116,21 @@ public partial class Form1 : Form
     // would otherwise vanish from the grid) stays visible from then on. Cleared on ticker switch.
     private readonly HashSet<(string Type, decimal Strike)> _forcedStrikes = new();
 
+    // Per explicit request, Charts-tab only: a strike opened from the Charts tab's own options
+    // grid (_dgvOptions, via TriggerQuoteStrikeClick) stays force-shown AND highlighted there for
+    // the rest of the session — gray while OTM, light green while ITM, on every cell except Strike
+    // itself (which keeps its normal Call/Put color) — even after the trade closes. Separate from
+    // _forcedStrikes above since that one only affects dgvQuotes (Options Quotes tab), and this
+    // coloring must NOT appear there. Cleared on ticker switch, same lifecycle as _forcedStrikes.
+    private readonly HashSet<(string Type, decimal Strike)> _chartsTabHighlightedStrikes = new();
+
+    // Read-and-reset by RecordEntryAsync (same pattern as _pendingTradeSendToApi/
+    // _chartsTabTradeOverride) — set in DgvQuotes_CellClick right before calling into whichever
+    // Charts-tab trade-open path (OpenSimulationTrade/PlaceRealTradeAsync/OpenSimulatedTrade) was
+    // actually taken, so RecordEntryAsync knows whether THIS trade-open came from the Charts tab
+    // specifically (vs. a real click on the Options Quotes tab's own grid).
+    private bool _lastTradeOpenFromChartsTab;
+
     public Form1()
     {
         InitializeComponent();
@@ -669,6 +684,16 @@ public partial class Form1 : Form
         return entry?.AwsEnabled ?? true;
     }
 
+    // Used by TwoPanelChartsControl's _dgvOptions CellFormatting to know whether a row's strike
+    // needs the gray/light-green highlight — see _chartsTabHighlightedStrikes' own comment.
+    internal bool IsChartsTabStrikeHighlighted(string rowType, decimal strike) =>
+        _chartsTabHighlightedStrikes.Contains((rowType.ToUpperInvariant(), strike));
+
+    // Used by TwoPanelChartsControl.RefreshOptionsGrid to force-include a highlighted strike's row
+    // even once it's gone ITM (and would otherwise be filtered out of otmCalls/otmPuts) — see
+    // PopulateSingleSideOptionsGrid's own comment.
+    internal HashSet<(string Type, decimal Strike)> GetChartsTabHighlightedStrikes() => _chartsTabHighlightedStrikes;
+
     // Per-ticker polling cadence (seconds), default 6 — per explicit request, so certain symbols
     // can be polled more/less often than others instead of the one-size-fits-all fixed interval.
     // Same persistence pattern as AWS/Telegram above (tickers.json).
@@ -782,6 +807,7 @@ public partial class Form1 : Form
         UpdateEarningsStatusLabel();
         UpdateAllTimeHighStatusLabel();
         _forcedStrikes.Clear();
+        _chartsTabHighlightedStrikes.Clear();
 
         // Reset to blank placeholder rows — real quotes arrive once Start Polling/Fetch Quotes
         // is used, so keep the grids looking like ready tables in the meantime.
@@ -1980,7 +2006,8 @@ public partial class Form1 : Form
     // unfiltered chain) is only used for Level's ranking, same as PopulateQuotesGrid's own
     // "rank among ALL OTM strikes before range/count filter" rule.
     internal static void PopulateSingleSideOptionsGrid(
-        DataGridView grid, List<OptionQuoteDto> allQuotes, List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, TickerEntry ticker)
+        DataGridView grid, List<OptionQuoteDto> allQuotes, List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, TickerEntry ticker,
+        HashSet<(string Type, decimal Strike)>? highlightedStrikes = null)
     {
         var rangeText = $"{ticker.Low} - {ticker.High}";
 
@@ -2000,8 +2027,27 @@ public partial class Form1 : Form
 
         var combined = otmCalls.Select(q => (Quote: q, IsCall: true))
             .Concat(otmPuts.Select(q => (Quote: q, IsCall: false)))
-            .OrderByDescending(x => x.Quote.StrikePrice)
             .ToList();
+
+        // Per explicit request: a highlighted strike (opened from this grid at some point this
+        // session) stays visible even once it goes ITM and would otherwise be filtered out of
+        // otmCalls/otmPuts entirely — same "force-show" idea as dgvQuotes' own _forcedStrikes, just
+        // sourced from allQuotes (which still has the ITM quote) instead of re-deriving one.
+        if (highlightedStrikes != null && highlightedStrikes.Count > 0)
+        {
+            var alreadyShown = combined.Select(x => (Type: x.IsCall ? "CALL" : "PUT", x.Quote.StrikePrice)).ToHashSet();
+            foreach (var (type, strikeVal) in highlightedStrikes)
+            {
+                if (alreadyShown.Contains((type, strikeVal))) continue;
+                var isCall = type == "CALL";
+                var quote = allQuotes.FirstOrDefault(q =>
+                    q.StrikePrice == strikeVal &&
+                    q.OptionType == (isCall ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put));
+                if (quote != null) combined.Add((quote, isCall));
+            }
+        }
+
+        combined = combined.OrderByDescending(x => x.Quote.StrikePrice).ToList();
 
         bool? previousWasCall = null;
         foreach (var (quote, isCall) in combined)
@@ -2026,7 +2072,12 @@ public partial class Form1 : Form
                 FormatStrike(quote.StrikePrice),
                 quote.Bid.ToString("F2"), quote.Ask.ToString("F2"), sprd,
                 contracts, level, rangeText);
-            grid.Rows[grid.Rows.Count - 1].Tag = isCall ? "CALL" : "PUT";
+            var newLiveRow = grid.Rows[grid.Rows.Count - 1];
+            newLiveRow.Tag = isCall ? "CALL" : "PUT";
+            // Read by CellFormatting to color a highlighted strike's row gray (OTM) or light green
+            // (ITM) — see _chartsTabHighlightedStrikes' own comment. Stashed on the Strike cell
+            // (not row.Tag, which callers already read as the plain "CALL"/"PUT" type string).
+            newLiveRow.Cells["colStrikeLive"].Tag = quote.InTheMoney;
         }
 
         PadWithBlankRows(grid, 8);
@@ -2199,6 +2250,7 @@ public partial class Form1 : Form
         _chartsTabTradeOverride = null;
         var chartsIsSimulation = _chartsTabTradeIsSimulation;
         _chartsTabTradeIsSimulation = false;
+        _lastTradeOpenFromChartsTab = chartsIsSimulation || chartsOverride.HasValue;
 
         // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
         if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
@@ -2414,6 +2466,14 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeForMoneyness))
             SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
         newRow.Cells["colTradeDemoReal"].Value = isSimulation ? "Simulation" : (isDemo ? "Demo" : "Real");
+
+        // Per explicit request: a strike opened from the Charts tab's own options grid stays
+        // highlighted there (gray/light-green row) for the rest of the session, even after this
+        // trade closes — see _chartsTabHighlightedStrikes' own comment. Read-and-reset, same
+        // pattern as the other Charts-tab-origin flags above.
+        if (_lastTradeOpenFromChartsTab && strikeForMoneyness > 0)
+            _chartsTabHighlightedStrikes.Add((rowType.ToUpperInvariant(), strikeForMoneyness));
+        _lastTradeOpenFromChartsTab = false;
 
         // Premium = riesgo máximo de la posición = precio de entrada * 100 (por contrato) *
         // cantidad de contratos. "ask" ya es el valor usado como EntryPrice acá mismo (ver
