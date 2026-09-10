@@ -2119,6 +2119,23 @@
     forceRepaint();
   }
 
+  // 'above'/'below'/null — whether price has broken outside THIS panel's own Bollinger Band(20,2),
+  // reusing whatever recalculateBollinger() already computed (see lastBollingerUpper/Lower) instead
+  // of duplicating that math in C#. Same "exposed" semantics ChartPanel.GetBollingerDirection uses
+  // for the live chart's own premarket line.
+  function computeBollingerExposedDirection(price) {
+    if (lastBollingerUpper == null || lastBollingerLower == null) return null;
+    if (price > lastBollingerUpper) return 'above';
+    if (price < lastBollingerLower) return 'below';
+    return null;
+  }
+
+  // Simulator convenience — same call site as updatePreMarketLine, minus having to separately
+  // compute/pass the exposed direction from C#.
+  function updatePreMarketLineAuto(price) {
+    updatePreMarketLine(price, computeBollingerExposedDirection(price));
+  }
+
   // ---- Arrow tool: line + arrowhead between 2 clicks — red if the 1st click is ABOVE (higher
   // price than) the 2nd click, green otherwise ----
 
@@ -3375,6 +3392,11 @@
   // ---- Bollinger Bands overlay (optional — only enabled on panels that call configureBollinger) ----
 
   let bollingerConfig = null; // { period, mult }
+  // Stashed by recalculateBollinger() — read by computeBollingerExposedDirection() (Simulator's
+  // premarket-line "Expuesto" indicator) instead of duplicating the Bollinger math in C#, since
+  // it's already computed here every cycle anyway.
+  let lastBollingerUpper = null;
+  let lastBollingerLower = null;
   let bollingerSeries = null; // { upper, middle, lower }
 
   // Panel 2 (15m RTH), both Simulator and Live Chart: white markers over the CURRENT Bollinger
@@ -3592,6 +3614,8 @@
         bollingerEdgeMarkerPrimitive._upper = null;
         bollingerEdgeMarkerPrimitive._lower = null;
       }
+      lastBollingerUpper = null;
+      lastBollingerLower = null;
       return;
     }
     const upperData = [], midData = [], lowerData = [];
@@ -3610,6 +3634,8 @@
     bollingerSeries.upper.setData(upperData);
     bollingerSeries.middle.setData(midData);
     bollingerSeries.lower.setData(lowerData);
+    lastBollingerUpper = upperData[upperData.length - 1].value;
+    lastBollingerLower = lowerData[lowerData.length - 1].value;
 
     if (bollingerFillEnabled) {
       if (!bollingerFillAttached) { candleSeries.attachPrimitive(bollingerFillPrimitive); bollingerFillAttached = true; }

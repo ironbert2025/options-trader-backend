@@ -61,6 +61,12 @@ public class SimulatorForm : Form
     private readonly System.Windows.Forms.Timer _tickPlayTimer = new();
     private int _tickPlayIndex = -1;
 
+    // True once the premarket line has been anchored/frozen at today's 9:30 open — most captured
+    // days have no L1Ticks data before 9:30 at all (the line would otherwise never get a single
+    // price and never appear, per explicit request), so this fallback fires the FIRST time today's
+    // real first 15-min RTH candle exists, using its Open, then never fires again for this day.
+    private bool _premarketLineFinalizedForDay;
+
     // Width matches Form1's real dgvQuotes (566) — see BuildChainColumns' per-column widths.
     private readonly DataGridView _dgvChain = new()
     {
@@ -792,6 +798,7 @@ public class SimulatorForm : Form
         _hourlyCandles   = SimulationDataLoader.LoadHourlyCandlesWithContext(symbol, date);
         _intradayCandles = SimulationDataLoader.LoadUnderlyingCandlesWithContext(symbol, date, contextDays: 3);
         _tickPlayIndex   = -1; // stale index into the OLD day's _intradayCandles — reseed lazily (StepTick/StartTickPlayClock) against the new one
+        _premarketLineFinalizedForDay = false;
 
         // Lands on the RTH open (9:30:00 ET) instead of index 0 (the day's first recorded step,
         // which is often well before 9:30 — premarket ticks) per explicit request. Same
@@ -838,6 +845,15 @@ public class SimulatorForm : Form
             _hourlyChart.ResetViewForNewDayAsync(),
             _rthChart.ResetViewForNewDayAsync(),
             _fullChart.ResetViewForNewDayAsync());
+
+        // Blue premarket line — panels 1/2 only, per explicit request, same primitive the live
+        // chart's own Charts tab uses. Pinned at this simulated day's 9:30 ET open; fed per-tick by
+        // RenderChartsUpToTime below while the replay is still before that time.
+        var sessionOpenEastern = date.ToDateTime(new TimeOnly(9, 30));
+        var sessionOpenUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sessionOpenEastern, DateTimeKind.Unspecified), EasternZone);
+        var sessionOpenFakeEpoch = SimulatedChartPanel.ToFakeUtcEpochSeconds(sessionOpenUtc);
+        _ = _hourlyChart.StartPreMarketLineAsync(sessionOpenFakeEpoch);
+        _ = _rthChart.StartPreMarketLineAsync(sessionOpenFakeEpoch);
 
         UpdateStepButtons();
         RenderCurrentStep();
@@ -1303,6 +1319,34 @@ public class SimulatorForm : Form
         _ = _rthChart.CargarHastaPasoAsync(rthCandles, visibleDays: 3, _simDate);
         _ = _fullChart.CargarHastaPasoAsync(CandleAggregation.AggregateToInterval(
             intradayUpToNow, 15, rthOnly: false), visibleDays: 3, _simDate);
+
+        // Blue premarket line update — panels 1/2 only, before 9:30 ET; C# simply stops calling
+        // this once RTH starts (same "freezes in place" convention the live chart uses). Filtered
+        // to TODAY's own ticks specifically — intradayUpToNow also carries 3 context days, whose
+        // stale last tick would otherwise satisfy "Count > 0" even with zero real premarket data
+        // for today, drawing a meaningless flat line at yesterday's close instead of nothing.
+        var todaysPremarketTicks = intradayUpToNow.Where(c => DateOnly.FromDateTime(EasternTime(c.Time)) == _simDate).ToList();
+        if (EasternTime(uptoUtc).TimeOfDay < new TimeSpan(9, 30, 0) && todaysPremarketTicks.Count > 0)
+        {
+            var premarketPrice = todaysPremarketTicks[^1].Close;
+            _ = _hourlyChart.UpdatePreMarketLineAsync(premarketPrice);
+            _ = _rthChart.UpdatePreMarketLineAsync(premarketPrice);
+        }
+        // Fallback for days with no L1Ticks data before 9:30 (most of them) — per explicit
+        // request, the line still needs to appear and freeze SOMEWHERE even with zero premarket
+        // ticks to drive it, so the moment today's actual first 15-min RTH candle exists, anchor
+        // it there at that candle's Open — exactly once per day (never re-fires afterward, same
+        // "frozen" convention as the real premarket-fed case above).
+        else if (!_premarketLineFinalizedForDay)
+        {
+            var todaysFirstRthCandle = rthCandles.FirstOrDefault(c => DateOnly.FromDateTime(EasternTime(c.Time)) == _simDate);
+            if (todaysFirstRthCandle != null)
+            {
+                _premarketLineFinalizedForDay = true;
+                _ = _hourlyChart.UpdatePreMarketLineAsync(todaysFirstRthCandle.Open);
+                _ = _rthChart.UpdatePreMarketLineAsync(todaysFirstRthCandle.Open);
+            }
+        }
     }
 
     // ----- Demo trades (practice only — separate from real/demo trades in Form1) -----

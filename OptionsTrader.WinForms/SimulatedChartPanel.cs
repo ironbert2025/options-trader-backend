@@ -236,6 +236,33 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr});");
     }
 
+    // Blue premarket spot-price line — panels 1 (Hourly15) and 2 (Fifteen_RTH) only, per explicit
+    // request, same startPreMarketLine/updatePreMarketLine primitive the live chart uses.
+    // anchorFakeEpoch is the simulated day's own 9:30 ET open (see ToFakeUtcEpochSeconds), pinning
+    // the line's left edge there instead of wherever the last-loaded candle happens to be.
+    public async Task StartPreMarketLineAsync(long anchorFakeEpoch)
+    {
+        // Awaits WebView2 readiness first — called from LoadSelectedDay right after construction/
+        // a fresh day load, when InitializeAsync's own CoreWebView2 setup can still be in flight.
+        // Without this, the CoreWebView2-null check below just silently no-ops, arming never
+        // actually happens, and every later updatePreMarketLineAuto call is a no-op forever (its
+        // own JS-side guard requires _armed) — confirmed live as "premarket line never appears".
+        if (_readyTcs != null) await _readyTcs.Task;
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"startPreMarketLine({anchorFakeEpoch});");
+    }
+
+    // updatePreMarketLineAuto computes the "Expuesto" direction JS-side (against whatever
+    // recalculateBollinger() already has for THIS panel), so the Simulator doesn't need its own
+    // copy of the live chart's GetBollingerDirection math in C#.
+    public async Task UpdatePreMarketLineAsync(decimal price)
+    {
+        if (_readyTcs != null) await _readyTcs.Task;
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"updatePreMarketLineAuto({priceStr});");
+    }
+
     // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,
     // per explicit request. The underlying calculation keeps running either way; this only toggles
     // the draw.
