@@ -398,6 +398,16 @@ public partial class Form1 : Form
         RaiseWsStatusEvent("Market closed — forcing disconnect from Schwab streamer");
         await _historyClient.StopAsync();
         RaiseWsStatusEvent("Disconnected");
+
+        // Per explicit request: a later manual "Connect" (Charts tab) must actually re-establish
+        // the Schwab stream, not just rebuild the chart UI. EnsureLiveFeedReadyAsync memoizes
+        // _liveFeedReadyTask forever once it succeeds — without resetting it here, a later call
+        // would just hand back this same already-completed task, leaving _historyClient/_liveFeed
+        // pointed at the streamer that was just stopped above, so no ticks would ever arrive again
+        // until the app itself restarts. SetUpLiveFeedAsync's hub branch reuses _candleHubServer
+        // (still alive/listening the whole time — only the Schwab socket was stopped, never the
+        // local port this instance's hub relays other instances through) instead of re-binding it.
+        _liveFeedReadyTask = null;
     }
 
     // Only the hub instance ever calls this directly (ForceDisconnectWebSocketAsync, and the
@@ -3216,6 +3226,26 @@ public partial class Form1 : Form
             _candleHubClient = remoteHubClient;
             _historyClient   = CreateSchwabStreamerClient();
             _liveFeed        = remoteHubClient;
+            return;
+        }
+
+        // Reconnecting after ForceDisconnectWebSocketAsync's 4pm forced disconnect — this instance
+        // was already the hub, and its local relay server (_candleHubServer) is still alive the
+        // whole time; only the actual Schwab socket got stopped. Reuse it instead of trying
+        // hubServer.TryStart below, which would just fail (the port's already bound by this same
+        // process) — only the Schwab streamer itself needs recreating/reconnecting/resubscribing.
+        if (_isWebSocketHub && _candleHubServer != null)
+        {
+            var reconnectedStreamer = CreateSchwabStreamerClient(allowRefresh: true);
+            reconnectedStreamer.OnWsStatusEvent += RaiseWsStatusEvent;
+            await reconnectedStreamer.ConnectAsync();
+            await reconnectedStreamer.SubscribeChartEquity(symbols);
+            await reconnectedStreamer.SubscribeLevelOneEquity(symbols);
+            reconnectedStreamer.OnNewCandle    += (symbol, candle) => _candleHubServer.Broadcast(symbol, candle);
+            reconnectedStreamer.OnLevelOneTick += (symbol, price, time) => _candleHubServer.BroadcastLevelOne(symbol, price, time);
+
+            _historyClient = reconnectedStreamer;
+            _liveFeed      = reconnectedStreamer;
             return;
         }
 
