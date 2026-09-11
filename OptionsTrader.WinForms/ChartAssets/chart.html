@@ -22,6 +22,11 @@
      FinvizTargetPriceService.cs). Same plain-overlay pattern as exposureBanner above, just
      anchored top-right instead of top-center. See showTargetPrice/hideTargetPrice below. -->
 <div id="targetPriceLabel" style="position:absolute; right:52px; top:4px; text-align:right; pointer-events:auto; cursor:pointer; z-index:20; font: bold 12px sans-serif; color:#26a69a; background:rgba(0,0,0,0.55); padding:1px 4px; border-radius:3px; display:none;"></div>
+<!-- Fixed top-left corner note (e.g. the Daily popup's 3 tabs, "Buscar Rebote en PM") — set via
+     setCornerText/clearCornerText below. Same plain-overlay pattern as exposureBanner above, just
+     anchored top-left and left visible until explicitly cleared (no auto-hide condition of its
+     own, unlike the Bollinger-exposure banner). -->
+<div id="cornerText" style="position:absolute; right:220px; top:14px; text-align:left; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b; white-space:pre-line; display:none;"></div>
 <script>
   const container = document.getElementById('chart');
 
@@ -2627,6 +2632,19 @@
   }
   function hideExposureBanner() {
     document.getElementById('exposureBanner').style.display = 'none';
+  }
+
+  // Fixed top-left corner note — e.g. the Daily popup's "Buscar Rebote en PM" on all 3 of its
+  // tabs (Daily/Hora/15 Min), set once from C# right after each tab's chart loads. Unlike
+  // showExposureBanner above, nothing here re-evaluates or auto-hides it — it just stays until
+  // clearCornerText is called (never, for the Daily popup's use case).
+  function setCornerText(text) {
+    const el = document.getElementById('cornerText');
+    el.textContent = text;
+    el.style.display = 'block';
+  }
+  function clearCornerText() {
+    document.getElementById('cornerText').style.display = 'none';
   }
 
   // Finviz analyst Target Price — set from C# (ChartPanel.SetTargetPriceAsync) after
