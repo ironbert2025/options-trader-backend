@@ -23,6 +23,15 @@
      anchored top-left and left visible until explicitly cleared (no auto-hide condition of its
      own, unlike the Bollinger-exposure banner). -->
 <div id="cornerText" style="position:absolute; right:220px; top:14px; text-align:left; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b; white-space:pre-line; display:none;"></div>
+<!-- 3-column fixed note row (e.g. the Daily popup's "15 Min" tab: "Expuesto en 3" / "CT 15 Min" /
+     "Sal BB Vol") — set via setTripleCornerText below. Same plain-overlay convention as
+     cornerText above, just laid out left/center/right on one row instead of a single left-anchored
+     block. Independent of cornerText — a tab can use either (or neither). -->
+<div id="tripleCornerText" style="position:absolute; left:6px; right:6px; top:14px; display:none; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b;">
+  <span id="tripleCornerTextLeft"   style="position:absolute; left:0; text-align:left;"></span>
+  <span id="tripleCornerTextCenter" style="position:absolute; left:50%; transform:translateX(-50%); text-align:left; white-space:pre-line;"></span>
+  <span id="tripleCornerTextRight"  style="position:absolute; right:220px; text-align:right;"></span>
+</div>
 <script>
   const container = document.getElementById('chart');
 
@@ -2641,6 +2650,19 @@
   }
   function clearCornerText() {
     document.getElementById('cornerText').style.display = 'none';
+  }
+
+  // 3-column fixed note row — e.g. the Daily popup's "15 Min" tab: "Expuesto en 3" (left) /
+  // "CT 15 Min" (center) / "Sal BB Vol" (right), per explicit request. Same "set once, stays
+  // until cleared" convention as setCornerText above.
+  function setTripleCornerText(left, center, right) {
+    document.getElementById('tripleCornerTextLeft').textContent = left;
+    document.getElementById('tripleCornerTextCenter').textContent = center;
+    document.getElementById('tripleCornerTextRight').textContent = right;
+    document.getElementById('tripleCornerText').style.display = 'block';
+  }
+  function clearTripleCornerText() {
+    document.getElementById('tripleCornerText').style.display = 'none';
   }
 
   // Finviz analyst Target Price — set from C# (ChartPanel.SetTargetPriceAsync) after

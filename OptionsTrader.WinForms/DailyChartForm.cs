@@ -20,9 +20,21 @@ public class DailyChartForm : Form
 {
     // Fixed yellow top-left corner notes — per explicit request, just a static visual reminder per
     // tab, no logic tied to either. See chart.html's setCornerText.
-    private const string DailyCornerNoteText   = "Buscar Rebote en PM";
-    private const string HoraCornerNoteText    = "Buscar CT Hora";
-    private const string FifteenCornerNoteText = "Buscar CT 15 Min\nExpuesto en 3";
+    private const string DailyCornerNoteText = "Buscar Rebote en PM";
+    private const string HoraCornerNoteText  = "Buscar CT Hora";
+    // 15 Min tab: 3 separate notes on one line (left/center/right) instead of the single
+    // left-anchored block Daily/Hora use — per explicit request. See chart.html's
+    // setTripleCornerText.
+    private const string FifteenCornerNoteLeft   = "Expuesto en 3";
+    private const string FifteenCornerNoteCenter =
+        "CT 15 Min\n" +
+        "-Dibujar T-Line (Alza, Baja, Lateral)\n" +
+        "-Precio cierra arriba de T-Line,PM si bajista\n" +
+        "-Precio cierra abajo de T-Line, PM si alcista\n" +
+        "-Precio abre con un salto en efecto\n" +
+        "-forma el Wick en sentido del Close\n" +
+        "-vuelve el Open y sale de BB";
+    private const string FifteenCornerNoteRight  = "Sal BB Vol";
 
     private Dictionary<int, Button> _smaWatchButtons = new();
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
@@ -361,7 +373,9 @@ public class DailyChartForm : Form
         // tab's own line (ChartPanel.GetTodaySessionOpenFakeEpoch convention), since this tab also
         // shows real (15-minute) intraday bars, not one bar per day. Fed by UpdateLivePrice below.
         await _fifteenWebView.CoreWebView2!.ExecuteScriptAsync($"startPreMarketLine({GetTodaySessionOpenFakeEpoch()});");
-        await _fifteenWebView.CoreWebView2.ExecuteScriptAsync($"setCornerText({JsonSerializer.Serialize(FifteenCornerNoteText)});");
+        await _fifteenWebView.CoreWebView2.ExecuteScriptAsync(
+            $"setTripleCornerText({JsonSerializer.Serialize(FifteenCornerNoteLeft)}, " +
+            $"{JsonSerializer.Serialize(FifteenCornerNoteCenter)}, {JsonSerializer.Serialize(FifteenCornerNoteRight)});");
 
         await LoadAndWireHLinesAsync();
     }
