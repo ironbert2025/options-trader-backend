@@ -3765,11 +3765,17 @@ public partial class Form1 : Form
         else
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
-        // Simulation trades stop here — the Telegram push above is now the one exception (per
-        // explicit request); everything below (TradeLog screenshot, S3 upload, daily-log entry)
-        // still only applies to real/demo trades — see RecordEntryAsync's matching isSimulation
-        // skip on the entry side (no S3/daily-log there either).
-        if (isSimulation) return;
+        // Simulation trades stop here for S3/TradeHistoryStore — the Telegram push above is one
+        // exception (per explicit request); the daily-log entry below is another (also per
+        // explicit request) — writes straight to its own "_Sim_Trades.md" using the LOCAL entry/
+        // close snapshot paths already captured (tag.EntryImagePath, closeChartPath), no S3 URL
+        // needed. Everything else below (TradeLog screenshot, S3 upload) still only applies to
+        // real/demo trades — see RecordEntryAsync's matching isSimulation skip on the entry side.
+        if (isSimulation)
+        {
+            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath);
+            return;
+        }
 
         // Screenshot TradeLog (Trades + Logger section of the form) — scroll the just-closed row
         // into view first, per explicit request, so it's actually visible in the capture even if
