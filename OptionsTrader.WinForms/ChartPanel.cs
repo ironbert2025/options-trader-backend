@@ -94,6 +94,10 @@ public class ChartPanel : Panel
     private int _intervalMinutes; // mutable only for Fifteen_Full, via ToggleIntervalAsync (5m <-> 15m)
     private readonly bool _rthOnly;
     private readonly Label _header;
+    // Finviz Target Price text — panel 2 (15m RTH) only, see SetTargetPriceAsync. Lives in the
+    // header row next to "SYMBOL — 15m RTH" (right-aligned), not inside the chart itself anymore —
+    // per explicit request. Hidden (Visible=false) reserves no space for the other 2 panels/modes.
+    private readonly Label _targetPriceHeaderLabel;
     private WebView2 _webView = null!;
     private bool _closing;
 
@@ -283,18 +287,35 @@ public class ChartPanel : Panel
 
         _header = new Label
         {
-            Dock      = DockStyle.Top,
-            Height    = 22,
+            Dock      = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = Color.White,
             BackColor = Color.FromArgb(19, 23, 34),
             Text      = $"{symbol} — {ModeLabel(mode)}"
         };
+        _targetPriceHeaderLabel = new Label
+        {
+            Dock      = DockStyle.Right,
+            Width     = 130,
+            TextAlign = ContentAlignment.MiddleRight,
+            ForeColor = Color.FromArgb(0x26, 0xa6, 0x9a),
+            BackColor = Color.FromArgb(19, 23, 34),
+            Cursor    = Cursors.Hand,
+            Visible   = false
+        };
+        _targetPriceHeaderLabel.Click += async (s, e) =>
+        {
+            if (_webView.CoreWebView2 != null)
+                await _webView.CoreWebView2.ExecuteScriptAsync("toggleTargetPriceLine();");
+        };
+        var headerRow = new Panel { Dock = DockStyle.Top, Height = 22, BackColor = Color.FromArgb(19, 23, 34) };
+        headerRow.Controls.Add(_header);
+        headerRow.Controls.Add(_targetPriceHeaderLabel);
 
         InitializeWebView();
 
         Controls.Add(_webView);
-        Controls.Add(_header);
+        Controls.Add(headerRow);
 
         // "Potencial CT al Alza/Baja" and daily-bounce hints — 1h panel only, rendered as a green
         // overlay INSIDE the chart itself (chart.html's #hints div, via setTLineHint/
@@ -642,11 +663,13 @@ public class ChartPanel : Panel
         if (price == null)
         {
             await _webView.CoreWebView2.ExecuteScriptAsync("hideTargetPrice();");
+            _targetPriceHeaderLabel.Visible = false;
             return;
         }
         var priceStr = price.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-        var text = $"TargetP= {priceStr}";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"showTargetPrice({JsonSerializer.Serialize(text)}, {priceStr});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"showTargetPrice({priceStr});");
+        _targetPriceHeaderLabel.Text    = $"TargetP= {priceStr}";
+        _targetPriceHeaderLabel.Visible = true;
     }
 
     // Shows/hides the white Bollinger-band edge markers (panel 15m RTH only) — a toolbar checkbox,

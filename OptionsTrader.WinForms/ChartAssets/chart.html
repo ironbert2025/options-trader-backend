@@ -18,10 +18,6 @@
      hideExposureBanner below. Plain overlay text, not a canvas primitive: no time/price anchor,
      no selection, just a static top-of-chart notice. -->
 <div id="exposureBanner" style="position:absolute; left:0; right:0; top:4px; text-align:center; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b; display:none;"></div>
-<!-- Finviz analyst Target Price (panel 2 / 15m RTH only, individual stocks only — see
-     FinvizTargetPriceService.cs). Same plain-overlay pattern as exposureBanner above, just
-     anchored top-right instead of top-center. See showTargetPrice/hideTargetPrice below. -->
-<div id="targetPriceLabel" style="position:absolute; right:52px; top:4px; text-align:right; pointer-events:auto; cursor:pointer; z-index:20; font: bold 12px sans-serif; color:#26a69a; background:rgba(0,0,0,0.55); padding:1px 4px; border-radius:3px; display:none;"></div>
 <!-- Fixed top-left corner note (e.g. the Daily popup's 3 tabs, "Buscar Rebote en PM") — set via
      setCornerText/clearCornerText below. Same plain-overlay pattern as exposureBanner above, just
      anchored top-left and left visible until explicitly cleared (no auto-hide condition of its
@@ -2670,23 +2666,23 @@
     });
   }
 
-  function showTargetPrice(text, price) {
-    const el = document.getElementById('targetPriceLabel');
-    el.textContent = text;
-    el.style.display = 'block';
+  // Text label itself moved out of the chart onto ChartPanel's WinForms header row, next to the
+  // "SYMBOL — 15m RTH" title, per explicit request (SetTargetPriceAsync sets that Label's Text
+  // directly in C#) — this only drives the actual price-line rendering now.
+  function showTargetPrice(price) {
     targetPriceValue = price;
     renderTargetPriceLine();
   }
   function hideTargetPrice() {
-    document.getElementById('targetPriceLabel').style.display = 'none';
     targetPriceValue = null;
     renderTargetPriceLine();
   }
 
-  document.getElementById('targetPriceLabel').addEventListener('click', () => {
+  // Click-to-toggle now lives on that same WinForms Label — see ChartPanel's click handler.
+  function toggleTargetPriceLine() {
     targetPriceLineVisible = !targetPriceLineVisible;
     renderTargetPriceLine();
-  });
+  }
 
   // Called once per SMA pair by C# after the pre-market read (see ChartPanel's one-time
   // analysis) — periodA/periodB identify which pair (20+40 or 100+200). textA/textB are each
