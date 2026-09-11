@@ -221,8 +221,20 @@ public class TwoPanelChartsControl : UserControl
             AutoScroll    = false,
             Padding       = new Padding(4, 1, 4, 0)
         };
+        // "Exp en 3"/"CT Hora"/"CT 15Min" (per explicit request) go in their own row, aligned
+        // under panel 1's own column, right above panel 1's chart — same pattern as
+        // toolbarRightRow2 above for panel 2's AWS/Telegram row.
+        var toolbarLeftRow2 = new FlowLayoutPanel
+        {
+            Dock          = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents  = false,
+            AutoScroll    = false,
+            Padding       = new Padding(4, 1, 4, 0)
+        };
         toolbar.Controls.Add(toolbarLeft, 0, 0);
         toolbar.Controls.Add(toolbarRight, 1, 0);
+        toolbar.Controls.Add(toolbarLeftRow2, 0, 1);
         toolbar.Controls.Add(toolbarRightRow2, 1, 1);
 
         var layout = new TableLayoutPanel
@@ -528,6 +540,30 @@ public class TwoPanelChartsControl : UserControl
             };
         }
 
+        // "Exp en 3" / "CT Hora" / "CT 15Min" — manual snapshot buttons, per explicit request. Each
+        // one just captures the same panel1+2 combined image already used for trade Entry/Close,
+        // saves it to its own subfolder (so the 3 never collide), and appends one entry (symbol +
+        // date/time + the image) to its own FIXED-name markdown file — NOT the per-symbol/per-day
+        // EventLogMarkdownWriter file (that's already covered elsewhere); these are single shared
+        // files across every symbol/day that the user reviews manually. No Telegram, no other side
+        // effect — purely "I clicked this because something happened, save it for me to look at".
+        async void SaveManualSnapshot(string subFolder, string fileName)
+        {
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null) return;
+            var imagePath = ManualChartMarkdownStore.SaveImage(subFolder, _symbol, combined);
+            ManualChartMarkdownStore.AppendEntry(fileName, _symbol, imagePath);
+        }
+
+        var btnExpEn3 = new Button { Text = "Exp en 3", Size = new Size(70, 24) };
+        btnExpEn3.Click += (s, e) => SaveManualSnapshot("ExpEn3", "ExpuestoEn3Charts.md");
+
+        var btnCtHora = new Button { Text = "CT Hora", Size = new Size(70, 24) };
+        btnCtHora.Click += (s, e) => SaveManualSnapshot("CTHora", "CTHora.md");
+
+        var btnCt15Min = new Button { Text = "CT 15Min", Size = new Size(70, 24) };
+        btnCt15Min.Click += (s, e) => SaveManualSnapshot("CT15Min", "CT15Min.md");
+
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
         // days of persisted hourly history) and plain Hourly candles.
         var btnDaily = new Button { Text = "Daily", Size = new Size(70, 24) };
@@ -743,6 +779,9 @@ public class TwoPanelChartsControl : UserControl
         toolbarLeft.Controls.Add(btnFlechaVerde);
         toolbarLeft.Controls.Add(btnFlechaRoja);
         toolbarLeft.Controls.Add(btnDaily);
+        toolbarLeftRow2.Controls.Add(btnExpEn3);
+        toolbarLeftRow2.Controls.Add(btnCtHora);
+        toolbarLeftRow2.Controls.Add(btnCt15Min);
         toolbarLeft.Controls.Add(chkDayDividers);
         toolbarLeft.Controls.Add(AthCheckBox);
 
