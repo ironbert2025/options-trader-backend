@@ -100,9 +100,11 @@ internal static class DailyChartSnapshotsMarkdownWriter
                 Close: File.Exists(e.ClosePath) ? e.ClosePath : null))
             .ToList();
 
-        Directory.CreateDirectory(VaultFolder);
-        var fileName = $"{dateEst:yyyy_MM_dd}_{Environment.MachineName}_OpenClose.md";
-        var path = Path.Combine(VaultFolder, fileName);
+        var dateStr = dateEst.ToString("yyyy_MM_dd");
+        var dayFolder = Path.Combine(VaultFolder, dateStr);
+        Directory.CreateDirectory(dayFolder);
+        var fileName = $"{dateStr}_{Environment.MachineName}_OpenClose.md";
+        var path = Path.Combine(dayFolder, fileName);
         var nl = Environment.NewLine;
 
         var body = new System.Text.StringBuilder();
