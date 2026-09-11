@@ -34,7 +34,13 @@ public class DailyChartForm : Form
         "-Precio abre con un salto en efecto\n" +
         "-forma el Wick en sentido del Close\n" +
         "-vuelve el Open y sale de BB";
-    private const string FifteenCornerNoteRight  = "Sal BB Vol";
+    private const string FifteenCornerNoteRight =
+        "Sal BB Vol\n" +
+        "-Precio abre con un salto en efecto en BB\n" +
+        "-forma el Wick en sentido del Close\n" +
+        "-vuelve el Open y sale de BB\n" +
+        "-PM inclinado en sentido del Movimiento\n" +
+        "-BB abriéndose las dos o una en sentido de PM";
 
     private Dictionary<int, Button> _smaWatchButtons = new();
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
