@@ -1117,7 +1117,14 @@ public class TwoPanelChartsControl : UserControl
         {
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
             if (snapshot == null) return;
-            if (_dgvOptions.IsDisposed || !_dgvOptions.IsHandleCreated) return;
+            if (_dgvOptions.IsDisposed) return;
+            // Same race RefreshTradesGrid had (see its own comment): wired to the whole control's
+            // HandleCreated, not _dgvOptions's own — on first connect that can fire before
+            // _dgvOptions's handle exists yet, silently skipping this refresh (BeginInvoke needs a
+            // handle) with nothing ever retrying it. Data already sitting in the Options Quotes tab
+            // (GetQuoteSnapshot) would then never show up here until the next live poll tick — per
+            // explicit request, force the handle into existence instead of bailing.
+            if (!_dgvOptions.IsHandleCreated) _ = _dgvOptions.Handle;
             if (!lblExpDate.IsDisposed)
                 lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
             if (!lblExpDateNext.IsDisposed)
