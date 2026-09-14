@@ -18,6 +18,18 @@
      hideExposureBanner below. Plain overlay text, not a canvas primitive: no time/price anchor,
      no selection, just a static top-of-chart notice. -->
 <div id="exposureBanner" style="position:absolute; left:0; right:0; top:4px; text-align:center; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#ffeb3b; display:none;"></div>
+<!-- "Pot Sal BB Vol Alza/Baja" — premarket-only, panel 2 (15m RTH) only, per explicit request:
+     the "salto" concept — premarket price (blue line) above/below yesterday's close (red dashed
+     "C" line) while still INSIDE this panel's own Bollinger Band(20,2). Re-evaluated on every
+     premarket tick (see updatePreMarketLine) — updates/hides live while price moves in and out of
+     the band, same as the line itself; once the market opens no more premarket ticks arrive, so it
+     simply freezes at whatever it last showed, same mechanism the premarket line itself relies on
+     for "freezing in place" (see startPreMarketLine's own comment). Deletable (see the keydown
+     handler's potSaltoDismissed fallback) — dismissal only lasts for that trading day.
+     Same plain-overlay pattern as exposureBanner above, just green and independent of it (the two
+     conditions are mutually exclusive — exposureBanner requires OUTSIDE the band, this requires
+     INSIDE — but kept as separate elements for robustness). -->
+<div id="potSaltoBanner" style="position:absolute; left:0; right:0; top:4px; text-align:center; pointer-events:none; z-index:5; font: bold 13px sans-serif; color:#3cd070; display:none;"></div>
 <!-- Fixed top-left corner note (e.g. the Daily popup's 3 tabs, "Buscar Rebote en PM") — set via
      setCornerText/clearCornerText below. Same plain-overlay pattern as exposureBanner above, just
      anchored top-left and left visible until explicitly cleared (no auto-hide condition of its
@@ -937,6 +949,15 @@
       openBandSnapshotDismissedDay = openBandSnapshot.day;
       openBandSnapshot = null;
       forceRepaint();
+    }
+
+    // "Pot Sal BB Vol Alza/Baja" banner — same last-resort fallback pattern as the Bollinger
+    // snapshot above (single, no click-to-select). Dismissal lasts only for the current trading
+    // day — potSaltoDismissed resets in startPreMarketLine/resetViewForNewDay.
+    const potSaltoBannerEl = document.getElementById('potSaltoBanner');
+    if (potSaltoBannerEl.style.display !== 'none') {
+      potSaltoDismissed = true;
+      hidePotSaltoBanner();
     }
   });
 
@@ -2146,7 +2167,22 @@
     preMarketLinePrimitive._armed = true;
     preMarketLinePrimitive._price = null;
     preMarketLinePrimitive._time = anchorTime ?? null;
+    potSaltoDismissed = false; // new trading day — see updatePreMarketLine/keydown handler
+    hidePotSaltoBanner();
     forceRepaint();
+  }
+
+  // Delete-dismissed for the current trading day only — see the keydown handler's fallback.
+  // Reset in startPreMarketLine (new day) and resetViewForNewDay (Simulator).
+  let potSaltoDismissed = false;
+
+  function showPotSaltoBanner(text) {
+    const el = document.getElementById('potSaltoBanner');
+    el.textContent = text;
+    el.style.display = 'block';
+  }
+  function hidePotSaltoBanner() {
+    document.getElementById('potSaltoBanner').style.display = 'none';
   }
 
   // Called on every pre-market tick until 9:30 AM ET; C# stops calling this once the market
@@ -2156,6 +2192,18 @@
     preMarketLinePrimitive._price = price;
     preMarketLinePrimitive._exposed = exposed || null;
     forceRepaint();
+
+    // "Pot Sal BB Vol Alza/Baja" — panel 2 (15m RTH) only, per explicit request. Symmetric: price
+    // above OR below yesterday's close (prevDayCloseLinePrimitive, the red dashed "C" line) while
+    // still inside THIS panel's own Bollinger Band(20,2) — re-evaluated live every tick (moves
+    // in/out with the price) until the market opens, same as the premarket line itself.
+    if (rthSlideWindowBars && !potSaltoDismissed) {
+      const closePrice = prevDayCloseLinePrimitive._price;
+      const insideBB = lastBollingerUpper != null && computeBollingerExposedDirection(price) === null;
+      if (closePrice != null && insideBB && price > closePrice) showPotSaltoBanner('Pot Sal BB Vol Alza');
+      else if (closePrice != null && insideBB && price < closePrice) showPotSaltoBanner('Pot Sal BB Vol Baja');
+      else hidePotSaltoBanner();
+    }
   }
 
   // 'above'/'below'/null — whether price has broken outside THIS panel's own Bollinger Band(20,2),
@@ -4064,6 +4112,8 @@
     lastAppliedRange = null;
     openBandSnapshot = null;
     openBandSnapshotDismissedDay = null;
+    potSaltoDismissed = false;
+    hidePotSaltoBanner();
   }
 
   function loadHistory(candles) {
