@@ -927,6 +927,14 @@ public class ChartPanel : Panel
                     else
                     {
                         TLineStore.Remove(_symbol, TLineModeTag, t1, p1, t2, p2);
+                        // Drawing only mirrors one-way (Daily -> live, see AddMirroredTLineAsync's
+                        // own comment), but deletion needs to go both ways: LoadSavedTLinesAsync
+                        // re-syncs anything present in DailyTLineTag but missing from TLineModeTag
+                        // on every chart open — without also removing it here, a line deleted on
+                        // the live chart would just reappear the next time this chart reopens
+                        // (confirmed live — reported as "elimino una T-Line y me vuelve a aparecer
+                        // el próximo día").
+                        TLineStore.Remove(_symbol, DailyTLineTag, t1, p1, t2, p2);
                         _tLineSignalFiredFor.Remove((t1, p1, t2, p2));
                         _ = _webView.CoreWebView2?.ExecuteScriptAsync("setTLineHint('');");
                         // Deleted before it ever resolved — marked, not removed, so the CT log
