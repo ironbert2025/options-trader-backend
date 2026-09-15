@@ -479,6 +479,50 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // Toggles P-Line ("price alert" line) drawing mode on/off — panel 2 (15m RTH) only, per
+    // explicit request. Single click draws a dashed horizontal line; single-shot (auto-disarms
+    // after one placement, see chart.html's 'pline_placed' message and OnPLinePlacedEvent below).
+    // No mirroring to other panels, no persistence — session-only, tracked in _pLines below.
+    public async Task<bool> TogglePLineModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("togglePLine();");
+        return result == "true";
+    }
+
+    // Fires once a P-Line is actually placed (single-shot tool auto-disarms itself in chart.html)
+    // so the toolbar button's color can reset, same pattern as OnArrowPlacedEvent/OnTLinePlacedEvent.
+    public event Action? OnPLinePlacedEvent;
+
+    // Fires (price, direction) the moment a live tick crosses an armed P-Line in the expected
+    // direction — see UpdateLivePriceFromExternalSource. The line itself stays drawn afterward
+    // (removed from _pLines below so it can't fire twice, but chart.html's own primitive is left
+    // untouched) — TwoPanelChartsControl subscribes to capture a snapshot and send the Telegram push.
+    public event Action<decimal, string>? OnPLineCrossedEvent;
+
+    // (Price, Direction) pairs currently armed and waiting to cross — 'above' fires when a tick
+    // rises to/past Price, 'below' when a tick falls to/past it. Session-only (no persistence,
+    // per explicit request) — cleared naturally on a fresh WebView2/new day, nothing to reset here.
+    private readonly List<(decimal Price, string Direction)> _pLines = new();
+
+    // Checks every armed P-Line against the latest live price — called from
+    // UpdateLivePriceFromExternalSource, panel 2 (15m RTH) only. A crossed line fires
+    // OnPLineCrossedEvent once and is removed from _pLines (so it can't fire twice), but the
+    // visual line itself stays drawn in chart.html — per explicit request, only the alert is
+    // one-shot, not the line.
+    private void EvaluatePLineCross(decimal price)
+    {
+        if (_pLines.Count == 0) return;
+        for (int i = _pLines.Count - 1; i >= 0; i--)
+        {
+            var (linePrice, direction) = _pLines[i];
+            var crossed = direction == "above" ? price >= linePrice : price <= linePrice;
+            if (!crossed) continue;
+            _pLines.RemoveAt(i);
+            OnPLineCrossedEvent?.Invoke(linePrice, direction);
+        }
+    }
+
     // Toggles Text-placement mode on/off. While on, every click writes `text` (captured by the
     // caller — MultiChartForm's own multiline textbox, not the Windows clipboard, per explicit
     // request) at that click's point — session-only, never persisted. Same
@@ -1057,6 +1101,29 @@ public class ChartPanel : Panel
                     var hAddTime  = root.GetProperty("time").GetInt64();
                     var hAddPrice = root.GetProperty("price").GetDecimal();
                     OnHLineDrawnEvent?.Invoke(hAddTime, hAddPrice);
+                    break;
+                }
+                case "pline_add":
+                {
+                    // No mirroring (panel 2 only) — just arm the cross-detection in
+                    // UpdateLivePriceFromExternalSource. No persistence, per explicit request.
+                    var pAddPrice     = root.GetProperty("price").GetDecimal();
+                    var pAddDirection = root.GetProperty("direction").GetString() ?? "above";
+                    _pLines.Add((pAddPrice, pAddDirection));
+                    break;
+                }
+                case "pline_delete":
+                {
+                    // Cancels the pending alert — no mirroring to clean up (panel 2 only).
+                    var pDelPrice = root.GetProperty("price").GetDecimal();
+                    _pLines.RemoveAll(l => Math.Abs(l.Price - pDelPrice) < 0.005m);
+                    break;
+                }
+                case "pline_placed":
+                {
+                    // Single-shot tool auto-disarmed itself in chart.html — reset the toolbar
+                    // button's color.
+                    OnPLinePlacedEvent?.Invoke();
                     break;
                 }
                 // "smawatch_delete" removed — this panel no longer loads the 👁 marker (see
@@ -3129,6 +3196,7 @@ public class ChartPanel : Panel
         if (_mode == ChartPanelMode.Fifteen_RTH && eastern.TimeOfDay >= new TimeSpan(9, 30, 0))
             ArmVolatilityOpeningWatchDefault();
         if (eastern.TimeOfDay < new TimeSpan(9, 30, 0)) EvaluateBollingerWideningLabel(price); // "BB" live during premarket too
+        if (_mode == ChartPanelMode.Fifteen_RTH) EvaluatePLineCross(price); // panel 2 only, see TogglePLineModeAsync
 
         if (_liveBucket == null) return; // no bucket open yet — CHART_EQUITY seeds the first one
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))

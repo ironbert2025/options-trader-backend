@@ -662,6 +662,37 @@ public class TwoPanelChartsControl : UserControl
             if (rthPanel != null) on = await rthPanel.ToggleHLineModeAsync();
             HLineButton.BackColor = on ? Color.LightSalmon : SystemColors.Control;
         };
+        // "P-Line" — price-alert line, panel 2 (15m RTH) ONLY, per explicit request (unlike
+        // H-Line/T-Line/Text/Arrow above, no panel-1 half, no MultiChartForm panel-3 wiring).
+        var btnPLine = new Button { Text = "P-Line", Size = new Size(60, 24) };
+        btnPLine.Click += async (s, e) =>
+        {
+            if (rthPanel == null) return;
+            var on = await rthPanel.TogglePLineModeAsync();
+            btnPLine.BackColor = on ? Color.MediumPurple : SystemColors.Control;
+        };
+        // Single-shot tool — chart.html auto-disarms itself the moment the line is placed.
+        if (rthPanel != null) rthPanel.OnPLinePlacedEvent += () => btnPLine.BackColor = SystemColors.Control;
+
+        // Fires once a live tick crosses an armed P-Line — capture the combined panel1+2 snapshot
+        // and push it to Telegram, same pattern as OnPmCrossEvent below. The line stays drawn on
+        // the chart afterward (chart.html never removes it); only the push itself is one-shot.
+        if (rthPanel != null)
+        {
+            rthPanel.OnPLineCrossedEvent += (price, direction) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(async () =>
+                {
+                    var arrow = direction == "above" ? "▲" : "▼";
+                    var message = $"{_symbol}: precio cruzó {price:F2} {arrow}";
+                    AppendLog($"{DateTime.Now:HH:mm:ss}  [P-Line] {message}{Environment.NewLine}");
+                    if (!SuppressOwnTelegramPushes)
+                        _ = SendPLineCrossedTelegramPushAsync(message);
+                });
+            };
+        }
+
         // Panel-1/2 half of the shared Text arm/disarm — see TextButton's XML-ish comment above and
         // MultiChartForm's own extra Click handler for the panel-3 half.
         TextButton.Click += async (s, e) =>
@@ -800,6 +831,7 @@ public class TwoPanelChartsControl : UserControl
         // Panel 2 group, per explicit request/order: H-Line, T-Line, Text, Arrow, BB edges, AWS, Telegram.
         toolbarRight.Controls.Add(HLineButton);
         toolbarRight.Controls.Add(btnTLine);
+        toolbarRight.Controls.Add(btnPLine);
         toolbarRight.Controls.Add(TextButton);
         toolbarRight.Controls.Add(ArrowButton);
         toolbarRight.Controls.Add(chkBollingerEdges);
@@ -1634,6 +1666,47 @@ public class TwoPanelChartsControl : UserControl
                 // the global CT.md with the image now included.
                 CtRecordStore.SetImagePathForMostRecentResolved(_symbol, timeframe, path);
             }
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined (panel 1 + 2) snapshot when a P-Line (panel 2 price alert) gets
+    // crossed — same pattern as SendTLineSignalTelegramPushAsync above, minus the CT-record
+    // attachment (P-Line isn't tied to a CT signal).
+    private async Task SendPLineCrossedTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_PLineCrossed_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "PLineCrossed", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             else
                 LogTelegramPushFailure(detail);
         }

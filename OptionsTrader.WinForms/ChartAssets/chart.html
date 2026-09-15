@@ -765,6 +765,28 @@
     return -1;
   }
 
+  // Same idea as findHLineByClick above, for P-Line.
+  function findPLineByClick(px, py) {
+    const ts = chart.timeScale();
+    const tolerance = 6;
+    for (let i = pLinePrimitive._segments.length - 1; i >= 0; i--) {
+      const seg = pLinePrimitive._segments[i];
+      let snappedTime = seg.time;
+      if (safeTimeToCoordinate(ts, snappedTime) == null && allCandles.length > 0) {
+        let floor = null;
+        for (let j = allCandles.length - 1; j >= 0; j--) {
+          if (allCandles[j].time <= seg.time) { floor = allCandles[j].time; break; }
+        }
+        snappedTime = floor ?? allCandles[0].time;
+      }
+      const x = safeTimeToCoordinate(ts, snappedTime);
+      const y = candleSeries.priceToCoordinate(seg.price);
+      if (x == null || y == null) continue;
+      if (distToSegment(px, py, x, y, chart.timeScale().width(), y) <= tolerance) return i;
+    }
+    return -1;
+  }
+
   // Returns the index of the DZ/SZ line (demand or supply, click point -> right edge, same shape
   // as H-Line) within a few pixels of (px,py), or -1.
   function findDzSzByClick(px, py) {
@@ -843,6 +865,20 @@
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'hline_delete', price: removed.price });
+      }
+      return;
+    }
+
+    // P-Line: removed here AND reported to C# (ChartPanel.CoreWebView2_WebMessageReceived), which
+    // cancels the pending alert (no more mirroring/removal needed than that — panel 2 only, no
+    // sibling panels to relay to).
+    const pLineIdx = pLinePrimitive._segments.findIndex(s => s.selected);
+    if (pLineIdx !== -1) {
+      const removedP = pLinePrimitive._segments[pLineIdx];
+      pLinePrimitive._segments.splice(pLineIdx, 1);
+      forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'pline_delete', price: removedP.price });
       }
       return;
     }
@@ -990,6 +1026,9 @@
     hLinePrimitive._segments = [];
     hLineArmed = false;
 
+    pLinePrimitive._segments = [];
+    pLineArmed = false;
+
     arrowPrimitive._arrows = [];
     arrowPrimitive._preview = null;
     arrowArmed = false;
@@ -1088,6 +1127,21 @@
       const hadHLineSelection = hLinePrimitive._segments.some(s => s.selected);
       if (hadHLineSelection) {
         hLinePrimitive._segments.forEach(s => { s.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // P-Line click selection — same reasoning as H-Line's own comment above.
+    if (pLinePrimitive._segments.length > 0) {
+      const hitIdx = findPLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        pLinePrimitive._segments.forEach((s, i) => { s.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      const hadPLineSelection = pLinePrimitive._segments.some(s => s.selected);
+      if (hadPLineSelection) {
+        pLinePrimitive._segments.forEach(s => { s.selected = false; });
         forceRepaint();
       }
     }
@@ -1367,6 +1421,22 @@
       forceRepaint();
     }
 
+    if (pLineArmed) {
+      const refPrice = currentReferencePrice();
+      const direction = refPrice != null && price < refPrice ? 'below' : 'above';
+      pLinePrimitive._segments.push({ time: clickTime, price, direction, selected: false });
+      // Reported to C# (ChartPanel.CoreWebView2_WebMessageReceived) — owns the actual live-tick
+      // cross-detection and Telegram push, no mirroring (panel 2 only, per explicit request).
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'pline_add', time: clickTime, price, direction });
+        window.chrome.webview.postMessage({ type: 'pline_placed' });
+      }
+      // Single-shot per arm, same convention as the Arrow tools — placing one line disarms the
+      // tool instead of staying armed for more.
+      pLineArmed = false;
+      forceRepaint();
+    }
+
     if (textArmed && pendingTextValue) {
       clickTextPrimitive._labels.push({ time: clickTime, price, text: pendingTextValue, selected: false });
       forceRepaint();
@@ -1607,6 +1677,86 @@
         }
       }];
     }
+  }
+
+  // "P-Line" — price-alert line, panel 2 (15m RTH) only, per explicit request. Single click draws
+  // a DASHED horizontal line (anchor -> right edge, same shape as H-Line) marking a price level to
+  // watch: 'above' if drawn above the price at click time (alert fires when price rises to meet
+  // it), 'below' otherwise (fires when price falls to meet it). Session-only, no persistence — C#
+  // (ChartPanel.UpdateLivePriceFromExternalSource) owns the actual cross-detection against live
+  // ticks and fires the Telegram push; this primitive is purely the visual + selection/delete.
+  // Stays drawn after firing (not removed) — only the push itself is one-shot, tracked in C#.
+  class PLinePrimitive {
+    constructor() { this._segments = []; this._chart = null; } // [{ time, price, direction, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                self._segments.forEach(seg => {
+                  let snappedTime = seg.time;
+                  if (safeTimeToCoordinate(ts, snappedTime) == null && allCandles.length > 0) {
+                    let floor = null;
+                    for (let i = allCandles.length - 1; i >= 0; i--) {
+                      if (allCandles[i].time <= seg.time) { floor = allCandles[i].time; break; }
+                    }
+                    snappedTime = floor ?? allCandles[0].time;
+                  }
+                  const x = safeTimeToCoordinate(ts, snappedTime);
+                  const y = candleSeries.priceToCoordinate(seg.price);
+                  if (x == null || y == null) return;
+                  ctx.strokeStyle = '#ba68c8'; // purple, distinct from H-Line's solid red
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                  ctx.setLineDash([]);
+
+                  if (seg.selected) {
+                    ctx.strokeStyle = '#ffeb3b'; // yellow dashed overlay = selected, ready to delete
+                    ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([2 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                    ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                  }
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const pLinePrimitive = new PLinePrimitive();
+  let pLineAttached = false;
+  let pLineArmed = false;
+
+  function togglePLine() {
+    if (!pLineAttached) { candleSeries.attachPrimitive(pLinePrimitive); pLineAttached = true; }
+    pLineArmed = !pLineArmed;
+    return pLineArmed;
+  }
+
+  // Current reference price for deciding 'above'/'below' at draw time — same "most recent real
+  // bar's close, by time" lookup sharedAutoscaleInfoProvider uses, not just series[len-1] (see
+  // that function's own comment on why the array's order isn't trusted).
+  function currentReferencePrice() {
+    const series = displaySeries();
+    if (series.length === 0) return null;
+    return series.reduce((a, b) => (b.time > a.time ? b : a)).close;
   }
 
   const hLinePrimitive = new HLinePrimitive();
