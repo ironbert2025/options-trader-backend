@@ -131,6 +131,16 @@ public class TwoPanelChartsControl : UserControl
         if (_rthPanel != null) await _rthPanel.MarkDeltaSAsync(entrySpot, closeSpot, strike);
     }
 
+    // Red "Expired!!!" marker at the 4pm auto-close of an expired trade — panel 2 (15m RTH) only,
+    // same pattern as MarkEntrySpotOnRthChartAsync above. Mirrors MultiChartForm's own
+    // MarkExpiredOnRthChartAsync (the popup Live Chart window) — CloseTradeRowAsync only ever
+    // called that one, never this control, so a symbol with no popup open but the Charts tab
+    // connected never got the marker at all.
+    public async Task MarkExpiredOnRthChartAsync()
+    {
+        if (_rthPanel != null) await _rthPanel.MarkExpiredAsync();
+    }
+
     // Small event log fed by panel 1/2 events — MultiChartForm's own panel-3/combined-screenshot
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.

@@ -3709,6 +3709,14 @@ public partial class Form1 : Form
             await chartFormExpired.MarkExpiredOnRthChartAsync();
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
+        // Same marker on the Charts tab's own panel 2 — was only ever drawn on the popup Live
+        // Chart window above, so a symbol with no popup open (just the Charts tab connected)
+        // never got it at all.
+        if (closeType == "EXPIRED" && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+        {
+            await _chartsTabForm.MarkExpiredOnRthChartAsync();
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
 
         // "ΔS=value" marker on the 15m RTH+Overnight chart — |spot at close - spot at entry|,
         // anchored at the trade's strike (same price as its green "Stk=xxx" line). EntrySpotPrice
