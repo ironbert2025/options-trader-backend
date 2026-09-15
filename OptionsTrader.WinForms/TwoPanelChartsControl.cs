@@ -647,7 +647,9 @@ public class TwoPanelChartsControl : UserControl
         };
 
         HLineButton = new Button { Text = "H-Line", Size = new Size(60, 24) };
-        TextButton = new Button { Text = "Text", Size = new Size(60, 24) };
+        // Extra left margin, per explicit request — pushes Text/Arrow/BB edges (everything after
+        // it in the flow) 40px further right, without moving H-Line/T-Line before it.
+        TextButton = new Button { Text = "Text", Size = new Size(60, 24), Margin = new Padding(68, 3, 3, 3) };
         ArrowButton = new Button { Text = "Arrow", Size = new Size(60, 24) };
 
         // Panel-1/2 half of the shared H-Line arm/disarm — MultiChartForm attaches its own extra
