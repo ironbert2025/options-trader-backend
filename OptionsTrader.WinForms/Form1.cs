@@ -13,10 +13,11 @@ namespace OptionsTrader.WinForms;
 // AccountHash/OccSymbol/Quantity are only set for REAL broker trades — that's what tells
 // CloseTradeRowAsync it needs to actually send a SELL_TO_CLOSE order, not just update the log.
 // ExitOrderId is the pending Trade-Target LIMIT exit (if any), cancelled before a manual close.
-// ReinforcementGroupId/IsReinforcementResult: Demo-only "Refuerzo" feature — a 2nd Demo trade at
-// the same (Type, Strike) as an already-open Demo trade creates a 3rd averaged row instead of a
-// normal one. All 3 rows share the same ReinforcementGroupId (the reinforcement row's own
-// TradeId); IsReinforcementResult is true only on that 3rd row. Closing ANY of the 3 (see
+// ReinforcementGroupId/IsReinforcementResult: "Refuerzo" feature (Demo and Simulation trades — see
+// TryCreateReinforcementAsync) — a 2nd trade at the same (Type, Strike) as an already-open one
+// creates a 3rd averaged row instead of a normal one. All 3 rows share the same
+// ReinforcementGroupId (the reinforcement row's own TradeId); IsReinforcementResult is true only
+// on that 3rd row. Closing ANY of the 3 (see
 // CloseTradeRowAsync) closes the whole group together at the same C_Bid. The two source rows
 // still receive normal live C_Bid/PnL updates from UpdateTradesPnL — only their color and
 // close-button behavior differ, per explicit request.
@@ -24,7 +25,7 @@ file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose 
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
     DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m,
     int? ReinforcementGroupId = null, bool IsReinforcementResult = false,
-    string EntrySpotColor = "#ffffff");
+    string EntrySpotColor = "#ffffff", Guid? LocalId = null, string? EntryImagePath = null);
 
 public partial class Form1 : Form
 {
@@ -398,6 +399,16 @@ public partial class Form1 : Form
         RaiseWsStatusEvent("Market closed — forcing disconnect from Schwab streamer");
         await _historyClient.StopAsync();
         RaiseWsStatusEvent("Disconnected");
+
+        // Per explicit request: a later manual "Connect" (Charts tab) must actually re-establish
+        // the Schwab stream, not just rebuild the chart UI. EnsureLiveFeedReadyAsync memoizes
+        // _liveFeedReadyTask forever once it succeeds — without resetting it here, a later call
+        // would just hand back this same already-completed task, leaving _historyClient/_liveFeed
+        // pointed at the streamer that was just stopped above, so no ticks would ever arrive again
+        // until the app itself restarts. SetUpLiveFeedAsync's hub branch reuses _candleHubServer
+        // (still alive/listening the whole time — only the Schwab socket was stopped, never the
+        // local port this instance's hub relays other instances through) instead of re-binding it.
+        _liveFeedReadyTask = null;
     }
 
     // Only the hub instance ever calls this directly (ForceDisconnectWebSocketAsync, and the
@@ -897,8 +908,6 @@ public partial class Form1 : Form
             .Where(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        if (saved.Count == 0) return;
-
         var today = DateOnly.FromDateTime(DateTime.Today);
 
         foreach (var t in saved)
@@ -949,6 +958,62 @@ public partial class Form1 : Form
 
                 // LogLine($"{DateTime.Now:HH:mm:ss} Restored open trade ({t.OptionType}) Strike: {t.StrikePrice}  Entry: {t.EntryPrice:F2}  Contracts: {t.Contracts}", Color.Cyan);
             }
+        }
+
+        RestoreOpenSimulationTrades(symbol, today);
+
+        // RestoreOpenTrades/RestoreOpenSimulationTrades mutate dgvTrades directly, unlike
+        // RecordEntryAsync/CloseTradeRowAsync — neither raises this on its own, so the Charts tab's
+        // own mirrored _dgvTrades (TwoPanelChartsControl.RefreshTradesGrid, wired to this event)
+        // never found out if it was already connected for this symbol before the restore ran.
+        OnTradesUpdatedEvent?.Invoke(symbol);
+    }
+
+    // "Trade Simulation" trades (Charts tab) — same still-open/expired split as RestoreOpenTrades
+    // above, just against SimulationTradesStore and matched by LocalId (their tradeId is always 0,
+    // shared by every simulation trade, so it can't identify a row the way TradeId does above).
+    private void RestoreOpenSimulationTrades(string symbol, DateOnly today)
+    {
+        var saved = SimulationTradesStore.Load()
+            .Where(t => t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (saved.Count == 0) return;
+
+        foreach (var t in saved)
+        {
+            bool alreadyShown = dgvTrades.Rows
+                .Cast<DataGridViewRow>()
+                .Any(r => r.Tag is TradeRowTag tag && tag.LocalId == t.LocalId);
+            if (alreadyShown) continue;
+
+            if (t.ExpirationDate < today)
+            {
+                // Expired unattended — just drop it, no close-out needed (never reached the
+                // API/TradeHistoryStore on entry either, see RecordEntryAsync's isSimulation skip).
+                SimulationTradesStore.Remove(t.LocalId);
+                continue;
+            }
+
+            decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
+            var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m), 2);
+
+            dgvTrades.Rows.Add(
+                t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
+                string.Empty, t.EntryPrice.ToString("F2"), t.Contracts,
+                t.EntryPrice.ToString("F2"), t.EntryPrice.ToString("F2"), tBid.ToString("F2"),
+                "0.00", "0.00", t.PnlTarget,
+                string.Empty, "Close");
+
+            var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
+            restoredRow.Tag = new TradeRowTag(0, t.EntryTime, ExpirationDate: t.ExpirationDate,
+                EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor, LocalId: t.LocalId);
+            restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
+            restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
+            restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
+            restoredRow.Cells["colTradeTBid"].Style.ForeColor       = Color.LimeGreen;
+            SetTradeTypeColor(restoredRow, t.OptionType);
+            restoredRow.Cells["colTradeDemoReal"].Value = "Simulation";
         }
     }
 
@@ -2059,7 +2124,11 @@ public partial class Form1 : Form
             }
         }
 
-        combined = combined.OrderByDescending(x => x.Quote.StrikePrice).ToList();
+        // Calls grouped first, then puts — sorting by strike price alone breaks this the moment a
+        // highlighted (forced-visible) strike goes ITM, since an ITM call's strike can fall below
+        // spot and interleave numerically with put strikes, splitting the list into multiple
+        // Call/Put sections (the separator-row logic above fires every time the type flips).
+        combined = combined.OrderByDescending(x => x.IsCall).ThenByDescending(x => x.Quote.StrikePrice).ToList();
 
         bool? previousWasCall = null;
         foreach (var (quote, isCall) in combined)
@@ -2327,7 +2396,8 @@ public partial class Form1 : Form
     // target), but never touches TradeHistoryStore/OpenTradesStore/screenshots. Never sends to the
     // API (sendToApi: false) and passes isSimulation through to RecordEntryAsync so the trade id
     // stays 0 — that alone makes CloseTradeRowAsync's existing tradeId != 0 gates skip
-    // OpenTradesStore/CloseTradeInApiAsync automatically. No Refuerzo (Demo-only).
+    // OpenTradesStore/CloseTradeInApiAsync automatically. Refuerzo works the same as Demo, per
+    // explicit request — see TryCreateReinforcementAsync's own same-kind matching.
     private async Task OpenSimulationTrade(int rowIndex) =>
         await OpenSimulationTradeFromRow(dgvQuotes.Rows[rowIndex], TodayGridColumns, expDateOverride: null);
 
@@ -2342,8 +2412,9 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Simulation", isDemo: true,
+        var (_, newRow) = await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Simulation", isDemo: true,
             suppressAutoClose: false, sendToApi: false, expDateOverride: expDateOverride, isSimulation: true);
+        await TryCreateReinforcementAsync(newRow, symbol, rowType, strike, suppressAutoClose: false, sendToApi: false, expDateOverride, isSimulation: true);
     }
 
     private async Task OpenSimulatedTradeFromRow(DataGridViewRow row, OptionsGridColumns cols, bool sendToApi, DateOnly? expDateOverride)
@@ -2381,23 +2452,30 @@ public partial class Form1 : Form
         await TryCreateReinforcementAsync(newRow, symbol, rowType, strike, suppressAutoClose: true, sendToApi, expDateOverride);
     }
 
-    // Demo-only "Refuerzo": if another Demo trade is already open at the same (Type, Strike) and
-    // isn't already part of a reinforcement group, average the two into a 3rd row (contracts sum,
-    // weighted-average entry price) instead of leaving two independent positions — per explicit
-    // request. A 3rd trade arriving at a strike that's already part of a group is left alone (no
-    // re-averaging), per explicit request ("se ignora por ahora"). The averaged row's target% is
-    // recalculated fresh from the averaged price (RecordEntryAsync always derives T_Bid from
-    // whatever "ask" it's given), and it flows through the exact same live-update/close machinery
-    // as any normal row — UpdateTradesPnL/CloseTradeRowAsync need no changes for it to work.
+    // "Refuerzo": if another trade of the SAME kind (Demo or Simulation — see isSimulation) is
+    // already open at the same (Type, Strike) and isn't already part of a reinforcement group,
+    // average the two into a 3rd row (contracts sum, weighted-average entry price) instead of
+    // leaving two independent positions — per explicit request (originally Demo-only, extended to
+    // Simulation trades later, same logic). A 3rd trade arriving at a strike that's already part
+    // of a group is left alone (no re-averaging), per explicit request ("se ignora por ahora").
+    // The averaged row's target% is recalculated fresh from the averaged price (RecordEntryAsync
+    // always derives T_Bid from whatever "ask" it's given), and it flows through the exact same
+    // live-update/close machinery as any normal row — UpdateTradesPnL/CloseTradeRowAsync need no
+    // changes for it to work.
     private async Task TryCreateReinforcementAsync(DataGridViewRow newRow, string symbol, string rowType,
-        string strike, bool suppressAutoClose, bool sendToApi, DateOnly? expDateOverride)
+        string strike, bool suppressAutoClose, bool sendToApi, DateOnly? expDateOverride, bool isSimulation = false)
     {
+        // Only combine trades of the SAME kind — a Simulation trade reinforcing with a Real/Demo
+        // one (or vice versa) would mix real money with a no-op paper position, which makes no
+        // sense (and Simulation's tradeId=0/no-API-persistence assumptions don't carry over to a
+        // real position anyway).
         var sourceRow = dgvTrades.Rows.Cast<DataGridViewRow>()
             .FirstOrDefault(r => r != newRow
                 && r.Tag is TradeRowTag { ReinforcementGroupId: null }
                 && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString())
                 && r.Cells["colTradeType"].Value?.ToString() == rowType
-                && r.Cells["colTradeStrike"].Value?.ToString() == strike);
+                && r.Cells["colTradeStrike"].Value?.ToString() == strike
+                && string.Equals(r.Cells["colTradeDemoReal"].Value?.ToString(), "Simulation", StringComparison.OrdinalIgnoreCase) == isSimulation);
         if (sourceRow == null) return;
         var sourceTradeId = (sourceRow.Tag as TradeRowTag)?.TradeId ?? 0;
         var newTradeId    = (newRow.Tag as TradeRowTag)?.TradeId ?? 0;
@@ -2414,7 +2492,8 @@ public partial class Form1 : Form
 
         var (reinforcementId, reinforcementRow) = await RecordEntryAsync(
             symbol, rowType, strike, "0", bid, avgPrice, combinedContracts.ToString(), "Trade Refuerzo",
-            isDemo: true, suppressAutoClose: suppressAutoClose, sendToApi: sendToApi, expDateOverride: expDateOverride);
+            isDemo: true, suppressAutoClose: suppressAutoClose, sendToApi: isSimulation ? false : sendToApi,
+            expDateOverride: expDateOverride, isSimulation: isSimulation);
 
         if (reinforcementRow.Tag is TradeRowTag rTag)
             reinforcementRow.Tag = rTag with { ReinforcementGroupId = reinforcementId, IsReinforcementResult = true };
@@ -2527,8 +2606,13 @@ public partial class Form1 : Form
         // tomorrow's ExpirationDate, not today's.
         var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         var entrySpotColor = NextEntrySpotColor();
+        // Simulation trades get their own LocalId (their tradeId stays 0, shared by every
+        // simulation trade, so it can't identify one in SimulationTradesStore) — see that store's
+        // own comment.
+        var simulationLocalId = isSimulation ? Guid.NewGuid() : (Guid?)null;
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
-            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice, EntrySpotColor: entrySpotColor);
+            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice, EntrySpotColor: entrySpotColor,
+            LocalId: simulationLocalId);
         PadWithBlankRows(dgvTrades, 4);
 
         if (!isSimulation)
@@ -2545,6 +2629,24 @@ public partial class Form1 : Form
                 PnlTarget:      targetPct.ToString("F0"),
                 EntrySpotPrice: _lastSpotPrice,
                 IsDemo:         isDemo,
+                EntrySpotColor: entrySpotColor));
+        else
+            // Per explicit request: unlike Real/Demo trades, "Trade Simulation" trades still
+            // don't touch TradeHistoryStore/the API/screenshots — but DO persist locally now, so
+            // one still open at end of day (not expired) reappears tomorrow when the symbol is
+            // reselected, same as Real/Demo (see RestoreOpenTrades).
+            SimulationTradesStore.Add(new PersistedSimulationTrade(
+                LocalId:        simulationLocalId!.Value,
+                Symbol:         symbol,
+                OptionType:     rowType,
+                StrikePrice:    strike,
+                EntryPrice:     ask,
+                Contracts:      contracts,
+                EntryTime:      entryTime,
+                ExpirationDate: expDate,
+                Level:          level,
+                PnlTarget:      targetPct.ToString("F0"),
+                EntrySpotPrice: _lastSpotPrice,
                 EntrySpotColor: entrySpotColor));
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
@@ -2571,6 +2673,16 @@ public partial class Form1 : Form
 
         if (!isSimulation)
             _ = UploadEntryChartSnapshotAsync(symbol, rowType, tradeId, now);
+        else
+        {
+            // Simulation trades still skip the S3 upload (see UploadEntryChartSnapshotAsync's own
+            // comment), but the entry image is kept locally on the row's tag — per explicit
+            // request, a same-day 0DTE simulation trade that expires unattended pushes BOTH the
+            // entry and close snapshots to Telegram (see CloseTradeRowAsync), and needs this one.
+            var entryImagePath = await SaveTradeChartSnapshotAsync(symbol, rowType, "Entry");
+            if (newRow.Tag is TradeRowTag tagWithEntryImage)
+                newRow.Tag = tagWithEntryImage with { EntryImagePath = entryImagePath };
+        }
 
         OnTradesUpdatedEvent?.Invoke(symbol);
         return (tradeId, newRow);
@@ -2865,12 +2977,39 @@ public partial class Form1 : Form
             _chartsTabForm = chartsControl;
             _chartsHost!.Controls.Add(chartsControl);
 
+            // Currently-open trades (Real/Demo/Simulation) for this symbol never got their
+            // strike/entry-spot markers drawn on THIS control — RecordEntryAsync only draws them
+            // if the Charts tab was already connected at the moment the trade opened, and
+            // RestoreOpenTrades/RestoreOpenSimulationTrades don't touch any chart at all. Catch up
+            // now that the panels actually exist, per explicit request ("que se vea en tab charts").
+            _ = RemarkOpenTradesOnChartsTabAsync(chartsControl, symbol);
+
             _btnChartsConnect!.Text = "Disconnect";
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Could not open the embedded charts:\n\n{ex}",
                 "Charts Tab Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // See ConnectChartsTabAsync's call site above. Only rows still open (no ExitTime) for this
+    // symbol — a closed trade's marker was already drawn (or missed) at the time it actually
+    // closed, nothing to catch up there.
+    private async Task RemarkOpenTradesOnChartsTabAsync(TwoPanelChartsControl chartsControl, string symbol)
+    {
+        var openRows = dgvTrades.Rows.Cast<DataGridViewRow>()
+            .Where(r => r.Tag is TradeRowTag && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
+            .ToList();
+
+        foreach (var row in openRows)
+        {
+            if (row.Tag is not TradeRowTag tag) continue;
+            if (!decimal.TryParse(row.Cells["colTradeStrike"].Value?.ToString(), out var strike)) continue;
+
+            await chartsControl.MarkStrikeOnRthChartAsync(strike);
+            if (tag.EntrySpotPrice > 0)
+                await chartsControl.MarkEntrySpotOnRthChartAsync(tag.EntrySpotPrice, tag.EntrySpotColor);
         }
     }
 
@@ -3102,6 +3241,26 @@ public partial class Form1 : Form
             _candleHubClient = remoteHubClient;
             _historyClient   = CreateSchwabStreamerClient();
             _liveFeed        = remoteHubClient;
+            return;
+        }
+
+        // Reconnecting after ForceDisconnectWebSocketAsync's 4pm forced disconnect — this instance
+        // was already the hub, and its local relay server (_candleHubServer) is still alive the
+        // whole time; only the actual Schwab socket got stopped. Reuse it instead of trying
+        // hubServer.TryStart below, which would just fail (the port's already bound by this same
+        // process) — only the Schwab streamer itself needs recreating/reconnecting/resubscribing.
+        if (_isWebSocketHub && _candleHubServer != null)
+        {
+            var reconnectedStreamer = CreateSchwabStreamerClient(allowRefresh: true);
+            reconnectedStreamer.OnWsStatusEvent += RaiseWsStatusEvent;
+            await reconnectedStreamer.ConnectAsync();
+            await reconnectedStreamer.SubscribeChartEquity(symbols);
+            await reconnectedStreamer.SubscribeLevelOneEquity(symbols);
+            reconnectedStreamer.OnNewCandle    += (symbol, candle) => _candleHubServer.Broadcast(symbol, candle);
+            reconnectedStreamer.OnLevelOneTick += (symbol, price, time) => _candleHubServer.BroadcastLevelOne(symbol, price, time);
+
+            _historyClient = reconnectedStreamer;
+            _liveFeed      = reconnectedStreamer;
             return;
         }
 
@@ -3545,6 +3704,8 @@ public partial class Form1 : Form
         // Remove from local persistence
         if (tradeId != 0)
             OpenTradesStore.Remove(tradeId);
+        if (isSimulation && tag?.LocalId is { } simulationLocalIdToRemove)
+            SimulationTradesStore.Remove(simulationLocalIdToRemove);
 
         // Close trade (API PATCH if tradeId is a real API id, always updates TradeHistoryStore
         // locally regardless — see CloseTradeInApiAsync)
@@ -3561,6 +3722,14 @@ public partial class Form1 : Form
         if (closeType == "EXPIRED" && _liveChartForms.TryGetValue(symbol, out var chartFormExpired) && !chartFormExpired.IsDisposed)
         {
             await chartFormExpired.MarkExpiredOnRthChartAsync();
+            await Task.Delay(100); // let the WebView2 repaint before capturing it
+        }
+        // Same marker on the Charts tab's own panel 2 — was only ever drawn on the popup Live
+        // Chart window above, so a symbol with no popup open (just the Charts tab connected)
+        // never got it at all.
+        if (closeType == "EXPIRED" && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+        {
+            await _chartsTabForm.MarkExpiredOnRthChartAsync();
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -3607,13 +3776,29 @@ public partial class Form1 : Form
         // id, so that gate was silently blocking this push for 100% of trades — an unintended side
         // effect of the bypass, not something anyone actually wanted disabled. Fixed by dropping the
         // gate entirely; the function's own checks (imagePath/bot token) still apply.
-        _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
+        // A same-day (0DTE) Simulation trade that expires unattended (never manually closed) gets
+        // its own richer push instead of the normal single-image one — per explicit request, BOTH
+        // the entry and close snapshots, captioned to make clear it's a Simulation-only expiration
+        // (no real/demo money or API trade involved).
+        var isSameDaySimulationExpiry = isSimulation && closeType == "EXPIRED"
+            && tag != null && tag.ExpirationDate == DateOnly.FromDateTime(tag.EntryTime);
+        if (isSameDaySimulationExpiry)
+            _ = SendSimulationExpiredTelegramPushAsync(symbol, type, strike, entryPrice, exitBid, pnlVal, pnlPctVal,
+                tag!.EntryImagePath, closeChartPath);
+        else
+            _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
-        // Simulation trades stop here — the Telegram push above is now the one exception (per
-        // explicit request); everything below (TradeLog screenshot, S3 upload, daily-log entry)
-        // still only applies to real/demo trades — see RecordEntryAsync's matching isSimulation
-        // skip on the entry side (no S3/daily-log there either).
-        if (isSimulation) return;
+        // Simulation trades stop here for S3/TradeHistoryStore — the Telegram push above is one
+        // exception (per explicit request); the daily-log entry below is another (also per
+        // explicit request) — writes straight to its own "_Sim_Trades.md" using the LOCAL entry/
+        // close snapshot paths already captured (tag.EntryImagePath, closeChartPath), no S3 URL
+        // needed. Everything else below (TradeLog screenshot, S3 upload) still only applies to
+        // real/demo trades — see RecordEntryAsync's matching isSimulation skip on the entry side.
+        if (isSimulation)
+        {
+            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath);
+            return;
+        }
 
         // Screenshot TradeLog (Trades + Logger section of the form) — scroll the just-closed row
         // into view first, per explicit request, so it's actually visible in the capture even if
@@ -3721,6 +3906,46 @@ public partial class Form1 : Form
             var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, imagePath, caption);
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "TradeClose", DateTime.Now));
+        }
+        catch
+        {
+            // Best-effort — never let a Telegram/network failure affect the already-closed trade.
+        }
+    }
+
+    // Same-day (0DTE) Simulation trade that expired unattended (never manually closed) — per
+    // explicit request, pushes BOTH the entry and close chart snapshots (Telegram has no
+    // multi-photo caption API, so this sends two separate photo messages, entry first) with a
+    // caption that's explicit about this being a Simulation-only expiration, not a real/demo trade.
+    private async Task SendSimulationExpiredTelegramPushAsync(
+        string symbol, string optionType, string strike, decimal entryPrice, decimal exitPrice,
+        decimal pnl, decimal pnlPercent, string? entryImagePath, string? closeImagePath)
+    {
+        try
+        {
+            if (entryImagePath == null && closeImagePath == null) return; // nothing to attach
+
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+
+            var pnlSign = pnl >= 0 ? "+" : string.Empty;
+            var caption =
+                $"⚠️ {symbol} {optionType} {strike} — Trade Simulación EXPIRÓ sin cerrar (0DTE)\n" +
+                $"Entry: {entryPrice:F2}  Exit: {exitPrice:F2}\n" +
+                $"PnL: {pnlSign}{pnl:F2} ({pnlSign}{pnlPercent:F1}%)";
+
+            if (entryImagePath != null)
+            {
+                var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, entryImagePath, caption);
+                if (ok && messageId.HasValue)
+                    TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "SimulationExpired", DateTime.Now));
+            }
+            if (closeImagePath != null)
+            {
+                var (ok, _, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, closeImagePath, caption);
+                if (ok && messageId.HasValue)
+                    TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "SimulationExpired", DateTime.Now));
+            }
         }
         catch
         {

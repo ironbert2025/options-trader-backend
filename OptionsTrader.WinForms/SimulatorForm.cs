@@ -1328,31 +1328,22 @@ public class SimulatorForm : Form
 
         // Blue premarket line — panels 1/2 only. Per explicit request: this is a SIMULATION replaying
         // already-known history, not a live feed — instead of incrementally following whatever tick
-        // is "current" as the user steps forward (which used to show YESTERDAY's stale close at load
-        // time, before any of today's own data had been stepped through yet), read the WHOLE day's
-        // data once and draw+freeze the line immediately at "Cargar", using TODAY's actual FIRST
-        // recorded price (whatever time that is) — same "exposed" check applies right away too,
-        // against whatever Bollinger bands are loaded at that point. Fires exactly once per day
-        // (guarded by _premarketLineFinalizedForDay); every later RenderChartsUpToTime call skips
-        // this block entirely, so it can never get overwritten by later step advances.
+        // is "current" as the user steps forward, read ahead and draw+freeze the line immediately at
+        // "Cargar", anchored at today's first 15-min RTH candle's own Open — NOT the day's raw first
+        // tick, which can be a premarket price that doesn't match where that candle (the only one
+        // panel 2 ever actually shows, since it's RTH-only) visually opens — confirmed live as the
+        // line landing off to the left of the real open. Fires exactly once per day (guarded by
+        // _premarketLineFinalizedForDay); that candle doesn't exist until intradayUpToNow/rthCandles
+        // has actually reached 9:30, so this naturally (and harmlessly) retries on the next render
+        // until it does, rather than ever drawing a stale/wrong value in the meantime.
         if (!_premarketLineFinalizedForDay)
         {
-            var todaysTicks = _intradayCandles
-                .Where(c => DateOnly.FromDateTime(EasternTime(c.Time)) == _simDate)
-                .OrderBy(c => c.Time)
-                .ToList();
-            // Falls back to today's first RTH candle's Open on a day with zero recorded ticks before
-            // 9:30 (most of them) — that candle doesn't exist until intradayUpToNow/rthCandles has
-            // actually reached 9:30, so this naturally (and harmlessly) retries on the next render
-            // until it does, rather than ever drawing a wrong/stale value in the meantime.
-            decimal? initialPrice = todaysTicks.Count > 0
-                ? todaysTicks[0].Close
-                : rthCandles.FirstOrDefault(c => DateOnly.FromDateTime(EasternTime(c.Time)) == _simDate)?.Open;
-            if (initialPrice.HasValue)
+            var todaysFirstRthCandle = rthCandles.FirstOrDefault(c => DateOnly.FromDateTime(EasternTime(c.Time)) == _simDate);
+            if (todaysFirstRthCandle != null)
             {
                 _premarketLineFinalizedForDay = true;
-                _ = _hourlyChart.UpdatePreMarketLineAsync(initialPrice.Value);
-                _ = _rthChart.UpdatePreMarketLineAsync(initialPrice.Value);
+                _ = _hourlyChart.UpdatePreMarketLineAsync(todaysFirstRthCandle.Open);
+                _ = _rthChart.UpdatePreMarketLineAsync(todaysFirstRthCandle.Open);
             }
         }
 
@@ -1589,8 +1580,8 @@ public class SimulatorForm : Form
         // added right at open instead of requiring the extra click ForceStrikeInChainGrid needs.
         _forcedStrikes.Add((rowType, strike));
 
-        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
-        _ = _fullChart.MarkStrikeAsync(strike);
+        // Green "Stk=xxx" line — panel 2 (15m RTH) only, per explicit request (moved off panel 3).
+        _ = _rthChart.MarkStrikeAsync(strike);
 
         // White (or yellow, per that trade's assigned color) spot-price line at the moment of
         // entry — panels 2 and 3, bounded to that one candle, mirroring the live app
