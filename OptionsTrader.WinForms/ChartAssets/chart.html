@@ -1721,6 +1721,21 @@
                   ctx.stroke();
                   ctx.setLineDash([]);
 
+                  // "S=value" label — above the line by default, but below it if the current spot
+                  // is above the line (so the label doesn't collide with price action sitting
+                  // right above it), per explicit request. Right edge, same convention as the
+                  // "C" (prev-close) label.
+                  const spot = currentReferencePrice();
+                  const labelBelow = spot != null && spot > seg.price;
+                  ctx.fillStyle = '#ba68c8';
+                  ctx.font = `${12 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textAlign = 'right';
+                  ctx.textBaseline = labelBelow ? 'top' : 'bottom';
+                  const labelY = labelBelow
+                    ? y * scope.verticalPixelRatio + 2 * scope.verticalPixelRatio
+                    : y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio;
+                  ctx.fillText(`S=${seg.price.toFixed(2)}`, scope.bitmapSize.width - 4 * scope.horizontalPixelRatio, labelY);
+
                   if (seg.selected) {
                     ctx.strokeStyle = '#ffeb3b'; // yellow dashed overlay = selected, ready to delete
                     ctx.lineWidth = 1 * scope.horizontalPixelRatio;
