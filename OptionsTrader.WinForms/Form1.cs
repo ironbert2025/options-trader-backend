@@ -2123,7 +2123,11 @@ public partial class Form1 : Form
             }
         }
 
-        combined = combined.OrderByDescending(x => x.Quote.StrikePrice).ToList();
+        // Calls grouped first, then puts — sorting by strike price alone breaks this the moment a
+        // highlighted (forced-visible) strike goes ITM, since an ITM call's strike can fall below
+        // spot and interleave numerically with put strikes, splitting the list into multiple
+        // Call/Put sections (the separator-row logic above fires every time the type flips).
+        combined = combined.OrderByDescending(x => x.IsCall).ThenByDescending(x => x.Quote.StrikePrice).ToList();
 
         bool? previousWasCall = null;
         foreach (var (quote, isCall) in combined)
