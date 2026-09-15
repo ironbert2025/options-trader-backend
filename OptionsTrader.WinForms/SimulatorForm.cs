@@ -1580,8 +1580,8 @@ public class SimulatorForm : Form
         // added right at open instead of requiring the extra click ForceStrikeInChainGrid needs.
         _forcedStrikes.Add((rowType, strike));
 
-        // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only, same as the real app.
-        _ = _fullChart.MarkStrikeAsync(strike);
+        // Green "Stk=xxx" line — panel 2 (15m RTH) only, per explicit request (moved off panel 3).
+        _ = _rthChart.MarkStrikeAsync(strike);
 
         // White (or yellow, per that trade's assigned color) spot-price line at the moment of
         // entry — panels 2 and 3, bounded to that one candle, mirroring the live app
