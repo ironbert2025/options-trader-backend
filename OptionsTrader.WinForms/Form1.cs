@@ -13,10 +13,11 @@ namespace OptionsTrader.WinForms;
 // AccountHash/OccSymbol/Quantity are only set for REAL broker trades — that's what tells
 // CloseTradeRowAsync it needs to actually send a SELL_TO_CLOSE order, not just update the log.
 // ExitOrderId is the pending Trade-Target LIMIT exit (if any), cancelled before a manual close.
-// ReinforcementGroupId/IsReinforcementResult: Demo-only "Refuerzo" feature — a 2nd Demo trade at
-// the same (Type, Strike) as an already-open Demo trade creates a 3rd averaged row instead of a
-// normal one. All 3 rows share the same ReinforcementGroupId (the reinforcement row's own
-// TradeId); IsReinforcementResult is true only on that 3rd row. Closing ANY of the 3 (see
+// ReinforcementGroupId/IsReinforcementResult: "Refuerzo" feature (Demo and Simulation trades — see
+// TryCreateReinforcementAsync) — a 2nd trade at the same (Type, Strike) as an already-open one
+// creates a 3rd averaged row instead of a normal one. All 3 rows share the same
+// ReinforcementGroupId (the reinforcement row's own TradeId); IsReinforcementResult is true only
+// on that 3rd row. Closing ANY of the 3 (see
 // CloseTradeRowAsync) closes the whole group together at the same C_Bid. The two source rows
 // still receive normal live C_Bid/PnL updates from UpdateTradesPnL — only their color and
 // close-button behavior differ, per explicit request.
@@ -2395,7 +2396,8 @@ public partial class Form1 : Form
     // target), but never touches TradeHistoryStore/OpenTradesStore/screenshots. Never sends to the
     // API (sendToApi: false) and passes isSimulation through to RecordEntryAsync so the trade id
     // stays 0 — that alone makes CloseTradeRowAsync's existing tradeId != 0 gates skip
-    // OpenTradesStore/CloseTradeInApiAsync automatically. No Refuerzo (Demo-only).
+    // OpenTradesStore/CloseTradeInApiAsync automatically. Refuerzo works the same as Demo, per
+    // explicit request — see TryCreateReinforcementAsync's own same-kind matching.
     private async Task OpenSimulationTrade(int rowIndex) =>
         await OpenSimulationTradeFromRow(dgvQuotes.Rows[rowIndex], TodayGridColumns, expDateOverride: null);
 
@@ -2410,8 +2412,9 @@ public partial class Form1 : Form
         var (bid, ask) = ReadRowBidAsk(row, rowType, cols);
         if (ask <= 0) return;
 
-        await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Simulation", isDemo: true,
+        var (_, newRow) = await RecordEntryAsync(symbol, rowType, strike, level, bid, ask, contracts, "Trade Simulation", isDemo: true,
             suppressAutoClose: false, sendToApi: false, expDateOverride: expDateOverride, isSimulation: true);
+        await TryCreateReinforcementAsync(newRow, symbol, rowType, strike, suppressAutoClose: false, sendToApi: false, expDateOverride, isSimulation: true);
     }
 
     private async Task OpenSimulatedTradeFromRow(DataGridViewRow row, OptionsGridColumns cols, bool sendToApi, DateOnly? expDateOverride)
@@ -2449,23 +2452,30 @@ public partial class Form1 : Form
         await TryCreateReinforcementAsync(newRow, symbol, rowType, strike, suppressAutoClose: true, sendToApi, expDateOverride);
     }
 
-    // Demo-only "Refuerzo": if another Demo trade is already open at the same (Type, Strike) and
-    // isn't already part of a reinforcement group, average the two into a 3rd row (contracts sum,
-    // weighted-average entry price) instead of leaving two independent positions — per explicit
-    // request. A 3rd trade arriving at a strike that's already part of a group is left alone (no
-    // re-averaging), per explicit request ("se ignora por ahora"). The averaged row's target% is
-    // recalculated fresh from the averaged price (RecordEntryAsync always derives T_Bid from
-    // whatever "ask" it's given), and it flows through the exact same live-update/close machinery
-    // as any normal row — UpdateTradesPnL/CloseTradeRowAsync need no changes for it to work.
+    // "Refuerzo": if another trade of the SAME kind (Demo or Simulation — see isSimulation) is
+    // already open at the same (Type, Strike) and isn't already part of a reinforcement group,
+    // average the two into a 3rd row (contracts sum, weighted-average entry price) instead of
+    // leaving two independent positions — per explicit request (originally Demo-only, extended to
+    // Simulation trades later, same logic). A 3rd trade arriving at a strike that's already part
+    // of a group is left alone (no re-averaging), per explicit request ("se ignora por ahora").
+    // The averaged row's target% is recalculated fresh from the averaged price (RecordEntryAsync
+    // always derives T_Bid from whatever "ask" it's given), and it flows through the exact same
+    // live-update/close machinery as any normal row — UpdateTradesPnL/CloseTradeRowAsync need no
+    // changes for it to work.
     private async Task TryCreateReinforcementAsync(DataGridViewRow newRow, string symbol, string rowType,
-        string strike, bool suppressAutoClose, bool sendToApi, DateOnly? expDateOverride)
+        string strike, bool suppressAutoClose, bool sendToApi, DateOnly? expDateOverride, bool isSimulation = false)
     {
+        // Only combine trades of the SAME kind — a Simulation trade reinforcing with a Real/Demo
+        // one (or vice versa) would mix real money with a no-op paper position, which makes no
+        // sense (and Simulation's tradeId=0/no-API-persistence assumptions don't carry over to a
+        // real position anyway).
         var sourceRow = dgvTrades.Rows.Cast<DataGridViewRow>()
             .FirstOrDefault(r => r != newRow
                 && r.Tag is TradeRowTag { ReinforcementGroupId: null }
                 && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString())
                 && r.Cells["colTradeType"].Value?.ToString() == rowType
-                && r.Cells["colTradeStrike"].Value?.ToString() == strike);
+                && r.Cells["colTradeStrike"].Value?.ToString() == strike
+                && string.Equals(r.Cells["colTradeDemoReal"].Value?.ToString(), "Simulation", StringComparison.OrdinalIgnoreCase) == isSimulation);
         if (sourceRow == null) return;
         var sourceTradeId = (sourceRow.Tag as TradeRowTag)?.TradeId ?? 0;
         var newTradeId    = (newRow.Tag as TradeRowTag)?.TradeId ?? 0;
@@ -2482,7 +2492,8 @@ public partial class Form1 : Form
 
         var (reinforcementId, reinforcementRow) = await RecordEntryAsync(
             symbol, rowType, strike, "0", bid, avgPrice, combinedContracts.ToString(), "Trade Refuerzo",
-            isDemo: true, suppressAutoClose: suppressAutoClose, sendToApi: sendToApi, expDateOverride: expDateOverride);
+            isDemo: true, suppressAutoClose: suppressAutoClose, sendToApi: isSimulation ? false : sendToApi,
+            expDateOverride: expDateOverride, isSimulation: isSimulation);
 
         if (reinforcementRow.Tag is TradeRowTag rTag)
             reinforcementRow.Tag = rTag with { ReinforcementGroupId = reinforcementId, IsReinforcementResult = true };
