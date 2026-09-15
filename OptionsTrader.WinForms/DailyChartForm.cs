@@ -263,7 +263,24 @@ public class DailyChartForm : Form
 
         Controls.Add(tabControl);
         Controls.Add(toolbar);
-        Load += async (s, e) => await InitAsync();
+        Load += async (s, e) =>
+        {
+            try
+            {
+                await InitAsync();
+            }
+            catch (Exception ex)
+            {
+                // Best-effort — InitAsync is a long chain of sequential WebView2 ExecuteScriptAsync
+                // calls across all 3 tabs; if this window gets closed (or a WebView2 process hiccup
+                // happens) while that chain is still running, the next call in the chain hits a
+                // torn-down CoreWebView2 and throws (observed: COMException 0x8007139F, "The group
+                // or resource is not in the correct state"). This is an async-void Load handler, so
+                // an uncaught exception here crashes the whole app with an unhandled-exception
+                // dialog instead of just failing this one window's init.
+                System.Diagnostics.Debug.WriteLine($"DailyChartForm.InitAsync failed: {ex}");
+            }
+        };
     }
 
     // Fired when the auto-disarming Rect/T-Line tool finishes placing one, so the toolbar button
