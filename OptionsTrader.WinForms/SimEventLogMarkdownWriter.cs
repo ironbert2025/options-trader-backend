@@ -18,9 +18,11 @@ internal static class SimEventLogMarkdownWriter
     {
         try
         {
-            Directory.CreateDirectory(VaultFolder);
-            var fileName = $"{runDate:yyyy_MM_dd}_{Environment.MachineName}_{symbol}_Sim_{dataDate:yyyy_MM_dd}_EventLogs.md";
-            var path = Path.Combine(VaultFolder, fileName);
+            var runDateStr = runDate.ToString("yyyy_MM_dd");
+            var dayFolder = Path.Combine(VaultFolder, runDateStr);
+            Directory.CreateDirectory(dayFolder);
+            var fileName = $"{runDateStr}_{Environment.MachineName}_{symbol}_Sim_{dataDate:yyyy_MM_dd}_EventLogs.md";
+            var path = Path.Combine(dayFolder, fileName);
 
             var nl = Environment.NewLine;
             var entry =

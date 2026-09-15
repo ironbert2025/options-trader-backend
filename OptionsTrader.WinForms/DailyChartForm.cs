@@ -18,6 +18,30 @@ namespace OptionsTrader.WinForms;
 // candles instead of hourly ones, with no live streaming/toggle involved at all.
 public class DailyChartForm : Form
 {
+    // Fixed yellow top-left corner notes — per explicit request, just a static visual reminder per
+    // tab, no logic tied to either. See chart.html's setCornerText.
+    private const string DailyCornerNoteText = "Buscar Rebote en PM";
+    private const string HoraCornerNoteText  = "Buscar CT Hora";
+    // 15 Min tab: 3 separate notes on one line (left/center/right) instead of the single
+    // left-anchored block Daily/Hora use — per explicit request. See chart.html's
+    // setTripleCornerText.
+    private const string FifteenCornerNoteLeft   = "Expuesto en 3";
+    private const string FifteenCornerNoteCenter =
+        "CT 15 Min\n" +
+        "-Dibujar T-Line (Alza, Baja, Lateral)\n" +
+        "-Precio cierra arriba de T-Line,PM si bajista\n" +
+        "-Precio cierra abajo de T-Line, PM si alcista\n" +
+        "-Precio abre con un salto en efecto\n" +
+        "-forma el Wick en sentido del Close\n" +
+        "-vuelve el Open y sale de BB";
+    private const string FifteenCornerNoteRight =
+        "Sal BB Vol\n" +
+        "-Precio abre con un salto en efecto en BB\n" +
+        "-forma el Wick en sentido del Close\n" +
+        "-vuelve el Open y sale de BB\n" +
+        "-PM inclinado en sentido del Movimiento\n" +
+        "-BB abriéndose las dos o una en sentido de PM";
+
     private Dictionary<int, Button> _smaWatchButtons = new();
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
     private readonly WebView2 _hourlyWebView = new() { Dock = DockStyle.Fill };
@@ -239,7 +263,24 @@ public class DailyChartForm : Form
 
         Controls.Add(tabControl);
         Controls.Add(toolbar);
-        Load += async (s, e) => await InitAsync();
+        Load += async (s, e) =>
+        {
+            try
+            {
+                await InitAsync();
+            }
+            catch (Exception ex)
+            {
+                // Best-effort — InitAsync is a long chain of sequential WebView2 ExecuteScriptAsync
+                // calls across all 3 tabs; if this window gets closed (or a WebView2 process hiccup
+                // happens) while that chain is still running, the next call in the chain hits a
+                // torn-down CoreWebView2 and throws (observed: COMException 0x8007139F, "The group
+                // or resource is not in the correct state"). This is an async-void Load handler, so
+                // an uncaught exception here crashes the whole app with an unhandled-exception
+                // dialog instead of just failing this one window's init.
+                System.Diagnostics.Debug.WriteLine($"DailyChartForm.InitAsync failed: {ex}");
+            }
+        };
     }
 
     // Fired when the auto-disarming Rect/T-Line tool finishes placing one, so the toolbar button
@@ -296,6 +337,9 @@ public class DailyChartForm : Form
         // ticks arrive (see OnLiveTick relay) — before the first tick lands, it just stays hidden.
         await _webView.CoreWebView2.ExecuteScriptAsync("startPreMarketLine();");
 
+        // Fixed yellow top-left corner note, per explicit request.
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setCornerText({JsonSerializer.Serialize(DailyCornerNoteText)});");
+
         // "SMA Watch" persistence — replay whatever's currently armed (button highlight + chart
         // marker), then listen for deletions via the chart marker's Delete key.
         var armedSmaWatches = SmaDailyWatchStore.Load(_symbol);
@@ -336,6 +380,7 @@ public class DailyChartForm : Form
         // GetTodaySessionOpenFakeEpoch) since this tab shows real hourly bars, not one-bar-per-day.
         // Fed the live spot the same way as the Daily tab's line — see UpdateLivePrice.
         await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync($"startPreMarketLine({GetTodaySessionOpenFakeEpoch()});");
+        await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"setCornerText({JsonSerializer.Serialize(HoraCornerNoteText)});");
 
         // Schwab's pricehistory only accepts period = 1,2,3,4,5,10 for periodType=day (same
         // constraint ChartPanel.LoadHistoryAsync works around) — request 10 (the closest valid
@@ -351,6 +396,9 @@ public class DailyChartForm : Form
         // tab's own line (ChartPanel.GetTodaySessionOpenFakeEpoch convention), since this tab also
         // shows real (15-minute) intraday bars, not one bar per day. Fed by UpdateLivePrice below.
         await _fifteenWebView.CoreWebView2!.ExecuteScriptAsync($"startPreMarketLine({GetTodaySessionOpenFakeEpoch()});");
+        await _fifteenWebView.CoreWebView2.ExecuteScriptAsync(
+            $"setTripleCornerText({JsonSerializer.Serialize(FifteenCornerNoteLeft)}, " +
+            $"{JsonSerializer.Serialize(FifteenCornerNoteCenter)}, {JsonSerializer.Serialize(FifteenCornerNoteRight)});");
 
         await LoadAndWireHLinesAsync();
     }

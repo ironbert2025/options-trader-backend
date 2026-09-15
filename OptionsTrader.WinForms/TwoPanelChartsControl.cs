@@ -131,6 +131,16 @@ public class TwoPanelChartsControl : UserControl
         if (_rthPanel != null) await _rthPanel.MarkDeltaSAsync(entrySpot, closeSpot, strike);
     }
 
+    // Red "Expired!!!" marker at the 4pm auto-close of an expired trade — panel 2 (15m RTH) only,
+    // same pattern as MarkEntrySpotOnRthChartAsync above. Mirrors MultiChartForm's own
+    // MarkExpiredOnRthChartAsync (the popup Live Chart window) — CloseTradeRowAsync only ever
+    // called that one, never this control, so a symbol with no popup open but the Charts tab
+    // connected never got the marker at all.
+    public async Task MarkExpiredOnRthChartAsync()
+    {
+        if (_rthPanel != null) await _rthPanel.MarkExpiredAsync();
+    }
+
     // Small event log fed by panel 1/2 events — MultiChartForm's own panel-3/combined-screenshot
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.
@@ -221,8 +231,20 @@ public class TwoPanelChartsControl : UserControl
             AutoScroll    = false,
             Padding       = new Padding(4, 1, 4, 0)
         };
+        // "Exp en 3"/"CT Hora"/"CT 15Min" (per explicit request) go in their own row, aligned
+        // under panel 1's own column, right above panel 1's chart — same pattern as
+        // toolbarRightRow2 above for panel 2's AWS/Telegram row.
+        var toolbarLeftRow2 = new FlowLayoutPanel
+        {
+            Dock          = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents  = false,
+            AutoScroll    = false,
+            Padding       = new Padding(4, 1, 4, 0)
+        };
         toolbar.Controls.Add(toolbarLeft, 0, 0);
         toolbar.Controls.Add(toolbarRight, 1, 0);
+        toolbar.Controls.Add(toolbarLeftRow2, 0, 1);
         toolbar.Controls.Add(toolbarRightRow2, 1, 1);
 
         var layout = new TableLayoutPanel
@@ -528,6 +550,30 @@ public class TwoPanelChartsControl : UserControl
             };
         }
 
+        // "Exp en 3" / "CT Hora" / "CT 15Min" — manual snapshot buttons, per explicit request. Each
+        // one just captures the same panel1+2 combined image already used for trade Entry/Close,
+        // saves it to its own subfolder (so the 3 never collide), and appends one entry (symbol +
+        // date/time + the image) to its own FIXED-name markdown file — NOT the per-symbol/per-day
+        // EventLogMarkdownWriter file (that's already covered elsewhere); these are single shared
+        // files across every symbol/day that the user reviews manually. No Telegram, no other side
+        // effect — purely "I clicked this because something happened, save it for me to look at".
+        async void SaveManualSnapshot(string subFolder, string fileName)
+        {
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null) return;
+            var imagePath = ManualChartMarkdownStore.SaveImage(subFolder, _symbol, combined);
+            ManualChartMarkdownStore.AppendEntry(fileName, _symbol, imagePath);
+        }
+
+        var btnExpEn3 = new Button { Text = "Exp en 3", Size = new Size(70, 24) };
+        btnExpEn3.Click += (s, e) => SaveManualSnapshot("ExpEn3", "ExpuestoEn3Charts.md");
+
+        var btnCtHora = new Button { Text = "CT Hora", Size = new Size(70, 24) };
+        btnCtHora.Click += (s, e) => SaveManualSnapshot("CTHora", "CTHora.md");
+
+        var btnCt15Min = new Button { Text = "CT 15Min", Size = new Size(70, 24) };
+        btnCt15Min.Click += (s, e) => SaveManualSnapshot("CT15Min", "CT15Min.md");
+
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
         // days of persisted hourly history) and plain Hourly candles.
         var btnDaily = new Button { Text = "Daily", Size = new Size(70, 24) };
@@ -601,7 +647,9 @@ public class TwoPanelChartsControl : UserControl
         };
 
         HLineButton = new Button { Text = "H-Line", Size = new Size(60, 24) };
-        TextButton = new Button { Text = "Text", Size = new Size(60, 24) };
+        // Extra left margin, per explicit request — pushes Text/Arrow/BB edges (everything after
+        // it in the flow) 40px further right, without moving H-Line/T-Line before it.
+        TextButton = new Button { Text = "Text", Size = new Size(60, 24), Margin = new Padding(3, 3, 3, 3) };
         ArrowButton = new Button { Text = "Arrow", Size = new Size(60, 24) };
 
         // Panel-1/2 half of the shared H-Line arm/disarm — MultiChartForm attaches its own extra
@@ -614,6 +662,37 @@ public class TwoPanelChartsControl : UserControl
             if (rthPanel != null) on = await rthPanel.ToggleHLineModeAsync();
             HLineButton.BackColor = on ? Color.LightSalmon : SystemColors.Control;
         };
+        // "P-Line" — price-alert line, panel 2 (15m RTH) ONLY, per explicit request (unlike
+        // H-Line/T-Line/Text/Arrow above, no panel-1 half, no MultiChartForm panel-3 wiring).
+        var btnPLine = new Button { Text = "P-Line", Size = new Size(60, 24) };
+        btnPLine.Click += async (s, e) =>
+        {
+            if (rthPanel == null) return;
+            var on = await rthPanel.TogglePLineModeAsync();
+            btnPLine.BackColor = on ? Color.MediumPurple : SystemColors.Control;
+        };
+        // Single-shot tool — chart.html auto-disarms itself the moment the line is placed.
+        if (rthPanel != null) rthPanel.OnPLinePlacedEvent += () => btnPLine.BackColor = SystemColors.Control;
+
+        // Fires once a live tick crosses an armed P-Line — capture the combined panel1+2 snapshot
+        // and push it to Telegram, same pattern as OnPmCrossEvent below. The line stays drawn on
+        // the chart afterward (chart.html never removes it); only the push itself is one-shot.
+        if (rthPanel != null)
+        {
+            rthPanel.OnPLineCrossedEvent += (price, direction) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(async () =>
+                {
+                    var arrow = direction == "above" ? "▲" : "▼";
+                    var message = $"{_symbol}: precio cruzó {price:F2} {arrow}";
+                    AppendLog($"{DateTime.Now:HH:mm:ss}  [P-Line] {message}{Environment.NewLine}");
+                    if (!SuppressOwnTelegramPushes)
+                        _ = SendPLineCrossedTelegramPushAsync(message);
+                });
+            };
+        }
+
         // Panel-1/2 half of the shared Text arm/disarm — see TextButton's XML-ish comment above and
         // MultiChartForm's own extra Click handler for the panel-3 half.
         TextButton.Click += async (s, e) =>
@@ -743,12 +822,16 @@ public class TwoPanelChartsControl : UserControl
         toolbarLeft.Controls.Add(btnFlechaVerde);
         toolbarLeft.Controls.Add(btnFlechaRoja);
         toolbarLeft.Controls.Add(btnDaily);
+        toolbarLeftRow2.Controls.Add(btnExpEn3);
+        toolbarLeftRow2.Controls.Add(btnCtHora);
+        toolbarLeftRow2.Controls.Add(btnCt15Min);
         toolbarLeft.Controls.Add(chkDayDividers);
         toolbarLeft.Controls.Add(AthCheckBox);
 
         // Panel 2 group, per explicit request/order: H-Line, T-Line, Text, Arrow, BB edges, AWS, Telegram.
         toolbarRight.Controls.Add(HLineButton);
         toolbarRight.Controls.Add(btnTLine);
+        toolbarRight.Controls.Add(btnPLine);
         toolbarRight.Controls.Add(TextButton);
         toolbarRight.Controls.Add(ArrowButton);
         toolbarRight.Controls.Add(chkBollingerEdges);
@@ -1078,7 +1161,14 @@ public class TwoPanelChartsControl : UserControl
         {
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
             if (snapshot == null) return;
-            if (_dgvOptions.IsDisposed || !_dgvOptions.IsHandleCreated) return;
+            if (_dgvOptions.IsDisposed) return;
+            // Same race RefreshTradesGrid had (see its own comment): wired to the whole control's
+            // HandleCreated, not _dgvOptions's own — on first connect that can fire before
+            // _dgvOptions's handle exists yet, silently skipping this refresh (BeginInvoke needs a
+            // handle) with nothing ever retrying it. Data already sitting in the Options Quotes tab
+            // (GetQuoteSnapshot) would then never show up here until the next live poll tick — per
+            // explicit request, force the handle into existence instead of bailing.
+            if (!_dgvOptions.IsHandleCreated) _ = _dgvOptions.Handle;
             if (!lblExpDate.IsDisposed)
                 lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
             if (!lblExpDateNext.IsDisposed)
@@ -1255,7 +1345,15 @@ public class TwoPanelChartsControl : UserControl
         {
             var sourceGrid = _form1.GetTradesGrid(_symbol);
             if (sourceGrid == null) return;
-            if (_dgvTrades.IsDisposed || !_dgvTrades.IsHandleCreated) return;
+            if (_dgvTrades.IsDisposed) return;
+            // This is wired to the whole control's own HandleCreated (below), not _dgvTrades's —
+            // on first connect, that can fire before _dgvTrades's own handle exists yet, which used
+            // to silently skip the refresh (BeginInvoke needs a handle) with nothing ever retrying
+            // it: a trade already open before the Charts tab was connected this session (restored
+            // on ticker select, or opened earlier) would show in Form1's own grid but never mirror
+            // here until some LATER trade open/close fired OnTradesUpdatedEvent again. Force the
+            // handle into existence instead of bailing — same idiom BeginInvoke needs anyway.
+            if (!_dgvTrades.IsHandleCreated) _ = _dgvTrades.Handle;
             _dgvTrades.BeginInvoke(() =>
             {
                 var scrollRowToRestore = _dgvTrades.Rows.Count > 0 ? _dgvTrades.FirstDisplayedScrollingRowIndex : -1;
@@ -1568,6 +1666,47 @@ public class TwoPanelChartsControl : UserControl
                 // the global CT.md with the image now included.
                 CtRecordStore.SetImagePathForMostRecentResolved(_symbol, timeframe, path);
             }
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined (panel 1 + 2) snapshot when a P-Line (panel 2 price alert) gets
+    // crossed — same pattern as SendTLineSignalTelegramPushAsync above, minus the CT-record
+    // attachment (P-Line isn't tied to a CT signal).
+    private async Task SendPLineCrossedTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_PLineCrossed_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "PLineCrossed", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             else
                 LogTelegramPushFailure(detail);
         }
