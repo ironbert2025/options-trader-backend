@@ -848,6 +848,12 @@ public class ChartPanel : Panel
     // listens for this to reset the corresponding button's color back to normal.
     public event Action<bool>? OnArrowPlacedEvent;
 
+    // Fires when the 2-click diagonal "Arrow" tool (ArrowButton) completes a draw — unlike the
+    // vertical arrows above, this tool stays armed for drawing several in a row, so
+    // TwoPanelChartsControl uses this to (re)start a 15s auto-disarm timer instead of resetting
+    // the button immediately, per explicit request.
+    public event Action? OnDiagonalArrowPlacedEvent;
+
     // Clears every DZ/SZ pair, rectangle, T-Line, H-Line, Arrow and Piso/Techo label drawn on
     // this panel, and turns all drawing modes off. Also wipes the persisted T-Line/vertical-arrow
     // files for this symbol (1h panel only) — a real "clear" should clear what's saved too.
@@ -1050,6 +1056,15 @@ public class ChartPanel : Panel
                     // btnFlechaVerde/btnFlechaRoja wiring).
                     var up = root.GetProperty("up").GetBoolean();
                     OnArrowPlacedEvent?.Invoke(up);
+                    break;
+                }
+                case "diagonal_arrow_placed":
+                {
+                    // The 2-click diagonal "Arrow" tool (ArrowButton/ToggleArrowModeAsync) — unlike
+                    // the single-click vertical arrows above, this one stays armed across multiple
+                    // draws, so TwoPanelChartsControl uses this to (re)start its 15s auto-disarm
+                    // timer instead of resetting the button immediately.
+                    OnDiagonalArrowPlacedEvent?.Invoke();
                     break;
                 }
                 case "arrow_move":

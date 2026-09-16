@@ -1068,6 +1068,12 @@
         arrowPrimitive._arrows.push({ l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: arrowPrice, red, selected: false });
         arrowPrimitive._preview = null;
         arrowPending = null;
+        // Reported to C# so it can (re)start the 15s auto-disarm countdown — per explicit request,
+        // this tool stays armed for drawing several arrows in a row, but should turn itself off
+        // after 15s of no new arrow being drawn instead of staying armed forever until re-clicked.
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'diagonal_arrow_placed' });
+        }
         forceRepaint();
       }
       return;

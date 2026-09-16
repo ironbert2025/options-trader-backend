@@ -723,12 +723,35 @@ public class TwoPanelChartsControl : UserControl
         // again" toggle as DZ/SZ (no auto-disarm-on-placement, so no reset wiring needed beyond the
         // toggle's own return value). MultiChartForm attaches an extra Click handler onto this same
         // button to also arm panel 3, same split-button convention as HLineButton/TextButton.
+        // Auto-disarm the diagonal Arrow tool after 15s of no new arrow being drawn — per explicit
+        // request, it stays armed for drawing several in a row (see ArrowButton.Click below,
+        // "stays armed until pressed again"), but shouldn't stay armed indefinitely if the user
+        // just forgets to turn it off. Restarted on every OnDiagonalArrowPlacedEvent below; each new
+        // arrow pushes the deadline back out another 15s instead of the timer running independently.
+        var arrowAutoDisarmTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+        arrowAutoDisarmTimer.Tick += async (s, e) =>
+        {
+            arrowAutoDisarmTimer.Stop();
+            if (hourlyPanel != null) await hourlyPanel.ToggleArrowModeAsync();
+            if (rthPanel != null) await rthPanel.ToggleArrowModeAsync();
+            ArrowButton.BackColor = SystemColors.Control;
+        };
+        Disposed += (s, e) => arrowAutoDisarmTimer.Dispose();
+        void RestartArrowAutoDisarmTimer()
+        {
+            arrowAutoDisarmTimer.Stop();
+            arrowAutoDisarmTimer.Start();
+        }
+        if (hourlyPanel != null) hourlyPanel.OnDiagonalArrowPlacedEvent += RestartArrowAutoDisarmTimer;
+        if (rthPanel != null) rthPanel.OnDiagonalArrowPlacedEvent += RestartArrowAutoDisarmTimer;
+
         ArrowButton.Click += async (s, e) =>
         {
             bool on = false;
             if (hourlyPanel != null) on = await hourlyPanel.ToggleArrowModeAsync();
             if (rthPanel != null) on = await rthPanel.ToggleArrowModeAsync();
             ArrowButton.BackColor = on ? Color.LightYellow : SystemColors.Control;
+            if (!on) arrowAutoDisarmTimer.Stop(); // manually turned off — no countdown to run
         };
 
         // Shows/hides the white Bollinger-band edge markers on this panel — checked by default
