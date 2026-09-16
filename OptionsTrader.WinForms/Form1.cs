@@ -3588,7 +3588,16 @@ public partial class Form1 : Form
         }
     }
 
-    private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType)
+    // exitPriceOverride: used ONLY when auto-closing a Refuerzo group by target (see UpdateTradesPnL) —
+    // every row in the group shares the exact same live quote, but each has its OWN entry price and
+    // therefore its own (usually different) T_Bid. When ONE row's C_Bid reaches ITS T_Bid, the whole
+    // group closes together — the other rows almost certainly haven't reached THEIR OWN T_Bid yet, so
+    // letting them close at closeType "TARGET" (which uses each row's own T_Bid) fabricates a price
+    // they never actually hit. Passing the triggering row's real live C_Bid here for every row in the
+    // group makes them all close at the price that's actually true for all of them (same underlying
+    // quote), matching exactly what the MANUAL group-close path already does correctly (see
+    // DgvTrades_CellClick's own comment: "each at its own current C_Bid").
+    private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType, decimal? exitPriceOverride = null)
     {
         var now       = DateTime.Now;
         var nowStr    = now.ToString("HH:mm:ss");
@@ -3672,7 +3681,7 @@ public partial class Form1 : Form
         var tBidStr       = row.Cells["colTradeTBid"].Value?.ToString() ?? string.Empty;
         decimal.TryParse(cBid, out var cBidParsed);
         decimal? targetClosePrice = closeType == "TARGET" && decimal.TryParse(tBidStr, out var tBidParsed) ? tBidParsed : null;
-        var exitBid = realClosePrice ?? targetClosePrice ?? cBidParsed;
+        var exitBid = exitPriceOverride ?? realClosePrice ?? targetClosePrice ?? cBidParsed;
         decimal.TryParse(entryPriceStr, out var entryPrice);
         decimal.TryParse(contractsStr, out var contractsForPnl);
         var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);
@@ -4212,7 +4221,7 @@ public partial class Form1 : Form
     private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
                                   Dictionary<(string, decimal), OptionQuoteDto> putMap)
     {
-        var rowsToClose = new List<DataGridViewRow>();
+        var rowsToClose = new List<(DataGridViewRow Row, decimal CurrentBid)>();
 
         foreach (DataGridViewRow row in dgvTrades.Rows)
         {
@@ -4258,7 +4267,7 @@ public partial class Form1 : Form
                 && decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
                 && targetBid > 0 && currentBid >= targetBid)
             {
-                rowsToClose.Add(row);
+                rowsToClose.Add((row, currentBid));
             }
         }
 
@@ -4267,7 +4276,7 @@ public partial class Form1 : Form
         // independently qualify for auto-close in the SAME pass — dedupe by group so the group only
         // gets closed once (closing every still-open row in it), instead of once per qualifying row.
         var closedReinforcementGroups = new HashSet<int>();
-        foreach (var row in rowsToClose)
+        foreach (var (row, currentBid) in rowsToClose)
         {
             if (row.Tag is TradeRowTag { ReinforcementGroupId: { } groupId })
             {
@@ -4276,8 +4285,13 @@ public partial class Form1 : Form
                     .Where(r => r.Tag is TradeRowTag t && t.ReinforcementGroupId == groupId
                         && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
                     .ToList();
+                // Only THIS row actually reached its own T_Bid — the other rows in the group almost
+                // certainly haven't reached THEIRS yet (different entry price => different target).
+                // Close every row in the group at the shared live currentBid instead of letting
+                // CloseTradeRowAsync fall back to each row's own (unmet) T_Bid — see its own
+                // exitPriceOverride comment for why that would otherwise fabricate PnL.
                 foreach (var groupRow in groupRows)
-                    _ = CloseTradeRowAsync(groupRow, "TARGET");
+                    _ = CloseTradeRowAsync(groupRow, "TARGET", exitPriceOverride: currentBid);
             }
             else
             {
