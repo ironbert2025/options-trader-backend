@@ -3788,22 +3788,12 @@ public partial class Form1 : Form
         else
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
-        // Simulation trades stop here for S3/TradeHistoryStore — the Telegram push above is one
-        // exception (per explicit request); the daily-log entry below is another (also per
-        // explicit request) — writes straight to its own "_Sim_Trades.md" using the LOCAL entry/
-        // close snapshot paths already captured (tag.EntryImagePath, closeChartPath), no S3 URL
-        // needed. Everything else below (TradeLog screenshot, S3 upload) still only applies to
-        // real/demo trades — see RecordEntryAsync's matching isSimulation skip on the entry side.
-        if (isSimulation)
-        {
-            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath);
-            return;
-        }
-
         // Screenshot TradeLog (Trades + Logger section of the form) — scroll the just-closed row
         // into view first, per explicit request, so it's actually visible in the capture even if
         // the grid was scrolled elsewhere when the trade closed (CaptureTradeLogScreenshot just
-        // renders whatever's currently on screen).
+        // renders whatever's currently on screen). Captured for Simulation trades too now (per
+        // explicit request) — CaptureTradeLogScreenshot itself is purely local (no S3 involved),
+        // so it's safe to reuse as-is; only the upload below stays real/demo-only.
         if (dgvTrades.Rows.Contains(row))
         {
             dgvTrades.CurrentCell = row.Cells[0];
@@ -3812,6 +3802,17 @@ public partial class Form1 : Form
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
+
+        // Simulation trades stop here for S3/TradeHistoryStore — the Telegram push above is one
+        // exception (per explicit request); the daily-log entry below is another (also per
+        // explicit request) — writes straight to its own "_Sim_Trades.md" using the LOCAL entry/
+        // close/trade-log snapshot paths already captured, no S3 URL needed. The upload below
+        // stays real/demo-only — see RecordEntryAsync's matching isSimulation skip on the entry side.
+        if (isSimulation)
+        {
+            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath, tradeLogPath);
+            return;
+        }
 
         // Uploads Close + TradeLog (fire-and-forget, doesn't block the row from showing "Closed"),
         // then appends today's Obsidian daily-trade-log entry once both S3 URLs are actually known

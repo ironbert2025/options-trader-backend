@@ -38,16 +38,21 @@ internal static class DailyTradeLogWriter
     // already saved for the entry/close snapshots — embedded via file:// like EventLogMarkdownWriter
     // does, instead of an S3 URL.
     public static void AppendSimTrade(string symbol, string optionType, DateTime entryTime,
-        string? entryImagePath, string? closeImagePath)
+        string? entryImagePath, string? closeImagePath, string? tradeLogImagePath = null)
     {
         var time = entryTime.ToString("HH:mm:ss");
         var nl   = Environment.NewLine;
-        var openLine  = entryImagePath != null ? $"**Open**{nl}![Open]({new Uri(entryImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
-        var closeLine = closeImagePath != null ? $"**Close**{nl}![Close]({new Uri(closeImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
+        var openLine     = entryImagePath != null ? $"**Open**{nl}![Open]({new Uri(entryImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
+        var closeLine    = closeImagePath != null ? $"**Close**{nl}![Close]({new Uri(closeImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
+        // Trade Log (Trades + Logger section screenshot) — per explicit request, saved locally
+        // same as Real/Demo trades already do (see Form1.CaptureTradeLogScreenshot), just embedded
+        // via file:// like everything else here instead of an S3 URL (Simulation never uploads).
+        var tradeLogLine = tradeLogImagePath != null ? $"**TradeLog**{nl}![TradeLog]({new Uri(tradeLogImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
         var entry =
             $"### {symbol} ({optionType}, {time}){nl}{nl}" +
             openLine +
             closeLine +
+            tradeLogLine +
             $"---{nl}{nl}";
 
         Append("Sim_Trades", entry);
