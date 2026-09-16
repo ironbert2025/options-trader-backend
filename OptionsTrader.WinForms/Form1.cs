@@ -2497,10 +2497,18 @@ public partial class Form1 : Form
 
         if (reinforcementRow.Tag is TradeRowTag rTag)
             reinforcementRow.Tag = rTag with { ReinforcementGroupId = reinforcementId, IsReinforcementResult = true };
+        // The 2 original legs stop auto-closing on their OWN (now-stale) target once they're part
+        // of a group — per explicit request, only the combined reinforcement row's target drives
+        // the auto-close from here on (UpdateTradesPnL already skips SuppressAutoClose rows). They
+        // keep running (still get live C_Bid/PnL updates) and still close manually/together with
+        // the group when the reinforcement row itself hits target — see UpdateTradesPnL's own
+        // group-close comment. PnL_Target cleared to blank to match every other suppressed row.
         if (sourceRow.Tag is TradeRowTag sTag)
-            sourceRow.Tag = sTag with { ReinforcementGroupId = reinforcementId };
+            sourceRow.Tag = sTag with { ReinforcementGroupId = reinforcementId, SuppressAutoClose = true };
         if (newRow.Tag is TradeRowTag nTag)
-            newRow.Tag = nTag with { ReinforcementGroupId = reinforcementId };
+            newRow.Tag = nTag with { ReinforcementGroupId = reinforcementId, SuppressAutoClose = true };
+        sourceRow.Cells["colTradePnLTarget"].Value = string.Empty;
+        newRow.Cells["colTradePnLTarget"].Value     = string.Empty;
 
         // Note in trade_history.json (and, via CloseTradeRowAsync -> DailyTradeLogWriter, the
         // Obsidian .md log at close time) that this trade is a Refuerzo result, and which 2 trades
