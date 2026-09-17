@@ -3877,6 +3877,25 @@ public partial class Form1 : Form
             Directory.CreateDirectory(folder);
             var fileName = $"{symbol}_{optionType}_{DateTime.Now:yyyyMMdd_HHmmss}_{tag}.png";
             var filePath = Path.Combine(folder, fileName);
+
+            // Per explicit request: stamp the close date onto the "Close" snapshot — the whole
+            // trade entry now gets filed under the day it OPENED (see DailyTradeLogWriter), so a
+            // trade that closed on a LATER day needs something visible in the image itself to
+            // flag that, instead of only being inferable from the ExitTime cell in the grid.
+            if (tag == "Close")
+            {
+                using var g = Graphics.FromImage(combined);
+                var text = $"Cerrado: {DateTime.Now:yyyy-MM-dd}";
+                using var font = new Font("Segoe UI", 11f, FontStyle.Bold);
+                var size = g.MeasureString(text, font);
+                var x = combined.Width - size.Width - 8f;
+                var y = combined.Height - size.Height - 8f;
+                using var backBrush = new SolidBrush(Color.FromArgb(160, 0, 0, 0));
+                g.FillRectangle(backBrush, x - 4f, y - 2f, size.Width + 8f, size.Height + 4f);
+                using var textBrush = new SolidBrush(Color.FromArgb(255, 255, 235, 59)); // yellow
+                g.DrawString(text, font, textBrush, x, y);
+            }
+
             combined.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
             return filePath;
         }
