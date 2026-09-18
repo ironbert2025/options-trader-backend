@@ -1325,6 +1325,13 @@ public partial class Form1 : Form
             };
             _marketOpenTimer.Start();
         }
+
+        // Immediate fetch, same as clicking "Fetch Quotes" — per explicit request, every instance
+        // (not just the primary) should show current option quotes in the grid(s) right away
+        // instead of waiting for the first polling-timer tick (or, outside market hours, doing
+        // nothing until the market actually opens). Fire-and-forget: FetchAndUpdateQuotesAsync
+        // already has its own error handling (no blocking MessageBox), safe to not await here.
+        _ = FetchAndUpdateQuotesAsync();
     }
 
     // Proactively renews the Schwab access token every 30 minutes, starting immediately and
