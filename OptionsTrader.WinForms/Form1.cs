@@ -1568,7 +1568,12 @@ public partial class Form1 : Form
                     _csvLoggerNext?.AppendRows(TrimQuotesForCsv(allQuotesNext));
 
                 _lastAllQuotesNext = allQuotesNext;
-                (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
+                // Same filter as "Hoy" (applyCountsFilter/selectedCounts/Call-Put toggle) — per
+                // explicit request; this used to fall through to the default (range-filtered by
+                // Ask) instead, so "Próxima" showed a different set of strikes than "Hoy" for no
+                // reason other than this call not passing the same params.
+                (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker, applyCountsFilter: true,
+                    selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked);
             }
 
             // Live options grid mirrored on the Live Chart window (MultiChartForm) AND the Charts
