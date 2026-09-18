@@ -59,6 +59,10 @@ public class DailyChartForm : Form
     private CandleData? _lastHourlyCandle;
     private CandleData? _lastFifteenCandle;
 
+    // DZ/SZ — whichever WebView2 is currently armed (null if none), so a tab switch can disarm it
+    // and the toolbar button color stays in sync. See ActiveDzSzWebViewAndTag.
+    private WebView2? _dzSzArmedWebView;
+
     public DailyChartForm(string symbol, List<CandleData> dailyCandles, SchwabStreamerClient historyClient)
     {
         _symbol = symbol;
@@ -98,11 +102,17 @@ public class DailyChartForm : Form
         // the Hora and 15 Min tabs at once (persists via TLineStore, tags "DailyHora"/"Daily15Min"
         // so they never mix with the live chart's own "1h"/"RTH" T-Lines on the same symbol), per
         // explicit request.
-        var toolbar = new Panel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(6, 4, 6, 4) };
+        var toolbar = new Panel { Dock = DockStyle.Top, Height = 60, Padding = new Padding(6, 4, 6, 4) };
         var btnRect = new Button { Text = "Rect", Location = new Point(0, 2), Size = new Size(60, 24) };
         var btnColorRect = new Button { Text = "Color Rect", Location = new Point(66, 2), Size = new Size(80, 24) };
         var btnTLine = new Button { Text = "T-Line", Location = new Point(150, 2), Size = new Size(60, 24) };
         var btnHLine = new Button { Text = "H-Line", Location = new Point(216, 2), Size = new Size(60, 24) };
+        // "DZ/SZ" — pure draw+persist version of the Simulator/live-chart DZ/SZ tool (no rebote
+        // tracking, no cross-chart mirroring). Arms ONLY the currently active tab (Daily/Hora/15
+        // Min) — per explicit request, "the chart you want" — unlike T-Line/H-Line which always
+        // arm Hora+15Min together. Persisted via ZoneStore, one tag per tab so zones never mix
+        // across tabs. See ActiveDzSzWebViewAndTag()/HandleDzSzMessage below.
+        var btnDzSz = new Button { Text = "DZ/SZ", Location = new Point(216, 28), Size = new Size(60, 24) };
         btnRect.Click += async (s, e) =>
         {
             if (_webView.CoreWebView2 == null) return;
@@ -136,10 +146,30 @@ public class DailyChartForm : Form
             await _fifteenWebView.CoreWebView2.ExecuteScriptAsync("toggleHLine();");
             btnHLine.BackColor = result == "true" ? Color.Red : SystemColors.Control;
         };
+        // DZ/SZ stays armed across multiple pairs (same toggle semantics as toggleDzSz() itself —
+        // only turns off via this button again, tab switch, or window close), so there's no
+        // "placed" auto-disarm event to listen for like Rect/T-Line above.
+        btnDzSz.Click += async (s, e) =>
+        {
+            var (webView, _) = ActiveDzSzWebViewAndTag(tabControl);
+            if (webView?.CoreWebView2 == null) return;
+            var result = await webView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
+            if (result == "true")
+            {
+                _dzSzArmedWebView = webView;
+                btnDzSz.BackColor = Color.MediumPurple;
+            }
+            else
+            {
+                _dzSzArmedWebView = null;
+                btnDzSz.BackColor = SystemColors.Control;
+            }
+        };
         toolbar.Controls.Add(btnRect);
         toolbar.Controls.Add(btnColorRect);
         toolbar.Controls.Add(btnTLine);
         toolbar.Controls.Add(btnHLine);
+        toolbar.Controls.Add(btnDzSz);
         // chart.html auto-disarms each tool itself once the 2nd click completes a
         // rectangle/T-Line — reset the button color to match, same pattern the live chart uses.
         // H-Line is a single click-to-place (not 2-click), so chart.html never auto-disarms it —
@@ -147,6 +177,17 @@ public class DailyChartForm : Form
         OnRectPlacedEvent += () => btnRect.BackColor = SystemColors.Control;
         OnColorRectPlacedEvent += () => btnColorRect.BackColor = SystemColors.Control;
         OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
+
+        // Switching tabs while DZ/SZ is armed would silently arm a chart the user can no longer
+        // see clicks land on — disarm whichever tab it was armed on and reset the button.
+        tabControl.SelectedIndexChanged += async (s, e) =>
+        {
+            if (_dzSzArmedWebView == null) return;
+            if (_dzSzArmedWebView.CoreWebView2 != null)
+                await _dzSzArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
+            _dzSzArmedWebView = null;
+            btnDzSz.BackColor = SystemColors.Control;
+        };
 
         // "SMA Watch" — Daily tab only. Unlike Rect/T-Line these aren't 2-click drawing tools:
         // clicking one directly toggles whether that SMA's live-price cross is being watched (see
@@ -318,6 +359,17 @@ public class DailyChartForm : Form
     // Charts only, panel 1/2 — never MultiChartForm/panel 3, per explicit request).
     public event Action<int, bool>? OnDailySmaLineToggledEvent;
 
+    // Maps the currently selected tab (index 0=Daily, 1=Hora, 2=15 Min) to its WebView2 + the
+    // ZoneStore tag for that tab's persisted zones. Same tag convention T-Line uses for Hora/15
+    // Min ("DailyHora"/"Daily15Min"), plus "Daily" for the Daily tab's own chart.
+    private (WebView2? WebView, string Tag) ActiveDzSzWebViewAndTag(TabControl tabControl) => tabControl.SelectedIndex switch
+    {
+        0 => (_webView, "Daily"),
+        1 => (_hourlyWebView, "DailyHora"),
+        2 => (_fifteenWebView, "Daily15Min"),
+        _ => (null, string.Empty)
+    };
+
     private async void RefreshSmaWatchMarkersAsync()
     {
         if (_webView.CoreWebView2 == null) return;
@@ -401,6 +453,56 @@ public class DailyChartForm : Form
             $"{JsonSerializer.Serialize(FifteenCornerNoteCenter)}, {JsonSerializer.Serialize(FifteenCornerNoteRight)});");
 
         await LoadAndWireHLinesAsync();
+
+        await LoadAndWireDzSzAsync(_webView, "Daily");
+        await LoadAndWireDzSzAsync(_hourlyWebView, "DailyHora");
+        await LoadAndWireDzSzAsync(_fifteenWebView, "Daily15Min");
+    }
+
+    // "DZ/SZ" tool persistence (ZoneStore) for one tab — replay whatever was drawn in a previous
+    // session (via addMirroredZoneLine, the same replay hook the Simulator uses for cross-chart
+    // mirroring — here just used for reloading, nothing is actually mirrored), then listen for
+    // new/deleted lines from now on.
+    private async Task LoadAndWireDzSzAsync(WebView2 webView, string tag)
+    {
+        if (webView.CoreWebView2 == null) return;
+        var saved = ZoneStore.Load(_symbol, tag);
+        foreach (var (time, price, color) in saved)
+        {
+            var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            await webView.CoreWebView2.ExecuteScriptAsync($"addMirroredZoneLine({time}, {priceStr}, {JsonSerializer.Serialize(color)});");
+        }
+        webView.CoreWebView2.WebMessageReceived += (s, e) => HandleDzSzMessage(e, tag);
+    }
+
+    private void HandleDzSzMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string tag)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "dzsz" && type != "dzsz_delete") return;
+
+            if (type == "dzsz")
+            {
+                var t = root.GetProperty("time").GetInt64();
+                var p = root.GetProperty("price").GetDecimal();
+                var c = root.GetProperty("color").GetString() ?? "#26a69a";
+                ZoneStore.Append(_symbol, tag, t, p, c);
+            }
+            else
+            {
+                var p1 = root.GetProperty("price1").GetDecimal();
+                var p2 = root.GetProperty("price2").GetDecimal();
+                ZoneStore.Remove(_symbol, tag, p1);
+                ZoneStore.Remove(_symbol, tag, p2);
+            }
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
     }
 
     // "T-Line" tool persistence (TLineStore) for one of the Hora/15 Min tabs — replay whatever was
