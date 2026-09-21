@@ -3811,7 +3811,14 @@ public partial class Form1 : Form
         // (no real/demo money or API trade involved).
         var isSameDaySimulationExpiry = isSimulation && closeType == "EXPIRED"
             && tag != null && tag.ExpirationDate == DateOnly.FromDateTime(tag.EntryTime);
-        if (isSameDaySimulationExpiry)
+        // Refuerzo group: only the combined result row pushes to Telegram — the 2 source legs
+        // close in the same instant with the same chart and would just triple the messages.
+        var isReinforcementSourceLeg = tag is { ReinforcementGroupId: not null, IsReinforcementResult: false };
+        if (isReinforcementSourceLeg)
+        {
+            // no push — covered by the group's result row
+        }
+        else if (isSameDaySimulationExpiry)
             _ = SendSimulationExpiredTelegramPushAsync(symbol, type, strike, entryPrice, exitBid, pnlVal, pnlPctVal,
                 tag!.EntryImagePath, closeChartPath);
         else
