@@ -652,6 +652,25 @@ public class TwoPanelChartsControl : UserControl
         TextButton = new Button { Text = "Text", Size = new Size(60, 24), Margin = new Padding(3, 3, 3, 3) };
         ArrowButton = new Button { Text = "Arrow", Size = new Size(60, 24) };
 
+        // Auto-disarm H-Line 15s after the last line drawn, same behavior as the Arrow tool below —
+        // per explicit request. Disarms via HLineButton.PerformClick() (only while armed) so every
+        // Click handler attached to this button also runs (MultiChartForm's extra one that toggles
+        // panel 3), instead of leaving that panel armed with a button that says otherwise.
+        var hLineAutoDisarmTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+        hLineAutoDisarmTimer.Tick += (s, e) =>
+        {
+            hLineAutoDisarmTimer.Stop();
+            if (HLineButton.BackColor == Color.LightSalmon) HLineButton.PerformClick();
+        };
+        Disposed += (s, e) => hLineAutoDisarmTimer.Dispose();
+        void RestartHLineAutoDisarmTimer()
+        {
+            hLineAutoDisarmTimer.Stop();
+            hLineAutoDisarmTimer.Start();
+        }
+        if (hourlyPanel != null) hourlyPanel.OnHLineDrawnEvent += (t, p) => RestartHLineAutoDisarmTimer();
+        if (rthPanel != null) rthPanel.OnHLineDrawnEvent += (t, p) => RestartHLineAutoDisarmTimer();
+
         // Panel-1/2 half of the shared H-Line arm/disarm — MultiChartForm attaches its own extra
         // Click handler onto this same button to also toggle panel 3 (see its constructor), same
         // "sequential toggle → last result wins the button color" behavior as before the split.
@@ -661,7 +680,9 @@ public class TwoPanelChartsControl : UserControl
             if (hourlyPanel != null) on = await hourlyPanel.ToggleHLineModeAsync();
             if (rthPanel != null) on = await rthPanel.ToggleHLineModeAsync();
             HLineButton.BackColor = on ? Color.LightSalmon : SystemColors.Control;
+            if (!on) hLineAutoDisarmTimer.Stop(); // manually turned off — no countdown to run
         };
+
         // "P-Line" — price-alert line, panel 2 (15m RTH) ONLY, per explicit request (unlike
         // H-Line/T-Line/Text/Arrow above, no panel-1 half, no MultiChartForm panel-3 wiring).
         var btnPLine = new Button { Text = "P-Line", Size = new Size(60, 24) };
