@@ -252,6 +252,7 @@ public partial class Form1 : Form
         // the exact same fallback path already used when the API is unreachable or "AWS" is off.
         lblStatusUser.Text = "User: (API bypass)";
         CtLogWriter.WireUp(); // regenerates the CT.md whenever CtRecordStore changes, any symbol/panel
+        ClaimTickerSlotAndSelect();
         /*
         try
         {
@@ -301,6 +302,53 @@ public partial class Form1 : Form
         // stale one in the meantime. Safe to call again later from BeginPolling too — it's a no-op
         // if the timer is already running (see its own guard).
         if (IsPrimaryTickerInstance()) StartTokenKeepAlive();
+
+        if (_selectedTicker != null && MarketHours.IsWithinTwoHoursBeforeOpen)
+            await AutoStartPollingAndOpenChartsAsync();
+    }
+
+    // Kept alive for the whole process lifetime — the OS releases it if the process dies, freeing
+    // the slot for the next launch.
+    private Mutex? _tickerSlotMutex;
+
+    // Each launched instance claims the first free slot i (0..tickers-1) and selects tickers[i] —
+    // launch order = ticker order, per machine (TickerSettingsStore is local to each PC). Slot 0 is
+    // therefore always tickers[0], i.e. the "primary" instance IsPrimaryTickerInstance() expects.
+    // More instances than tickers: no free slot, nothing selected, stays manual as before.
+    private void ClaimTickerSlotAndSelect()
+    {
+        var buttons = flpTickers.Controls.OfType<Button>().ToList();
+        for (int i = 0; i < buttons.Count; i++)
+        {
+            var mutex = new Mutex(initiallyOwned: false, name: $@"Local\OptionsTrader.TickerSlot.{i}");
+            bool acquired;
+            try { acquired = mutex.WaitOne(0); }
+            catch (AbandonedMutexException) { acquired = true; } // previous owner crashed — slot is ours
+            if (!acquired) { mutex.Dispose(); continue; }
+
+            _tickerSlotMutex = mutex;
+            buttons[i].PerformClick();
+            LogLine($"{DateTime.Now:HH:mm:ss} [Startup] Instancia #{i + 1} → ticker {buttons[i].Text}", Color.Cyan);
+            return;
+        }
+    }
+
+    // Launched 7:30–9:30 AM ET on a weekday: Start Polling, wait for the first fetch to fill the
+    // grid(s), then switch to the Charts tab (whose SelectedIndexChanged handler connects it).
+    private async Task AutoStartPollingAndOpenChartsAsync()
+    {
+        try
+        {
+            if (!_isPolling) BeginPolling(showWarnings: false, isAutoCapture: false);
+            if (!_isPolling) { LogLine($"{DateTime.Now:HH:mm:ss} [Startup] Auto Start Polling no pudo iniciar (¿credenciales Schwab?).", Color.Orange); return; }
+
+            if (_lastPollingFetchTask != null) await _lastPollingFetchTask;
+            tabControl.SelectedTab = tabCharts;
+        }
+        catch (Exception ex)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Startup] Auto-arranque falló: {ex.Message}", Color.Orange);
+        }
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
@@ -1331,8 +1379,12 @@ public partial class Form1 : Form
         // instead of waiting for the first polling-timer tick (or, outside market hours, doing
         // nothing until the market actually opens). Fire-and-forget: FetchAndUpdateQuotesAsync
         // already has its own error handling (no blocking MessageBox), safe to not await here.
-        _ = FetchAndUpdateQuotesAsync();
+        _lastPollingFetchTask = FetchAndUpdateQuotesAsync();
     }
+
+    // The immediate fetch BeginPolling fires last — kept so the startup auto-arranque can await it
+    // (grids populated) before switching to the Charts tab.
+    private Task? _lastPollingFetchTask;
 
     // Proactively renews the Schwab access token every 30 minutes, starting immediately and
     // running through the RTH close (16:00 ET) regardless of whether polling itself is later
