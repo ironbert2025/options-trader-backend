@@ -2974,14 +2974,16 @@ public partial class Form1 : Form
             AutoSize  = true,
             Font      = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold),
             ForeColor = Color.DarkGoldenrod,
-            Anchor    = AnchorStyles.Top | AnchorStyles.Right
+            Anchor    = AnchorStyles.Top | AnchorStyles.Left // positioned manually in RepositionChartsConnectButton
         };
         _lblChartsPollingTime = lblPolling;
 
         void RepositionChartsConnectButton()
         {
             btn.Location = new Point(tabCharts.ClientSize.Width - btn.Width - 8, 3);
-            lblPolling.Location = new Point(btn.Right - lblPolling.Width, btn.Bottom + 4);
+            // PreferredSize, not Width: TextChanged fires before AutoSize applies the new width, so
+            // Width was stale (0/old) and the label landed past the right edge, clipped.
+            lblPolling.Location = new Point(btn.Right - lblPolling.PreferredSize.Width, btn.Bottom + 4);
         }
         RepositionChartsConnectButton();
         tabCharts.Resize += (s, e) => RepositionChartsConnectButton();
