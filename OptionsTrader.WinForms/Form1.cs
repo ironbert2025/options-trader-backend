@@ -3820,7 +3820,8 @@ public partial class Form1 : Form
         }
         else if (isSameDaySimulationExpiry)
             _ = SendSimulationExpiredTelegramPushAsync(symbol, type, strike, entryPrice, exitBid, pnlVal, pnlPctVal,
-                tag!.EntryImagePath, closeChartPath);
+                // Refuerzo result: close photo only — it already shows the result trade's open line.
+                tag!.IsReinforcementResult ? null : tag.EntryImagePath, closeChartPath);
         else
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
 
