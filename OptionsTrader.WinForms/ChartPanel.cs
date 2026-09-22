@@ -2345,6 +2345,10 @@ public class ChartPanel : Panel
             var widthYesterday = bandsYesterday.Value.Upper - bandsYesterday.Value.Lower;
             var open = widthToday > widthYesterday;
             BeginInvoke(async () => await MarkDailyBbAsync(open));
+
+            // Daily Bollinger Band lines themselves (not just the "opening" flag above) — 1h panel
+            // only, white, per explicit request.
+            BeginInvoke(() => OnDailyBollingerBandsValueEvent?.Invoke(bandsToday.Value.Upper, bandsToday.Value.Lower));
         }
     }
 
@@ -2511,6 +2515,19 @@ public class ChartPanel : Panel
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         await _webView.CoreWebView2.ExecuteScriptAsync($"markDailySmaLine({period}, {anchorFakeEpoch}, {priceStr});");
+    }
+
+    // Fires (upper, lower) every time EvaluateDailyPmAndBb recomputes today's Daily Bollinger(20,2)
+    // bands (1h panel only) — draws 2 white reference lines on panel 1, per explicit request, so
+    // they're visually distinct from that panel's own (colored) Bollinger bands.
+    public event Action<decimal, decimal>? OnDailyBollingerBandsValueEvent;
+
+    public async Task MarkDailyBollingerBandsAsync(decimal upper, decimal lower, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var upperStr = upper.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var lowerStr = lower.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyBollingerBands({anchorFakeEpoch}, {upperStr}, {lowerStr});");
     }
 
     public async Task SetDailySmaLineVisibleAsync(int period, bool show)

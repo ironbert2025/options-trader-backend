@@ -399,6 +399,18 @@ public class TwoPanelChartsControl : UserControl
                 });
             };
 
+            // Daily Bollinger Band white reference lines — panel 1 (1h) ONLY, per explicit request
+            // (unlike D.PM/Daily SMA above, not mirrored to panel 2).
+            hourlyPanel.OnDailyBollingerBandsValueEvent += (upper, lower) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    var sessionStart = GetTodaySessionStartFakeEpoch();
+                    _ = hourlyPanel.MarkDailyBollingerBandsAsync(upper, lower, sessionStart);
+                });
+            };
+
             hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
             {
                 if (IsDisposed) return;
