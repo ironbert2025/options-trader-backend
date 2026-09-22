@@ -1231,6 +1231,23 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLines({JsonSerializer.Serialize(prices)});");
     }
 
+    // Simulator-only "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% labels — only takes effect on
+    // strikes whose Stk Call/Put line is already showing (see chart.html's setStkCallLabels' own
+    // comment). SimulatorForm computes the label text (currency/percent formatting).
+    public async Task SetStkCallLabelsAsync(IEnumerable<(decimal Price, string Label)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, label = e.Label });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallLabels({JsonSerializer.Serialize(payload)});");
+    }
+
+    public async Task SetStkPutLabelsAsync(IEnumerable<(decimal Price, string Label)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, label = e.Label });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLabels({JsonSerializer.Serialize(payload)});");
+    }
+
     // ==================================================================================
     // "BB" (bands currently widening) + "Δ" (distance to nearest band) — ported from ChartPanel.
     // EvaluateBollingerWideningLabel. Purely visual, continuous, independent of the armed/fired
