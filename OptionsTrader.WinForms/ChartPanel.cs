@@ -428,6 +428,21 @@ public class ChartPanel : Panel
         return result == "true";
     }
 
+    // "Stk Call"/"Stk Put" toolbar buttons (TwoPanelChartsControl, panel 2 only) — up to 4 short
+    // dashed reference lines pinned to the right edge, at strike prices captured once at click
+    // time (see chart.html's setStkCallLines/setStkPutLines). Empty array turns them off.
+    public async Task SetStkCallLinesAsync(IEnumerable<decimal> prices)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallLines({JsonSerializer.Serialize(prices)});");
+    }
+
+    public async Task SetStkPutLinesAsync(IEnumerable<decimal> prices)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLines({JsonSerializer.Serialize(prices)});");
+    }
+
     // Toggles Rect drawing mode on/off. While on, every pair of clicks draws a new sky-blue
     // rectangle between them (opposite corners, no value labels). Same toggle pattern as DZ/SZ.
     public async Task<bool> ToggleRectModeAsync()

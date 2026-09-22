@@ -589,6 +589,35 @@ public class TwoPanelChartsControl : UserControl
         var btnSalBbVol = new Button { Text = "Sal BB Vol", Size = new Size(70, 24) };
         btnSalBbVol.Click += (s, e) => SaveManualSnapshot("SalBBVol", "SalBBVol.md");
 
+        // "Stk Call"/"Stk Put" — panel 2 only. Toggle: ON captures the current grid's first 4
+        // Call/Put strikes (GetQuoteSnapshot's OtmCalls/OtmPuts, same lists the options grid itself
+        // shows) and draws them as short dashed reference lines pinned to panel 2's right edge; OFF
+        // clears them. Captured ONCE at click time — per explicit request, does NOT stay in sync
+        // with the grid afterward (a later poll changing the "first 4" doesn't move these lines).
+        var btnStkCall = new Button { Text = "Stk Call", Size = new Size(70, 24), ForeColor = Color.DarkGreen };
+        var stkCallOn = false;
+        btnStkCall.Click += async (s, e) =>
+        {
+            stkCallOn = !stkCallOn;
+            btnStkCall.BackColor = stkCallOn ? Color.LightGreen : SystemColors.Control;
+            if (!stkCallOn) { if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
+            var snapshot = _form1.GetQuoteSnapshot(_symbol);
+            var strikes = snapshot?.OtmCalls.Take(4).Select(q => q.StrikePrice) ?? Enumerable.Empty<decimal>();
+            if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(strikes);
+        };
+
+        var btnStkPut = new Button { Text = "Stk Put", Size = new Size(70, 24), ForeColor = Color.Red };
+        var stkPutOn = false;
+        btnStkPut.Click += async (s, e) =>
+        {
+            stkPutOn = !stkPutOn;
+            btnStkPut.BackColor = stkPutOn ? Color.LightSalmon : SystemColors.Control;
+            if (!stkPutOn) { if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
+            var snapshot = _form1.GetQuoteSnapshot(_symbol);
+            var strikes = snapshot?.OtmPuts.Take(4).Select(q => q.StrikePrice) ?? Enumerable.Empty<decimal>();
+            if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(strikes);
+        };
+
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
         // days of persisted hourly history) and plain Hourly candles.
         var btnDaily = new Button { Text = "Daily", Size = new Size(70, 24) };
@@ -885,6 +914,8 @@ public class TwoPanelChartsControl : UserControl
         toolbarLeftRow2.Controls.Add(btnCtHora);
         toolbarLeftRow2.Controls.Add(btnCt15Min);
         toolbarLeftRow2.Controls.Add(btnSalBbVol);
+        toolbarLeftRow2.Controls.Add(btnStkCall);
+        toolbarLeftRow2.Controls.Add(btnStkPut);
         toolbarLeft.Controls.Add(chkDayDividers);
         toolbarLeft.Controls.Add(AthCheckBox);
 
