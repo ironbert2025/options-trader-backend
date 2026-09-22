@@ -589,11 +589,13 @@ public class TwoPanelChartsControl : UserControl
         var btnSalBbVol = new Button { Text = "Sal BB Vol", Size = new Size(70, 24) };
         btnSalBbVol.Click += (s, e) => SaveManualSnapshot("SalBBVol", "SalBBVol.md");
 
-        // "Stk Call"/"Stk Put" — panel 2 only. Toggle: ON captures the current grid's first 4
-        // Call/Put strikes (GetQuoteSnapshot's OtmCalls/OtmPuts, same lists the options grid itself
-        // shows) and draws them as short dashed reference lines pinned to panel 2's right edge; OFF
-        // clears them. Captured ONCE at click time — per explicit request, does NOT stay in sync
-        // with the grid afterward (a later poll changing the "first 4" doesn't move these lines).
+        // "Stk Call"/"Stk Put" — panel 2 only. Toggle: ON captures the grid's closest 4 Call/Put
+        // strikes to spot (Level 1-4) and draws them as short dashed reference lines pinned to
+        // panel 2's right edge; OFF clears them. Captured ONCE at click time — per explicit
+        // request, does NOT stay in sync with the grid afterward.
+        // GetQuoteSnapshot's OtmCalls is ordered DESCENDING by strike (farthest-OTM first, closest/
+        // Level-1 LAST — see PopulateQuotesGrid's own countsFilter branch), the opposite of OtmPuts
+        // (already closest-first) — TakeLast, not Take, to actually get Level 1-4.
         var btnStkCall = new Button { Text = "Stk Call", Size = new Size(70, 24), ForeColor = Color.DarkGreen };
         var stkCallOn = false;
         btnStkCall.Click += async (s, e) =>
@@ -602,7 +604,7 @@ public class TwoPanelChartsControl : UserControl
             btnStkCall.BackColor = stkCallOn ? Color.LightGreen : SystemColors.Control;
             if (!stkCallOn) { if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
-            var strikes = snapshot?.OtmCalls.Take(4).Select(q => q.StrikePrice) ?? Enumerable.Empty<decimal>();
+            var strikes = snapshot?.OtmCalls.TakeLast(4).Select(q => q.StrikePrice) ?? Enumerable.Empty<decimal>();
             if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(strikes);
         };
 
