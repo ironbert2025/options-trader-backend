@@ -596,7 +596,7 @@ public class TwoPanelChartsControl : UserControl
         // GetQuoteSnapshot's OtmCalls is ordered DESCENDING by strike (farthest-OTM first, closest/
         // Level-1 LAST — see PopulateQuotesGrid's own countsFilter branch), the opposite of OtmPuts
         // (already closest-first) — TakeLast, not Take, to actually get Level 1-4.
-        var btnStkCall = new Button { Text = "Stk Call", Size = new Size(70, 24), ForeColor = Color.DarkGreen };
+        var btnStkCall = new Button { Text = "Stk Call", Size = new Size(56, 24), ForeColor = Color.DarkGreen };
         var stkCallOn = false;
         btnStkCall.Click += async (s, e) =>
         {
@@ -608,7 +608,7 @@ public class TwoPanelChartsControl : UserControl
             if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(strikes);
         };
 
-        var btnStkPut = new Button { Text = "Stk Put", Size = new Size(70, 24), ForeColor = Color.Red };
+        var btnStkPut = new Button { Text = "Stk Put", Size = new Size(56, 24), ForeColor = Color.Red };
         var stkPutOn = false;
         btnStkPut.Click += async (s, e) =>
         {
