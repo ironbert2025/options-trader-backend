@@ -174,7 +174,7 @@ public class SimulatedChartPanel : Panel
         if (myGeneration != _renderGeneration) return; // a newer step/jump landed while this one was still sending
 
         if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full || _mode == ChartPanelMode.Fifteen_RTH)
-            EvaluateNewlyClosedCandles(candles);
+            EvaluateNewlyClosedCandles(candles, simDate);
 
         if (myGeneration != _renderGeneration) return;
         await DrawPrevDayCloseAsync(candles, myGeneration, simDate);
@@ -334,6 +334,98 @@ public class SimulatedChartPanel : Panel
         };
 
         return System.Text.Json.JsonSerializer.Serialize(candles.Select(Map));
+    }
+
+    // ==================================================================================
+    // "Trigger Call/Put" wick analysis — ported from ChartPanel (RTH chart only). Same rule: armed
+    // once by 2 diagonal Arrows (red smaller than green in Y), stays armed regardless of deleting
+    // either afterward; then watches the FIRST 15m RTH candle of the SIMULATED day (simDate, not
+    // real time) for a wick-then-recover pattern, firing at most once per simulated day.
+    // ==================================================================================
+    private decimal? _lastRedArrowSize;
+    private decimal? _lastGreenArrowSize;
+    private bool _wickAnalysisArmed;
+    private enum WickState { None, DippedBelow, RoseAbove }
+    private WickState _wickState = WickState.None;
+    private decimal _wickLow;
+    private decimal _wickHigh;
+    private bool _wickTriggerFiredForDay;
+    private DateOnly _wickStateSimDate;
+
+    // Fires "Trigger Call"/"Trigger Put" — SimulatorForm logs it via LogSimEvent.
+    public event Action<string>? OnWickTriggerEvent;
+
+    private void HandleDiagonalArrowPlaced(decimal p1, decimal p2, bool red)
+    {
+        var size = Math.Abs(p1 - p2);
+        if (red) _lastRedArrowSize = size; else _lastGreenArrowSize = size;
+
+        if (!_wickAnalysisArmed && _lastRedArrowSize is { } r && _lastGreenArrowSize is { } g && r < g)
+            _wickAnalysisArmed = true;
+    }
+
+    private void HandleDiagonalArrowDeleted(bool red)
+    {
+        // Once armed, deleting an arrow afterward does NOT disarm — only drops the cached size so
+        // a still-not-armed comparison starts fresh, same as the live app.
+        if (red) _lastRedArrowSize = null; else _lastGreenArrowSize = null;
+    }
+
+    // Called once per step (EvaluateNewlyClosedCandles) with the RTH candle list and the current
+    // simDate. candles[^1] is the still-forming candle for this step; it's "the session's first
+    // 15m candle" when it's the only candle in the list whose date matches simDate.
+    private void EvaluateWickTrigger(List<CandleData> candles, DateOnly simDate)
+    {
+        if (_wickStateSimDate != simDate)
+        {
+            _wickStateSimDate = simDate;
+            _wickAnalysisArmed = false;
+            _lastRedArrowSize = null;
+            _lastGreenArrowSize = null;
+            _wickState = WickState.None;
+            _wickTriggerFiredForDay = false;
+        }
+
+        if (!_wickAnalysisArmed || _wickTriggerFiredForDay || candles.Count == 0) return;
+
+        var forming = candles[^1];
+        var formingDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(forming.Time, EasternZone));
+        if (formingDate != simDate) return;
+        // Must be the FIRST candle of simDate in the list — any earlier candle sharing that date
+        // means we're past the session's opening 15m bar.
+        if (candles.Count > 1)
+        {
+            var prevDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(candles[^2].Time, EasternZone));
+            if (prevDate == simDate) return;
+        }
+
+        var open = forming.Open;
+        var price = forming.Close;
+        switch (_wickState)
+        {
+            case WickState.None:
+                if (price < open) { _wickState = WickState.DippedBelow; _wickLow = price; }
+                else if (price > open) { _wickState = WickState.RoseAbove; _wickHigh = price; }
+                break;
+
+            case WickState.DippedBelow:
+                if (price < _wickLow) { _wickLow = price; break; }
+                if (price >= open + (open - _wickLow))
+                {
+                    _wickTriggerFiredForDay = true;
+                    OnWickTriggerEvent?.Invoke("Trigger Call");
+                }
+                break;
+
+            case WickState.RoseAbove:
+                if (price > _wickHigh) { _wickHigh = price; break; }
+                if (price <= open - (_wickHigh - open))
+                {
+                    _wickTriggerFiredForDay = true;
+                    OnWickTriggerEvent?.Invoke("Trigger Put");
+                }
+                break;
+        }
     }
 
     // ==================================================================================
@@ -715,6 +807,20 @@ public class SimulatedChartPanel : Panel
         return result == "true";
     }
 
+    // "Arrow" (diagonal, 2-click) — ported from the live ChartPanel/TwoPanelChartsControl, RTH
+    // chart only (no "panel 1" equivalent here to also arm). Same toggle pattern as DZ/SZ. See
+    // CoreWebView2_WebMessageReceived's "diagonal_arrow_placed"/"diagonal_arrow_deleted" cases for
+    // the "Trigger Call/Put" wick-analysis arming this feeds.
+    public async Task<bool> ToggleArrowModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleArrow();");
+        return result == "true";
+    }
+
+    // Fired so SimulatorForm can (re)start its 15s auto-disarm countdown, same as the live app.
+    public event Action? OnDiagonalArrowPlacedEvent;
+
     // Clears everything drawn on THIS chart (same as ClearTLineAsync — chart.html's
     // clearDrawings() is shared/global per WebView instance).
     public async Task ClearDzSzAsync()
@@ -883,6 +989,22 @@ public class SimulatedChartPanel : Panel
                 var price1 = root.GetProperty("price1").GetDecimal();
                 var price2 = root.GetProperty("price2").GetDecimal();
                 OnDzSzPairDeletedEvent?.Invoke(price1, price2);
+                return;
+            }
+
+            if (type == "diagonal_arrow_placed")
+            {
+                OnDiagonalArrowPlacedEvent?.Invoke();
+                var arrowP1 = root.GetProperty("p1").GetDecimal();
+                var arrowP2 = root.GetProperty("p2").GetDecimal();
+                var arrowRed = root.GetProperty("red").GetBoolean();
+                HandleDiagonalArrowPlaced(arrowP1, arrowP2, arrowRed);
+                return;
+            }
+
+            if (type == "diagonal_arrow_deleted")
+            {
+                HandleDiagonalArrowDeleted(root.GetProperty("red").GetBoolean());
                 return;
             }
 
@@ -1095,6 +1217,20 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyBollingerBands({anchorFakeEpoch}, {upperStr}, {lowerStr});");
     }
 
+    // "Stk Call"/"Stk Put" — ported from the live ChartPanel, same setStkCallLines/setStkPutLines
+    // JS primitive. RTH chart only, per explicit request.
+    public async Task SetStkCallLinesAsync(IEnumerable<decimal> prices)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallLines({JsonSerializer.Serialize(prices)});");
+    }
+
+    public async Task SetStkPutLinesAsync(IEnumerable<decimal> prices)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLines({JsonSerializer.Serialize(prices)});");
+    }
+
     // ==================================================================================
     // "BB" (bands currently widening) + "Δ" (distance to nearest band) — ported from ChartPanel.
     // EvaluateBollingerWideningLabel. Purely visual, continuous, independent of the armed/fired
@@ -1162,8 +1298,10 @@ public class SimulatedChartPanel : Panel
     // (e.g. the "Ir a hora" buttons) by evaluating every newly-closed candle in order, not just
     // the latest one, so the Cross-SMA sequence never skips a step.
     // ==================================================================================
-    private void EvaluateNewlyClosedCandles(List<CandleData> candles)
+    private void EvaluateNewlyClosedCandles(List<CandleData> candles, DateOnly simDate)
     {
+        if (_mode == ChartPanelMode.Fifteen_RTH) EvaluateWickTrigger(candles, simDate);
+
         var closedNow = candles.Count > 0 ? candles.Take(candles.Count - 1).ToList() : new List<CandleData>();
 
         // A step going backwards (◀) or a jump to an earlier time must roll the sequence state

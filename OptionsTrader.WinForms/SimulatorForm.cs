@@ -101,6 +101,12 @@ public class SimulatorForm : Form
     // subscription in the constructor and _rthChartMinFakeEpoch's use in RenderCurrentStep).
     private readonly Panel _pnlDzSz = new() { Location = new Point(590, 202), Size = new Size(440, 30) };
     private long? _rthChartMinFakeEpoch;
+
+    // "Arrow" (diagonal, RTH chart only — arms the "Trigger Call/Put" wick analysis, see
+    // SimulatedChartPanel.OnWickTriggerEvent) + "Stk Call"/"Stk Put" (short strike-marker lines,
+    // captured once at click time from _dgvChain's current first 4 Call/Put strikes) — ported from
+    // the live app's TwoPanelChartsControl, placed beside the tick clock label to avoid overlap.
+    private readonly Panel _pnlArrowStk = new() { Location = new Point(780, 232), Size = new Size(260, 26) };
     private readonly TextBox _txtEventLog = new()
     {
         Location = new Point(8, 848), Size = new Size(1050, 90),
@@ -135,6 +141,12 @@ public class SimulatorForm : Form
     private readonly RadioButton _rbNoTrade = new() { Text = "No Trade", Checked = true, AutoSize = true, Location = new Point(6, 20) };
     private readonly RadioButton _rbNoTradeTarget = new() { Text = "No Trade-Target", AutoSize = true, Location = new Point(6, 40) };
     private string _selectedCounts    = "6"; // same default as Form1's _selectedCounts
+
+    // Latest OtmCalls/OtmPuts lists PopulateQuotesGrid computed for _dgvChain — captured for the
+    // "Stk Call"/"Stk Put" buttons (BuildArrowStkControls), same source the live app's own
+    // GetQuoteSnapshot uses.
+    private List<OptionQuoteDto> _lastOtmCalls = new();
+    private List<OptionQuoteDto> _lastOtmPuts  = new();
 
     // Strikes force-shown in _dgvChain regardless of the OTM-only filter — same idea as Form1's
     // identical field, set by clicking a trade's Strike button in _dgvTrades. Cleared on day load.
@@ -172,6 +184,7 @@ public class SimulatorForm : Form
         BuildGoToTimeButtons();
         BuildSmaEventControls();
         BuildDzSzControls();
+        BuildArrowStkControls();
 
         _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
         _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
@@ -203,6 +216,7 @@ public class SimulatorForm : Form
         Controls.Add(_pnlGoToTime);
         Controls.Add(_pnlSmaEvents);
         Controls.Add(_pnlDzSz);
+        Controls.Add(_pnlArrowStk);
         Controls.Add(_txtEventLog);
         Controls.Add(_chartsHost);
         Controls.Add(_dgvTrades);
@@ -252,6 +266,66 @@ public class SimulatorForm : Form
         };
 
         _pnlDzSz.Controls.Add(btnDzSz);
+    }
+
+    // "Arrow" (diagonal, RTH chart only) + "Stk Call"/"Stk Put" — ported from the live app's
+    // TwoPanelChartsControl. Arrow stays armed across multiple draws with the same 15s
+    // auto-disarm-after-last-arrow behavior as the live app; Stk Call/Put are plain toggles that
+    // capture the grid's current first 4 Call/Put strikes once at click time.
+    private void BuildArrowStkControls()
+    {
+        var btnArrow = new Button { Text = "Arrow", Location = new Point(0, 0), Size = new Size(60, 24) };
+        var arrowAutoDisarmTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+        arrowAutoDisarmTimer.Tick += async (s, e) =>
+        {
+            arrowAutoDisarmTimer.Stop();
+            await _rthChart.ToggleArrowModeAsync();
+            btnArrow.BackColor = SystemColors.Control;
+        };
+        Disposed += (s, e) => arrowAutoDisarmTimer.Dispose();
+        _rthChart.OnDiagonalArrowPlacedEvent += () =>
+        {
+            arrowAutoDisarmTimer.Stop();
+            arrowAutoDisarmTimer.Start();
+        };
+        btnArrow.Click += async (s, e) =>
+        {
+            var on = await _rthChart.ToggleArrowModeAsync();
+            btnArrow.BackColor = on ? Color.LightYellow : SystemColors.Control;
+            if (!on) arrowAutoDisarmTimer.Stop();
+        };
+
+        _rthChart.OnWickTriggerEvent += label =>
+        {
+            if (IsDisposed) return;
+            BeginInvoke(() => LogSimEvent(label));
+        };
+
+        var btnStkCall = new Button { Text = "Stk Call", Location = new Point(66, 0), Size = new Size(56, 24), ForeColor = Color.DarkGreen };
+        var stkCallOn = false;
+        btnStkCall.Click += async (s, e) =>
+        {
+            stkCallOn = !stkCallOn;
+            btnStkCall.BackColor = stkCallOn ? Color.LightGreen : SystemColors.Control;
+            if (!stkCallOn) { await _rthChart.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
+            // OtmCalls is ordered farthest-OTM-first (closest/Level-1 last) — TakeLast, not Take,
+            // same fix applied to the live app's own Stk Call button.
+            await _rthChart.SetStkCallLinesAsync(_lastOtmCalls.TakeLast(4).Select(q => q.StrikePrice));
+        };
+
+        var btnStkPut = new Button { Text = "Stk Put", Location = new Point(126, 0), Size = new Size(56, 24), ForeColor = Color.Red };
+        var stkPutOn = false;
+        btnStkPut.Click += async (s, e) =>
+        {
+            stkPutOn = !stkPutOn;
+            btnStkPut.BackColor = stkPutOn ? Color.LightSalmon : SystemColors.Control;
+            if (!stkPutOn) { await _rthChart.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
+            await _rthChart.SetStkPutLinesAsync(_lastOtmPuts.Take(4).Select(q => q.StrikePrice));
+        };
+
+        _pnlArrowStk.Controls.Add(btnArrow);
+        _pnlArrowStk.Controls.Add(btnStkCall);
+        _pnlArrowStk.Controls.Add(btnStkPut);
     }
 
     // "Real Time" (real recorded pace, per-step gap) plus 4 fixed speeds for "Play" (ticks/sec) —
@@ -1258,7 +1332,7 @@ public class SimulatorForm : Form
         var step = _steps[_currentIndex];
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
-        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts,
+        (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts,
             forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
 
         // PopulateQuotesGrid computes its own Conts column from the REAL (persisted)
@@ -1748,7 +1822,7 @@ public class SimulatorForm : Form
         _forcedStrikes.Add((type, strike));
 
         if (_currentIndex >= 0)
-            Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
+            (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
                 selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
     }
 }
