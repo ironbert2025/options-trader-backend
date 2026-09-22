@@ -1776,7 +1776,7 @@
   // explicit request). Unlike every other line primitive here, this one deliberately does NOT span
   // from an anchor time to the right edge — it's a short ~30px segment pinned to the right edge
   // itself, so it reads as "a marker on the price axis" rather than a line crossing the chart.
-  const StkLineSegmentPx = 30;
+  const StkLineSegmentPx = 60;
   class StkLinesPrimitive {
     constructor() { this._callPrices = []; this._putPrices = []; this._chart = null; }
     attached(param) { this._chart = param.chart; }
