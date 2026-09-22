@@ -80,6 +80,10 @@ public class SimulatedChartPanel : Panel
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+
+                // Light gray fill between the bands — same as panel 2 (15m RTH), per explicit request.
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
+
                 _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
             }
             else if (_mode == ChartPanelMode.Fifteen_RTH)
