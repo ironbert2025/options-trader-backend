@@ -574,6 +574,9 @@ public class TwoPanelChartsControl : UserControl
         var btnCt15Min = new Button { Text = "CT 15Min", Size = new Size(70, 24) };
         btnCt15Min.Click += (s, e) => SaveManualSnapshot("CT15Min", "CT15Min.md");
 
+        var btnSalBbVol = new Button { Text = "Sal BB Vol", Size = new Size(70, 24) };
+        btnSalBbVol.Click += (s, e) => SaveManualSnapshot("SalBBVol", "SalBBVol.md");
+
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
         // days of persisted hourly history) and plain Hourly candles.
         var btnDaily = new Button { Text = "Daily", Size = new Size(70, 24) };
@@ -869,6 +872,7 @@ public class TwoPanelChartsControl : UserControl
         toolbarLeftRow2.Controls.Add(btnExpEn3);
         toolbarLeftRow2.Controls.Add(btnCtHora);
         toolbarLeftRow2.Controls.Add(btnCt15Min);
+        toolbarLeftRow2.Controls.Add(btnSalBbVol);
         toolbarLeft.Controls.Add(chkDayDividers);
         toolbarLeft.Controls.Add(AthCheckBox);
 
