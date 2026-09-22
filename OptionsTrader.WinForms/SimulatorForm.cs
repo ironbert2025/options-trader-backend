@@ -977,6 +977,11 @@ public class SimulatorForm : Form
             var widthYesterday = bandsYesterday.Value.Upper - bandsYesterday.Value.Lower;
             var open = widthToday > widthYesterday;
             _ = _hourlyChart.MarkDailyBbAsync(open);
+
+            // Bollinger Band lines themselves (white, 1h panel only) — same as ChartPanel's live
+            // version, per explicit request.
+            var sessionStartForBands = GetSessionStartFakeEpoch();
+            _ = _hourlyChart.MarkDailyBollingerBandsAsync(bandsToday.Value.Upper, bandsToday.Value.Lower, sessionStartForBands);
         }
 
         if (smaToday != null)

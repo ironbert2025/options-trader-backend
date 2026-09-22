@@ -1081,6 +1081,16 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyPmLine({anchorFakeEpoch}, {priceStr});");
     }
 
+    // Daily Bollinger Band(20,2) white reference lines — same JS call ChartPanel's live version
+    // uses (see its own comment); ported here for the 1h panel only, per explicit request.
+    public async Task MarkDailyBollingerBandsAsync(decimal upper, decimal lower, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var upperStr = upper.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var lowerStr = lower.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyBollingerBands({anchorFakeEpoch}, {upperStr}, {lowerStr});");
+    }
+
     // ==================================================================================
     // "BB" (bands currently widening) + "Δ" (distance to nearest band) — ported from ChartPanel.
     // EvaluateBollingerWideningLabel. Purely visual, continuous, independent of the armed/fired
