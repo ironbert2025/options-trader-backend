@@ -1098,7 +1098,11 @@ public class TwoPanelChartsControl : UserControl
                 if (e.ColumnIndex == sprdCol)
                 {
                     e.CellStyle.ForeColor = Color.Red;
-                    e.CellStyle.Font = new Font(grid.Font, FontStyle.Bold);
+                    // Per explicit request: a wide spread (>= 5) stands out with a slightly bigger
+                    // font on top of the usual bold — the Strike button stays enabled either way,
+                    // this is purely a visual flag to catch the eye.
+                    var wideSpread = decimal.TryParse(e.Value?.ToString(), out var sprdVal) && sprdVal >= 5;
+                    e.CellStyle.Font = new Font(grid.Font.FontFamily, wideSpread ? grid.Font.Size + 2 : grid.Font.Size, FontStyle.Bold);
                 }
                 else if (e.ColumnIndex == askCol)
                 {
