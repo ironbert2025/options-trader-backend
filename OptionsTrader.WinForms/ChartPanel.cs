@@ -168,6 +168,95 @@ public class ChartPanel : Panel
     // signal, and the premarket Bollinger-exposure check.
     private readonly List<CandleData> _closedCandles = new();
 
+    // ==================================================================================
+    // "Trigger Call/Put" wick analysis (15m RTH panel only, per explicit request) — armed once by
+    // drawing 2 diagonal Arrows (one red, one green) where the red one's vertical size is SMALLER
+    // than the green one's; once armed it stays armed regardless of deleting either arrow
+    // afterward. Then watches the FIRST 15m RTH candle of the session (bucket index 0) for a
+    // lower-wick-then-recover (Call) or upper-wick-then-reverse (Put) pattern, firing at most once
+    // per day. All state resets on a new trading day (see EvaluateWickTrigger's date check).
+    // ==================================================================================
+    private decimal? _lastRedArrowSize;
+    private decimal? _lastGreenArrowSize;
+    private bool _wickAnalysisArmed;
+    private enum WickState { None, DippedBelow, RoseAbove }
+    private WickState _wickState = WickState.None;
+    private decimal _wickLow;
+    private decimal _wickHigh;
+    private bool _wickTriggerFiredToday;
+    private DateOnly _wickStateDate;
+
+    // Fires "Trigger Call" or "Trigger Put" when the wick-recovery pattern completes — relayed by
+    // TwoPanelChartsControl into Form1.LogLine.
+    public event Action<string>? OnWickTriggerEvent;
+
+    private void HandleDiagonalArrowPlaced(decimal p1, decimal p2, bool red)
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        ResetWickStateIfNewDay();
+
+        var size = Math.Abs(p1 - p2);
+        if (red) _lastRedArrowSize = size; else _lastGreenArrowSize = size;
+
+        if (!_wickAnalysisArmed && _lastRedArrowSize is { } r && _lastGreenArrowSize is { } g && r < g)
+            _wickAnalysisArmed = true;
+    }
+
+    private void HandleDiagonalArrowDeleted(bool red)
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        // Per explicit request: once armed, deleting an arrow afterward does NOT disarm — only
+        // drops the cached size so a still-not-armed comparison starts fresh.
+        if (red) _lastRedArrowSize = null; else _lastGreenArrowSize = null;
+    }
+
+    private void ResetWickStateIfNewDay()
+    {
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        if (_wickStateDate == today) return;
+        _wickStateDate = today;
+        _wickAnalysisArmed = false;
+        _lastRedArrowSize = null;
+        _lastGreenArrowSize = null;
+        _wickState = WickState.None;
+        _wickTriggerFiredToday = false;
+    }
+
+    // Called on every live tick (15m RTH panel only) — see UpdateLivePriceFromExternalSource.
+    private void EvaluateWickTrigger(decimal price)
+    {
+        ResetWickStateIfNewDay();
+        if (!_wickAnalysisArmed || _wickTriggerFiredToday) return;
+        if (_liveBucket == null || _liveBucketIndex != 0) return; // only the session's 1st 15m candle
+
+        var open = _liveBucket.Open;
+        switch (_wickState)
+        {
+            case WickState.None:
+                if (price < open) { _wickState = WickState.DippedBelow; _wickLow = price; }
+                else if (price > open) { _wickState = WickState.RoseAbove; _wickHigh = price; }
+                break;
+
+            case WickState.DippedBelow:
+                if (price < _wickLow) { _wickLow = price; break; }
+                if (price >= open + (open - _wickLow))
+                {
+                    _wickTriggerFiredToday = true;
+                    OnWickTriggerEvent?.Invoke("Trigger Call");
+                }
+                break;
+
+            case WickState.RoseAbove:
+                if (price > _wickHigh) { _wickHigh = price; break; }
+                if (price <= open - (_wickHigh - open))
+                {
+                    _wickTriggerFiredToday = true;
+                    OnWickTriggerEvent?.Invoke("Trigger Put");
+                }
+                break;
+        }
+    }
+
     // ---- Demand/Supply Zone rebote (15m RTH+Overnight panel only) ----
     // Every DZ/SZ line drawn (toggleDzSz — see CoreWebView2_WebMessageReceived's "dzsz" case)
     // arrives one at a time; every 2 form a pair. Geometry decides which kind of zone it is (per
@@ -1080,6 +1169,16 @@ public class ChartPanel : Panel
                     // draws, so TwoPanelChartsControl uses this to (re)start its 15s auto-disarm
                     // timer instead of resetting the button immediately.
                     OnDiagonalArrowPlacedEvent?.Invoke();
+
+                    var p1 = root.GetProperty("p1").GetDecimal();
+                    var p2 = root.GetProperty("p2").GetDecimal();
+                    var arrowRed = root.GetProperty("red").GetBoolean();
+                    HandleDiagonalArrowPlaced(p1, p2, arrowRed);
+                    break;
+                }
+                case "diagonal_arrow_deleted":
+                {
+                    HandleDiagonalArrowDeleted(root.GetProperty("red").GetBoolean());
                     break;
                 }
                 case "arrow_move":
@@ -3248,6 +3347,7 @@ public class ChartPanel : Panel
             ArmVolatilityOpeningWatchDefault();
         if (eastern.TimeOfDay < new TimeSpan(9, 30, 0)) EvaluateBollingerWideningLabel(price); // "BB" live during premarket too
         if (_mode == ChartPanelMode.Fifteen_RTH) EvaluatePLineCross(price); // panel 2 only, see TogglePLineModeAsync
+        if (_mode == ChartPanelMode.Fifteen_RTH) EvaluateWickTrigger(price); // panel 2 only, see OnWickTriggerEvent
 
         if (_liveBucket == null) return; // no bucket open yet — CHART_EQUITY seeds the first one
         if (_rthOnly && (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)))

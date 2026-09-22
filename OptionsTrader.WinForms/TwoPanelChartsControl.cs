@@ -760,6 +760,18 @@ public class TwoPanelChartsControl : UserControl
             };
         }
 
+        // "Trigger Call"/"Trigger Put" wick analysis (panel 2 only) — see ChartPanel.
+        // OnWickTriggerEvent's own comment for the full rule. Logged only, per explicit request
+        // ("por ahora en el log") — no chart overlay, no Telegram push.
+        if (rthPanel != null)
+        {
+            rthPanel.OnWickTriggerEvent += label =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => AppendLog($"{DateTime.Now:HH:mm:ss}  [{_symbol}] {label}{Environment.NewLine}"));
+            };
+        }
+
         // Panel-1/2 half of the shared Text arm/disarm — see TextButton's XML-ish comment above and
         // MultiChartForm's own extra Click handler for the panel-3 half.
         TextButton.Click += async (s, e) =>

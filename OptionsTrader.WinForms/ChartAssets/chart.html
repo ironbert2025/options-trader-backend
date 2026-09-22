@@ -958,12 +958,16 @@
       return;
     }
 
-    // Diagonal Arrow: session-only (not persisted anywhere), nothing to report to C# — just
-    // remove it locally, same as click-text below.
+    // Diagonal Arrow: session-only (not persisted anywhere) — still reports the color to C# (see
+    // "diagonal_arrow_placed") so it can drop its cached red/green size if this was the tracked one.
     const diagArrowIdx = arrowPrimitive._arrows.findIndex(a => a.selected);
     if (diagArrowIdx !== -1) {
+      const removedRed = arrowPrimitive._arrows[diagArrowIdx].red;
       arrowPrimitive._arrows.splice(diagArrowIdx, 1);
       forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'diagonal_arrow_deleted', red: removedRed });
+      }
       return;
     }
 
@@ -1065,14 +1069,17 @@
         arrowPending = { logical: logicalX, price: arrowPrice };
       } else {
         const red = arrowPending.price > arrowPrice; // 1st click above (higher price than) 2nd -> red
+        const arrowP1 = arrowPending.price;
         arrowPrimitive._arrows.push({ l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: arrowPrice, red, selected: false });
         arrowPrimitive._preview = null;
         arrowPending = null;
-        // Reported to C# so it can (re)start the 15s auto-disarm countdown — per explicit request,
+        // Reported to C# so it can (re)start the 15s auto-disarm countdown (per explicit request,
         // this tool stays armed for drawing several arrows in a row, but should turn itself off
-        // after 15s of no new arrow being drawn instead of staying armed forever until re-clicked.
+        // after 15s of no new arrow being drawn instead of staying armed forever until re-clicked)
+        // and so it can compare this arrow's vertical size (red vs green) for the "Trigger Call/
+        // Put" wick analysis — see ChartPanel's "diagonal_arrow_placed" handling.
         if (window.chrome && window.chrome.webview) {
-          window.chrome.webview.postMessage({ type: 'diagonal_arrow_placed' });
+          window.chrome.webview.postMessage({ type: 'diagonal_arrow_placed', p1: arrowP1, p2: arrowPrice, red });
         }
         forceRepaint();
       }
