@@ -360,7 +360,10 @@ public class SimulatedChartPanel : Panel
         var size = Math.Abs(p1 - p2);
         if (red) _lastRedArrowSize = size; else _lastGreenArrowSize = size;
 
-        if (!_wickAnalysisArmed && _lastRedArrowSize is { } r && _lastGreenArrowSize is { } g && r < g)
+        // Arms on EITHER inequality now, not just red < green — a pair drawn the other way
+        // (green shorter than red, i.e. arming for the Put scenario) must arm just as well, per
+        // explicit request. Only an exact tie (r == g) leaves it unarmed.
+        if (!_wickAnalysisArmed && _lastRedArrowSize is { } r && _lastGreenArrowSize is { } g && r != g)
             _wickAnalysisArmed = true;
     }
 
@@ -1262,6 +1265,19 @@ public class SimulatedChartPanel : Panel
         if (_webView.CoreWebView2 == null) return;
         var payload = entries.Select(e => new { price = e.Price, label = new { ask = e.Ask, bid = e.Bid, pnlText = e.PnlText, pnlPositive = e.PnlPositive } });
         await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLabels({JsonSerializer.Serialize(payload)});");
+    }
+
+    // "Reset Stk" button — clears the label without removing the lines/strike-price text.
+    public async Task ClearStkCallLabelsAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearStkCallLabels();");
+    }
+
+    public async Task ClearStkPutLabelsAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearStkPutLabels();");
     }
 
     // ==================================================================================

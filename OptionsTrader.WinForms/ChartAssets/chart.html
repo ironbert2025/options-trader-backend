@@ -1906,6 +1906,18 @@
     forceRepaint();
   }
 
+  // Simulator-only "Reset Stk" button — clears the Ask/Bid/PnL% label without touching the lines
+  // themselves (strike price stays visible), so a fresh cycle can start from a clean slate.
+  function clearStkCallLabels() {
+    stkLinesPrimitive._callLines.forEach(l => { l.label = null; });
+    forceRepaint();
+  }
+
+  function clearStkPutLabels() {
+    stkLinesPrimitive._putLines.forEach(l => { l.label = null; });
+    forceRepaint();
+  }
+
   // Current reference price for deciding 'above'/'below' at draw time — same "most recent real
   // bar's close, by time" lookup sharedAutoscaleInfoProvider uses, not just series[len-1] (see
   // that function's own comment on why the array's order isn't trusted).

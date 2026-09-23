@@ -106,7 +106,7 @@ public class SimulatorForm : Form
     // SimulatedChartPanel.OnWickTriggerEvent) + "Stk Call"/"Stk Put" (short strike-marker lines,
     // captured once at click time from _dgvChain's current first 4 Call/Put strikes) — ported from
     // the live app's TwoPanelChartsControl, placed beside the tick clock label to avoid overlap.
-    private readonly Panel _pnlArrowStk = new() { Location = new Point(780, 232), Size = new Size(340, 26) };
+    private readonly Panel _pnlArrowStk = new() { Location = new Point(780, 232), Size = new Size(340, 54) };
 
     // ΔSpot estimado — read at the moment the trigger fires (see ArmTriggerStkTracking), together
     // with each tracked strike's OWN Delta/Gamma at that same instant, to project a net-of-cost %
@@ -281,6 +281,12 @@ public class SimulatorForm : Form
     private void BuildArrowStkControls()
     {
         var btnArrow = new Button { Text = "Arrow", Location = new Point(0, 0), Size = new Size(60, 24) };
+        var btnResetStk = new Button { Text = "Reset Stk", Location = new Point(0, 28), Size = new Size(78, 22) };
+        btnResetStk.Click += (s, e) =>
+        {
+            ToggleResetStk();
+            btnResetStk.BackColor = _resetStkOn ? Color.LightYellow : SystemColors.Control;
+        };
         var arrowAutoDisarmTimer = new System.Windows.Forms.Timer { Interval = 15000 };
         arrowAutoDisarmTimer.Tick += async (s, e) =>
         {
@@ -317,7 +323,7 @@ public class SimulatorForm : Form
         {
             _stkCallOn = !_stkCallOn;
             btnStkCall.BackColor = _stkCallOn ? Color.LightGreen : SystemColors.Control;
-            _triggerTrackedIsCall = null; // toggling either button off/on cancels any in-progress tracking
+            _callTrack.Entries.Clear(); // toggling either button off/on cancels any in-progress tracking
             if (!_stkCallOn) { _stkCallStrikes.Clear(); await _rthChart.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
             // OtmCalls is ordered farthest-OTM-first (closest/Level-1 last) — TakeLast, not Take,
             // same fix applied to the live app's own Stk Call button.
@@ -330,13 +336,14 @@ public class SimulatorForm : Form
         {
             _stkPutOn = !_stkPutOn;
             btnStkPut.BackColor = _stkPutOn ? Color.LightSalmon : SystemColors.Control;
-            _triggerTrackedIsCall = null;
+            _putTrack.Entries.Clear();
             if (!_stkPutOn) { _stkPutStrikes.Clear(); await _rthChart.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
             _stkPutStrikes = _lastOtmPuts.Take(4).Select(q => q.StrikePrice).ToList();
             await _rthChart.SetStkPutLinesAsync(_stkPutStrikes);
         };
 
         _pnlArrowStk.Controls.Add(btnArrow);
+        _pnlArrowStk.Controls.Add(btnResetStk);
         _pnlArrowStk.Controls.Add(btnStkCall);
         _pnlArrowStk.Controls.Add(btnStkPut);
         _pnlArrowStk.Controls.Add(_lblDeltaSpot);
@@ -353,13 +360,37 @@ public class SimulatorForm : Form
 
     // "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% tracking — only starts if the matching Stk
     // Call/Put button is ON at the moment the trigger fires (per explicit request); does nothing
-    // otherwise. null = no tracking in progress.
-    private bool? _triggerTrackedIsCall;
-    private List<(decimal Strike, decimal FrozenAsk)> _triggerTrackedEntries = new();
+    // otherwise. Two independent tracks (not one shared "which side" flag) so Call and Put can each
+    // be armed/reset on their own without clobbering the other — e.g. the "Reset Stk" button below
+    // can restart both at once if both Stk buttons are on.
+    private sealed class StkTrackState
+    {
+        public List<(decimal Strike, decimal FrozenAsk)> Entries = new();
+        // false = armed by the wick trigger (only updates live during the session's 1st 15m candle,
+        // same as before). true = armed/reset by the manual "Reset Stk" button (updates live
+        // indefinitely until that button is pressed again).
+        public bool Manual;
+    }
+    private readonly StkTrackState _callTrack = new();
+    private readonly StkTrackState _putTrack = new();
 
     // Round-trip broker commission per contract, in premium units (1.30 USD / 100 shares) — fixed,
     // per explicit request (no UI to change it).
     private const decimal FixedCostPerContract = 0.013m;
+
+    // Captures the CURRENT Ask for the given side's already-chosen strikes (_stkCallStrikes/
+    // _stkPutStrikes — which strikes never changes here, only their value) — shared by the
+    // automatic wick-trigger arm and the manual "Reset Stk" button.
+    private List<(decimal Strike, decimal FrozenAsk)> CaptureStkEntries(bool isCall)
+    {
+        var strikes = isCall ? _stkCallStrikes : _stkPutStrikes;
+        var quotes = isCall ? _lastOtmCalls : _lastOtmPuts;
+        return strikes
+            .Select(strike => (Strike: strike, Ask: quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Ask))
+            .Where(e => e.Ask.HasValue)
+            .Select(e => (e.Strike, FrozenAsk: e.Ask!.Value))
+            .ToList();
+    }
 
     private void ArmTriggerStkTracking(string label)
     {
@@ -367,17 +398,55 @@ public class SimulatorForm : Form
         if (isCall && !_stkCallOn) return;
         if (!isCall && !_stkPutOn) return;
 
-        var strikes = isCall ? _stkCallStrikes : _stkPutStrikes;
-        var quotes = isCall ? _lastOtmCalls : _lastOtmPuts;
-        _triggerTrackedEntries = strikes
-            .Select(strike => (Strike: strike, Ask: quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Ask))
-            .Where(e => e.Ask.HasValue)
-            .Select(e => (e.Strike, FrozenAsk: e.Ask!.Value))
-            .ToList();
-        if (_triggerTrackedEntries.Count == 0) return;
-        _triggerTrackedIsCall = isCall;
+        var entries = CaptureStkEntries(isCall);
+        if (entries.Count == 0) return;
 
-        LogProjectedStkEstimate(isCall, quotes);
+        var track = isCall ? _callTrack : _putTrack;
+        track.Entries = entries;
+        track.Manual = false;
+
+        LogProjectedStkEstimate(isCall, isCall ? _lastOtmCalls : _lastOtmPuts);
+    }
+
+    // "Reset Stk" toggle — ON: for each side currently shown (Stk Call/Put on), clears the label,
+    // re-captures a fresh Ask for those same 4 strikes right now, re-logs the ΔSpot estimate, and
+    // switches that side to Manual (updates live with no 1st-15m-candle limit). OFF: switches
+    // whichever sides were Manual back to non-manual — since real time is almost certainly past
+    // that window by then, UpdateTriggerStkLabelsAsync's own window check naturally stops updating
+    // it from here on, leaving whatever was last shown in place (no explicit "frozen" flag needed).
+    private bool _resetStkOn;
+    private async void ToggleResetStk()
+    {
+        _resetStkOn = !_resetStkOn;
+        if (!_resetStkOn)
+        {
+            _callTrack.Manual = false;
+            _putTrack.Manual = false;
+            return;
+        }
+
+        if (_stkCallOn)
+        {
+            await _rthChart.ClearStkCallLabelsAsync();
+            var entries = CaptureStkEntries(isCall: true);
+            if (entries.Count > 0)
+            {
+                _callTrack.Entries = entries;
+                _callTrack.Manual = true;
+                LogProjectedStkEstimate(isCall: true, _lastOtmCalls);
+            }
+        }
+        if (_stkPutOn)
+        {
+            await _rthChart.ClearStkPutLabelsAsync();
+            var entries = CaptureStkEntries(isCall: false);
+            if (entries.Count > 0)
+            {
+                _putTrack.Entries = entries;
+                _putTrack.Manual = true;
+                LogProjectedStkEstimate(isCall: false, _lastOtmPuts);
+            }
+        }
     }
 
     // ΔSpot-based projection — Delta + 0.5*Gamma*ΔSpot^2 (2nd-order Taylor estimate of the premium
@@ -390,7 +459,7 @@ public class SimulatorForm : Form
         if (!decimal.TryParse(_txtDeltaSpot.Text, out var deltaSpot)) return;
 
         var estimates = new List<(decimal Strike, decimal NetPct)>();
-        foreach (var (strike, frozenAsk) in _triggerTrackedEntries)
+        foreach (var (strike, frozenAsk) in (isCall ? _callTrack : _putTrack).Entries)
         {
             var quote = quotes.FirstOrDefault(q => q.StrikePrice == strike);
             if (quote == null || frozenAsk <= 0) continue;
@@ -417,19 +486,28 @@ public class SimulatorForm : Form
     }
 
     // Called every step (right after _lastOtmCalls/_lastOtmPuts refresh) — updates the live
-    // Bid/PnL% label on the tracked Stk lines, but ONLY while still inside the session's first 15m
-    // RTH candle (same window EvaluateWickTrigger itself only fires within), per explicit request.
+    // Bid/PnL% label on the tracked Stk lines. A track armed by the wick trigger (Manual=false)
+    // only updates while still inside the session's first 15m RTH candle; one armed/reset by the
+    // "Reset Stk" button (Manual=true) updates indefinitely, until that button is pressed again.
     private async Task UpdateTriggerStkLabelsAsync()
     {
-        if (_triggerTrackedIsCall is not { } isCall) return;
         if (_currentIndex < 0 || _currentIndex >= _steps.Count) return;
         var stepEastern = EasternTime(_steps[_currentIndex].Time);
-        if (DateOnly.FromDateTime(stepEastern) != _simDate) return;
-        if (stepEastern.TimeOfDay < new TimeSpan(9, 30, 0) || stepEastern.TimeOfDay >= new TimeSpan(9, 45, 0)) return;
+        var inFirstCandleWindow = DateOnly.FromDateTime(stepEastern) == _simDate
+            && stepEastern.TimeOfDay >= new TimeSpan(9, 30, 0) && stepEastern.TimeOfDay < new TimeSpan(9, 45, 0);
+
+        await UpdateOneSideAsync(_callTrack, isCall: true, inFirstCandleWindow);
+        await UpdateOneSideAsync(_putTrack, isCall: false, inFirstCandleWindow);
+    }
+
+    private async Task UpdateOneSideAsync(StkTrackState track, bool isCall, bool inFirstCandleWindow)
+    {
+        if (track.Entries.Count == 0) return;
+        if (!track.Manual && !inFirstCandleWindow) return;
 
         var quotes = isCall ? _lastOtmCalls : _lastOtmPuts;
         var entries = new List<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)>();
-        foreach (var (strike, frozenAsk) in _triggerTrackedEntries)
+        foreach (var (strike, frozenAsk) in track.Entries)
         {
             var bid = quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Bid;
             if (bid == null) continue;
@@ -973,8 +1051,11 @@ public class SimulatorForm : Form
         // New day — the "Trigger Call/Put" wick-armed state itself resets inside SimulatedChartPanel
         // (keyed off simDate), but the Ask/Bid/PnL tracking here (and the Stk Call/Put toggles
         // driving it) live in THIS form, so they need their own reset.
-        _triggerTrackedIsCall = null;
-        _triggerTrackedEntries.Clear();
+        _callTrack.Entries.Clear();
+        _callTrack.Manual = false;
+        _putTrack.Entries.Clear();
+        _putTrack.Manual = false;
+        _resetStkOn = false;
 
         var tickers = TickerSettingsStore.Load();
         _ticker = tickers.FirstOrDefault(t => t.Symbol == symbol);
@@ -1426,7 +1507,7 @@ public class SimulatorForm : Form
     private void RenderCurrentStep()
     {
         // Charts render FIRST, not after — RenderChartsUpToTime is what actually evaluates the
-        // "Trigger Call/Put" wick analysis and arms _triggerTrackedIsCall (via
+        // "Trigger Call/Put" wick analysis and arms _callTrack/_putTrack (via
         // SimulatedChartPanel.OnWickTriggerEvent). RenderGridForStep below reads that same-step
         // state for its Ask/Bid/PnL% label update; the old order (grid first) made it always read
         // LAST step's state, so the label almost never caught the trigger before its 1st-15m-candle
