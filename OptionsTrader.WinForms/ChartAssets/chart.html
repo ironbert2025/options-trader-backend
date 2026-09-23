@@ -3288,12 +3288,13 @@
                   ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
                   ctx.stroke();
 
+                  // Label sits where the line itself starts (its anchor candle), not at the right
+                  // edge, per explicit request — stays there as the line extends rightward.
                   ctx.fillStyle = '#00c853';
                   ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
                   ctx.textBaseline = 'bottom';
-                  ctx.textAlign = 'right';
-                  ctx.fillText(l.label, scope.bitmapSize.width - 4, y * scope.verticalPixelRatio - 2);
-                  ctx.textAlign = 'left'; // reset — other primitives assume the default
+                  ctx.textAlign = 'left';
+                  ctx.fillText(l.label, x * scope.horizontalPixelRatio + 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2);
 
                   if (l.selected) {
                     ctx.save();
