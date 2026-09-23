@@ -532,6 +532,25 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLines({JsonSerializer.Serialize(prices)});");
     }
 
+    // "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% labels — only takes effect on strikes whose
+    // Stk Call/Put line is already showing (see chart.html's setStkCallLabels' own comment).
+    // TwoPanelChartsControl computes the formatted Ask/Bid text and the PnL sign; chart.html colors
+    // each piece independently (Ask green, Bid orange, PnL green/red). Ported from the Simulator's
+    // identical SimulatedChartPanel methods.
+    public async Task SetStkCallLabelsAsync(IEnumerable<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, label = new { ask = e.Ask, bid = e.Bid, pnlText = e.PnlText, pnlPositive = e.PnlPositive } });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallLabels({JsonSerializer.Serialize(payload)});");
+    }
+
+    public async Task SetStkPutLabelsAsync(IEnumerable<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, label = new { ask = e.Ask, bid = e.Bid, pnlText = e.PnlText, pnlPositive = e.PnlPositive } });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLabels({JsonSerializer.Serialize(payload)});");
+    }
+
     // Toggles Rect drawing mode on/off. While on, every pair of clicks draws a new sky-blue
     // rectangle between them (opposite corners, no value labels). Same toggle pattern as DZ/SZ.
     public async Task<bool> ToggleRectModeAsync()

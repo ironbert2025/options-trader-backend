@@ -1,5 +1,7 @@
+using OptionsTrader.Application.DTOs.Options;
 using OptionsTrader.Application.DTOs.Streaming;
 using OptionsTrader.Application.Interfaces;
+using OptionsTrader.Domain.Enums;
 using OptionsTrader.Infrastructure.Schwab;
 using System.Linq;
 
@@ -29,6 +31,66 @@ public class TwoPanelChartsControl : UserControl
     private readonly ICandleFeed _liveFeed;
     private readonly string _symbol;
     private readonly Form1 _form1;
+
+    // "Stk Call"/"Stk Put" toggle state + the strikes captured when each was last turned on —
+    // needed so the "Trigger Call/Put" Ask/Bid/PnL% tracking below knows whether there's anything
+    // to attach to, and which exact strikes. Ported from the Simulator's identical fields.
+    private bool _stkCallOn;
+    private bool _stkPutOn;
+    private List<decimal> _stkCallStrikes = new();
+    private List<decimal> _stkPutStrikes = new();
+
+    // "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% tracking — only starts if the matching Stk
+    // Call/Put button is ON at the moment the trigger fires; does nothing otherwise. null = no
+    // tracking in progress. Ported from the Simulator's identical fields.
+    private bool? _triggerTrackedIsCall;
+    private List<(decimal Strike, decimal FrozenAsk)> _triggerTrackedEntries = new();
+
+    private void ArmTriggerStkTracking(string label)
+    {
+        var isCall = label == "Trigger Call";
+        if (isCall && !_stkCallOn) return;
+        if (!isCall && !_stkPutOn) return;
+
+        var strikes = isCall ? _stkCallStrikes : _stkPutStrikes;
+        var quotes = _form1.GetQuoteSnapshot(_symbol)?.AllQuotes ?? new List<OptionQuoteDto>();
+        var side = isCall ? OptionType.Call : OptionType.Put;
+        _triggerTrackedEntries = strikes
+            .Select(strike => (Strike: strike, Ask: quotes.FirstOrDefault(q => q.OptionType == side && q.StrikePrice == strike)?.Ask))
+            .Where(e => e.Ask.HasValue)
+            .Select(e => (e.Strike, FrozenAsk: e.Ask!.Value))
+            .ToList();
+        if (_triggerTrackedEntries.Count == 0) return;
+        _triggerTrackedIsCall = isCall;
+    }
+
+    // Called on every quotes-poll refresh (RefreshOptionsGrid) — updates the live Bid/PnL% label
+    // on the tracked Stk lines, but ONLY while still inside the session's real first 15m RTH
+    // candle (9:30-9:45 ET) — same window the trigger itself only fires within. Stops updating
+    // once that candle ends; last values stay shown.
+    private async Task UpdateTriggerStkLabelsAsync(List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, ChartPanel? rthPanel)
+    {
+        if (_triggerTrackedIsCall is not { } isCall) return;
+        if (rthPanel == null) return;
+        var nowEt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
+        if (nowEt.TimeOfDay < new TimeSpan(9, 30, 0) || nowEt.TimeOfDay >= new TimeSpan(9, 45, 0)) return;
+
+        var quotes = isCall ? otmCalls : otmPuts;
+        var entries = new List<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)>();
+        foreach (var (strike, frozenAsk) in _triggerTrackedEntries)
+        {
+            var bid = quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Bid;
+            if (bid == null) continue;
+            var pnlPct = frozenAsk > 0 ? (bid.Value - frozenAsk) / frozenAsk * 100 : 0m;
+            var pnlPositive = pnlPct >= 0;
+            var sign = pnlPositive ? "+" : string.Empty;
+            entries.Add((strike, frozenAsk.ToString("F2"), bid.Value.ToString("F2"), $"{sign}{pnlPct:F1}%", pnlPositive));
+        }
+        if (entries.Count == 0) return;
+
+        if (isCall) await rthPanel.SetStkCallLabelsAsync(entries);
+        else await rthPanel.SetStkPutLabelsAsync(entries);
+    }
 
     // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
     // GetQuoteSnapshot) — clicking Strike forwards into Form1.TriggerQuoteStrikeClick, which runs
@@ -597,27 +659,27 @@ public class TwoPanelChartsControl : UserControl
         // Level-1 LAST — see PopulateQuotesGrid's own countsFilter branch), the opposite of OtmPuts
         // (already closest-first) — TakeLast, not Take, to actually get Level 1-4.
         var btnStkCall = new Button { Text = "Stk Call", Size = new Size(56, 24), ForeColor = Color.DarkGreen };
-        var stkCallOn = false;
         btnStkCall.Click += async (s, e) =>
         {
-            stkCallOn = !stkCallOn;
-            btnStkCall.BackColor = stkCallOn ? Color.LightGreen : SystemColors.Control;
-            if (!stkCallOn) { if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
+            _stkCallOn = !_stkCallOn;
+            btnStkCall.BackColor = _stkCallOn ? Color.LightGreen : SystemColors.Control;
+            _triggerTrackedIsCall = null; // toggling either button off/on cancels any in-progress tracking
+            if (!_stkCallOn) { _stkCallStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
-            var strikes = snapshot?.OtmCalls.TakeLast(4).Select(q => q.StrikePrice) ?? Enumerable.Empty<decimal>();
-            if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(strikes);
+            _stkCallStrikes = snapshot?.OtmCalls.TakeLast(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
+            if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(_stkCallStrikes);
         };
 
         var btnStkPut = new Button { Text = "Stk Put", Size = new Size(56, 24), ForeColor = Color.Red };
-        var stkPutOn = false;
         btnStkPut.Click += async (s, e) =>
         {
-            stkPutOn = !stkPutOn;
-            btnStkPut.BackColor = stkPutOn ? Color.LightSalmon : SystemColors.Control;
-            if (!stkPutOn) { if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
+            _stkPutOn = !_stkPutOn;
+            btnStkPut.BackColor = _stkPutOn ? Color.LightSalmon : SystemColors.Control;
+            _triggerTrackedIsCall = null;
+            if (!_stkPutOn) { _stkPutStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
-            var strikes = snapshot?.OtmPuts.Take(4).Select(q => q.StrikePrice) ?? Enumerable.Empty<decimal>();
-            if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(strikes);
+            _stkPutStrikes = snapshot?.OtmPuts.Take(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
+            if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(_stkPutStrikes);
         };
 
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
@@ -761,14 +823,19 @@ public class TwoPanelChartsControl : UserControl
         }
 
         // "Trigger Call"/"Trigger Put" wick analysis (panel 2 only) — see ChartPanel.
-        // OnWickTriggerEvent's own comment for the full rule. Logged only, per explicit request
-        // ("por ahora en el log") — no chart overlay, no Telegram push.
+        // OnWickTriggerEvent's own comment for the full rule. Logged, no Telegram push. Also arms
+        // the Ask(frozen)/Bid(live)/PnL% tracking on the Stk Call/Put lines — ported from the
+        // Simulator's identical feature — but only if the matching button is already ON.
         if (rthPanel != null)
         {
             rthPanel.OnWickTriggerEvent += label =>
             {
                 if (IsDisposed) return;
-                BeginInvoke(() => AppendLog($"{DateTime.Now:HH:mm:ss}  [{_symbol}] {label}{Environment.NewLine}"));
+                BeginInvoke(() =>
+                {
+                    AppendLog($"{DateTime.Now:HH:mm:ss}  [{_symbol}] {label}{Environment.NewLine}");
+                    ArmTriggerStkTracking(label);
+                });
             };
         }
 
@@ -1281,6 +1348,8 @@ public class TwoPanelChartsControl : UserControl
                 lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
             if (!lblExpDateNext.IsDisposed)
                 lblExpDateNext.Text = $"Next: {ExpirationDateResolver.ResolveNext(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
+
+            _ = UpdateTriggerStkLabelsAsync(snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, rthPanel);
 
             var snapshotNext = _form1.GetQuoteSnapshotNext(_symbol);
 
