@@ -371,10 +371,17 @@ public class SimulatedChartPanel : Panel
         if (red) _lastRedArrowSize = null; else _lastGreenArrowSize = null;
     }
 
-    // Called once per step (EvaluateNewlyClosedCandles) with the RTH candle list and the current
-    // simDate. candles[^1] is the still-forming candle for this step; it's "the session's first
-    // 15m candle" when it's the only candle in the list whose date matches simDate.
-    private void EvaluateWickTrigger(List<CandleData> candles, DateOnly simDate)
+    // Called once per step, SYNCHRONOUSLY, by SimulatorForm.RenderChartsUpToTime — deliberately
+    // NOT wired through CargarHastaPasoAsync/EvaluateNewlyClosedCandles (both async, awaiting
+    // several WebView2 round trips) because this is pure C# candle-data math with no dependency on
+    // the chart having actually redrawn yet. Calling it from inside that async chain made
+    // OnWickTriggerEvent fire tens of milliseconds AFTER RenderGridForStep already ran and read
+    // the (still unarmed) tracking state — the label update was always one step behind, which
+    // combined with the tight first-15m-candle window meant it almost never fired in time when
+    // stepping forward via ▶/"+1 Min"/"Vela ▶". candles[^1] is the still-forming candle for this
+    // step; it's "the session's first 15m candle" when it's the only candle in the list whose date
+    // matches simDate.
+    public void EvaluateWickTrigger(List<CandleData> candles, DateOnly simDate)
     {
         if (_wickStateSimDate != simDate)
         {
@@ -1318,8 +1325,6 @@ public class SimulatedChartPanel : Panel
     // ==================================================================================
     private void EvaluateNewlyClosedCandles(List<CandleData> candles, DateOnly simDate)
     {
-        if (_mode == ChartPanelMode.Fifteen_RTH) EvaluateWickTrigger(candles, simDate);
-
         var closedNow = candles.Count > 0 ? candles.Take(candles.Count - 1).ToList() : new List<CandleData>();
 
         // A step going backwards (◀) or a jump to an earlier time must roll the sequence state

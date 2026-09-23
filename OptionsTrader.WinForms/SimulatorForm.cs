@@ -298,11 +298,12 @@ public class SimulatorForm : Form
         _rthChart.OnWickTriggerEvent += label =>
         {
             if (IsDisposed) return;
-            BeginInvoke(() =>
-            {
-                LogSimEvent(label);
-                ArmTriggerStkTracking(label);
-            });
+            // Called synchronously (EvaluateWickTrigger is invoked directly from RenderChartsUpToTime
+            // on the UI thread now, not from an async WebView2 continuation) — BeginInvoke would
+            // defer this past the current RenderCurrentStep call, reintroducing the same 1-step lag
+            // this whole change exists to fix. Arm the tracking state immediately, in order.
+            LogSimEvent(label);
+            ArmTriggerStkTracking(label);
         };
 
         var btnStkCall = new Button { Text = "Stk Call", Location = new Point(66, 0), Size = new Size(56, 24), ForeColor = Color.DarkGreen };
@@ -1468,6 +1469,10 @@ public class SimulatorForm : Form
         _rthChartMinFakeEpoch = rthCandles.Count > 0
             ? SimulatedChartPanel.ToFakeUtcEpochSeconds(rthCandles[0].Time)
             : (long?)null;
+
+        // Synchronous, BEFORE the async CargarHastaPasoAsync calls below — see EvaluateWickTrigger's
+        // own comment for why this can't just live inside that async chain.
+        _rthChart.EvaluateWickTrigger(rthCandles, _simDate);
 
         _ = _hourlyChart.CargarHastaPasoAsync(
             CandleAggregation.AggregateToHourlyRthBuckets(hourlyUpToNow), visibleDays: 7, _simDate);
