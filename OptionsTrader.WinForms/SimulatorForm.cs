@@ -377,14 +377,15 @@ public class SimulatorForm : Form
         if (stepEastern.TimeOfDay < new TimeSpan(9, 30, 0) || stepEastern.TimeOfDay >= new TimeSpan(9, 45, 0)) return;
 
         var quotes = isCall ? _lastOtmCalls : _lastOtmPuts;
-        var entries = new List<(decimal Price, string Label)>();
+        var entries = new List<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)>();
         foreach (var (strike, frozenAsk) in _triggerTrackedEntries)
         {
             var bid = quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Bid;
             if (bid == null) continue;
             var pnlPct = frozenAsk > 0 ? (bid.Value - frozenAsk) / frozenAsk * 100 : 0m;
-            var sign = pnlPct >= 0 ? "+" : string.Empty;
-            entries.Add((strike, $"{frozenAsk:F2} {bid:F2} {sign}{pnlPct:F1}%"));
+            var pnlPositive = pnlPct >= 0;
+            var sign = pnlPositive ? "+" : string.Empty;
+            entries.Add((strike, frozenAsk.ToString("F2"), bid.Value.ToString("F2"), $"{sign}{pnlPct:F1}%", pnlPositive));
         }
         if (entries.Count == 0) return;
 

@@ -1233,18 +1233,19 @@ public class SimulatedChartPanel : Panel
 
     // Simulator-only "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% labels — only takes effect on
     // strikes whose Stk Call/Put line is already showing (see chart.html's setStkCallLabels' own
-    // comment). SimulatorForm computes the label text (currency/percent formatting).
-    public async Task SetStkCallLabelsAsync(IEnumerable<(decimal Price, string Label)> entries)
+    // comment). SimulatorForm computes the formatted Ask/Bid text and the PnL sign; chart.html
+    // colors each piece independently (Ask green, Bid orange, PnL green/red).
+    public async Task SetStkCallLabelsAsync(IEnumerable<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)> entries)
     {
         if (_webView.CoreWebView2 == null) return;
-        var payload = entries.Select(e => new { price = e.Price, label = e.Label });
+        var payload = entries.Select(e => new { price = e.Price, label = new { ask = e.Ask, bid = e.Bid, pnlText = e.PnlText, pnlPositive = e.PnlPositive } });
         await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallLabels({JsonSerializer.Serialize(payload)});");
     }
 
-    public async Task SetStkPutLabelsAsync(IEnumerable<(decimal Price, string Label)> entries)
+    public async Task SetStkPutLabelsAsync(IEnumerable<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)> entries)
     {
         if (_webView.CoreWebView2 == null) return;
-        var payload = entries.Select(e => new { price = e.Price, label = e.Label });
+        var payload = entries.Select(e => new { price = e.Price, label = new { ask = e.Ask, bid = e.Bid, pnlText = e.PnlText, pnlPositive = e.PnlPositive } });
         await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLabels({JsonSerializer.Serialize(payload)});");
     }
 
