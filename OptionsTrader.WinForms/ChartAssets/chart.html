@@ -1817,17 +1817,17 @@
                   });
                   ctx.setLineDash([]);
 
-                  // Trigger-fed label (Ask frozen / Bid live / PnL%) — drawn just to the left of
-                  // the segment, right-aligned so it never runs into the candles.
+                  // Trigger-fed label (Ask frozen / Bid live / PnL%) — drawn ABOVE the segment,
+                  // centered over it.
                   ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
-                  ctx.textAlign = 'right';
-                  ctx.textBaseline = 'middle';
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'bottom';
                   lines.forEach(({ price, label }) => {
                     if (!label) return;
                     const y = candleSeries.priceToCoordinate(price);
                     if (y == null) return;
                     ctx.fillStyle = color;
-                    ctx.fillText(label, left - 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                    ctx.fillText(label, (left + right) / 2, y * scope.verticalPixelRatio - 4 * scope.verticalPixelRatio);
                   });
                 };
                 drawSet(self._callLines, '#26a69a');

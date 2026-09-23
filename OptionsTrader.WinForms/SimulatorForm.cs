@@ -384,7 +384,7 @@ public class SimulatorForm : Form
             if (bid == null) continue;
             var pnlPct = frozenAsk > 0 ? (bid.Value - frozenAsk) / frozenAsk * 100 : 0m;
             var sign = pnlPct >= 0 ? "+" : string.Empty;
-            entries.Add((strike, $"A{frozenAsk:F2} B{bid:F2} {sign}{pnlPct:F1}%"));
+            entries.Add((strike, $"{frozenAsk:F2} {bid:F2} {sign}{pnlPct:F1}%"));
         }
         if (entries.Count == 0) return;
 
