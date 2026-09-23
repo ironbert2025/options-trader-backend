@@ -381,17 +381,25 @@ public class SimulatedChartPanel : Panel
     // stepping forward via ▶/"+1 Min"/"Vela ▶". candles[^1] is the still-forming candle for this
     // step; it's "the session's first 15m candle" when it's the only candle in the list whose date
     // matches simDate.
+    // Called once by SimulatorForm.LoadSelectedDay, right after _simDate is set — BEFORE the user
+    // has any chance to draw arrows. Without this, _wickStateSimDate stayed at its default value
+    // until the FIRST EvaluateWickTrigger call of the day, which then saw a "date mismatch" and
+    // wiped out whatever arming had already happened from arrows drawn right after loading but
+    // before ever clicking Adelante/Vela — the analysis looked armed but reset itself the instant
+    // stepping started.
+    public void ResetWickStateForDay(DateOnly simDate)
+    {
+        _wickStateSimDate = simDate;
+        _wickAnalysisArmed = false;
+        _lastRedArrowSize = null;
+        _lastGreenArrowSize = null;
+        _wickState = WickState.None;
+        _wickTriggerFiredForDay = false;
+    }
+
     public void EvaluateWickTrigger(List<CandleData> candles, DateOnly simDate)
     {
-        if (_wickStateSimDate != simDate)
-        {
-            _wickStateSimDate = simDate;
-            _wickAnalysisArmed = false;
-            _lastRedArrowSize = null;
-            _lastGreenArrowSize = null;
-            _wickState = WickState.None;
-            _wickTriggerFiredForDay = false;
-        }
+        if (_wickStateSimDate != simDate) ResetWickStateForDay(simDate);
 
         if (!_wickAnalysisArmed || _wickTriggerFiredForDay || candles.Count == 0) return;
 
