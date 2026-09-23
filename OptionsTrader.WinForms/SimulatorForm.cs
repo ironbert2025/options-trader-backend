@@ -1373,18 +1373,16 @@ public class SimulatorForm : Form
 
     private void RenderCurrentStep()
     {
-        RenderGridForStep();
-        if (_currentIndex < 0) return;
-        var step = _steps[_currentIndex];
+        // Charts render FIRST, not after — RenderChartsUpToTime is what actually evaluates the
+        // "Trigger Call/Put" wick analysis and arms _triggerTrackedIsCall (via
+        // SimulatedChartPanel.OnWickTriggerEvent). RenderGridForStep below reads that same-step
+        // state for its Ask/Bid/PnL% label update; the old order (grid first) made it always read
+        // LAST step's state, so the label almost never caught the trigger before its 1st-15m-candle
+        // window closed when stepping forward with ▶/"+1 Min".
+        if (_currentIndex >= 0 && (!_realTimeMode || !_isPlaying))
+            RenderChartsUpToTime(_steps[_currentIndex].Time);
 
-        // In Real Time Play, the chart candles are driven independently by _tickPlayTimer (at the
-        // raw tick recording's own pace) instead of by this options-step advance — per explicit
-        // request, the options grid and the candle rendering are two separate clocks in that mode.
-        // Re-rendering charts here too would fight the tick clock, snapping candles back to
-        // whatever this (coarser) step's time is every few seconds. Manual stepping (not Play)
-        // always renders charts normally even with Real Time selected.
-        if (!_realTimeMode || !_isPlaying)
-            RenderChartsUpToTime(step.Time);
+        RenderGridForStep();
     }
 
     // Grid/PnL half of RenderCurrentStep — extracted so StepTick (the independent candle-clock
