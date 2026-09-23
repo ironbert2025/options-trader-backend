@@ -400,10 +400,20 @@ public class SimulatorForm : Form
         }
         if (estimates.Count == 0) return;
 
+        // Strikes listed highest-to-lowest, top to bottom (per explicit request), NOT sorted by
+        // the projected %; the best one is called out separately with a "<-- mejor" arrow at the
+        // end of its own line instead of reordering the list.
+        var bestPct = estimates.Max(e => e.NetPct);
         var side = isCall ? "Call" : "Put";
-        var parts = estimates.OrderByDescending(e => e.NetPct)
-            .Select(e => $"{e.Strike:F2}: {(e.NetPct >= 0 ? "+" : string.Empty)}{e.NetPct:F1}%");
-        LogSimEvent($"[Estimación {side}] ΔSpot={deltaSpot:F2} → {string.Join("  ", parts)}");
+        var lines = estimates
+            .OrderByDescending(e => e.Strike)
+            .Select(e =>
+            {
+                var pctStr = $"{(e.NetPct >= 0 ? "+" : string.Empty)}{e.NetPct:F1}%";
+                var line = $"    {e.Strike,7:F2}  {pctStr,8}";
+                return e.NetPct == bestPct ? $"{line}  ← mejor" : line;
+            });
+        LogSimEvent($"[Estimación {side}] ΔSpot={deltaSpot:F2}{Environment.NewLine}{string.Join(Environment.NewLine, lines)}");
     }
 
     // Called every step (right after _lastOtmCalls/_lastOtmPuts refresh) — updates the live
