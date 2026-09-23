@@ -106,7 +106,13 @@ public class SimulatorForm : Form
     // SimulatedChartPanel.OnWickTriggerEvent) + "Stk Call"/"Stk Put" (short strike-marker lines,
     // captured once at click time from _dgvChain's current first 4 Call/Put strikes) — ported from
     // the live app's TwoPanelChartsControl, placed beside the tick clock label to avoid overlap.
-    private readonly Panel _pnlArrowStk = new() { Location = new Point(780, 232), Size = new Size(260, 26) };
+    private readonly Panel _pnlArrowStk = new() { Location = new Point(780, 232), Size = new Size(340, 26) };
+
+    // ΔSpot estimado — read at the moment the trigger fires (see ArmTriggerStkTracking), together
+    // with each tracked strike's OWN Delta/Gamma at that same instant, to project a net-of-cost %
+    // return BEFORE the real move happens. Pure estimate, log-only, per explicit request.
+    private readonly Label _lblDeltaSpot = new() { Text = "ΔSpot:", AutoSize = true, Location = new Point(188, 4) };
+    private readonly TextBox _txtDeltaSpot = new() { Location = new Point(228, 1), Size = new Size(50, 20) };
     private readonly TextBox _txtEventLog = new()
     {
         Location = new Point(8, 848), Size = new Size(1050, 90),
@@ -333,6 +339,8 @@ public class SimulatorForm : Form
         _pnlArrowStk.Controls.Add(btnArrow);
         _pnlArrowStk.Controls.Add(btnStkCall);
         _pnlArrowStk.Controls.Add(btnStkPut);
+        _pnlArrowStk.Controls.Add(_lblDeltaSpot);
+        _pnlArrowStk.Controls.Add(_txtDeltaSpot);
     }
 
     // "Stk Call"/"Stk Put" toggle state + the strikes captured when each was last turned on —
@@ -349,6 +357,10 @@ public class SimulatorForm : Form
     private bool? _triggerTrackedIsCall;
     private List<(decimal Strike, decimal FrozenAsk)> _triggerTrackedEntries = new();
 
+    // Round-trip broker commission per contract, in premium units (1.30 USD / 100 shares) — fixed,
+    // per explicit request (no UI to change it).
+    private const decimal FixedCostPerContract = 0.013m;
+
     private void ArmTriggerStkTracking(string label)
     {
         var isCall = label == "Trigger Call";
@@ -364,6 +376,34 @@ public class SimulatorForm : Form
             .ToList();
         if (_triggerTrackedEntries.Count == 0) return;
         _triggerTrackedIsCall = isCall;
+
+        LogProjectedStkEstimate(isCall, quotes);
+    }
+
+    // ΔSpot-based projection — Delta + 0.5*Gamma*ΔSpot^2 (2nd-order Taylor estimate of the premium
+    // move), minus the fixed cost, over the frozen Ask — computed ONCE at trigger time using each
+    // strike's OWN Delta/Gamma at that same instant, ranked best-to-worst. Purely informational,
+    // log-only — does not affect the live Ask/Bid/PnL% tracking above. Skipped entirely if the
+    // ΔSpot textbox is empty or not a valid number, per explicit request (no calc, not a 0% calc).
+    private void LogProjectedStkEstimate(bool isCall, List<OptionQuoteDto> quotes)
+    {
+        if (!decimal.TryParse(_txtDeltaSpot.Text, out var deltaSpot)) return;
+
+        var estimates = new List<(decimal Strike, decimal NetPct)>();
+        foreach (var (strike, frozenAsk) in _triggerTrackedEntries)
+        {
+            var quote = quotes.FirstOrDefault(q => q.StrikePrice == strike);
+            if (quote == null || frozenAsk <= 0) continue;
+            var projectedMove = quote.Delta * deltaSpot + 0.5m * quote.Gamma * deltaSpot * deltaSpot;
+            var netPct = (projectedMove - FixedCostPerContract) / frozenAsk * 100m;
+            estimates.Add((strike, netPct));
+        }
+        if (estimates.Count == 0) return;
+
+        var side = isCall ? "Call" : "Put";
+        var parts = estimates.OrderByDescending(e => e.NetPct)
+            .Select(e => $"{e.Strike:F2}: {(e.NetPct >= 0 ? "+" : string.Empty)}{e.NetPct:F1}%");
+        LogSimEvent($"[Estimación {side}] ΔSpot={deltaSpot:F2} → {string.Join("  ", parts)}");
     }
 
     // Called every step (right after _lastOtmCalls/_lastOtmPuts refresh) — updates the live
