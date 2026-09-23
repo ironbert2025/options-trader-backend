@@ -1783,7 +1783,7 @@
   // explicit request). Unlike every other line primitive here, this one deliberately does NOT span
   // from an anchor time to the right edge — it's a short ~30px segment pinned to the right edge
   // itself, so it reads as "a marker on the price axis" rather than a line crossing the chart.
-  const StkLineSegmentPx = 60;
+  const StkLineSegmentPx = 100;
   class StkLinesPrimitive {
     // _callLines/_putLines: [{ price, label }, ...] — label is null for a plain line (the usual
     // manual toggle case); Simulator-only "Trigger Call/Put" tracking (setStkCallLabels/
