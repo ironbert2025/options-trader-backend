@@ -1828,10 +1828,13 @@
                     const y = candleSeries.priceToCoordinate(price);
                     if (y == null) return;
                     const gap = ' ';
+                    // Same colors the grid itself uses: Ask/positive PnL = DarkGreen (#006400,
+                    // matches DgvQuotes_CellFormatting's Ask column), negative PnL = plain Red
+                    // (#FF0000, matches its Sprd column) — per explicit request.
                     const pieces = [
-                      { text: label.ask, color: '#26a69a' },
+                      { text: label.ask, color: '#006400' },
                       { text: label.bid, color: '#ffa726' },
-                      { text: label.pnlText, color: label.pnlPositive ? '#26a69a' : '#ef5350' },
+                      { text: label.pnlText, color: label.pnlPositive ? '#006400' : '#FF0000' },
                     ];
                     const widths = pieces.map(p => ctx.measureText(p.text).width);
                     const gapWidth = ctx.measureText(gap).width;
