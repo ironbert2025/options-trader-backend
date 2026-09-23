@@ -1847,6 +1847,18 @@
                       x += widths[i] + gapWidth;
                     });
                   });
+
+                  // Strike price itself, below-left of the segment, so the line stays identifiable
+                  // even without a trigger label above it.
+                  ctx.font = `${10 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textAlign = 'left';
+                  ctx.textBaseline = 'top';
+                  ctx.fillStyle = color;
+                  lines.forEach(({ price }) => {
+                    const y = candleSeries.priceToCoordinate(price);
+                    if (y == null) return;
+                    ctx.fillText(price.toFixed(2), left, y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio);
+                  });
                 };
                 drawSet(self._callLines, '#26a69a');
                 drawSet(self._putLines, '#ef5350');
