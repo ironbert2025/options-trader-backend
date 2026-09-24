@@ -1090,8 +1090,13 @@ public class TwoPanelChartsControl : UserControl
             ToggleResetStk(rthPanel);
             btnResetStk.BackColor = _resetStkOn ? Color.LightYellow : SystemColors.Control;
         };
-        var lblDeltaSpot = new Label { Text = "ΔSpot", AutoSize = true, Margin = new Padding(6, 6, 2, 3) };
-        _txtDeltaSpot = new TextBox { Width = 50, Margin = new Padding(2, 3, 3, 3) };
+        // Own small panel (label on top, textbox below), not 2 separate flow items — a
+        // FlowLayoutPanel wraps/pushes mismatched-height siblings around unpredictably otherwise.
+        var pnlDeltaSpot = new Panel { Size = new Size(54, 40), Margin = new Padding(3, 0, 3, 0) };
+        var lblDeltaSpot = new Label { Text = "ΔSpot", AutoSize = true, Location = new Point(0, 2) };
+        _txtDeltaSpot = new TextBox { Width = 50, Location = new Point(0, 18) };
+        pnlDeltaSpot.Controls.Add(lblDeltaSpot);
+        pnlDeltaSpot.Controls.Add(_txtDeltaSpot);
 
         // Live "time — price" readout for panel 2's own WebSocket ticks, above panel 2's toolbar —
         // same idea as MultiChartForm's own lblLiveTick (panel 3), per explicit request to have one
@@ -1139,8 +1144,7 @@ public class TwoPanelChartsControl : UserControl
         toolbarRightRow2.Controls.Add(lblPollingInterval);
         toolbarRightRow2.Controls.Add(numPollingInterval);
         toolbarRightRow2.Controls.Add(btnResetStk);
-        toolbarRightRow2.Controls.Add(lblDeltaSpot);
-        toolbarRightRow2.Controls.Add(_txtDeltaSpot);
+        toolbarRightRow2.Controls.Add(pnlDeltaSpot);
         toolbarRightRow2.Controls.Add(lblRthLiveTick);
 
         // Wraps the toolbar row + its Text-tool note box together so their relative order (toolbar
