@@ -419,6 +419,30 @@
 
   // ---- Rect tool: sky-blue rectangle between 2 clicks (opposite corners, no value labels) ----
 
+  // "Range=x   Days=n" label for Rect / Color Rect, drawn centered just above the rect's top edge
+  // in yellow. Range = |p1 - p2|. Days = distinct market days (inclusive of both end days) among
+  // the LOADED candles between the rect's two x-positions — counting dates that actually have
+  // candles is what excludes weekends/holidays, no calendar needed. Works for Daily (1 candle/day)
+  // and Hora (many candles/day, each date counted once). Recomputed each repaint, so already-saved
+  // rects show it too.
+  function drawRectInfoLabel(ctx, scope, r, left, right, top) {
+    const day = (t) => Math.floor(t / 86400);
+    const d1 = day(Math.min(r.t1, r.t2)), d2 = day(Math.max(r.t1, r.t2));
+    const days = new Set();
+    for (let i = 0; i < allCandles.length; i++) {
+      const d = day(allCandles[i].time);
+      if (d >= d1 && d <= d2) days.add(d);
+    }
+    const text = `Range=${Math.abs(r.p1 - r.p2).toFixed(2)}   Days=${days.size}`;
+    ctx.save();
+    ctx.fillStyle = '#ffeb3b';
+    ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(text, (left + right) / 2, top - 4 * scope.verticalPixelRatio);
+    ctx.restore();
+  }
+
   class RectanglesPrimitive {
     constructor() { this._rects = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, selected }, ...]
     attached(param) { this._chart = param.chart; }
@@ -471,6 +495,7 @@
                     ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                     ctx.strokeRect(left, top, right - left, bottom - top);
                   }
+                  drawRectInfoLabel(ctx, scope, r, left, right, top);
                 };
                 self._rects.forEach(r => drawRect(r, 0.35, r.selected));
                 if (self._preview) drawRect(self._preview, 0.18, false); // lighter while still dragging
@@ -542,6 +567,7 @@
                     ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                     ctx.strokeRect(left, top, right - left, bottom - top);
                   }
+                  drawRectInfoLabel(ctx, scope, r, left, right, top);
                 };
                 self._rects.forEach(r => drawRect(r, 0.35, r.selected));
                 if (self._preview) drawRect(self._preview, 0.18, false); // lighter while still dragging
