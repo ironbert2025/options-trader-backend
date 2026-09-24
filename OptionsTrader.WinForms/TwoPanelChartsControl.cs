@@ -45,6 +45,33 @@ public class TwoPanelChartsControl : UserControl
     // any use before that point (shouldn't happen) is guarded with a null check.
     private TextBox? _txtDeltaSpot;
 
+    // Live spot price, updated from every raw tick (rthPanel.OnLiveTick fires premarket too) — used
+    // by Stk Call/Put to pick the 4 nearest strikes when clicked BEFORE market open, since Form1's
+    // own quote polling (and therefore GetQuoteSnapshot's OtmCalls/OtmPuts) doesn't run premarket
+    // and can be stale relative to how far the spot has actually moved overnight by click time.
+    private decimal? _lastLiveSpotPrice;
+
+    // Picks the 4 strikes closest to _lastLiveSpotPrice from the full (unfiltered) chain — Call:
+    // closest 4 AT/ABOVE spot; Put: closest 4 AT/BELOW spot — ignoring whatever stale OTM/spot
+    // classification the snapshot itself carries, since only the STRIKE VALUES need to still be
+    // valid (they don't change intraday), not the rest of that quote's data. Falls back to null if
+    // there's no live tick yet or no chain data at all, so the caller can fall back to the normal
+    // (market-open) path.
+    private List<decimal>? PickStrikesNearLiveSpot(bool isCall)
+    {
+        if (_lastLiveSpotPrice is not { } spot) return null;
+        var allQuotes = _form1.GetQuoteSnapshot(_symbol)?.AllQuotes;
+        if (allQuotes == null || allQuotes.Count == 0) return null;
+
+        var side = isCall ? OptionType.Call : OptionType.Put;
+        var strikes = allQuotes.Where(q => q.OptionType == side).Select(q => q.StrikePrice).Distinct();
+        var picked = isCall
+            ? strikes.Where(s => s >= spot).OrderBy(s => s).Take(4)
+            : strikes.Where(s => s <= spot).OrderByDescending(s => s).Take(4);
+        var result = picked.ToList();
+        return result.Count > 0 ? result : null;
+    }
+
     // "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% tracking — only starts if the matching Stk
     // Call/Put button is ON at the moment the trigger fires; does nothing otherwise. Two
     // independent tracks (not one shared "which side" flag) so Call and Put can each be
@@ -784,8 +811,12 @@ public class TwoPanelChartsControl : UserControl
             btnStkCall.BackColor = _stkCallOn ? Color.LightGreen : SystemColors.Control;
             _callTrack.Entries.Clear(); // toggling either button off/on cancels any in-progress tracking
             if (!_stkCallOn) { _stkCallStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
+            // Before market open, Form1's own quote polling hasn't started yet — GetQuoteSnapshot's
+            // OtmCalls can be stale relative to how far the spot moved overnight. Pick the nearest
+            // strikes off the live tick instead in that case; once the market is open, unchanged.
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
-            _stkCallStrikes = snapshot?.OtmCalls.TakeLast(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
+            _stkCallStrikes = (!MarketHours.IsOpen ? PickStrikesNearLiveSpot(isCall: true) : null)
+                ?? snapshot?.OtmCalls.TakeLast(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
             if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(_stkCallStrikes);
         };
 
@@ -797,7 +828,8 @@ public class TwoPanelChartsControl : UserControl
             _putTrack.Entries.Clear();
             if (!_stkPutOn) { _stkPutStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
-            _stkPutStrikes = snapshot?.OtmPuts.Take(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
+            _stkPutStrikes = (!MarketHours.IsOpen ? PickStrikesNearLiveSpot(isCall: false) : null)
+                ?? snapshot?.OtmPuts.Take(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
             if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(_stkPutStrikes);
         };
 
@@ -1113,6 +1145,7 @@ public class TwoPanelChartsControl : UserControl
         {
             rthPanel.OnLiveTick += (eastern, price) =>
             {
+                _lastLiveSpotPrice = price; // see PickStrikesNearLiveSpot — fires premarket too
                 if (IsDisposed || lblRthLiveTick.IsDisposed || !lblRthLiveTick.IsHandleCreated) return;
                 lblRthLiveTick.BeginInvoke(() => lblRthLiveTick.Text = $"{eastern:HH:mm:ss}  {price:F2}");
             };
