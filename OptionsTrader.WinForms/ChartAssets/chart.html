@@ -1857,7 +1857,9 @@
                   lines.forEach(({ price }) => {
                     const y = candleSeries.priceToCoordinate(price);
                     if (y == null) return;
-                    ctx.fillText(price.toFixed(2), left, y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio);
+                    // No trailing ".00" for whole-number strikes, per explicit request.
+                    const priceText = Number.isInteger(price) ? String(price) : price.toFixed(2);
+                    ctx.fillText(priceText, left, y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio);
                   });
                 };
                 drawSet(self._callLines, '#26a69a');
