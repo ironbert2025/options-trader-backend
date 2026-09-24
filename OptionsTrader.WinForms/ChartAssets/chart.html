@@ -3906,8 +3906,14 @@
   const saltoLabelPrimitive = new SaltoLabelPrimitive();
   let saltoLabelAttached = false;
 
+  // Opt-in per page (called from C# for the 1h panels and the Daily form's Hora tab only — NOT the
+  // Daily tab, per explicit request); a page that never calls this never shows the label.
+  let saltoEnabled = false;
+  function enableSalto() { saltoEnabled = true; recalcSalto(); }
+
   function recalcSalto() {
     saltoLabelPrimitive._label = null;
+    if (!saltoEnabled) return;
     if (!smaPeriods.includes(20) || !smaPeriods.includes(40) || dailyMode || allCandles.length < 42) {
       if (saltoLabelAttached) forceRepaint();
       return;

@@ -461,6 +461,7 @@ public class DailyChartForm : Form
         // 15m RTH panel.
         var hourlyCandles = HourlyCandleStore.Load(_symbol);
         await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20);
+        await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync("enableSalto();"); // "1er Salto": Hora tab only, not Daily
         _lastHourlyCandle = hourlyCandles.Count > 0 ? hourlyCandles[^1] : null;
         await LoadAndWireTLinesAsync(_hourlyWebView, "DailyHora");
 
