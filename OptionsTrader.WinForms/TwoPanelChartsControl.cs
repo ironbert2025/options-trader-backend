@@ -40,11 +40,42 @@ public class TwoPanelChartsControl : UserControl
     private List<decimal> _stkCallStrikes = new();
     private List<decimal> _stkPutStrikes = new();
 
+    // ΔSpot estimate textbox — read at the moment the trigger fires or "Reset Stk" is pressed (see
+    // LogProjectedStkEstimate), next to the Poll(s) control. Built in the constructor (below), so
+    // any use before that point (shouldn't happen) is guarded with a null check.
+    private TextBox? _txtDeltaSpot;
+
     // "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% tracking — only starts if the matching Stk
-    // Call/Put button is ON at the moment the trigger fires; does nothing otherwise. null = no
-    // tracking in progress. Ported from the Simulator's identical fields.
-    private bool? _triggerTrackedIsCall;
-    private List<(decimal Strike, decimal FrozenAsk)> _triggerTrackedEntries = new();
+    // Call/Put button is ON at the moment the trigger fires; does nothing otherwise. Two
+    // independent tracks (not one shared "which side" flag) so Call and Put can each be
+    // armed/reset on their own — e.g. the "Reset Stk" button below can restart both at once if
+    // both Stk buttons are on. Ported from the Simulator's identical StkTrackState.
+    private sealed class StkTrackState
+    {
+        public List<(decimal Strike, decimal FrozenAsk)> Entries = new();
+        // false = armed by the wick trigger (only updates live during the session's real 1st 15m
+        // candle, 9:30-9:45 ET). true = armed/reset by the manual "Reset Stk" button (updates live
+        // indefinitely until that button is pressed again).
+        public bool Manual;
+    }
+    private readonly StkTrackState _callTrack = new();
+    private readonly StkTrackState _putTrack = new();
+
+    // Round-trip broker commission per contract, in premium units (1.30 USD / 100 shares) — fixed,
+    // per explicit request (no UI to change it). Same value as the Simulator's own constant.
+    private const decimal FixedCostPerContract = 0.013m;
+
+    private List<(decimal Strike, decimal FrozenAsk)> CaptureStkEntries(bool isCall)
+    {
+        var strikes = isCall ? _stkCallStrikes : _stkPutStrikes;
+        var quotes = _form1.GetQuoteSnapshot(_symbol)?.AllQuotes ?? new List<OptionQuoteDto>();
+        var side = isCall ? OptionType.Call : OptionType.Put;
+        return strikes
+            .Select(strike => (Strike: strike, Ask: quotes.FirstOrDefault(q => q.OptionType == side && q.StrikePrice == strike)?.Ask))
+            .Where(e => e.Ask.HasValue)
+            .Select(e => (e.Strike, FrozenAsk: e.Ask!.Value))
+            .ToList();
+    }
 
     private void ArmTriggerStkTracking(string label)
     {
@@ -52,32 +83,117 @@ public class TwoPanelChartsControl : UserControl
         if (isCall && !_stkCallOn) return;
         if (!isCall && !_stkPutOn) return;
 
-        var strikes = isCall ? _stkCallStrikes : _stkPutStrikes;
+        var entries = CaptureStkEntries(isCall);
+        if (entries.Count == 0) return;
+
+        var track = isCall ? _callTrack : _putTrack;
+        track.Entries = entries;
+        track.Manual = false;
+
+        LogProjectedStkEstimate(isCall);
+    }
+
+    // "Reset Stk" toggle — ON: for each side currently shown (Stk Call/Put on), clears the label,
+    // re-captures a fresh Ask for those same 4 strikes right now, re-logs the ΔSpot estimate, and
+    // switches that side to update live indefinitely (no 1st-15m-candle limit). OFF: reverts to
+    // the time-windowed rule, which — since real time is almost certainly past that window by
+    // then — leaves whatever was last shown in place. Ported from the Simulator's identical
+    // ToggleResetStk.
+    private bool _resetStkOn;
+    private async void ToggleResetStk(ChartPanel? rthPanel)
+    {
+        _resetStkOn = !_resetStkOn;
+        if (!_resetStkOn)
+        {
+            _callTrack.Manual = false;
+            _putTrack.Manual = false;
+            return;
+        }
+        if (rthPanel == null) return;
+
+        if (_stkCallOn)
+        {
+            await rthPanel.ClearStkCallLabelsAsync();
+            var entries = CaptureStkEntries(isCall: true);
+            if (entries.Count > 0)
+            {
+                _callTrack.Entries = entries;
+                _callTrack.Manual = true;
+                LogProjectedStkEstimate(isCall: true);
+            }
+        }
+        if (_stkPutOn)
+        {
+            await rthPanel.ClearStkPutLabelsAsync();
+            var entries = CaptureStkEntries(isCall: false);
+            if (entries.Count > 0)
+            {
+                _putTrack.Entries = entries;
+                _putTrack.Manual = true;
+                LogProjectedStkEstimate(isCall: false);
+            }
+        }
+    }
+
+    // ΔSpot-based projection — Delta + 0.5*Gamma*ΔSpot^2 (2nd-order Taylor estimate of the premium
+    // move), minus the fixed cost, over the frozen Ask — computed using each strike's OWN
+    // Delta/Gamma at the same instant it's captured, ranked with the strikes listed highest-to-
+    // lowest and the single best one called out with an arrow. Log-only, skipped entirely if the
+    // ΔSpot textbox is empty/invalid. Ported from the Simulator's identical LogProjectedStkEstimate.
+    private void LogProjectedStkEstimate(bool isCall)
+    {
+        if (_txtDeltaSpot == null || !decimal.TryParse(_txtDeltaSpot.Text, out var deltaSpot)) return;
+
+        var track = isCall ? _callTrack : _putTrack;
         var quotes = _form1.GetQuoteSnapshot(_symbol)?.AllQuotes ?? new List<OptionQuoteDto>();
         var side = isCall ? OptionType.Call : OptionType.Put;
-        _triggerTrackedEntries = strikes
-            .Select(strike => (Strike: strike, Ask: quotes.FirstOrDefault(q => q.OptionType == side && q.StrikePrice == strike)?.Ask))
-            .Where(e => e.Ask.HasValue)
-            .Select(e => (e.Strike, FrozenAsk: e.Ask!.Value))
-            .ToList();
-        if (_triggerTrackedEntries.Count == 0) return;
-        _triggerTrackedIsCall = isCall;
+
+        var estimates = new List<(decimal Strike, decimal NetPct)>();
+        foreach (var (strike, frozenAsk) in track.Entries)
+        {
+            var quote = quotes.FirstOrDefault(q => q.OptionType == side && q.StrikePrice == strike);
+            if (quote == null || frozenAsk <= 0) continue;
+            var projectedMove = quote.Delta * deltaSpot + 0.5m * quote.Gamma * deltaSpot * deltaSpot;
+            var netPct = (projectedMove - FixedCostPerContract) / frozenAsk * 100m;
+            estimates.Add((strike, netPct));
+        }
+        if (estimates.Count == 0) return;
+
+        var bestPct = estimates.Max(e => e.NetPct);
+        var sideLabel = isCall ? "Call" : "Put";
+        var lines = estimates
+            .OrderByDescending(e => e.Strike)
+            .Select(e =>
+            {
+                var pctStr = $"{(e.NetPct >= 0 ? "+" : string.Empty)}{e.NetPct:F1}%";
+                var line = $"    {e.Strike,7:F2}  {pctStr,8}";
+                return e.NetPct == bestPct ? $"{line}  ← mejor" : line;
+            });
+        AppendLog($"{DateTime.Now:HH:mm:ss}  [Estimación {sideLabel}] ΔSpot={deltaSpot:F2}{Environment.NewLine}{string.Join(Environment.NewLine, lines)}{Environment.NewLine}");
     }
 
     // Called on every quotes-poll refresh (RefreshOptionsGrid) — updates the live Bid/PnL% label
-    // on the tracked Stk lines, but ONLY while still inside the session's real first 15m RTH
-    // candle (9:30-9:45 ET) — same window the trigger itself only fires within. Stops updating
-    // once that candle ends; last values stay shown.
+    // on the tracked Stk lines. A track armed by the wick trigger (Manual=false) only updates
+    // while still inside the session's real first 15m RTH candle (9:30-9:45 ET); one armed/reset
+    // by the "Reset Stk" button (Manual=true) updates indefinitely, until that button is pressed
+    // again.
     private async Task UpdateTriggerStkLabelsAsync(List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, ChartPanel? rthPanel)
     {
-        if (_triggerTrackedIsCall is not { } isCall) return;
         if (rthPanel == null) return;
         var nowEt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
-        if (nowEt.TimeOfDay < new TimeSpan(9, 30, 0) || nowEt.TimeOfDay >= new TimeSpan(9, 45, 0)) return;
+        var inFirstCandleWindow = nowEt.TimeOfDay >= new TimeSpan(9, 30, 0) && nowEt.TimeOfDay < new TimeSpan(9, 45, 0);
 
-        var quotes = isCall ? otmCalls : otmPuts;
+        await UpdateOneStkSideAsync(_callTrack, isCall: true, otmCalls, rthPanel, inFirstCandleWindow);
+        await UpdateOneStkSideAsync(_putTrack, isCall: false, otmPuts, rthPanel, inFirstCandleWindow);
+    }
+
+    private async Task UpdateOneStkSideAsync(StkTrackState track, bool isCall, List<OptionQuoteDto> quotes, ChartPanel rthPanel, bool inFirstCandleWindow)
+    {
+        if (track.Entries.Count == 0) return;
+        if (!track.Manual && !inFirstCandleWindow) return;
+
         var entries = new List<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)>();
-        foreach (var (strike, frozenAsk) in _triggerTrackedEntries)
+        foreach (var (strike, frozenAsk) in track.Entries)
         {
             var bid = quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Bid;
             if (bid == null) continue;
@@ -663,7 +779,7 @@ public class TwoPanelChartsControl : UserControl
         {
             _stkCallOn = !_stkCallOn;
             btnStkCall.BackColor = _stkCallOn ? Color.LightGreen : SystemColors.Control;
-            _triggerTrackedIsCall = null; // toggling either button off/on cancels any in-progress tracking
+            _callTrack.Entries.Clear(); // toggling either button off/on cancels any in-progress tracking
             if (!_stkCallOn) { _stkCallStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
             _stkCallStrikes = snapshot?.OtmCalls.TakeLast(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
@@ -675,7 +791,7 @@ public class TwoPanelChartsControl : UserControl
         {
             _stkPutOn = !_stkPutOn;
             btnStkPut.BackColor = _stkPutOn ? Color.LightSalmon : SystemColors.Control;
-            _triggerTrackedIsCall = null;
+            _putTrack.Entries.Clear();
             if (!_stkPutOn) { _stkPutStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
             _stkPutStrikes = snapshot?.OtmPuts.Take(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
@@ -966,6 +1082,17 @@ public class TwoPanelChartsControl : UserControl
             _form1.ApplyLivePollingInterval(_symbol, seconds);
         };
 
+        // "Reset Stk" + ΔSpot — ported from the Simulator, placed next to Poll(s) per explicit
+        // request. See ToggleResetStk/LogProjectedStkEstimate above for the full behavior.
+        var btnResetStk = new Button { Text = "Reset Stk", AutoSize = true, Margin = new Padding(12, 3, 3, 3) };
+        btnResetStk.Click += (s, e) =>
+        {
+            ToggleResetStk(rthPanel);
+            btnResetStk.BackColor = _resetStkOn ? Color.LightYellow : SystemColors.Control;
+        };
+        var lblDeltaSpot = new Label { Text = "ΔSpot", AutoSize = true, Margin = new Padding(6, 6, 2, 3) };
+        _txtDeltaSpot = new TextBox { Width = 50, Margin = new Padding(2, 3, 3, 3) };
+
         // Live "time — price" readout for panel 2's own WebSocket ticks, above panel 2's toolbar —
         // same idea as MultiChartForm's own lblLiveTick (panel 3), per explicit request to have one
         // here too, so a stalled/disconnected feed (no updates) is visible at a glance.
@@ -1011,6 +1138,9 @@ public class TwoPanelChartsControl : UserControl
         toolbarRightRow2.Controls.Add(chkTelegram);
         toolbarRightRow2.Controls.Add(lblPollingInterval);
         toolbarRightRow2.Controls.Add(numPollingInterval);
+        toolbarRightRow2.Controls.Add(btnResetStk);
+        toolbarRightRow2.Controls.Add(lblDeltaSpot);
+        toolbarRightRow2.Controls.Add(_txtDeltaSpot);
         toolbarRightRow2.Controls.Add(lblRthLiveTick);
 
         // Wraps the toolbar row + its Text-tool note box together so their relative order (toolbar
