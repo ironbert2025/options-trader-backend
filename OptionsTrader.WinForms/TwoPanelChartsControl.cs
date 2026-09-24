@@ -1769,6 +1769,7 @@ public class TwoPanelChartsControl : UserControl
                     {
                         mirrorRow.Cells[i].Style.ForeColor = sourceRow.Cells[i].Style.ForeColor;
                         mirrorRow.Cells[i].Style.BackColor = sourceRow.Cells[i].Style.BackColor;
+                        mirrorRow.Cells[i].ToolTipText = sourceRow.Cells[i].ToolTipText; // Min/Max PnL% record times
                         if (sourceRow.Cells[i].Style.Font != null)
                             mirrorRow.Cells[i].Style.Font = sourceRow.Cells[i].Style.Font;
                     }

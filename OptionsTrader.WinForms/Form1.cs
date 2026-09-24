@@ -3764,7 +3764,7 @@ public partial class Form1 : Form
         row.Cells["colTradePnLPercent"].Value = pnlPct;
         // Closing PnL% (real fill price, or target price for TARGET closes) can be a new
         // low/high the live ticks never saw.
-        UpdatePnLMinMax(row, pnlPctVal);
+        UpdatePnLMinMax(row, pnlPctVal, nowStr);
         row.Cells["colTradeExitTime"].Value   = nowStr;
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
@@ -4298,7 +4298,10 @@ public partial class Form1 : Form
     // been profitable leaves Max blank (no positive value to show) rather than showing "the least
     // negative point reached"; same idea mirrored for Min if it's never gone negative.
     // Session-only — not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
-    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
+    // whenText (HH:mm:ss) is when this new record happened — stored as the cell's tooltip, so
+    // hovering Min/Max shows the exact time it was reached (TwoPanelChartsControl's mirror grid
+    // copies ToolTipText too).
+    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct, string whenText)
     {
         var minCell = row.Cells["colTradePnLMin"];
         var maxCell = row.Cells["colTradePnLMax"];
@@ -4307,12 +4310,14 @@ public partial class Form1 : Form
         {
             minCell.Value             = pnlPct.ToString("F1");
             minCell.Style.ForeColor   = Color.Red;
+            minCell.ToolTipText       = $"Min {pnlPct:F1}% a las {whenText}";
         }
 
         if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value             = pnlPct.ToString("F1");
             maxCell.Style.ForeColor   = Color.Green;
+            maxCell.ToolTipText       = $"Max {pnlPct:F1}% a las {whenText}";
         }
     }
 
@@ -4354,7 +4359,7 @@ public partial class Form1 : Form
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
             row.Cells["colTradePnLPercent"].Style.Font      = new Font(dgvTrades.Font, FontStyle.Bold);
 
-            UpdatePnLMinMax(row, pnlPct);
+            UpdatePnLMinMax(row, pnlPct, DateTime.Now.ToString("HH:mm:ss"));
             SetMoneyness(row, type, strike, _lastSpotPrice);
 
             // Auto-close when the current bid reaches the target price (T_Bid).

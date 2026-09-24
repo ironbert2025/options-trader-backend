@@ -1963,7 +1963,7 @@ public class SimulatorForm : Form
             trade.Row.Cells["colSimCBid"].Style.ForeColor    = Color.Orange;
             trade.Row.Cells["colSimPnl"].Style.ForeColor     = pnl >= 0 ? Color.LimeGreen : Color.OrangeRed;
             trade.Row.Cells["colSimPnlPct"].Style.ForeColor  = pnlPct >= 0 ? Color.LimeGreen : Color.OrangeRed;
-            UpdatePnLMinMax(trade.Row, pnlPct);
+            UpdatePnLMinMax(trade.Row, pnlPct, EasternTime(step.Time).ToString("HH:mm:ss"));
             SetSimMoneyness(trade.Row, trade.OptionType, trade.StrikePrice, step.UnderlyingPrice);
 
             if (!trade.SuppressAutoClose && quote.Bid >= trade.TBid)
@@ -1995,7 +1995,7 @@ public class SimulatorForm : Form
 
         var row = trade.Row;
         row.Cells["colSimExitTime"].Value = EasternTime(step.Time).ToString("HH:mm:ss");
-        UpdatePnLMinMax(row, pnlPct);
+        UpdatePnLMinMax(row, pnlPct, EasternTime(step.Time).ToString("HH:mm:ss"));
 
         // DataGridViewButtonColumn with UseColumnTextForButtonValue=true always shows the
         // column's own Text ("Close") regardless of the cell's Value, so gray out the row instead
@@ -2035,7 +2035,9 @@ public class SimulatorForm : Form
     // Min only ever tracks NEGATIVE values, Max only ever tracks POSITIVE ones — a trade that's
     // never been profitable leaves Max blank instead of showing "the least negative point
     // reached" (same idea mirrored for Min if it's never gone negative). See Form1's identical copy.
-    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
+    // whenText (HH:mm:ss, simulated ET clock) is stored as the cell's tooltip — hover shows the
+    // exact time the Min/Max record was reached.
+    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct, string whenText)
     {
         var minCell = row.Cells["colSimPnlMin"];
         var maxCell = row.Cells["colSimPnlMax"];
@@ -2044,12 +2046,14 @@ public class SimulatorForm : Form
         {
             minCell.Value           = pnlPct.ToString("F1");
             minCell.Style.ForeColor = Color.Red;
+            minCell.ToolTipText     = $"Min {pnlPct:F1}% a las {whenText}";
         }
 
         if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value           = pnlPct.ToString("F1");
             maxCell.Style.ForeColor = Color.Green;
+            maxCell.ToolTipText     = $"Max {pnlPct:F1}% a las {whenText}";
         }
     }
 
