@@ -567,6 +567,24 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync("clearStkPutLabels();");
     }
 
+    // Running Min/Max PnL% shown next to the strike price label, right-justified — unlike the
+    // trigger-fed Ask/Bid/PnL% above the line, this runs continuously the whole time Stk Call/Put
+    // is on, no 1st-15m-candle window. minText/maxText are null when nothing to show yet (e.g.
+    // never gone negative/positive) — TwoPanelChartsControl decides that, this just forwards it.
+    public async Task SetStkCallMinMaxAsync(IEnumerable<(decimal Price, string? MinText, string? MaxText)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, minText = e.MinText, maxText = e.MaxText });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallMinMax({JsonSerializer.Serialize(payload)});");
+    }
+
+    public async Task SetStkPutMinMaxAsync(IEnumerable<(decimal Price, string? MinText, string? MaxText)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, minText = e.MinText, maxText = e.MaxText });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutMinMax({JsonSerializer.Serialize(payload)});");
+    }
+
     // Toggles Rect drawing mode on/off. While on, every pair of clicks draws a new sky-blue
     // rectangle between them (opposite corners, no value labels). Same toggle pattern as DZ/SZ.
     public async Task<bool> ToggleRectModeAsync()

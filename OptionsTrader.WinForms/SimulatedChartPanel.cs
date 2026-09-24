@@ -1280,6 +1280,23 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync("clearStkPutLabels();");
     }
 
+    // Running Min/Max PnL% shown next to the strike price label, right-justified — runs
+    // continuously the whole time Stk Call/Put is on, no 1st-15m-candle window (unlike the
+    // trigger-fed Ask/Bid/PnL% above the line). Ported from ChartPanel's identical method.
+    public async Task SetStkCallMinMaxAsync(IEnumerable<(decimal Price, string? MinText, string? MaxText)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, minText = e.MinText, maxText = e.MaxText });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallMinMax({JsonSerializer.Serialize(payload)});");
+    }
+
+    public async Task SetStkPutMinMaxAsync(IEnumerable<(decimal Price, string? MinText, string? MaxText)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, minText = e.MinText, maxText = e.MaxText });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutMinMax({JsonSerializer.Serialize(payload)});");
+    }
+
     // ==================================================================================
     // "BB" (bands currently widening) + "Δ" (distance to nearest band) — ported from ChartPanel.
     // EvaluateBollingerWideningLabel. Purely visual, continuous, independent of the armed/fired

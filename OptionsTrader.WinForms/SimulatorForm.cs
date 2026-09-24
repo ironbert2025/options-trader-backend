@@ -324,11 +324,13 @@ public class SimulatorForm : Form
             _stkCallOn = !_stkCallOn;
             btnStkCall.BackColor = _stkCallOn ? Color.LightGreen : SystemColors.Control;
             _callTrack.Entries.Clear(); // toggling either button off/on cancels any in-progress tracking
+            _callMinMax.Clear();
             if (!_stkCallOn) { _stkCallStrikes.Clear(); await _rthChart.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
             // OtmCalls is ordered farthest-OTM-first (closest/Level-1 last) — TakeLast, not Take,
             // same fix applied to the live app's own Stk Call button.
             _stkCallStrikes = _lastOtmCalls.TakeLast(4).Select(q => q.StrikePrice).ToList();
             await _rthChart.SetStkCallLinesAsync(_stkCallStrikes);
+            CaptureStkMinMax(isCall: true);
         };
 
         var btnStkPut = new Button { Text = "Stk Put", Location = new Point(126, 0), Size = new Size(56, 24), ForeColor = Color.Red };
@@ -337,9 +339,11 @@ public class SimulatorForm : Form
             _stkPutOn = !_stkPutOn;
             btnStkPut.BackColor = _stkPutOn ? Color.LightSalmon : SystemColors.Control;
             _putTrack.Entries.Clear();
+            _putMinMax.Clear();
             if (!_stkPutOn) { _stkPutStrikes.Clear(); await _rthChart.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
             _stkPutStrikes = _lastOtmPuts.Take(4).Select(q => q.StrikePrice).ToList();
             await _rthChart.SetStkPutLinesAsync(_stkPutStrikes);
+            CaptureStkMinMax(isCall: false);
         };
 
         _pnlArrowStk.Controls.Add(btnArrow);
@@ -377,6 +381,53 @@ public class SimulatorForm : Form
     // Round-trip broker commission per contract, in premium units (1.30 USD / 100 shares) — fixed,
     // per explicit request (no UI to change it).
     private const decimal FixedCostPerContract = 0.013m;
+
+    // Running Min/Max PnL% shown next to the strike label (right-justified) — UNLIKE the
+    // trigger-fed Ask/Bid/PnL% above, this runs continuously for as long as Stk Call/Put stays ON,
+    // no 1st-15m-candle window, per explicit request. Ported from the live app's identical fields.
+    private sealed class StkMinMaxEntry
+    {
+        public decimal Strike;
+        public decimal EntryAsk;
+        public decimal? MinPct;
+        public decimal? MaxPct;
+    }
+    private readonly List<StkMinMaxEntry> _callMinMax = new();
+    private readonly List<StkMinMaxEntry> _putMinMax = new();
+
+    private void CaptureStkMinMax(bool isCall)
+    {
+        var list = isCall ? _callMinMax : _putMinMax;
+        list.Clear();
+        foreach (var (strike, ask) in CaptureStkEntries(isCall))
+            list.Add(new StkMinMaxEntry { Strike = strike, EntryAsk = ask });
+    }
+
+    private async Task UpdateStkMinMaxAsync()
+    {
+        await UpdateOneStkMinMaxSideAsync(_callMinMax, _lastOtmCalls, isCall: true);
+        await UpdateOneStkMinMaxSideAsync(_putMinMax, _lastOtmPuts, isCall: false);
+    }
+
+    private async Task UpdateOneStkMinMaxSideAsync(List<StkMinMaxEntry> list, List<OptionQuoteDto> quotes, bool isCall)
+    {
+        if (list.Count == 0) return;
+
+        var payload = new List<(decimal Price, string? MinText, string? MaxText)>();
+        foreach (var entry in list)
+        {
+            var bid = quotes.FirstOrDefault(q => q.StrikePrice == entry.Strike)?.Bid;
+            if (bid == null || entry.EntryAsk <= 0) continue;
+            var pnlPct = (bid.Value - entry.EntryAsk) / entry.EntryAsk * 100;
+            if (pnlPct < 0 && (entry.MinPct == null || pnlPct < entry.MinPct)) entry.MinPct = pnlPct;
+            if (pnlPct > 0 && (entry.MaxPct == null || pnlPct > entry.MaxPct)) entry.MaxPct = pnlPct;
+            payload.Add((entry.Strike, entry.MinPct.HasValue ? $"{entry.MinPct:F1}%" : null, entry.MaxPct.HasValue ? $"+{entry.MaxPct:F1}%" : null));
+        }
+        if (payload.Count == 0) return;
+
+        if (isCall) await _rthChart.SetStkCallMinMaxAsync(payload);
+        else await _rthChart.SetStkPutMinMaxAsync(payload);
+    }
 
     // Captures the CURRENT Ask for the given side's already-chosen strikes (_stkCallStrikes/
     // _stkPutStrikes — which strikes never changes here, only their value) — shared by the
@@ -428,6 +479,7 @@ public class SimulatorForm : Form
         if (_stkCallOn)
         {
             await _rthChart.ClearStkCallLabelsAsync();
+            CaptureStkMinMax(isCall: true); // "start fresh from this moment" also resets Min/Max
             var entries = CaptureStkEntries(isCall: true);
             if (entries.Count > 0)
             {
@@ -439,6 +491,7 @@ public class SimulatorForm : Form
         if (_stkPutOn)
         {
             await _rthChart.ClearStkPutLabelsAsync();
+            CaptureStkMinMax(isCall: false);
             var entries = CaptureStkEntries(isCall: false);
             if (entries.Count > 0)
             {
@@ -1055,6 +1108,8 @@ public class SimulatorForm : Form
         _callTrack.Manual = false;
         _putTrack.Entries.Clear();
         _putTrack.Manual = false;
+        _callMinMax.Clear();
+        _putMinMax.Clear();
         _resetStkOn = false;
 
         var tickers = TickerSettingsStore.Load();
@@ -1537,6 +1592,7 @@ public class SimulatorForm : Form
         (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts,
             forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
         _ = UpdateTriggerStkLabelsAsync();
+        _ = UpdateStkMinMaxAsync();
 
         // PopulateQuotesGrid computes its own Conts column from the REAL (persisted)
         // ContractsSettingsStore — override it here with the simulator's own local Contracts

@@ -72,6 +72,55 @@ public class TwoPanelChartsControl : UserControl
         return result.Count > 0 ? result : null;
     }
 
+    // Running Min/Max PnL% shown next to the strike label (right-justified) — UNLIKE the
+    // trigger-fed Ask/Bid/PnL% below, this runs continuously for as long as Stk Call/Put stays ON,
+    // no 1st-15m-candle window, per explicit request. Captured fresh (Min/Max reset) whenever the
+    // Stk button toggles ON, and again whenever "Reset Stk" re-arms that side.
+    private sealed class StkMinMaxEntry
+    {
+        public decimal Strike;
+        public decimal EntryAsk;
+        public decimal? MinPct; // only ever tracks NEGATIVE values, like Form1's own UpdatePnLMinMax
+        public decimal? MaxPct; // only ever tracks POSITIVE values
+    }
+    private readonly List<StkMinMaxEntry> _callMinMax = new();
+    private readonly List<StkMinMaxEntry> _putMinMax = new();
+
+    private void CaptureStkMinMax(bool isCall)
+    {
+        var list = isCall ? _callMinMax : _putMinMax;
+        list.Clear();
+        foreach (var (strike, ask) in CaptureStkEntries(isCall))
+            list.Add(new StkMinMaxEntry { Strike = strike, EntryAsk = ask });
+    }
+
+    private async Task UpdateStkMinMaxAsync(List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, ChartPanel? rthPanel)
+    {
+        if (rthPanel == null) return;
+        await UpdateOneStkMinMaxSideAsync(_callMinMax, otmCalls, isCall: true, rthPanel);
+        await UpdateOneStkMinMaxSideAsync(_putMinMax, otmPuts, isCall: false, rthPanel);
+    }
+
+    private async Task UpdateOneStkMinMaxSideAsync(List<StkMinMaxEntry> list, List<OptionQuoteDto> quotes, bool isCall, ChartPanel rthPanel)
+    {
+        if (list.Count == 0) return;
+
+        var payload = new List<(decimal Price, string? MinText, string? MaxText)>();
+        foreach (var entry in list)
+        {
+            var bid = quotes.FirstOrDefault(q => q.StrikePrice == entry.Strike)?.Bid;
+            if (bid == null || entry.EntryAsk <= 0) continue;
+            var pnlPct = (bid.Value - entry.EntryAsk) / entry.EntryAsk * 100;
+            if (pnlPct < 0 && (entry.MinPct == null || pnlPct < entry.MinPct)) entry.MinPct = pnlPct;
+            if (pnlPct > 0 && (entry.MaxPct == null || pnlPct > entry.MaxPct)) entry.MaxPct = pnlPct;
+            payload.Add((entry.Strike, entry.MinPct.HasValue ? $"{entry.MinPct:F1}%" : null, entry.MaxPct.HasValue ? $"+{entry.MaxPct:F1}%" : null));
+        }
+        if (payload.Count == 0) return;
+
+        if (isCall) await rthPanel.SetStkCallMinMaxAsync(payload);
+        else await rthPanel.SetStkPutMinMaxAsync(payload);
+    }
+
     // "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% tracking — only starts if the matching Stk
     // Call/Put button is ON at the moment the trigger fires; does nothing otherwise. Two
     // independent tracks (not one shared "which side" flag) so Call and Put can each be
@@ -141,6 +190,7 @@ public class TwoPanelChartsControl : UserControl
         if (_stkCallOn)
         {
             await rthPanel.ClearStkCallLabelsAsync();
+            CaptureStkMinMax(isCall: true); // "start fresh from this moment" also resets Min/Max
             var entries = CaptureStkEntries(isCall: true);
             if (entries.Count > 0)
             {
@@ -152,6 +202,7 @@ public class TwoPanelChartsControl : UserControl
         if (_stkPutOn)
         {
             await rthPanel.ClearStkPutLabelsAsync();
+            CaptureStkMinMax(isCall: false);
             var entries = CaptureStkEntries(isCall: false);
             if (entries.Count > 0)
             {
@@ -810,6 +861,7 @@ public class TwoPanelChartsControl : UserControl
             _stkCallOn = !_stkCallOn;
             btnStkCall.BackColor = _stkCallOn ? Color.LightGreen : SystemColors.Control;
             _callTrack.Entries.Clear(); // toggling either button off/on cancels any in-progress tracking
+            _callMinMax.Clear();
             if (!_stkCallOn) { _stkCallStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
             // Before market open, Form1's own quote polling hasn't started yet — GetQuoteSnapshot's
             // OtmCalls can be stale relative to how far the spot moved overnight. Pick the nearest
@@ -818,6 +870,7 @@ public class TwoPanelChartsControl : UserControl
             _stkCallStrikes = (!MarketHours.IsOpen ? PickStrikesNearLiveSpot(isCall: true) : null)
                 ?? snapshot?.OtmCalls.TakeLast(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
             if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(_stkCallStrikes);
+            CaptureStkMinMax(isCall: true);
         };
 
         var btnStkPut = new Button { Text = "Stk Put", Size = new Size(56, 24), ForeColor = Color.Red };
@@ -826,11 +879,13 @@ public class TwoPanelChartsControl : UserControl
             _stkPutOn = !_stkPutOn;
             btnStkPut.BackColor = _stkPutOn ? Color.LightSalmon : SystemColors.Control;
             _putTrack.Entries.Clear();
+            _putMinMax.Clear();
             if (!_stkPutOn) { _stkPutStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
             var snapshot = _form1.GetQuoteSnapshot(_symbol);
             _stkPutStrikes = (!MarketHours.IsOpen ? PickStrikesNearLiveSpot(isCall: false) : null)
                 ?? snapshot?.OtmPuts.Take(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
             if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(_stkPutStrikes);
+            CaptureStkMinMax(isCall: false);
         };
 
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
@@ -1517,6 +1572,7 @@ public class TwoPanelChartsControl : UserControl
                 lblExpDateNext.Text = $"Next: {ExpirationDateResolver.ResolveNext(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
 
             _ = UpdateTriggerStkLabelsAsync(snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, rthPanel);
+            _ = UpdateStkMinMaxAsync(snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, rthPanel);
 
             var snapshotNext = _form1.GetQuoteSnapshotNext(_symbol);
 

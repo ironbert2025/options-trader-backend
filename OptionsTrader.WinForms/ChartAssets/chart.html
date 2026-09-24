@@ -1848,18 +1848,38 @@
                     });
                   });
 
-                  // Strike price itself, below-left of the segment, so the line stays identifiable
-                  // even without a trigger label above it.
+                  // Strike price + running Min/Max PnL% (see setStkCallMinMax/setStkPutMinMax),
+                  // below the segment, right-justified — so the line stays identifiable even
+                  // without a trigger label above it, and the min/max reads right next to the
+                  // strike it belongs to. Min red (only shown once it's gone negative at least
+                  // once), Max green (only shown once it's gone positive at least once) — same
+                  // "Min only tracks negative, Max only tracks positive" convention as Form1's own
+                  // UpdatePnLMinMax for real/demo trades.
                   ctx.font = `${10 * scope.verticalPixelRatio}px sans-serif`;
                   ctx.textAlign = 'left';
                   ctx.textBaseline = 'top';
-                  ctx.fillStyle = color;
-                  lines.forEach(({ price }) => {
+                  lines.forEach(({ price, minMax }) => {
                     const y = candleSeries.priceToCoordinate(price);
                     if (y == null) return;
                     // No trailing ".00" for whole-number strikes, per explicit request.
                     const priceText = Number.isInteger(price) ? String(price) : price.toFixed(2);
-                    ctx.fillText(priceText, left, y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio);
+                    const pieces = [{ text: priceText, color }];
+                    if (minMax && (minMax.minText || minMax.maxText)) {
+                      pieces.push({ text: ' (', color });
+                      if (minMax.minText) pieces.push({ text: minMax.minText, color: '#FF0000' });
+                      if (minMax.minText && minMax.maxText) pieces.push({ text: '/', color });
+                      if (minMax.maxText) pieces.push({ text: minMax.maxText, color: '#006400' });
+                      pieces.push({ text: ')', color });
+                    }
+                    const widths = pieces.map(p => ctx.measureText(p.text).width);
+                    const totalWidth = widths.reduce((a, b) => a + b, 0);
+                    let x = right - totalWidth;
+                    const ty = y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio;
+                    pieces.forEach((p, i) => {
+                      ctx.fillStyle = p.color;
+                      ctx.fillText(p.text, x, ty);
+                      x += widths[i];
+                    });
                   });
                 };
                 drawSet(self._callLines, '#26a69a');
@@ -1877,13 +1897,33 @@
 
   function setStkCallLines(prices) {
     if (!stkLinesAttached) { candleSeries.attachPrimitive(stkLinesPrimitive); stkLinesAttached = true; }
-    stkLinesPrimitive._callLines = (prices || []).map(price => ({ price, label: null }));
+    stkLinesPrimitive._callLines = (prices || []).map(price => ({ price, label: null, minMax: null }));
     forceRepaint();
   }
 
   function setStkPutLines(prices) {
     if (!stkLinesAttached) { candleSeries.attachPrimitive(stkLinesPrimitive); stkLinesAttached = true; }
-    stkLinesPrimitive._putLines = (prices || []).map(price => ({ price, label: null }));
+    stkLinesPrimitive._putLines = (prices || []).map(price => ({ price, label: null, minMax: null }));
+    forceRepaint();
+  }
+
+  // Running Min/Max PnL% next to the strike label — entries: [{ price, minText, maxText }, ...],
+  // matched onto the already-set _callLines/_putLines by price (set via setStkCallLines/
+  // setStkPutLines above). minText/maxText are pre-formatted strings (e.g. "-5.2%") or null —
+  // C# decides when there's nothing to show yet, this just renders whatever it's given.
+  function setStkCallMinMax(entries) {
+    (entries || []).forEach(({ price, minText, maxText }) => {
+      const line = stkLinesPrimitive._callLines.find(l => l.price === price);
+      if (line) line.minMax = { minText, maxText };
+    });
+    forceRepaint();
+  }
+
+  function setStkPutMinMax(entries) {
+    (entries || []).forEach(({ price, minText, maxText }) => {
+      const line = stkLinesPrimitive._putLines.find(l => l.price === price);
+      if (line) line.minMax = { minText, maxText };
+    });
     forceRepaint();
   }
 
