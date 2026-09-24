@@ -3860,6 +3860,107 @@
       smaSeries[p].setData(data);
       smaLastPoint[p] = data.length > 0 ? data[data.length - 1] : null;
     });
+    recalcSalto();
+  }
+
+  // ---- "1er Salto" (1h panel, i.e. wherever SMA20 AND SMA40 are configured) ----
+  // A "Salto" is a day whose OPEN differs from the PREVIOUS day's CLOSE: Open > prevClose = Salto
+  // al Alza, Open < prevClose = Salto a la Baja. "1er Salto" = the FIRST such day after the most
+  // recent SMA20/SMA40 cross, and it's only marked when it goes the same way as that cross (cross
+  // up + Salto al Alza, cross down + Salto a la Baja); a first Salto in the opposite direction
+  // marks nothing (and nothing later does either — it's no longer the first). Shown in yellow to
+  // the LEFT of the previous day's close, just above that price, so the right side stays free for
+  // the new day's candles, with Diff = |Open - prevClose|. Runs on every SMA recalculation, so it
+  // covers live updates, history loads and the Simulator's step-by-step replays alike.
+  class SaltoLabelPrimitive {
+    constructor() { this._label = null; this._chart = null; } // { time, price, text }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || !self._label) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const x = safeTimeToCoordinate(self._chart.timeScale(), self._label.time);
+                const y = candleSeries.priceToCoordinate(self._label.price);
+                if (x == null || y == null) return;
+                ctx.save();
+                ctx.fillStyle = '#ffeb3b';
+                ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'bottom';
+                ctx.fillText(self._label.text, x * scope.horizontalPixelRatio - 6 * scope.horizontalPixelRatio,
+                  y * scope.verticalPixelRatio - 4 * scope.verticalPixelRatio);
+                ctx.restore();
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const saltoLabelPrimitive = new SaltoLabelPrimitive();
+  let saltoLabelAttached = false;
+
+  function recalcSalto() {
+    saltoLabelPrimitive._label = null;
+    if (!smaPeriods.includes(20) || !smaPeriods.includes(40) || dailyMode || allCandles.length < 42) {
+      if (saltoLabelAttached) forceRepaint();
+      return;
+    }
+
+    // SMA20/SMA40 over the whole loaded history, then the most recent cross of the two.
+    const n = allCandles.length;
+    const sma = (p) => {
+      const out = new Array(n).fill(null);
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        sum += allCandles[i].close;
+        if (i >= p) sum -= allCandles[i - p].close;
+        if (i >= p - 1) out[i] = sum / p;
+      }
+      return out;
+    };
+    const s20 = sma(20), s40 = sma(40);
+    let crossIdx = -1, crossUp = false;
+    for (let i = 1; i < n; i++) {
+      if (s20[i] == null || s40[i] == null || s20[i - 1] == null || s40[i - 1] == null) continue;
+      const prev = s20[i - 1] - s40[i - 1], cur = s20[i] - s40[i];
+      if (prev <= 0 && cur > 0) { crossIdx = i; crossUp = true; }
+      else if (prev >= 0 && cur < 0) { crossIdx = i; crossUp = false; }
+    }
+    if (crossIdx < 0) { if (saltoLabelAttached) forceRepaint(); return; }
+
+    // Per-day open/close, in order. The cross candle's own day is excluded: its open came before the cross.
+    const day = (t) => Math.floor(t / 86400);
+    const days = [];
+    for (let i = 0; i < n; i++) {
+      const d = day(allCandles[i].time);
+      if (days.length === 0 || days[days.length - 1].d !== d)
+        days.push({ d, open: allCandles[i].open, close: allCandles[i].close, lastTime: allCandles[i].time });
+      else { const last = days[days.length - 1]; last.close = allCandles[i].close; last.lastTime = allCandles[i].time; }
+    }
+    const crossDay = day(allCandles[crossIdx].time);
+    for (let k = 1; k < days.length; k++) {
+      if (days[k].d <= crossDay) continue;
+      // First day after the cross = the first Salto (any nonzero Open vs prev Close difference).
+      const diff = days[k].open - days[k - 1].close;
+      if (diff === 0) continue;
+      const up = diff > 0;
+      if (up === crossUp) {
+        saltoLabelPrimitive._label = {
+          time: days[k - 1].lastTime, price: days[k - 1].close,
+          text: `1er Salto ${up ? '▲' : '▼'} Diff=${Math.abs(diff).toFixed(2)}`,
+        };
+      }
+      break; // only the FIRST Salto after the cross counts, matching direction or not
+    }
+    if (saltoLabelPrimitive._label && !saltoLabelAttached) { candleSeries.attachPrimitive(saltoLabelPrimitive); saltoLabelAttached = true; }
+    if (saltoLabelAttached) forceRepaint();
   }
 
   function upsertCandle(candle) {
