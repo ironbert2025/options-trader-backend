@@ -1084,7 +1084,7 @@ public class TwoPanelChartsControl : UserControl
 
         // "Reset Stk" + ΔSpot — ported from the Simulator, placed next to Poll(s) per explicit
         // request. See ToggleResetStk/LogProjectedStkEstimate above for the full behavior.
-        var btnResetStk = new Button { Text = "Reset Stk", AutoSize = true, Margin = new Padding(12, 3, 3, 3) };
+        var btnResetStk = new Button { Text = "Reset Stk", AutoSize = true, Margin = new Padding(12, 0, 3, 3) };
         btnResetStk.Click += (s, e) =>
         {
             ToggleResetStk(rthPanel);
@@ -1092,7 +1092,7 @@ public class TwoPanelChartsControl : UserControl
         };
         // Own small panel (label on top, textbox below), not 2 separate flow items — a
         // FlowLayoutPanel wraps/pushes mismatched-height siblings around unpredictably otherwise.
-        var pnlDeltaSpot = new Panel { Size = new Size(54, 40), Margin = new Padding(3, 0, 3, 0) };
+        var pnlDeltaSpot = new Panel { Size = new Size(54, 40), Margin = new Padding(3, -3, 3, 0) };
         var lblDeltaSpot = new Label { Text = "ΔSpot", AutoSize = true, Location = new Point(0, 2) };
         _txtDeltaSpot = new TextBox { Width = 50, Location = new Point(0, 18) };
         pnlDeltaSpot.Controls.Add(lblDeltaSpot);
