@@ -63,6 +63,11 @@ public class DailyChartForm : Form
     // and the toolbar button color stays in sync. See ActiveDzSzWebViewAndTag.
     private WebView2? _dzSzArmedWebView;
 
+    // Which tab's WebView currently has Rect / Color Rect armed (null = neither) — so a second
+    // click, or a tab switch, turns the RIGHT one off.
+    private WebView2? _rectArmedWebView;
+    private WebView2? _colorRectArmedWebView;
+
     public DailyChartForm(string symbol, List<CandleData> dailyCandles, SchwabStreamerClient historyClient)
     {
         _symbol = symbol;
@@ -113,19 +118,52 @@ public class DailyChartForm : Form
         // arm Hora+15Min together. Persisted via ZoneStore, one tag per tab so zones never mix
         // across tabs. See ActiveDzSzWebViewAndTag()/HandleDzSzMessage below.
         var btnDzSz = new Button { Text = "DZ/SZ", Location = new Point(216, 28), Size = new Size(60, 24) };
+        // "Rect"/"Color Rect" arm the ACTIVE tab only — Daily or Hora (the 15 Min tab has neither),
+        // same idea as DZ/SZ. Hora's rects persist under their own tags and mirror onto the live
+        // 1h panel (see LoadAndWireHoraRectsAsync). Switching tabs while armed disarms, below.
+        WebView2? RectTargetWebView() => tabControl.SelectedIndex switch { 0 => _webView, 1 => _hourlyWebView, _ => null };
         btnRect.Click += async (s, e) =>
         {
-            if (_webView.CoreWebView2 == null) return;
-            var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
-            btnRect.BackColor = result == "true" ? Color.LightGray : SystemColors.Control;
+            if (_rectArmedWebView != null)
+            {
+                if (_rectArmedWebView.CoreWebView2 != null) await _rectArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
+                _rectArmedWebView = null;
+                btnRect.BackColor = SystemColors.Control;
+                return;
+            }
+            var target = RectTargetWebView();
+            if (target?.CoreWebView2 == null) return;
+            await target.CoreWebView2.ExecuteScriptAsync("toggleRect();");
+            _rectArmedWebView = target;
+            btnRect.BackColor = Color.LightGray;
         };
-        // "Color Rect" — Daily tab only, same 2-click draw as "Rect" but filled red/green
-        // depending on drag direction (see ColorRectPrimitive in chart.html), per explicit request.
+        // "Color Rect" — same 2-click draw as "Rect" but filled red/green depending on drag
+        // direction (see ColorRectPrimitive in chart.html), per explicit request.
         btnColorRect.Click += async (s, e) =>
         {
-            if (_webView.CoreWebView2 == null) return;
-            var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
-            btnColorRect.BackColor = result == "true" ? Color.LightSalmon : SystemColors.Control;
+            if (_colorRectArmedWebView != null)
+            {
+                if (_colorRectArmedWebView.CoreWebView2 != null) await _colorRectArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
+                _colorRectArmedWebView = null;
+                btnColorRect.BackColor = SystemColors.Control;
+                return;
+            }
+            var target = RectTargetWebView();
+            if (target?.CoreWebView2 == null) return;
+            await target.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
+            _colorRectArmedWebView = target;
+            btnColorRect.BackColor = Color.LightSalmon;
+        };
+        tabControl.SelectedIndexChanged += async (s, e) =>
+        {
+            if (_rectArmedWebView != null && _rectArmedWebView.CoreWebView2 != null)
+                await _rectArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
+            if (_colorRectArmedWebView != null && _colorRectArmedWebView.CoreWebView2 != null)
+                await _colorRectArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
+            _rectArmedWebView = null;
+            _colorRectArmedWebView = null;
+            btnRect.BackColor = SystemColors.Control;
+            btnColorRect.BackColor = SystemColors.Control;
         };
         btnTLine.Click += async (s, e) =>
         {
@@ -174,8 +212,8 @@ public class DailyChartForm : Form
         // rectangle/T-Line — reset the button color to match, same pattern the live chart uses.
         // H-Line is a single click-to-place (not 2-click), so chart.html never auto-disarms it —
         // it stays armed until clicked again, same as the live chart's own H-Line button.
-        OnRectPlacedEvent += () => btnRect.BackColor = SystemColors.Control;
-        OnColorRectPlacedEvent += () => btnColorRect.BackColor = SystemColors.Control;
+        OnRectPlacedEvent += () => { _rectArmedWebView = null; btnRect.BackColor = SystemColors.Control; };
+        OnColorRectPlacedEvent += () => { _colorRectArmedWebView = null; btnColorRect.BackColor = SystemColors.Control; };
         OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
 
         // Switching tabs while DZ/SZ is armed would silently arm a chart the user can no longer
@@ -453,6 +491,7 @@ public class DailyChartForm : Form
             $"{JsonSerializer.Serialize(FifteenCornerNoteCenter)}, {JsonSerializer.Serialize(FifteenCornerNoteRight)});");
 
         await LoadAndWireHLinesAsync();
+        await LoadAndWireHoraRectsAsync();
 
         await LoadAndWireDzSzAsync(_webView, "Daily");
         await LoadAndWireDzSzAsync(_hourlyWebView, "DailyHora");
@@ -503,6 +542,32 @@ public class DailyChartForm : Form
         {
             // Best-effort — never let a malformed message crash the window.
         }
+    }
+
+    // Fired when a Rect / Color Rect is drawn (added=true) or deleted on the "Hora" tab —
+    // TwoPanelChartsControl.AttachDailyMirroring relays it onto the live 1h panel (panel 1).
+    // (color, added, t1, p1, t2, p2). One-way, Daily -> live.
+    public event Action<bool, bool, long, decimal, long, decimal>? OnHoraRectChangedEvent;
+
+    // "Rect"/"Color Rect" persistence for the "Hora" tab (RectStore, tags "DailyHora"/
+    // "DailyHoraColor") — replay what was drawn in a previous session, then listen for new/
+    // deleted ones and relay them to the live 1h panel.
+    private async Task LoadAndWireHoraRectsAsync()
+    {
+        if (_hourlyWebView.CoreWebView2 == null) return;
+        var rects = RectStore.Load(_symbol, "DailyHora");
+        var rectsJson = JsonSerializer.Serialize(rects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+        await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"loadRects({rectsJson});");
+        var colorRects = RectStore.Load(_symbol, "DailyHoraColor");
+        var colorJson = JsonSerializer.Serialize(colorRects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+        await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"loadColorRects({colorJson});");
+
+        _hourlyWebView.CoreWebView2.WebMessageReceived += (s, e) =>
+            HandleRectMessage(e, "DailyHora", () => OnRectPlacedEvent?.Invoke(),
+                (added, t1, p1, t2, p2) => OnHoraRectChangedEvent?.Invoke(false, added, t1, p1, t2, p2));
+        _hourlyWebView.CoreWebView2.WebMessageReceived += (s, e) =>
+            HandleColorRectMessage(e, () => OnColorRectPlacedEvent?.Invoke(), "DailyHoraColor",
+                (added, t1, p1, t2, p2) => OnHoraRectChangedEvent?.Invoke(true, added, t1, p1, t2, p2));
     }
 
     // "T-Line" tool persistence (TLineStore) for one of the Hora/15 Min tabs — replay whatever was
@@ -573,7 +638,10 @@ public class DailyChartForm : Form
         }
     }
 
-    private void HandleRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string contextTag, Action onPlaced)
+    // onChanged (added?, t1, p1, t2, p2) — optional relay, used by the Hora tab to mirror the rect
+    // onto the live 1h panel (see OnHoraRectChangedEvent).
+    private void HandleRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string contextTag, Action onPlaced,
+        Action<bool, long, decimal, long, decimal>? onChanged = null)
     {
         try
         {
@@ -590,6 +658,7 @@ public class DailyChartForm : Form
             var p2 = root.GetProperty("p2").GetDecimal();
             if (type == "bluerect_add") RectStore.Append(_symbol, contextTag, t1, p1, t2, p2);
             else RectStore.Remove(_symbol, contextTag, t1, p1, t2, p2);
+            onChanged?.Invoke(type == "bluerect_add", t1, p1, t2, p2);
         }
         catch
         {
@@ -600,7 +669,8 @@ public class DailyChartForm : Form
     // "Color Rect" tool — same RectStore, own tag "DailyColor" and own message-type prefix
     // ("colorrect_*") so it never collides with the plain gray Rect tool's "bluerect_*"/"rect_*"
     // messages on the same WebMessageReceived stream.
-    private void HandleColorRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, Action onPlaced)
+    private void HandleColorRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, Action onPlaced,
+        string tag = "DailyColor", Action<bool, long, decimal, long, decimal>? onChanged = null)
     {
         try
         {
@@ -615,8 +685,9 @@ public class DailyChartForm : Form
             var p1 = root.GetProperty("p1").GetDecimal();
             var t2 = root.GetProperty("t2").GetInt64();
             var p2 = root.GetProperty("p2").GetDecimal();
-            if (type == "colorrect_add") RectStore.Append(_symbol, "DailyColor", t1, p1, t2, p2);
-            else RectStore.Remove(_symbol, "DailyColor", t1, p1, t2, p2);
+            if (type == "colorrect_add") RectStore.Append(_symbol, tag, t1, p1, t2, p2);
+            else RectStore.Remove(_symbol, tag, t1, p1, t2, p2);
+            onChanged?.Invoke(type == "colorrect_add", t1, p1, t2, p2);
         }
         catch
         {

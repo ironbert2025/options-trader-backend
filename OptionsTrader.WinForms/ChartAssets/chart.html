@@ -4482,6 +4482,28 @@
     forceRepaint();
   }
 
+  // Single add/remove of a blue / Color Rect — used by the live 1h panel to mirror a rect drawn or
+  // deleted on DailyChartForm's "Hora" tab while both are open (loadRects/loadColorRects above
+  // replace the whole set instead). Never postMessage back out, so no ping-pong.
+  function addMirroredRect(t1, p1, t2, p2) {
+    if (!rectAttached) { candleSeries.attachPrimitive(rectanglesPrimitive); rectAttached = true; }
+    rectanglesPrimitive._rects.push({ t1, p1, t2, p2, selected: false });
+    forceRepaint();
+  }
+  function removeMirroredRect(t1, p1, t2, p2) {
+    rectanglesPrimitive._rects = rectanglesPrimitive._rects.filter(r => !(r.t1 === t1 && r.p1 === p1 && r.t2 === t2 && r.p2 === p2));
+    forceRepaint();
+  }
+  function addMirroredColorRect(t1, p1, t2, p2) {
+    if (!colorRectAttached) { candleSeries.attachPrimitive(colorRectPrimitive); colorRectAttached = true; }
+    colorRectPrimitive._rects.push({ t1, p1, t2, p2, selected: false });
+    forceRepaint();
+  }
+  function removeMirroredColorRect(t1, p1, t2, p2) {
+    colorRectPrimitive._rects = colorRectPrimitive._rects.filter(r => !(r.t1 === t1 && r.p1 === p1 && r.t2 === t2 && r.p2 === p2));
+    forceRepaint();
+  }
+
   // Seeds T-Line drawings persisted from a previous session (1h panel only — see TLineStore.cs).
   function loadTLines(lines) {
     if (!tLineAttached) { candleSeries.attachPrimitive(tLinePrimitive); tLineAttached = true; }

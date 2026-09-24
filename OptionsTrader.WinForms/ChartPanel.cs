@@ -781,6 +781,33 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"addMirroredTLine({t1}, {p1Str}, {t2}, {p2Str});");
     }
 
+    // Blue / Color Rects drawn on DailyChartForm's "Hora" tab, mirrored onto THIS panel (Hourly15
+    // only). They live in RectStore under the Daily form's own tags — this panel reads/deletes
+    // straight from those instead of keeping a second copy, so a rect deleted here can't come
+    // back from a stale duplicate (the T-Line resurrection bug's cause).
+    private const string HoraRectTag = "DailyHora";
+    private const string HoraColorRectTag = "DailyHoraColor";
+
+    private async Task LoadHoraRectsAsync()
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _webView.CoreWebView2 == null) return;
+        var rects = RectStore.Load(_symbol, HoraRectTag);
+        if (rects.Count > 0)
+            await _webView.CoreWebView2.ExecuteScriptAsync($"loadRects({JsonSerializer.Serialize(rects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }))});");
+        var colorRects = RectStore.Load(_symbol, HoraColorRectTag);
+        if (colorRects.Count > 0)
+            await _webView.CoreWebView2.ExecuteScriptAsync($"loadColorRects({JsonSerializer.Serialize(colorRects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }))});");
+    }
+
+    // Visual only — the Daily form already wrote/removed the RectStore entry.
+    public async Task MirrorRectAsync(bool color, bool add, long t1, decimal p1, long t2, decimal p2)
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _webView.CoreWebView2 == null) return;
+        var fn = (add ? "addMirrored" : "removeMirrored") + (color ? "ColorRect" : "Rect");
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"{fn}({t1}, {p1.ToString(inv)}, {t2}, {p2.ToString(inv)});");
+    }
+
     // Removes a mirrored T-Line — called when the ORIGINATING T-Line (drawn on DailyChartForm's
     // "Hora"/"15 Min" tab) gets deleted there, so the live chart's copy and its TLineStore entry
     // don't outlive it.
@@ -1149,6 +1176,19 @@ public class ChartPanel : Panel
                         // already resolved (Resolve already moved it off "Pendiente").
                         CtRecordStore.MarkDeletedUnresolved(_symbol, CtTimeframeLabel, t1, p1, t2, p2);
                     }
+                    break;
+                }
+                case "bluerect_delete":
+                case "colorrect_delete":
+                {
+                    // A rect mirrored from the Daily "Hora" tab, deleted here (Delete key) — remove it
+                    // from the shared RectStore entry too so it doesn't reappear on next open.
+                    if (_mode != ChartPanelMode.Hourly15) break;
+                    var rt1 = root.GetProperty("t1").GetInt64();
+                    var rp1 = root.GetProperty("p1").GetDecimal();
+                    var rt2 = root.GetProperty("t2").GetInt64();
+                    var rp2 = root.GetProperty("p2").GetDecimal();
+                    RectStore.Remove(_symbol, type == "bluerect_delete" ? HoraRectTag : HoraColorRectTag, rt1, rp1, rt2, rp2);
                     break;
                 }
                 case "tline_placed":
@@ -2891,6 +2931,7 @@ public class ChartPanel : Panel
                 }
 
                 await LoadSavedTLinesAsync();
+                await LoadHoraRectsAsync();
 
                 var savedArrows = VerticalArrowStore.Load(_symbol);
                 if (savedArrows.Count > 0)

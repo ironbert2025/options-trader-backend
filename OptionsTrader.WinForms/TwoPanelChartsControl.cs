@@ -1886,6 +1886,13 @@ public class TwoPanelChartsControl : UserControl
             _ = _rthPanel?.RemoveHLineAsync(price);
         };
 
+        // Rect / Color Rect drawn or deleted on the Daily form's "Hora" tab -> panel 1 (1h) only.
+        dailyForm.OnHoraRectChangedEvent += (color, added, t1, p1, t2, p2) =>
+        {
+            if (IsDisposed) return;
+            BeginInvoke(() => { _ = _hourlyPanel?.MirrorRectAsync(color, added, t1, p1, t2, p2); });
+        };
+
         dailyForm.OnTLineDrawnEvent += (tag, t1, p1, t2, p2) =>
         {
             if (tag == "DailyHora") { if (_hourlyPanel != null) _ = _hourlyPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }
