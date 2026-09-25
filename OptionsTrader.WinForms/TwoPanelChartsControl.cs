@@ -400,7 +400,7 @@ public class TwoPanelChartsControl : UserControl
     // Small event log fed by panel 1/2 events — MultiChartForm's own panel-3/combined-screenshot
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.
-    private readonly TextBox _crossLog;
+    private readonly RichTextBox _crossLog;
 
     // Every "Daily" window currently open for this symbol — see MultiChartForm's original comment
     // (unchanged): removed on FormClosed so a closed window's WebView2 never gets touched again.
@@ -1034,11 +1034,15 @@ public class TwoPanelChartsControl : UserControl
         {
             hourlyPanel.OnTrendStateChanged += (shortDir, longDir) =>
             {
-                var text = ChartPanel.TrendLogText(shortDir, longDir);
-                if (text == null || IsDisposed) return;
+                var segs = ChartPanel.TrendLogSegments(shortDir, longDir);
+                if (segs == null || IsDisposed) return;
                 // Logged immediately, premarket included — the point is to show what panel 1 is
                 // already displaying before the open (AppendLog itself drops pre-9:30 text).
-                BeginInvoke(() => _crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [{_symbol}]{Environment.NewLine}{text}{Environment.NewLine}"));
+                BeginInvoke(() =>
+                {
+                    _crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [{_symbol}]{Environment.NewLine}");
+                    ChartPanel.AppendColored(_crossLog, segs);
+                });
             };
         }
 
@@ -1263,12 +1267,12 @@ public class TwoPanelChartsControl : UserControl
         // Small event log below the charts — logs Cross-SMA cruce/rebote detections (so the
         // Telegram-push feature can be sanity-checked without digging through Telegram itself).
         // Temporary/diagnostic for now.
-        _crossLog = new TextBox
+        _crossLog = new RichTextBox
         {
             Dock       = DockStyle.Fill,
             Multiline  = true,
             ReadOnly   = true,
-            ScrollBars = ScrollBars.Vertical,
+            ScrollBars = RichTextBoxScrollBars.Vertical,
             Font       = new Font("Consolas", 8.5F),
             BackColor  = Color.Black,
             ForeColor  = Color.LightGreen

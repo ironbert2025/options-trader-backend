@@ -113,10 +113,10 @@ public class SimulatorForm : Form
     // return BEFORE the real move happens. Pure estimate, log-only, per explicit request.
     private readonly Label _lblDeltaSpot = new() { Text = "ΔSpot:", AutoSize = true, Location = new Point(188, 4) };
     private readonly TextBox _txtDeltaSpot = new() { Location = new Point(228, 1), Size = new Size(50, 20) };
-    private readonly TextBox _txtEventLog = new()
+    private readonly RichTextBox _txtEventLog = new()
     {
         Location = new Point(8, 848), Size = new Size(1050, 90),
-        Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+        Multiline = true, ReadOnly = true, ScrollBars = RichTextBoxScrollBars.Vertical,
         Font = new Font("Consolas", 8.5F), BackColor = Color.Black, ForeColor = Color.LightGreen
     };
 
@@ -312,8 +312,8 @@ public class SimulatorForm : Form
         _hourlyChart.OnTrendStateChanged += (shortDir, longDir) =>
         {
             if (IsDisposed) return;
-            var text = ChartPanel.TrendLogText(shortDir, longDir);
-            if (text != null) LogSimEvent(text);
+            var segs = ChartPanel.TrendLogSegments(shortDir, longDir);
+            if (segs != null) LogSimEvent(ChartPanel.SegmentsToPlainText(segs), segs);
         };
 
         _rthChart.OnWickTriggerEvent += label =>
@@ -979,7 +979,9 @@ public class SimulatorForm : Form
         };
     }
 
-    private void LogSimEvent(string message)
+    // segments (optional): same text as message but colored per piece — written to the on-screen log
+    // with those colors; the markdown record just gets the plain message.
+    private void LogSimEvent(string message, IReadOnlyList<(string Text, Color? Color)>? segments = null)
     {
         if (IsDisposed) return;
 
@@ -991,7 +993,16 @@ public class SimulatorForm : Form
             ? EasternTime(_steps[_currentIndex].Time)
             : DateTime.Now;
 
-        void Append() => _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
+        void Append()
+        {
+            if (segments == null)
+            {
+                _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
+                return;
+            }
+            _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  ");
+            ChartPanel.AppendColored(_txtEventLog, segments);
+        }
         if (InvokeRequired) BeginInvoke(Append); else Append();
 
         // Permanent record of this replay — see SimEventLogMarkdownWriter for the rundate vs

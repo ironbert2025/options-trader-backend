@@ -561,22 +561,48 @@ public class ChartPanel : Panel
     // Log block for the trend state, or null when neither side has a direction. The 3 dash lines
     // (fixed reminder text, worded per trend: Piso MM when bullish, Techo MM when bearish) only
     // appear when BOTH trends agree, per explicit request. Shared by the live Charts tab and the Simulator.
-    public static string? TrendLogText(string? shortDir, string? longDir)
+    // First line is "<largo> - <corto>" (long-term SMA100/200 first, short-term SMA20/40 second),
+    // each word colored: Alcista green, Bajista red, Neutral (no direction yet) gray. Segments with a
+    // null color use the log's normal color.
+    public static List<(string Text, Color? Color)>? TrendLogSegments(string? shortDir, string? longDir)
     {
-        var lines = new List<string>();
-        if (shortDir == "up") lines.Add("Tend corto plazo alcista");
-        else if (shortDir == "down") lines.Add("Tend corto plazo bajista");
-        if (longDir == "up") lines.Add("Tend largo plazo alcista");
-        else if (longDir == "down") lines.Add("Tend largo plazo bajista");
-        if (lines.Count == 0) return null;
+        if (shortDir == null && longDir == null) return null; // nothing known -> log nothing
+        static (string, Color?) Word(string? dir) => dir switch
+        {
+            "up" => ("Alcista", Color.LimeGreen),
+            "down" => ("Bajista", Color.Red),
+            _ => ("Neutral", Color.Gray)
+        };
+        var (longWord, longColor) = Word(longDir);
+        var (shortWord, shortColor) = Word(shortDir);
+        var segs = new List<(string, Color?)>
+        {
+            (longWord, longColor), (" - ", null), (shortWord, shortColor), (Environment.NewLine, null)
+        };
         if (shortDir != null && shortDir == longDir)
         {
             var up = shortDir == "up";
-            lines.Add(up ? "-Sal BB Vol Alza" : "-Sal BB Vol Baja");
-            lines.Add(up ? "-Rebote en Piso MM (+ Vela Conf + Sal BB Vol)" : "-Rebote en Techo MM (+ Vela Conf + Sal BB Vol)");
-            lines.Add(up ? "-Ruptura de Piso MM (+ Vela Conf + Sal BB Vol)" : "-Ruptura de Techo MM (+ Vela Conf + Sal BB Vol)");
+            segs.Add(((up ? "-Sal BB Vol Alza" : "-Sal BB Vol Baja") + Environment.NewLine, null));
+            segs.Add(((up ? "-Rebote en Piso MM (+ Vela Conf + Sal BB Vol)" : "-Rebote en Techo MM (+ Vela Conf + Sal BB Vol)") + Environment.NewLine, null));
+            segs.Add(((up ? "-Ruptura de Piso MM (+ Vela Conf + Sal BB Vol)" : "-Ruptura de Techo MM (+ Vela Conf + Sal BB Vol)") + Environment.NewLine, null));
         }
-        return string.Join(Environment.NewLine, lines);
+        return segs;
+    }
+
+    public static string SegmentsToPlainText(IEnumerable<(string Text, Color? Color)> segments) =>
+        string.Concat(segments.Select(s => s.Text)).TrimEnd((char)13, (char)10);
+
+    // Appends the segments to a RichTextBox, each in its own color (null = the box's ForeColor).
+    public static void AppendColored(RichTextBox box, IEnumerable<(string Text, Color? Color)> segments)
+    {
+        foreach (var (text, color) in segments)
+        {
+            box.SelectionStart = box.TextLength;
+            box.SelectionLength = 0;
+            box.SelectionColor = color ?? box.ForeColor;
+            box.AppendText(text);
+        }
+        box.SelectionColor = box.ForeColor;
     }
 
     // "Reset Stk" button — clears the label without removing the lines/strike-price text.
