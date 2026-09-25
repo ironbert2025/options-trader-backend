@@ -1889,23 +1889,27 @@
                     if (y == null) return;
                     // No trailing ".00" for whole-number strikes, per explicit request.
                     const priceText = Number.isInteger(price) ? String(price) : price.toFixed(2);
-                    const pieces = [{ text: priceText, color }];
+                    const ty = y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio;
+                    // Strike at the left end of the segment.
+                    ctx.fillStyle = color;
+                    ctx.fillText(priceText, left, ty);
+                    const strikeWidth = ctx.measureText(priceText).width;
+                    // (Min/Max) at the right end, kept at least 8px away from the strike.
                     if (minMax && (minMax.minText || minMax.maxText)) {
-                      pieces.push({ text: ' (', color });
+                      const pieces = [{ text: '(', color }];
                       if (minMax.minText) pieces.push({ text: minMax.minText, color: '#FF0000' });
                       if (minMax.minText && minMax.maxText) pieces.push({ text: '/', color });
                       if (minMax.maxText) pieces.push({ text: minMax.maxText, color: '#006400' });
                       pieces.push({ text: ')', color });
+                      const widths = pieces.map(p => ctx.measureText(p.text).width);
+                      const totalWidth = widths.reduce((a, b) => a + b, 0);
+                      let x = Math.max(right - totalWidth, left + strikeWidth + 8 * scope.horizontalPixelRatio);
+                      pieces.forEach((p, i) => {
+                        ctx.fillStyle = p.color;
+                        ctx.fillText(p.text, x, ty);
+                        x += widths[i];
+                      });
                     }
-                    const widths = pieces.map(p => ctx.measureText(p.text).width);
-                    const totalWidth = widths.reduce((a, b) => a + b, 0);
-                    let x = right - totalWidth;
-                    const ty = y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio;
-                    pieces.forEach((p, i) => {
-                      ctx.fillStyle = p.color;
-                      ctx.fillText(p.text, x, ty);
-                      x += widths[i];
-                    });
                   });
                 };
                 drawSet(self._callLines, '#26a69a');
