@@ -2515,7 +2515,7 @@ public class ChartPanel : Panel
     // price hovering right at the PM value whipsaws _pmCrossLastSide back and forth on ticks that
     // barely move (e.g. 313.00/312.99/313.00), logging the "same" cross dozens of times in one
     // session. Reset alongside _pmCrossLastSide at the day boundary above.
-    private bool _pmCrossFiredToday;
+    private DateTime? _pmCrossLastFiredAt;
 
     // Live (tick-by-tick) counterpart — fires the EXACT moment the spot price crosses through the
     // current PM(15m) value, not just once a candle closes above/below it (the original version,
@@ -2525,10 +2525,7 @@ public class ChartPanel : Panel
     // the tracked side silently, no event.
     private void EvaluatePmCross(decimal livePrice)
     {
-        if (_pmCrossFiredToday) return;
-
         var smaNow = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1);
-        var smaEarlier = Sma(VolatilityBollingerPeriod, _closedCandles.Count - 1 - VolatilityWidthLookback);
         if (smaNow == null) { _pmCrossLastSide = null; return; } // no PM yet — nothing to track against
 
         var side = livePrice > smaNow.Value;
@@ -2536,15 +2533,15 @@ public class ChartPanel : Panel
         _pmCrossLastSide = side;
 
         if (previousSide == null || previousSide == side) return; // first tick, or no crossing this tick
-        if (smaEarlier == null || smaNow == smaEarlier) return; // no clear PM tilt yet — can't judge direction
 
-        var pmBullish = smaNow > smaEarlier;
-        var crossedUpward = side; // side==true means spot is now ABOVE PM, i.e. just crossed upward
-        if (crossedUpward != pmBullish) return; // crossed the "wrong" way relative to PM's current tilt
+        // Any direction counts (PM tilt irrelevant). Crosses within 30 min of the last LOGGED one
+        // are ignored, which also filters the whipsaw of price hovering right at the PM value.
+        var now = DateTime.Now;
+        if (_pmCrossLastFiredAt != null && now - _pmCrossLastFiredAt.Value < TimeSpan.FromMinutes(30)) return;
 
-        _pmCrossFiredToday = true;
-        var direction = pmBullish ? "alza" : "baja";
-        var caption = $"Cruce de Spot con PM ({direction}) — Spot {livePrice:F2} = PM {smaNow.Value:F2}";
+        _pmCrossLastFiredAt = now;
+        var direction = side ? "alza" : "baja"; // side==true: spot just crossed upward through PM
+        var caption = $"Cruce de Spot con PM ({direction})";
         BeginInvoke(() => OnPmCrossEvent?.Invoke(caption));
     }
 
@@ -3371,7 +3368,7 @@ public class ChartPanel : Panel
                     _liveBucket      = new CandleData { Time = candle.Time, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
                     var freshBucket = _liveBucket;
                     _pmCrossLastSide = null; // new session — don't compare today's first tick against yesterday's last known side
-                    _pmCrossFiredToday = false;
+                    _pmCrossLastFiredAt = null;
                     FinalizePreMarketLineAtOpen(candle.Open, eastern);
                     BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                     return;
