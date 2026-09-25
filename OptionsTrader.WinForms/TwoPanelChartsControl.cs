@@ -51,18 +51,6 @@ public class TwoPanelChartsControl : UserControl
     // and can be stale relative to how far the spot has actually moved overnight by click time.
     private decimal? _lastLiveSpotPrice;
 
-    // Trend log text waiting for AppendLog to accept it (it ignores premarket) — see the
-    // hourlyPanel.OnTrendStateChanged subscription.
-    private string? _pendingTrendText;
-    private void FlushPendingTrendLog()
-    {
-        var text = _pendingTrendText;
-        if (text == null) return;
-        if (TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).TimeOfDay < new TimeSpan(9, 30, 0)) return;
-        _pendingTrendText = null;
-        AppendLog($"{DateTime.Now:HH:mm:ss}  [{_symbol}]{Environment.NewLine}{text}{Environment.NewLine}");
-    }
-
     // Picks the 4 strikes closest to _lastLiveSpotPrice from the full (unfiltered) chain — Call:
     // closest 4 AT/ABOVE spot; Put: closest 4 AT/BELOW spot — ignoring whatever stale OTM/spot
     // classification the snapshot itself carries, since only the STRIKE VALUES need to still be
@@ -1041,16 +1029,16 @@ public class TwoPanelChartsControl : UserControl
         }
 
         // Trend text (SMA20/40 short-term, SMA100/200 long-term + reminder dashes) from panel 1, logged
-        // whenever the trend pair changes. AppendLog drops anything before 9:30 ET, so a trend
-        // established premarket (or on chart load) is held in _pendingTrendText and flushed by the
-        // first live tick at/after 9:30 — see FlushPendingTrendLog.
+        // whenever the trend pair changes — including premarket (see below).
         if (hourlyPanel != null)
         {
             hourlyPanel.OnTrendStateChanged += (shortDir, longDir) =>
             {
                 var text = ChartPanel.TrendLogText(shortDir, longDir);
-                _pendingTrendText = text;
-                if (text != null && !IsDisposed) BeginInvoke(FlushPendingTrendLog);
+                if (text == null || IsDisposed) return;
+                // Logged immediately, premarket included — the point is to show what panel 1 is
+                // already displaying before the open (AppendLog itself drops pre-9:30 text).
+                BeginInvoke(() => _crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [{_symbol}]{Environment.NewLine}{text}{Environment.NewLine}"));
             };
         }
 
@@ -1227,7 +1215,6 @@ public class TwoPanelChartsControl : UserControl
             rthPanel.OnLiveTick += (eastern, price) =>
             {
                 _lastLiveSpotPrice = price; // see PickStrikesNearLiveSpot — fires premarket too
-                if (_pendingTrendText != null && !IsDisposed) BeginInvoke(FlushPendingTrendLog);
                 if (IsDisposed || lblRthLiveTick.IsDisposed || !lblRthLiveTick.IsHandleCreated) return;
                 lblRthLiveTick.BeginInvoke(() => lblRthLiveTick.Text = $"{eastern:HH:mm:ss}  {price:F2}");
             };

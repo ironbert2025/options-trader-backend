@@ -559,8 +559,8 @@ public class ChartPanel : Panel
     public event Action<string?, string?>? OnTrendStateChanged;
 
     // Log block for the trend state, or null when neither side has a direction. The 3 dash lines
-    // (fixed reminder text) only appear when BOTH trends agree (both up -> "alza", both down ->
-    // "baja"), per explicit request. Shared by the live Charts tab and the Simulator.
+    // (fixed reminder text, worded per trend: Piso MM when bullish, Techo MM when bearish) only
+    // appear when BOTH trends agree, per explicit request. Shared by the live Charts tab and the Simulator.
     public static string? TrendLogText(string? shortDir, string? longDir)
     {
         var lines = new List<string>();
@@ -571,9 +571,10 @@ public class ChartPanel : Panel
         if (lines.Count == 0) return null;
         if (shortDir != null && shortDir == longDir)
         {
-            lines.Add(shortDir == "up" ? "-sal bb vol alza" : "-sal bb vol baja");
-            lines.Add("-rebote en mm (+ vela conf + sal bb vol)");
-            lines.Add("-ruptura mm (+ vela conf + sal bb vol)");
+            var up = shortDir == "up";
+            lines.Add(up ? "-sal bb vol alza" : "-sal bb vol baja");
+            lines.Add(up ? "-rebote en Piso MM (+ vela conf + sal bb vol)" : "-rebote en Techo MM (+ vela conf + sal bb vol)");
+            lines.Add(up ? "-ruptura de Piso MM (+ vela conf + sal bb vol)" : "-ruptura de Techo MM (+ vela conf + sal bb vol)");
         }
         return string.Join(Environment.NewLine, lines);
     }
