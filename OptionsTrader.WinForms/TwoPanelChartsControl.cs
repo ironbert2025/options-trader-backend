@@ -401,6 +401,7 @@ public class TwoPanelChartsControl : UserControl
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.
     private readonly RichTextBox _crossLog;
+    private RichTextBox _crossLog2 = null!; // panel 2 log (placement only for now)
 
     // Every "Daily" window currently open for this symbol — see MultiChartForm's original comment
     // (unchanged): removed on FormClosed so a closed window's WebView2 never gets touched again.
@@ -1829,7 +1830,27 @@ public class TwoPanelChartsControl : UserControl
         var logRow = new Panel { Dock = DockStyle.Fill };
         ChartTextTextBox.Dock = DockStyle.Right;
         ChartTextTextBox.Width = optionsGridHost.Width;
-        logRow.Controls.Add(_crossLog);
+        // Two logs side by side (50/50): _crossLog = panel 1 events (still receives EVERYTHING for
+        // now), _crossLog2 = panel 2 events (empty placeholder until events get routed to it).
+        _crossLog2 = new RichTextBox
+        {
+            Dock       = DockStyle.Fill,
+            Multiline  = true,
+            ReadOnly   = true,
+            ScrollBars = RichTextBoxScrollBars.Vertical,
+            Font       = new Font("Consolas", 8.5F),
+            BackColor  = Color.Black,
+            ForeColor  = Color.LightGreen
+        };
+        var logsTable = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        logsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        logsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        logsTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        _crossLog.Margin = new Padding(0, 0, 2, 0);
+        _crossLog2.Margin = new Padding(2, 0, 0, 0);
+        logsTable.Controls.Add(_crossLog, 0, 0);
+        logsTable.Controls.Add(_crossLog2, 1, 0);
+        logRow.Controls.Add(logsTable);
         logRow.Controls.Add(ChartTextTextBox);
 
         var bottomSection = new Panel { Dock = DockStyle.Bottom, Height = tradesGridHost.Height + 90 };
