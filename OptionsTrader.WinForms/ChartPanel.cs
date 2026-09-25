@@ -3245,6 +3245,19 @@ public class ChartPanel : Panel
     // panel. Eastern wall-clock time, same conversion used everywhere else in this class.
     public event Action<DateTime, decimal>? OnLiveTick;
 
+    // Wall-clock (ET) time the last CHART_EQUITY websocket message arrived, drawn in the chart's
+    // bottom-right corner (chart.html setLastTickTime) so a lagging/dead stream is visible.
+    // Throttled to once per second.
+    private string _lastArrivalShown = "";
+    private void ShowWebsocketArrivalTime()
+    {
+        var text = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).ToString("HH:mm:ss");
+        if (text == _lastArrivalShown) return;
+        _lastArrivalShown = text;
+        var core = _webView?.CoreWebView2;
+        if (core != null) _ = core.ExecuteScriptAsync($"setLastTickTime('{text}');");
+    }
+
     private void Streamer_OnNewCandle(string symbol, CandleData candle)
     {
         if (symbol != _symbol) return; // one shared connection carries all 4 tickers — ignore ticks for the others
@@ -3252,6 +3265,7 @@ public class ChartPanel : Panel
         RestoreHeaderIfWasDisconnected();
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
+        ShowWebsocketArrivalTime();
         OnLiveTick?.Invoke(eastern, candle.Close);
         EvaluatePuntoMedioSlope(); // premarket + RTH alike, see method comment
         EvaluateLastHourCandleBeforeCloseIfNeeded(eastern);

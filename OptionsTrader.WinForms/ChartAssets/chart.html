@@ -3873,6 +3873,17 @@
   // straight off the same SMA values just drawn. Posted to C# only when the (short, long) pair actually changes, so a stable trend
   // logs once, not per tick — C# formats/logs it (see ChartPanel.TrendLogText).
   let trendReportEnabled = false;
+  // Websocket arrival time (ET), bottom-right corner under the time axis.
+  function setLastTickTime(text) {
+    let el = document.getElementById('lastTickTime');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'lastTickTime';
+      el.style.cssText = 'position:absolute; right:4px; bottom:2px; pointer-events:none; z-index:5; font:11px sans-serif; color:#787b86;';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+  }
   let lastTrendPosted = null;
   function enableTrendReport() { trendReportEnabled = true; reportTrendState(); }
   function reportTrendState() {
