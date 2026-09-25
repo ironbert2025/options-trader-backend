@@ -3885,6 +3885,21 @@
     const key = `${shortDir}|${longDir}`;
     if (key === lastTrendPosted) return;
     lastTrendPosted = key;
+    // Corner text "Largo - Corto", same words/colors as the log's first line.
+    let el = document.getElementById('trendCornerText');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'trendCornerText';
+      el.style.cssText = 'position:absolute; left:6px; top:4px; pointer-events:none; z-index:5; font:bold 13px sans-serif;';
+      document.body.appendChild(el);
+    }
+    if (shortDir == null && longDir == null) { el.style.display = 'none'; }
+    else {
+      const w = (d) => d === 'up' ? ['Alcista', '#32cd32'] : d === 'down' ? ['Bajista', '#ff0000'] : ['Neutral', '#808080'];
+      const [lw, lc] = w(longDir), [sw, sc] = w(shortDir);
+      el.innerHTML = `<span style="color:${lc}">${lw}</span><span style="color:#d1d4dc"> - </span><span style="color:${sc}">${sw}</span>`;
+      el.style.display = 'block';
+    }
     if (window.chrome && window.chrome.webview)
       window.chrome.webview.postMessage({ type: 'trend_state', shortDir, longDir });
   }
