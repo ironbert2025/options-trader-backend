@@ -572,7 +572,7 @@ public class ChartPanel : Panel
         if (shortDir != null && shortDir == longDir)
         {
             var up = shortDir == "up";
-            lines.Add(up ? "-Sal BB Vol Alza" : "-Sal BB Vol baja");
+            lines.Add(up ? "-Sal BB Vol Alza" : "-Sal BB Vol Baja");
             lines.Add(up ? "-Rebote en Piso MM (+ Vela Conf + Sal BB Vol)" : "-Rebote en Techo MM (+ Vela Conf + Sal BB Vol)");
             lines.Add(up ? "-Ruptura de Piso MM (+ Vela Conf + Sal BB Vol)" : "-Ruptura de Techo MM (+ Vela Conf + Sal BB Vol)");
         }
