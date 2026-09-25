@@ -187,6 +187,7 @@ public class TwoPanelChartsControl : UserControl
         }
         if (rthPanel == null) return;
 
+        var callLogged = false;
         if (_stkCallOn)
         {
             await rthPanel.ClearStkCallLabelsAsync();
@@ -196,7 +197,7 @@ public class TwoPanelChartsControl : UserControl
             {
                 _callTrack.Entries = entries;
                 _callTrack.Manual = true;
-                LogProjectedStkEstimate(isCall: true);
+                callLogged = LogProjectedStkEstimate(isCall: true);
             }
         }
         if (_stkPutOn)
@@ -208,7 +209,7 @@ public class TwoPanelChartsControl : UserControl
             {
                 _putTrack.Entries = entries;
                 _putTrack.Manual = true;
-                LogProjectedStkEstimate(isCall: false);
+                LogProjectedStkEstimate(isCall: false, append: callLogged);
             }
         }
     }
@@ -218,9 +219,9 @@ public class TwoPanelChartsControl : UserControl
     // Delta/Gamma at the same instant it's captured, ranked with the strikes listed highest-to-
     // lowest and the single best one called out with an arrow. Log-only, skipped entirely if the
     // ΔSpot textbox is empty/invalid. Ported from the Simulator's identical LogProjectedStkEstimate.
-    private void LogProjectedStkEstimate(bool isCall)
+    private bool LogProjectedStkEstimate(bool isCall, bool append = false)
     {
-        if (_txtDeltaSpot == null || !decimal.TryParse(_txtDeltaSpot.Text, out var deltaSpot)) return;
+        if (_txtDeltaSpot == null || !decimal.TryParse(_txtDeltaSpot.Text, out var deltaSpot)) return false;
 
         var track = isCall ? _callTrack : _putTrack;
         var quotes = _form1.GetQuoteSnapshot(_symbol)?.AllQuotes ?? new List<OptionQuoteDto>();
@@ -235,7 +236,7 @@ public class TwoPanelChartsControl : UserControl
             var netPct = (projectedMove - FixedCostPerContract) / frozenAsk * 100m;
             estimates.Add((strike, netPct));
         }
-        if (estimates.Count == 0) return;
+        if (estimates.Count == 0) return false;
 
         var bestPct = estimates.Max(e => e.NetPct);
         var sideLabel = isCall ? "Call" : "Put";
@@ -247,7 +248,13 @@ public class TwoPanelChartsControl : UserControl
                 var line = $"    {e.Strike,7:F2}  {pctStr,8}";
                 return e.NetPct == bestPct ? $"{line}  ← mejor" : line;
             });
-        AppendLog($"{DateTime.Now:HH:mm:ss}  [Estimación {sideLabel}] ΔSpot={deltaSpot:F2}{Environment.NewLine}{string.Join(Environment.NewLine, lines)}{Environment.NewLine}");
+        // Log 2 (panel 2) only ever shows the latest estimate: each new action replaces the previous
+        // one (append=true only for the Put block right after the Call block of the SAME Reset Stk
+        // press). No premarket filter here, unlike AppendLog.
+        var text = $"{DateTime.Now:HH:mm:ss}  [Estimación {sideLabel}] ΔSpot={deltaSpot:F2}{Environment.NewLine}{string.Join(Environment.NewLine, lines)}{Environment.NewLine}";
+        if (!append) _crossLog2.Clear();
+        _crossLog2.AppendText(text);
+        return true;
     }
 
     // Called on every quotes-poll refresh (RefreshOptionsGrid) — updates the live Bid/PnL% label
