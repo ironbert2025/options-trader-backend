@@ -307,6 +307,15 @@ public class SimulatorForm : Form
             if (!on) arrowAutoDisarmTimer.Stop();
         };
 
+        // Trend text (SMA20/40 short-term, SMA100/200 long-term + reminder dashes) on the 1h chart,
+        // logged whenever the trend pair changes — see ChartPanel.TrendLogText.
+        _hourlyChart.OnTrendStateChanged += (shortDir, longDir) =>
+        {
+            if (IsDisposed) return;
+            var text = ChartPanel.TrendLogText(shortDir, longDir);
+            if (text != null) LogSimEvent(text);
+        };
+
         _rthChart.OnWickTriggerEvent += label =>
         {
             if (IsDisposed) return;

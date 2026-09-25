@@ -554,6 +554,30 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLabels({JsonSerializer.Serialize(payload)});");
     }
 
+    // SMA20/40 (short-term) and SMA100/200 (long-term) trend, "up"/"down"/null each, reported by
+    // chart.html only when the pair changes (1h panel). Consumers log TrendLogText(...).
+    public event Action<string?, string?>? OnTrendStateChanged;
+
+    // Log block for the trend state, or null when neither side has a direction. The 3 dash lines
+    // (fixed reminder text) only appear when BOTH trends agree (both up -> "alza", both down ->
+    // "baja"), per explicit request. Shared by the live Charts tab and the Simulator.
+    public static string? TrendLogText(string? shortDir, string? longDir)
+    {
+        var lines = new List<string>();
+        if (shortDir == "up") lines.Add("Tend corto plazo alcista");
+        else if (shortDir == "down") lines.Add("Tend corto plazo bajista");
+        if (longDir == "up") lines.Add("Tend largo plazo alcista");
+        else if (longDir == "down") lines.Add("Tend largo plazo bajista");
+        if (lines.Count == 0) return null;
+        if (shortDir != null && shortDir == longDir)
+        {
+            lines.Add(shortDir == "up" ? "-sal bb vol alza" : "-sal bb vol baja");
+            lines.Add("-rebote en mm (+ vela conf + sal bb vol)");
+            lines.Add("-ruptura mm (+ vela conf + sal bb vol)");
+        }
+        return string.Join(Environment.NewLine, lines);
+    }
+
     // "Reset Stk" button — clears the label without removing the lines/strike-price text.
     public async Task ClearStkCallLabelsAsync()
     {
@@ -1267,6 +1291,13 @@ public class ChartPanel : Panel
                     var p2 = root.GetProperty("p2").GetDecimal();
                     var arrowRed = root.GetProperty("red").GetBoolean();
                     HandleDiagonalArrowPlaced(p1, p2, arrowRed);
+                    break;
+                }
+                case "trend_state":
+                {
+                    var shortDir = root.TryGetProperty("shortDir", out var sd) && sd.ValueKind == JsonValueKind.String ? sd.GetString() : null;
+                    var longDir = root.TryGetProperty("longDir", out var ld) && ld.ValueKind == JsonValueKind.String ? ld.GetString() : null;
+                    OnTrendStateChanged?.Invoke(shortDir, longDir);
                     break;
                 }
                 case "diagonal_arrow_deleted":
@@ -2914,6 +2945,7 @@ public class ChartPanel : Panel
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableSalto();"); // "1er Salto" label, 1h panel only
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableTrendReport();"); // trend text for the log
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
                 // Light gray fill between the bands — same as panel 2 (15m RTH), per explicit request.

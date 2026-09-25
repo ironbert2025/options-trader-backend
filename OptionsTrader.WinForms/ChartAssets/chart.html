@@ -3861,6 +3861,28 @@
       smaLastPoint[p] = data.length > 0 ? data[data.length - 1] : null;
     });
     recalcSalto();
+    reportTrendState();
+  }
+
+  // Trend state for the log (1h panels only, opt-in via enableTrendReport): SMA20 vs SMA40 =
+  // short-term trend, SMA100 vs SMA200 = long-term trend ('up' bullish / 'down' bearish / null),
+  // straight off the same SMA values just drawn. Posted to C# only when the (short, long) pair actually changes, so a stable trend
+  // logs once, not per tick — C# formats/logs it (see ChartPanel.TrendLogText).
+  let trendReportEnabled = false;
+  let lastTrendPosted = null;
+  function enableTrendReport() { trendReportEnabled = true; reportTrendState(); }
+  function reportTrendState() {
+    if (!trendReportEnabled || dailyMode) return;
+    const v = (p) => smaLastPoint[p] ? smaLastPoint[p].value : null;
+    const s20 = v(20), s40 = v(40), s100 = v(100), s200 = v(200);
+    const dir = (a, b) => (a == null || b == null || a === b) ? null : (a > b ? 'up' : 'down');
+    const shortDir = dir(s20, s40);  // SMA20 vs SMA40 — short-term trend
+    const longDir = dir(s100, s200); // SMA100 vs SMA200 — long-term trend
+    const key = `${shortDir}|${longDir}`;
+    if (key === lastTrendPosted) return;
+    lastTrendPosted = key;
+    if (window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage({ type: 'trend_state', shortDir, longDir });
   }
 
   // ---- "1er Salto" (1h panel, i.e. wherever SMA20 AND SMA40 are configured) ----

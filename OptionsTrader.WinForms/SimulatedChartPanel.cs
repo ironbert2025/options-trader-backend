@@ -80,6 +80,7 @@ public class SimulatedChartPanel : Panel
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableSalto();"); // "1er Salto" label, 1h panel only
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableTrendReport();"); // trend text for the log
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
                 // Light gray fill between the bands — same as panel 2 (15m RTH), per explicit request.
@@ -837,6 +838,9 @@ public class SimulatedChartPanel : Panel
         return result == "true";
     }
 
+    // SMA20/40 + SMA100/200 trend ("up"/"down"/null each) — see ChartPanel.OnTrendStateChanged.
+    public event Action<string?, string?>? OnTrendStateChanged;
+
     // Fired so SimulatorForm can (re)start its 15s auto-disarm countdown, same as the live app.
     public event Action? OnDiagonalArrowPlacedEvent;
 
@@ -1018,6 +1022,14 @@ public class SimulatedChartPanel : Panel
                 var arrowP2 = root.GetProperty("p2").GetDecimal();
                 var arrowRed = root.GetProperty("red").GetBoolean();
                 HandleDiagonalArrowPlaced(arrowP1, arrowP2, arrowRed);
+                return;
+            }
+
+            if (type == "trend_state")
+            {
+                var shortDir = root.TryGetProperty("shortDir", out var sd) && sd.ValueKind == JsonValueKind.String ? sd.GetString() : null;
+                var longDir = root.TryGetProperty("longDir", out var ld) && ld.ValueKind == JsonValueKind.String ? ld.GetString() : null;
+                OnTrendStateChanged?.Invoke(shortDir, longDir);
                 return;
             }
 
