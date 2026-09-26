@@ -1279,6 +1279,8 @@ public class TwoPanelChartsControl : UserControl
         toolbarLeftRow2.Controls.Add(btnSalBbVol);
         toolbarLeftRow2.Controls.Add(btnStkCall);
         toolbarLeftRow2.Controls.Add(btnStkPut);
+        // Tighter spacing (1px instead of the default 3px per side) so all six, Stk Put included, fit.
+        foreach (Control c in toolbarLeftRow2.Controls) c.Margin = new Padding(1, 3, 1, 3);
         toolbarLeft.Controls.Add(chkDayDividers);
         toolbarLeft.Controls.Add(AthCheckBox);
 
