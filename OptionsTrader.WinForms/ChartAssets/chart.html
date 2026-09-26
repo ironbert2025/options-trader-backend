@@ -4181,6 +4181,19 @@
     }
     if (saltoEffectPrimitive._state && !saltoEffectAttached) { candleSeries.attachPrimitive(saltoEffectPrimitive); saltoEffectAttached = true; }
     if (saltoEffectAttached) forceRepaint();
+    reportSaltoEffectState(level);
+  }
+
+  // Tells C# the current state (only when it changes) — C# sends the 3:45 PM Telegram push if it's
+  // still active and not erased by then.
+  let lastSaltoEffectKey = null;
+  function reportSaltoEffectState(level) {
+    const st = saltoEffectPrimitive._state;
+    const key = st ? `1|${st.erased}|${st.price}|${level}` : '0';
+    if (key === lastSaltoEffectKey) return;
+    lastSaltoEffectKey = key;
+    if (window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage({ type: 'salto_effect_state', active: !!st, erased: st ? st.erased : false, open: st ? st.price : null, close: st ? level : null });
   }
 
   function recalcSalto() {

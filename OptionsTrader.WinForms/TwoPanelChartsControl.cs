@@ -369,6 +369,9 @@ public class TwoPanelChartsControl : UserControl
     // request that the popup keep working exactly as it did before this control existed.
     public bool SuppressOwnTelegramPushes { get; set; }
 
+    // Raised when the 3:45 PM "Salto en Efecto" push is due (MultiChartForm sends its own 3-panel copy).
+    public event Action<string>? OnSaltoEnEfectoPushDue;
+
     // White entry-spot line above the candle when a trade opens/closes — panel 2 (15m RTH) only,
     // per explicit request that the Charts tab's own panel 2 show it too (previously this only
     // ever reached the popup Live Chart window's rthPanel, via MultiChartForm.
@@ -737,6 +740,32 @@ public class TwoPanelChartsControl : UserControl
                 {
                     AppendLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
                     if (!SuppressOwnTelegramPushes) _ = SendTLineSignalTelegramPushAsync(message, "15Min");
+                });
+            };
+
+            // "Salto en Efecto" still valid at 3:45 PM ET -> one Telegram push per ticker/day. Panel 2
+            // reports its state; the first tick at/after 15:45 (before 16:00) decides. A per-ticker/day
+            // flag file keeps app restarts and extra instances from re-sending.
+            (bool Active, bool Erased, decimal? Open, decimal? Close) saltoState = default;
+            var saltoPushDone = false;
+            rthPanel.OnSaltoEffectStateChanged += (active, erased, open, close) => saltoState = (active, erased, open, close);
+            rthPanel.OnLiveTick += (eastern, livePx) =>
+            {
+                if (saltoPushDone || IsDisposed) return;
+                var tod = eastern.TimeOfDay;
+                if (tod < new TimeSpan(15, 45, 0) || tod >= new TimeSpan(16, 0, 0)) return;
+                saltoPushDone = true; // decide once per app run
+                if (!saltoState.Active || saltoState.Erased || saltoState.Open == null || saltoState.Close == null) return;
+                var flag = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OptionsTrader", $"salto_push_{_symbol}_{eastern:yyyyMMdd}.flag");
+                if (File.Exists(flag)) return;
+                try { File.WriteAllText(flag, "sent"); } catch { /* best-effort */ }
+                var o = saltoState.Open.Value; var c = saltoState.Close.Value;
+                var dir = o > c ? "al alza" : "a la baja";
+                var caption = $"Salto en Efecto {dir} sigue vigente a las 3:45 PM: Open {o:F2} vs Close ayer {c:F2} (Diff={Math.Abs(o - c):F2})";
+                BeginInvoke(() =>
+                {
+                    OnSaltoEnEfectoPushDue?.Invoke(caption);
+                    if (!SuppressOwnTelegramPushes) _ = SendSaltoEnEfectoTelegramPushAsync(caption);
                 });
             };
 
@@ -2212,6 +2241,45 @@ public class TwoPanelChartsControl : UserControl
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SmaCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined (panel 1 + 2) snapshot for a "Salto en Efecto" still valid at 3:45 PM.
+    private async Task SendSaltoEnEfectoTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_SaltoEnEfecto_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SaltoEnEfecto", DateTime.Now));
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             else

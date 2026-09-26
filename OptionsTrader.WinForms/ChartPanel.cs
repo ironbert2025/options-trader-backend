@@ -562,6 +562,9 @@ public class ChartPanel : Panel
     // Relayed to panel 2's "Salto en Efecto" (see TwoPanelChartsControl / SimulatorForm).
     public event Action<bool?, long[]>? OnSaltoSetupChanged;
 
+    // Panel 2: (active, erased, open, close) of "Salto en Efecto" — drives the 3:45 PM Telegram push.
+    public event Action<bool, bool, decimal?, decimal?>? OnSaltoEffectStateChanged;
+
     internal static bool? ParseSaltoCrossUp(JsonElement root) =>
         root.TryGetProperty("crossUp", out var cu) && (cu.ValueKind == JsonValueKind.True || cu.ValueKind == JsonValueKind.False) ? cu.GetBoolean() : null;
 
@@ -1363,6 +1366,15 @@ public class ChartPanel : Panel
                     var p2 = root.GetProperty("p2").GetDecimal();
                     var arrowRed = root.GetProperty("red").GetBoolean();
                     HandleDiagonalArrowPlaced(p1, p2, arrowRed);
+                    break;
+                }
+                case "salto_effect_state":
+                {
+                    var active = root.TryGetProperty("active", out var sa) && sa.ValueKind == JsonValueKind.True;
+                    var erased = root.TryGetProperty("erased", out var se) && se.ValueKind == JsonValueKind.True;
+                    decimal? openP = root.TryGetProperty("open", out var so) && so.ValueKind == JsonValueKind.Number ? so.GetDecimal() : null;
+                    decimal? closeP = root.TryGetProperty("close", out var sc) && sc.ValueKind == JsonValueKind.Number ? sc.GetDecimal() : null;
+                    OnSaltoEffectStateChanged?.Invoke(active, erased, openP, closeP);
                     break;
                 }
                 case "salto_setup":

@@ -71,6 +71,7 @@ public class MultiChartForm : Form
         // This window sends its own Piso/Techo Telegram push below (3-panel image) — see
         // SendPisoTechoTelegramPushAsync — so the control's own 2-panel-only push must stay silent.
         _twoPanelControl.SuppressOwnTelegramPushes = true;
+        _twoPanelControl.OnSaltoEnEfectoPushDue += caption => { if (!IsDisposed) BeginInvoke(() => _ = SendSaltoEnEfectoTelegramPushAsync(caption)); };
         var hourlyPanel = _twoPanelControl.HourlyPanel;
         var rthPanel = _twoPanelControl.RthPanel;
 
@@ -765,6 +766,45 @@ public class MultiChartForm : Form
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SmaCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // 3-chart snapshot push for a "Salto en Efecto" still valid at 3:45 PM.
+    private async Task SendSaltoEnEfectoTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_SaltoEnEfecto_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SaltoEnEfecto", DateTime.Now));
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             else
