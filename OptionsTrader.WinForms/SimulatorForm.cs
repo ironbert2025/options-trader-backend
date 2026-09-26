@@ -12,6 +12,9 @@ public class SimulatorForm : Form
 {
     private readonly ComboBox _cmbSymbol = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(8, 8), Size = new Size(100, 24) };
     private readonly ComboBox _cmbDate   = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(116, 8), Size = new Size(120, 24) };
+    // Expiration of the option-chain files to replay (a day can have 2+, e.g. 09-25 and 09-28) — defaults to the nearest.
+    private readonly ComboBox _cmbExp    = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(404, 8), Size = new Size(110, 24) };
+    private DateOnly? _simExp;
     private readonly Button _btnCargar   = new() { Text = "Cargar", Location = new Point(244, 8), Size = new Size(70, 24) };
     private readonly Button _btnPlayPause = new() { Text = "Play", Location = new Point(324, 8), Size = new Size(70, 24), Enabled = false };
     private readonly Button _btnAtras    = new() { Text = "◀ Atrás", Location = new Point(8, 40), Size = new Size(90, 26), Enabled = false };
@@ -202,6 +205,8 @@ public class SimulatorForm : Form
 
         Controls.Add(_cmbSymbol);
         Controls.Add(_cmbDate);
+        Controls.Add(_cmbExp);
+        new ToolTip().SetToolTip(_cmbExp, "Expiración del archivo de opciones a simular (por defecto la más cercana). Presiona Cargar para aplicarla.");
         Controls.Add(_btnCargar);
         Controls.Add(_btnPlayPause);
         Controls.Add(_btnAtras);
@@ -228,6 +233,7 @@ public class SimulatorForm : Form
         Controls.Add(_dgvTrades);
 
         _cmbSymbol.SelectedIndexChanged += (s, e) => RefreshAvailableDates();
+        _cmbDate.SelectedIndexChanged += (s, e) => RefreshExpirations();
         _btnCargar.Click    += (s, e) => LoadSelectedDay();
         _btnPlayPause.Click += (s, e) => TogglePlay();
         _btnAtras.Click     += (s, e) => Step(-1);
@@ -1015,7 +1021,7 @@ public class SimulatorForm : Form
         // Permanent record of this replay — see SimEventLogMarkdownWriter for the rundate vs
         // datadate distinction. runDate is "today" regardless of what step is currently loaded;
         // dataDate is _simDate, the historical day whose ticks were loaded for this replay.
-        SimEventLogMarkdownWriter.AppendEvent(_symbol, DateOnly.FromDateTime(DateTime.Now), _simDate, timestamp, message);
+        SimEventLogMarkdownWriter.AppendEvent(_symbol, DateOnly.FromDateTime(DateTime.Now), _simDate, timestamp, message, _simExp);
     }
 
     private void BuildGoToTimeButtons()
@@ -1118,6 +1124,18 @@ public class SimulatorForm : Form
         _availableDates = SimulationDataLoader.GetAvailableDates(symbol);
         foreach (var d in _availableDates) _cmbDate.Items.Add(d.ToString("yyyy-MM-dd"));
         if (_cmbDate.Items.Count > 0) _cmbDate.SelectedIndex = 0;
+        RefreshExpirations();
+    }
+
+    // Lists the expirations available for the selected symbol/day, nearest selected by default;
+    // disabled when there's only one (nothing to choose).
+    private void RefreshExpirations()
+    {
+        _cmbExp.Items.Clear();
+        if (_cmbSymbol.SelectedItem is string symbol && _cmbDate.SelectedItem is string dateStr && DateOnly.TryParse(dateStr, out var date))
+            foreach (var e in SimulationDataLoader.GetAvailableExpirations(symbol, date)) _cmbExp.Items.Add(e.ToString("yyyy-MM-dd"));
+        if (_cmbExp.Items.Count > 0) _cmbExp.SelectedIndex = 0;
+        _cmbExp.Enabled = _cmbExp.Items.Count > 1;
     }
 
     private async void LoadSelectedDay()
@@ -1152,7 +1170,8 @@ public class SimulatorForm : Form
         _simDate = date;
         _rthChart.ResetWickStateForDay(date); // see its own comment — must happen before any arrow gets drawn
         _hourlyChart.WatchStartDate = date; // Piso/Techo Cruce/Rebote must not fire against backfilled prior-context candles
-        _steps   = SimulationDataLoader.LoadDay(symbol, date);
+        _simExp  = _cmbExp.SelectedItem is string expStr && DateOnly.TryParse(expStr, out var expDate) ? expDate : null;
+        _steps   = SimulationDataLoader.LoadDay(symbol, date, _simExp);
         // Same amount of surrounding context the live charts default to (7 days for 1h, 3 for the
         // two 15m panels) — see ChartPanel.LoadHistoryAsync's visibleDays.
         _hourlyCandles   = SimulationDataLoader.LoadHourlyCandlesWithContext(symbol, date);
@@ -2018,7 +2037,7 @@ public class SimulatorForm : Form
         var pnlPct = trade.EntryPrice > 0 ? Math.Round((exitPrice - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
 
         SimTradesStore.Append(_symbol, _simDate, trade.OptionType, trade.StrikePrice, trade.Contracts,
-            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct);
+            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct, _simExp);
 
         var row = trade.Row;
         row.Cells["colSimExitTime"].Value = EasternTime(step.Time).ToString("HH:mm:ss");
