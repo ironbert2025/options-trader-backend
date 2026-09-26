@@ -1939,6 +1939,12 @@ public class TwoPanelChartsControl : UserControl
             BeginInvoke(() => { _ = _hourlyPanel?.MirrorRectAsync(color, added, t1, p1, t2, p2); });
         };
 
+        dailyForm.OnHoraCircleChangedEvent += (added, t1, p1, t2, p2) =>
+        {
+            if (IsDisposed) return;
+            BeginInvoke(() => { _ = _hourlyPanel?.MirrorCircleAsync(added, t1, p1, t2, p2); });
+        };
+
         dailyForm.OnTLineDrawnEvent += (tag, t1, p1, t2, p2) =>
         {
             if (tag == "DailyHora") { if (_hourlyPanel != null) _ = _hourlyPanel.AddMirroredTLineAsync(t1, p1, t2, p2); }

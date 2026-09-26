@@ -67,6 +67,8 @@ public class DailyChartForm : Form
     // click, or a tab switch, turns the RIGHT one off.
     private WebView2? _rectArmedWebView;
     private WebView2? _colorRectArmedWebView;
+    private WebView2? _circleArmedWebView;
+    private Button? _btnCircle;
 
     public DailyChartForm(string symbol, List<CandleData> dailyCandles, SchwabStreamerClient historyClient)
     {
@@ -153,6 +155,33 @@ public class DailyChartForm : Form
             await target.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
             _colorRectArmedWebView = target;
             btnColorRect.BackColor = Color.LightSalmon;
+        };
+        // "Circle" — Hora tab only: click 1 = center, drag previews, click 2 = edge (single-shot).
+        // Persisted in RectStore under tag "DailyHoraCircle" (center = t1/p1, edge = t2/p2) and
+        // mirrored onto the live 1h panel, same as the Hora rects.
+        var btnCircle = new Button { Text = "Circle", Location = new Point(282, 2), Size = new Size(60, 24) };
+        _btnCircle = btnCircle;
+        btnCircle.Click += async (s, e) =>
+        {
+            if (_circleArmedWebView != null)
+            {
+                if (_circleArmedWebView.CoreWebView2 != null) await _circleArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleCircle();");
+                _circleArmedWebView = null;
+                btnCircle.BackColor = SystemColors.Control;
+                return;
+            }
+            if (tabControl.SelectedIndex != 1 || _hourlyWebView.CoreWebView2 == null) return;
+            await _hourlyWebView.CoreWebView2.ExecuteScriptAsync("toggleCircle();");
+            _circleArmedWebView = _hourlyWebView;
+            btnCircle.BackColor = Color.Gold;
+        };
+        toolbar.Controls.Add(btnCircle);
+        tabControl.SelectedIndexChanged += async (s, e) =>
+        {
+            if (_circleArmedWebView != null && _circleArmedWebView.CoreWebView2 != null)
+                await _circleArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleCircle();");
+            _circleArmedWebView = null;
+            btnCircle.BackColor = SystemColors.Control;
         };
         tabControl.SelectedIndexChanged += async (s, e) =>
         {
@@ -563,6 +592,11 @@ public class DailyChartForm : Form
         var colorJson = JsonSerializer.Serialize(colorRects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
         await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"loadColorRects({colorJson});");
 
+        var circles = RectStore.Load(_symbol, "DailyHoraCircle");
+        var circlesJson = JsonSerializer.Serialize(circles.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+        await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"loadCircles({circlesJson});");
+        _hourlyWebView.CoreWebView2.WebMessageReceived += (s, e) => HandleCircleMessage(e);
+
         _hourlyWebView.CoreWebView2.WebMessageReceived += (s, e) =>
             HandleRectMessage(e, "DailyHora", () => OnRectPlacedEvent?.Invoke(),
                 (added, t1, p1, t2, p2) => OnHoraRectChangedEvent?.Invoke(false, added, t1, p1, t2, p2));
@@ -660,6 +694,39 @@ public class DailyChartForm : Form
             if (type == "bluerect_add") RectStore.Append(_symbol, contextTag, t1, p1, t2, p2);
             else RectStore.Remove(_symbol, contextTag, t1, p1, t2, p2);
             onChanged?.Invoke(type == "bluerect_add", t1, p1, t2, p2);
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
+    }
+
+    // (added, t1, p1, t2, p2) — a Circle drawn/deleted on the Hora tab, relayed to the live 1h panel.
+    public event Action<bool, long, decimal, long, decimal>? OnHoraCircleChangedEvent;
+
+    private void HandleCircleMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "circle_add" && type != "circle_delete" && type != "circle_placed") return;
+
+            if (type == "circle_placed")
+            {
+                _circleArmedWebView = null;
+                if (_btnCircle != null) _btnCircle.BackColor = SystemColors.Control;
+                return;
+            }
+
+            var t1 = root.GetProperty("t1").GetInt64();
+            var p1 = root.GetProperty("p1").GetDecimal();
+            var t2 = root.GetProperty("t2").GetInt64();
+            var p2 = root.GetProperty("p2").GetDecimal();
+            if (type == "circle_add") RectStore.Append(_symbol, "DailyHoraCircle", t1, p1, t2, p2);
+            else RectStore.Remove(_symbol, "DailyHoraCircle", t1, p1, t2, p2);
+            OnHoraCircleChangedEvent?.Invoke(type == "circle_add", t1, p1, t2, p2);
         }
         catch
         {

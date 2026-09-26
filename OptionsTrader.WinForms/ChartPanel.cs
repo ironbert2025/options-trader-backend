@@ -850,6 +850,25 @@ public class ChartPanel : Panel
             await _webView.CoreWebView2.ExecuteScriptAsync($"loadColorRects({JsonSerializer.Serialize(colorRects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }))});");
     }
 
+    // Circles drawn on the Hora tab (RectStore tag "DailyHoraCircle": center t1/p1, edge t2/p2).
+    private const string HoraCircleTag = "DailyHoraCircle";
+
+    private async Task LoadHoraCirclesAsync()
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _webView.CoreWebView2 == null) return;
+        var circles = RectStore.Load(_symbol, HoraCircleTag);
+        if (circles.Count > 0)
+            await _webView.CoreWebView2.ExecuteScriptAsync($"loadCircles({JsonSerializer.Serialize(circles.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }))});");
+    }
+
+    // Visual only — the Daily form already wrote/removed the RectStore entry.
+    public async Task MirrorCircleAsync(bool add, long t1, decimal p1, long t2, decimal p2)
+    {
+        if (_mode != ChartPanelMode.Hourly15 || _webView.CoreWebView2 == null) return;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"{(add ? "addMirroredCircle" : "removeMirroredCircle")}({t1}, {p1.ToString(inv)}, {t2}, {p2.ToString(inv)});");
+    }
+
     // Visual only — the Daily form already wrote/removed the RectStore entry.
     public async Task MirrorRectAsync(bool color, bool add, long t1, decimal p1, long t2, decimal p2)
     {
@@ -1240,6 +1259,14 @@ public class ChartPanel : Panel
                     var rt2 = root.GetProperty("t2").GetInt64();
                     var rp2 = root.GetProperty("p2").GetDecimal();
                     RectStore.Remove(_symbol, type == "bluerect_delete" ? HoraRectTag : HoraColorRectTag, rt1, rp1, rt2, rp2);
+                    break;
+                }
+                case "circle_delete":
+                {
+                    // A circle mirrored from the Daily "Hora" tab, deleted here — drop it from the store too.
+                    if (_mode != ChartPanelMode.Hourly15) break;
+                    RectStore.Remove(_symbol, HoraCircleTag, root.GetProperty("t1").GetInt64(), root.GetProperty("p1").GetDecimal(),
+                        root.GetProperty("t2").GetInt64(), root.GetProperty("p2").GetDecimal());
                     break;
                 }
                 case "tline_placed":
@@ -2989,6 +3016,7 @@ public class ChartPanel : Panel
 
                 await LoadSavedTLinesAsync();
                 await LoadHoraRectsAsync();
+                await LoadHoraCirclesAsync();
 
                 var savedArrows = VerticalArrowStore.Load(_symbol);
                 if (savedArrows.Count > 0)

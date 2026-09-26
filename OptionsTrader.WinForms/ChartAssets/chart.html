@@ -593,6 +593,79 @@
     return rectArmed;
   }
 
+  // ---- Circle tool (Daily "Hora" tab, mirrored to live panel 1): yellow, unfilled ellipse anchored
+  // to data — center (t1,p1), edge point (t2,p2); semi-axes are |x2-x1| / |y2-y1| in pixels, so it
+  // follows zoom/scroll with the candles (and is only a true circle when the axes happen to match).
+  class CirclePrimitive {
+    constructor() { this._circles = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const drawCircle = (c, selected) => {
+                  const g = circleGeometry(c);
+                  if (!g) return;
+                  ctx.strokeStyle = '#ffeb3b';
+                  ctx.lineWidth = (selected ? 3 : 1.5) * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.ellipse(g.cx * scope.horizontalPixelRatio, g.cy * scope.verticalPixelRatio,
+                    Math.max(g.rx, 0.5) * scope.horizontalPixelRatio, Math.max(g.ry, 0.5) * scope.verticalPixelRatio,
+                    0, 0, Math.PI * 2);
+                  ctx.stroke();
+                };
+                self._circles.forEach(c => drawCircle(c, c.selected));
+                if (self._preview) drawCircle(self._preview, false);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  // Center + semi-axes in CSS pixels for a circle, or null if it can't be placed right now.
+  function circleGeometry(c) {
+    const ts = chart.timeScale();
+    let x1, x2;
+    try { x1 = safeTimeToCoordinate(ts, c.t1); x2 = safeTimeToCoordinate(ts, c.t2); } catch { return null; }
+    const y1 = candleSeries.priceToCoordinate(c.p1);
+    const y2 = candleSeries.priceToCoordinate(c.p2);
+    if (x1 == null || x2 == null || y1 == null || y2 == null) return null;
+    return { cx: x1, cy: y1, rx: Math.abs(x2 - x1), ry: Math.abs(y2 - y1) };
+  }
+
+  // Index of the circle whose outline is within 6px of (px, py), or -1.
+  function findCircleByBorderClick(px, py) {
+    for (let i = circlePrimitive._circles.length - 1; i >= 0; i--) {
+      const g = circleGeometry(circlePrimitive._circles[i]);
+      if (!g || g.rx < 1 || g.ry < 1) continue;
+      const norm = Math.hypot((px - g.cx) / g.rx, (py - g.cy) / g.ry);
+      if (Math.abs(norm - 1) * Math.min(g.rx, g.ry) <= 6) return i;
+    }
+    return -1;
+  }
+
+  const circlePrimitive = new CirclePrimitive();
+  let circleAttached = false;
+  let circleArmed = false;
+  let circlePending = null; // { time, price } of the center click
+
+  // Single-shot per arm: click 1 = center, mouse move previews, click 2 = edge, draws and disarms.
+  function toggleCircle() {
+    if (!circleAttached) { candleSeries.attachPrimitive(circlePrimitive); circleAttached = true; }
+    circleArmed = !circleArmed;
+    circlePending = null;
+    circlePrimitive._preview = null;
+    return circleArmed;
+  }
+
   const colorRectPrimitive = new ColorRectPrimitive();
   let colorRectAttached = false;
   let colorRectArmed = false;
@@ -866,6 +939,17 @@
       // Persisted by C# (RectStore, tag "DailyColor") — see DailyChartForm.cs.
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'colorrect_delete', t1: removedRect.t1, p1: removedRect.p1, t2: removedRect.t2, p2: removedRect.p2 });
+      }
+      return;
+    }
+
+    const circleIdx = circlePrimitive._circles.findIndex(c => c.selected);
+    if (circleIdx !== -1) {
+      const removedCircle = circlePrimitive._circles[circleIdx];
+      circlePrimitive._circles.splice(circleIdx, 1);
+      forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'circle_delete', t1: removedCircle.t1, p1: removedCircle.p1, t2: removedCircle.t2, p2: removedCircle.p2 });
       }
       return;
     }
@@ -1243,6 +1327,20 @@
       }
     }
 
+    // Circle outline-click selection (Delete key removes it).
+    if (circlePrimitive._circles.length > 0) {
+      const hitIdx = findCircleByBorderClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        circlePrimitive._circles.forEach((c, i) => { c.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      if (circlePrimitive._circles.some(c => c.selected)) {
+        circlePrimitive._circles.forEach(c => { c.selected = false; });
+        forceRepaint();
+      }
+    }
+
     // T-Line click selection (1h panel) — same idea as the gray rect above: clicking near an
     // existing line selects it (Delete key removes it), regardless of whether T-Line drawing is
     // currently armed.
@@ -1408,6 +1506,23 @@
       }
     }
 
+    if (circleArmed) {
+      if (!circlePending) {
+        circlePending = { time: clickTime, price };
+      } else {
+        const c = { t1: circlePending.time, p1: circlePending.price, t2: clickTime, p2: price, selected: false };
+        circlePrimitive._circles.push(c);
+        circlePrimitive._preview = null;
+        circlePending = null;
+        circleArmed = false;
+        forceRepaint();
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'circle_placed' });
+          window.chrome.webview.postMessage({ type: 'circle_add', t1: c.t1, p1: c.p1, t2: c.t2, p2: c.p2 });
+        }
+      }
+    }
+
     if (grayRectArmed) {
       if (!grayRectPending) {
         grayRectPending = { time: clickTime, price };
@@ -1523,6 +1638,16 @@
       const price = candleSeries.coordinateToPrice(param.point.y);
       if (price != null) {
         rectanglesPrimitive._preview = { t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price };
+        forceRepaint();
+      }
+    }
+
+    if (!circleArmed || !circlePending) {
+      if (circlePrimitive._preview) { circlePrimitive._preview = null; forceRepaint(); }
+    } else if (param.point && param.time !== undefined) {
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price != null) {
+        circlePrimitive._preview = { t1: circlePending.time, p1: circlePending.price, t2: param.time, p2: price };
         forceRepaint();
       }
     }
@@ -4682,6 +4807,21 @@
   function addMirroredColorRect(t1, p1, t2, p2) {
     if (!colorRectAttached) { candleSeries.attachPrimitive(colorRectPrimitive); colorRectAttached = true; }
     colorRectPrimitive._rects.push({ t1, p1, t2, p2, selected: false });
+    forceRepaint();
+  }
+  // Circle tool (Hora tab) — seed persisted circles / mirror a single add/remove onto panel 1.
+  function loadCircles(circles) {
+    if (!circleAttached) { candleSeries.attachPrimitive(circlePrimitive); circleAttached = true; }
+    circlePrimitive._circles = (circles || []).map(c => ({ t1: c.t1, p1: c.p1, t2: c.t2, p2: c.p2, selected: false }));
+    forceRepaint();
+  }
+  function addMirroredCircle(t1, p1, t2, p2) {
+    if (!circleAttached) { candleSeries.attachPrimitive(circlePrimitive); circleAttached = true; }
+    circlePrimitive._circles.push({ t1, p1, t2, p2, selected: false });
+    forceRepaint();
+  }
+  function removeMirroredCircle(t1, p1, t2, p2) {
+    circlePrimitive._circles = circlePrimitive._circles.filter(c => !(c.t1 === t1 && c.p1 === p1 && c.t2 === t2 && c.p2 === p2));
     forceRepaint();
   }
   function removeMirroredColorRect(t1, p1, t2, p2) {
