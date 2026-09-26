@@ -2767,6 +2767,7 @@
     preMarketLinePrimitive._exposed = exposed || null;
     forceRepaint();
     evaluateSaltoEffect(); // "Salto en Efecto" follows the premarket price
+    evaluateCounterSalto();
 
     // "Pot Sal BB Vol Alza/Baja" — panel 2 (15m RTH) only, per explicit request. Symmetric: price
     // above OR below yesterday's close (prevDayCloseLinePrimitive, the red dashed "C" line) while
@@ -3993,6 +3994,7 @@
     recalcSalto();
     reportTrendState();
     evaluateSaltoEffect();
+    evaluateCounterSalto();
   }
 
   // Trend state for the log (1h panels only, opt-in via enableTrendReport): SMA20 vs SMA40 =
@@ -4194,6 +4196,123 @@
     lastSaltoEffectKey = key;
     if (window.chrome && window.chrome.webview)
       window.chrome.webview.postMessage({ type: 'salto_effect_state', active: !!st, erased: st ? st.erased : false, open: st ? st.price : null, close: st ? level : null });
+  }
+
+  // ---- Counter-trend "Salto en Efecto" (panel 1 = 1h, live only — enableCounterSalto) ----
+  // Once the SMA20/40 trend has run >= 3 trading days since its cross, look for a Salto AGAINST it:
+  // uptrend -> Open gaps DOWN (below yesterday's close) AND sits below SMA20 and/or SMA40; downtrend
+  // -> mirror image. Open = the blue premarket line's price (moves until 9:30, then frozen). SMAs are
+  // the last CLOSED hourly candles before today. Shown under the Open line, right-justified: orange
+  // when it beats both SMAs, lighter when only one; once a candle of today touches yesterday's close
+  // the word "Salto" stays with a red strike-through for the rest of the day.
+  let counterSaltoEnabled = false;
+  let counterSaltoErasedDay = null;
+  let counterCtx = null; // cached per (today, last history candle)
+  class CounterSaltoPrimitive {
+    constructor() { this._state = null; this._chart = null; } // { price, text, strong, erased }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || !self._state) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const y = candleSeries.priceToCoordinate(self._state.price);
+                if (y == null) return;
+                const text = self._state.erased ? self._state.text.split(' ')[0] : self._state.text; // "Salto" only when erased
+                ctx.font = `bold ${13 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.fillStyle = self._state.strong ? '#ff9800' : '#ffcc80';
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'top';
+                const rx = scope.bitmapSize.width - 6 * scope.horizontalPixelRatio;
+                const ty = y * scope.verticalPixelRatio + 5 * scope.verticalPixelRatio;
+                ctx.fillText(text, rx, ty);
+                if (self._state.erased) {
+                  const w = ctx.measureText(text).width;
+                  ctx.strokeStyle = '#ff0000';
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(rx - w, ty + 7 * scope.verticalPixelRatio);
+                  ctx.lineTo(rx, ty + 7 * scope.verticalPixelRatio);
+                  ctx.stroke();
+                }
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const counterSaltoPrimitive = new CounterSaltoPrimitive();
+  let counterSaltoAttached = false;
+  function enableCounterSalto() { counterSaltoEnabled = true; evaluateCounterSalto(); }
+
+  // Trend/SMA context from the closed candles before `today`; null when not enough history/cross.
+  function computeCounterContext(today) {
+    const hist = allCandles.filter(c => Math.floor(c.time / 86400) < today);
+    if (hist.length < 42) return null;
+    const key = `${today}|${hist[hist.length - 1].time}|${hist.length}`;
+    if (counterCtx && counterCtx.key === key) return counterCtx.value;
+    const n = hist.length;
+    const sma = (p) => {
+      const out = new Array(n).fill(null);
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        sum += hist[i].close;
+        if (i >= p) sum -= hist[i - p].close;
+        if (i >= p - 1) out[i] = sum / p;
+      }
+      return out;
+    };
+    const s20 = sma(20), s40 = sma(40);
+    let crossIdx = -1;
+    for (let i = 1; i < n; i++) {
+      if (s20[i] == null || s40[i] == null || s20[i - 1] == null || s40[i - 1] == null) continue;
+      const prev = s20[i - 1] - s40[i - 1], cur = s20[i] - s40[i];
+      if ((prev <= 0 && cur > 0) || (prev >= 0 && cur < 0)) crossIdx = i;
+    }
+    let value = null;
+    if (crossIdx >= 0 && s20[n - 1] != null && s40[n - 1] != null && s20[n - 1] !== s40[n - 1]) {
+      const crossDay = Math.floor(hist[crossIdx].time / 86400);
+      const daysSince = new Set(hist.filter(c => Math.floor(c.time / 86400) > crossDay).map(c => Math.floor(c.time / 86400))).size;
+      value = { up: s20[n - 1] > s40[n - 1], daysSince, s20: s20[n - 1], s40: s40[n - 1], prevClose: hist[n - 1].close };
+    }
+    counterCtx = { key, value };
+    return value;
+  }
+
+  function evaluateCounterSalto() {
+    if (!counterSaltoEnabled || dailyMode || allCandles.length === 0) return;
+    counterSaltoPrimitive._state = null;
+    const lineArmed = preMarketLinePrimitive._armed && preMarketLinePrimitive._price != null;
+    const today = Math.floor((lineArmed && preMarketLinePrimitive._time != null ? preMarketLinePrimitive._time : allCandles[allCandles.length - 1].time) / 86400);
+    const ctx = computeCounterContext(today);
+    if (ctx && ctx.daysSince >= 3) {
+      const todays = allCandles.filter(c => Math.floor(c.time / 86400) === today);
+      const openPrice = lineArmed ? preMarketLinePrimitive._price : (todays.length > 0 ? todays[0].open : null);
+      if (openPrice != null) {
+        // Uptrend -> gap DOWN below SMA(s); downtrend -> gap UP above SMA(s).
+        const gapOk = ctx.up ? openPrice < ctx.prevClose : openPrice > ctx.prevClose;
+        const beats20 = ctx.up ? openPrice < ctx.s20 : openPrice > ctx.s20;
+        const beats40 = ctx.up ? openPrice < ctx.s40 : openPrice > ctx.s40;
+        if (gapOk && (beats20 || beats40)) {
+          const arrow = ctx.up ? '▼' : '▲';
+          const rel = ctx.up ? 'bajo' : 'sobre';
+          const which = beats20 && beats40 ? 'SMA20+SMA40' : (beats20 ? 'SMA20' : 'SMA40');
+          if (counterSaltoErasedDay !== today && todays.some(c => ctx.up ? c.high >= ctx.prevClose : c.low <= ctx.prevClose)) counterSaltoErasedDay = today;
+          counterSaltoPrimitive._state = {
+            price: openPrice, strong: beats20 && beats40, erased: counterSaltoErasedDay === today,
+            text: `Salto en Efecto ${arrow} ${rel} ${which}`,
+          };
+        }
+      }
+    }
+    if (counterSaltoPrimitive._state && !counterSaltoAttached) { candleSeries.attachPrimitive(counterSaltoPrimitive); counterSaltoAttached = true; }
+    if (counterSaltoAttached) forceRepaint();
   }
 
   function recalcSalto() {

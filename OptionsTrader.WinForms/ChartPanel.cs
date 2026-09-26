@@ -3032,6 +3032,7 @@ public class ChartPanel : Panel
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableSalto();"); // "1er Salto" label, 1h panel only
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableTrendReport();"); // trend text for the log
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableCounterSalto();"); // counter-trend "Salto en Efecto" (live 1h panel only)
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
 
                 // Light gray fill between the bands — same as panel 2 (15m RTH), per explicit request.
