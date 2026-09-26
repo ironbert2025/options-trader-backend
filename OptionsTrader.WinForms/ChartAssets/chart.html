@@ -2766,6 +2766,7 @@
     preMarketLinePrimitive._price = price;
     preMarketLinePrimitive._exposed = exposed || null;
     forceRepaint();
+    evaluateSaltoEffect(); // "Salto en Efecto" follows the premarket price
 
     // "Pot Sal BB Vol Alza/Baja" — panel 2 (15m RTH) only, per explicit request. Symmetric: price
     // above OR below yesterday's close (prevDayCloseLinePrimitive, the red dashed "C" line) while
@@ -4089,25 +4090,26 @@
   let saltoEnabled = false;
   function enableSalto() { saltoEnabled = true; recalcSalto(); }
 
-  // Tells C# (only when it changes) whether TODAY is the matching 1er Salto: { up, prevClose } or
-  // null. C# relays it to panel 2, which draws "Salto en Efecto" / crossed-out "Salto".
-  let lastSaltoTodayKey = null;
-  function reportSaltoToday(info) {
-    const key = info ? `${info.up}|${info.prevClose}` : 'null';
-    if (key === lastSaltoTodayKey) return;
-    lastSaltoTodayKey = key;
+  // Tells C# (only when it changes) the history panel 2 needs to decide "Salto en Efecto":
+  // { crossUp, saltoDays } = direction of the latest SMA20/40 cross + day keys (floor(t/86400)) of
+  // every Salto after it, or null when there's no cross yet. Panel 2 does the rest itself.
+  let lastSaltoSetupKey = null;
+  function reportSaltoSetup(info) {
+    const key = info ? `${info.crossUp}|${info.saltoDays.join(',')}` : 'null';
+    if (key === lastSaltoSetupKey) return;
+    lastSaltoSetupKey = key;
     if (window.chrome && window.chrome.webview)
-      window.chrome.webview.postMessage({ type: 'salto_today', up: info ? info.up : null, prevClose: info ? info.prevClose : null });
+      window.chrome.webview.postMessage({ type: 'salto_setup', crossUp: info ? info.crossUp : null, saltoDays: info ? info.saltoDays : [] });
   }
 
-  // ---- "Salto en Efecto" (panel 2 = 15m RTH only, fed by panel 1 via C# -> setSaltoToday) ----
+  // ---- "Salto en Efecto" (panel 2 = 15m RTH only, fed by panel 1 via C# -> setSaltoSetup) ----
   // Today is the matching 1er Salto (short-term trend up + Salto al alza, or down + a la baja,
   // decided ONCE by panel 1, so a later trend change doesn't flicker it). While no RTH candle
   // (from 9:30) has traded back to yesterday's close the gap is "en Efecto" — text under the blue
   // Open line, right-justified. Once one does (Low <= close for an up-gap, High >= close for a
   // down-gap) it's "Borrado": just the word "Salto" with a red strike-through, for the rest of the
   // day. Live only for now.
-  let saltoTodayInfo = null;   // { up, prevClose } | null
+  let saltoSetup = null;       // { crossUp, saltoDays } from panel 1 (see reportSaltoSetup)
   let saltoErasedDay = null;   // day key the gap got erased on
   class SaltoEffectPrimitive {
     constructor() { this._state = null; this._chart = null; } // { price, erased }
@@ -4151,22 +4153,29 @@
   const saltoEffectPrimitive = new SaltoEffectPrimitive();
   let saltoEffectAttached = false;
 
-  function setSaltoToday(up, prevClose) {
-    saltoTodayInfo = (up === null || up === undefined || prevClose == null) ? null : { up, prevClose };
+  function setSaltoSetup(crossUp, saltoDays) {
+    saltoSetup = (crossUp === null || crossUp === undefined) ? null : { crossUp, saltoDays: saltoDays || [] };
     evaluateSaltoEffect();
   }
 
+  // Open = the blue line's price: follows premarket ticks, frozen at 9:30 (C# stops updating it).
+  // Falls back to the first 9:30 candle's open when the line was never armed (app opened later).
+  // Direction must match the last cross, no Salto may have happened since it (before today), and
+  // price must sit on the gap side of yesterday's close ("C" line). Premarket: text just follows
+  // that condition live. From the 9:30 candles on, touching the close erases it (sticky).
   function evaluateSaltoEffect() {
-    // Only panel 2 ever receives setSaltoToday (C# relays it there), so every other panel exits here.
-    if (!saltoTodayInfo && !saltoEffectAttached) return;
+    if (!saltoSetup && !saltoEffectAttached) return;
     saltoEffectPrimitive._state = null;
-    if (saltoTodayInfo && allCandles.length > 0) {
-      const today = Math.floor(allCandles[allCandles.length - 1].time / 86400);
+    const level = prevDayCloseLinePrimitive._price;
+    if (saltoSetup && level != null && allCandles.length > 0) {
+      const lineArmed = preMarketLinePrimitive._armed && preMarketLinePrimitive._price != null;
+      const today = Math.floor((lineArmed && preMarketLinePrimitive._time != null ? preMarketLinePrimitive._time : allCandles[allCandles.length - 1].time) / 86400);
       const rth = allCandles.filter(c => Math.floor(c.time / 86400) === today && (c.time % 86400) >= 34200); // from 9:30
-      if (rth.length > 0) {
-        const level = prevDayCloseLinePrimitive._price != null ? prevDayCloseLinePrimitive._price : saltoTodayInfo.prevClose;
-        if (saltoErasedDay !== today && rth.some(c => saltoTodayInfo.up ? c.low <= level : c.high >= level)) saltoErasedDay = today;
-        const openPrice = (preMarketLinePrimitive._armed && preMarketLinePrimitive._price != null) ? preMarketLinePrimitive._price : rth[0].open;
+      const openPrice = lineArmed ? preMarketLinePrimitive._price : (rth.length > 0 ? rth[0].open : null);
+      const eligible = !saltoSetup.saltoDays.some(d => d < today);
+      if (eligible && openPrice != null && ((openPrice > level && saltoSetup.crossUp) || (openPrice < level && !saltoSetup.crossUp))) {
+        const up = openPrice > level;
+        if (saltoErasedDay !== today && rth.some(c => up ? c.low <= level : c.high >= level)) saltoErasedDay = today;
         saltoEffectPrimitive._state = { price: openPrice, erased: saltoErasedDay === today };
       }
     }
@@ -4179,7 +4188,7 @@
     if (!saltoEnabled) return;
     if (!smaPeriods.includes(20) || !smaPeriods.includes(40) || dailyMode || allCandles.length < 42) {
       if (saltoLabelAttached) forceRepaint();
-      reportSaltoToday(null);
+      reportSaltoSetup(null);
       return;
     }
 
@@ -4203,7 +4212,7 @@
       if (prev <= 0 && cur > 0) { crossIdx = i; crossUp = true; }
       else if (prev >= 0 && cur < 0) { crossIdx = i; crossUp = false; }
     }
-    if (crossIdx < 0) { if (saltoLabelAttached) forceRepaint(); reportSaltoToday(null); return; }
+    if (crossIdx < 0) { if (saltoLabelAttached) forceRepaint(); reportSaltoSetup(null); return; }
 
     // Per-day open/close, in order. The cross candle's own day is excluded: its open came before the cross.
     const day = (t) => Math.floor(t / 86400);
@@ -4215,7 +4224,6 @@
       else { const last = days[days.length - 1]; last.close = allCandles[i].close; last.lastTime = allCandles[i].time; }
     }
     const crossDay = day(allCandles[crossIdx].time);
-    let todaySalto = null; // set only when THIS (last) day is the matching 1er Salto — feeds panel 2's "Salto en Efecto"
     for (let k = 1; k < days.length; k++) {
       if (days[k].d <= crossDay) continue;
       // First day after the cross = the first Salto (any nonzero Open vs prev Close difference).
@@ -4227,11 +4235,13 @@
           time: days[k - 1].lastTime, price: days[k - 1].close,
           text: `1er Salto ${up ? '▲' : '▼'} Diff=${Math.abs(diff).toFixed(2)}`,
         };
-        if (k === days.length - 1) todaySalto = { up, prevClose: days[k - 1].close };
       }
       break; // only the FIRST Salto after the cross counts, matching direction or not
     }
-    reportSaltoToday(todaySalto);
+    const saltoDays = [];
+    for (let k = 1; k < days.length; k++)
+      if (days[k].d > crossDay && days[k].open !== days[k - 1].close) saltoDays.push(days[k].d);
+    reportSaltoSetup({ crossUp, saltoDays });
     if (saltoLabelPrimitive._label && !saltoLabelAttached) { candleSeries.attachPrimitive(saltoLabelPrimitive); saltoLabelAttached = true; }
     if (saltoLabelAttached) forceRepaint();
   }

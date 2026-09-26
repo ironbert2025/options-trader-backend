@@ -841,17 +841,14 @@ public class SimulatedChartPanel : Panel
     // SMA20/40 + SMA100/200 trend ("up"/"down"/null each) — see ChartPanel.OnTrendStateChanged.
     public event Action<string?, string?>? OnTrendStateChanged;
 
-    // Panel 1: today is (up, prevClose) / isn't (null, null) the matching 1er Salto — relayed to
-    // the 15m chart's "Salto en Efecto" by SimulatorForm. Same as ChartPanel.OnSaltoTodayChanged.
-    public event Action<bool?, decimal?>? OnSaltoTodayChanged;
+    // Same as ChartPanel.OnSaltoSetupChanged — relayed to the 15m chart by SimulatorForm.
+    public event Action<bool?, long[]>? OnSaltoSetupChanged;
 
-    public async Task SetSaltoTodayAsync(bool? up, decimal? prevClose)
+    public async Task SetSaltoSetupAsync(bool? crossUp, long[] saltoDays)
     {
         if (_webView.CoreWebView2 == null) return;
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
-        var upArg = up == null ? "null" : (up.Value ? "true" : "false");
-        var pcArg = prevClose == null ? "null" : prevClose.Value.ToString(inv);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"setSaltoToday({upArg}, {pcArg});");
+        var upArg = crossUp == null ? "null" : (crossUp.Value ? "true" : "false");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setSaltoSetup({upArg}, [{string.Join(",", saltoDays)}]);");
     }
 
     // Fired so SimulatorForm can (re)start its 15s auto-disarm countdown, same as the live app.
@@ -1038,11 +1035,9 @@ public class SimulatedChartPanel : Panel
                 return;
             }
 
-            if (type == "salto_today")
+            if (type == "salto_setup")
             {
-                bool? up = root.TryGetProperty("up", out var su) && (su.ValueKind == JsonValueKind.True || su.ValueKind == JsonValueKind.False) ? su.GetBoolean() : null;
-                decimal? prevClose = root.TryGetProperty("prevClose", out var sp) && sp.ValueKind == JsonValueKind.Number ? sp.GetDecimal() : null;
-                OnSaltoTodayChanged?.Invoke(up, prevClose);
+                OnSaltoSetupChanged?.Invoke(ChartPanel.ParseSaltoCrossUp(root), ChartPanel.ParseSaltoDays(root));
                 return;
             }
 

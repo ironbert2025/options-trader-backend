@@ -310,10 +310,10 @@ public class SimulatorForm : Form
         // Trend text (SMA20/40 short-term, SMA100/200 long-term + reminder dashes) on the 1h chart,
         // logged whenever the trend pair changes — see ChartPanel.TrendLogText.
         // 1er Salto decided on the 1h chart -> "Salto en Efecto" on the 15m chart.
-        _hourlyChart.OnSaltoTodayChanged += (up, prevClose) =>
+        _hourlyChart.OnSaltoSetupChanged += (crossUp, saltoDays) =>
         {
             if (IsDisposed) return;
-            BeginInvoke(() => { _ = _rthChart.SetSaltoTodayAsync(up, prevClose); });
+            BeginInvoke(() => { _ = _rthChart.SetSaltoSetupAsync(crossUp, saltoDays); });
         };
 
         _hourlyChart.OnTrendStateChanged += (shortDir, longDir) =>

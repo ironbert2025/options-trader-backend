@@ -407,7 +407,6 @@ public class TwoPanelChartsControl : UserControl
     // Small event log fed by panel 1/2 events — MultiChartForm's own panel-3/combined-screenshot
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.
-    private (bool? Up, decimal? PrevClose) _lastSaltoToday;
     private readonly RichTextBox _crossLog;
     private RichTextBox _crossLog2 = null!; // panel 2 log (placement only for now)
 
@@ -1043,11 +1042,10 @@ public class TwoPanelChartsControl : UserControl
         {
             // Panel 1 decides whether today is the matching 1er Salto; panel 2 draws "Salto en Efecto".
             // Not replayed: if panel 2's page isn't ready when this fires, it's lost until panel 1's value changes.
-            hourlyPanel.OnSaltoTodayChanged += (up, prevClose) =>
+            hourlyPanel.OnSaltoSetupChanged += (crossUp, saltoDays) =>
             {
-                _lastSaltoToday = (up, prevClose);
                 if (IsDisposed) return;
-                BeginInvoke(() => { _ = rthPanel?.SetSaltoTodayAsync(up, prevClose); });
+                BeginInvoke(() => { _ = rthPanel?.SetSaltoSetupAsync(crossUp, saltoDays); });
             };
             hourlyPanel.OnTrendStateChanged += (shortDir, longDir) =>
             {

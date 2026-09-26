@@ -558,17 +558,22 @@ public class ChartPanel : Panel
     // chart.html only when the pair changes (1h panel). Consumers log TrendLogText(...).
     public event Action<string?, string?>? OnTrendStateChanged;
 
-    // Panel 1: today is (up, prevClose) / isn't (null, null) the matching 1er Salto. Relayed to
-    // panel 2's "Salto en Efecto" (see TwoPanelChartsControl).
-    public event Action<bool?, decimal?>? OnSaltoTodayChanged;
+    // Panel 1: direction of the latest SMA20/40 cross (null = none) + day keys of every Salto since.
+    // Relayed to panel 2's "Salto en Efecto" (see TwoPanelChartsControl / SimulatorForm).
+    public event Action<bool?, long[]>? OnSaltoSetupChanged;
 
-    public async Task SetSaltoTodayAsync(bool? up, decimal? prevClose)
+    internal static bool? ParseSaltoCrossUp(JsonElement root) =>
+        root.TryGetProperty("crossUp", out var cu) && (cu.ValueKind == JsonValueKind.True || cu.ValueKind == JsonValueKind.False) ? cu.GetBoolean() : null;
+
+    internal static long[] ParseSaltoDays(JsonElement root) =>
+        root.TryGetProperty("saltoDays", out var sd) && sd.ValueKind == JsonValueKind.Array
+            ? sd.EnumerateArray().Select(e => e.GetInt64()).ToArray() : Array.Empty<long>();
+
+    public async Task SetSaltoSetupAsync(bool? crossUp, long[] saltoDays)
     {
         if (_webView.CoreWebView2 == null) return;
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
-        var upArg = up == null ? "null" : (up.Value ? "true" : "false");
-        var pcArg = prevClose == null ? "null" : prevClose.Value.ToString(inv);
-        await _webView.CoreWebView2.ExecuteScriptAsync($"setSaltoToday({upArg}, {pcArg});");
+        var upArg = crossUp == null ? "null" : (crossUp.Value ? "true" : "false");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setSaltoSetup({upArg}, [{string.Join(",", saltoDays)}]);");
     }
 
     // Log block for the trend state, or null when neither side has a direction. The 3 dash lines
@@ -1360,11 +1365,9 @@ public class ChartPanel : Panel
                     HandleDiagonalArrowPlaced(p1, p2, arrowRed);
                     break;
                 }
-                case "salto_today":
+                case "salto_setup":
                 {
-                    bool? up = root.TryGetProperty("up", out var su) && (su.ValueKind == JsonValueKind.True || su.ValueKind == JsonValueKind.False) ? su.GetBoolean() : null;
-                    decimal? prevClose = root.TryGetProperty("prevClose", out var sp) && sp.ValueKind == JsonValueKind.Number ? sp.GetDecimal() : null;
-                    OnSaltoTodayChanged?.Invoke(up, prevClose);
+                    OnSaltoSetupChanged?.Invoke(ParseSaltoCrossUp(root), ParseSaltoDays(root));
                     break;
                 }
                 case "trend_state":
