@@ -558,6 +558,19 @@ public class ChartPanel : Panel
     // chart.html only when the pair changes (1h panel). Consumers log TrendLogText(...).
     public event Action<string?, string?>? OnTrendStateChanged;
 
+    // Panel 1: today is (up, prevClose) / isn't (null, null) the matching 1er Salto. Relayed to
+    // panel 2's "Salto en Efecto" (see TwoPanelChartsControl).
+    public event Action<bool?, decimal?>? OnSaltoTodayChanged;
+
+    public async Task SetSaltoTodayAsync(bool? up, decimal? prevClose)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var upArg = up == null ? "null" : (up.Value ? "true" : "false");
+        var pcArg = prevClose == null ? "null" : prevClose.Value.ToString(inv);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setSaltoToday({upArg}, {pcArg});");
+    }
+
     // Log block for the trend state, or null when neither side has a direction. The 3 dash lines
     // (fixed reminder text, worded per trend: Piso MM when bullish, Techo MM when bearish) only
     // appear when BOTH trends agree, per explicit request. Shared by the live Charts tab and the Simulator.
@@ -1345,6 +1358,13 @@ public class ChartPanel : Panel
                     var p2 = root.GetProperty("p2").GetDecimal();
                     var arrowRed = root.GetProperty("red").GetBoolean();
                     HandleDiagonalArrowPlaced(p1, p2, arrowRed);
+                    break;
+                }
+                case "salto_today":
+                {
+                    bool? up = root.TryGetProperty("up", out var su) && (su.ValueKind == JsonValueKind.True || su.ValueKind == JsonValueKind.False) ? su.GetBoolean() : null;
+                    decimal? prevClose = root.TryGetProperty("prevClose", out var sp) && sp.ValueKind == JsonValueKind.Number ? sp.GetDecimal() : null;
+                    OnSaltoTodayChanged?.Invoke(up, prevClose);
                     break;
                 }
                 case "trend_state":
