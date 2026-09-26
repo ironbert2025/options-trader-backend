@@ -876,7 +876,7 @@ public class TwoPanelChartsControl : UserControl
         var btnExpEn3 = new Button { Text = "Exp en 3", Size = new Size(66, 24) }; // 5% narrower than the original 70
         btnExpEn3.Click += (s, e) => SaveManualSnapshot("ExpEn3", "ExpuestoEn3Charts.md");
 
-        var btnCtHora = new Button { Text = "CT Hora", Size = new Size(70, 24) };
+        var btnCtHora = new Button { Text = "CT Hora", Size = new Size(60, 24) }; // 15% narrower than the original 70 (59.5 rounded)
         btnCtHora.Click += (s, e) => SaveManualSnapshot("CTHora", "CTHora.md");
 
         var btnCt15Min = new Button { Text = "CT 15Min", Size = new Size(70, 24) };
