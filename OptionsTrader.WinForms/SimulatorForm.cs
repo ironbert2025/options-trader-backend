@@ -87,7 +87,7 @@ public class SimulatorForm : Form
     private readonly TableLayoutPanel _chartsHost = new()
     {
         Location = new Point(8, 302), Size = new Size(1050, 400),
-        ColumnCount = 3, RowCount = 1
+        ColumnCount = 4, RowCount = 1
     };
     private readonly SimulatedChartPanel _hourlyChart = new("1h", ChartPanelMode.Hourly15) { Dock = DockStyle.Fill };
     private readonly SimulatedChartPanel _rthChart    = new("15m RTH", ChartPanelMode.Fifteen_RTH) { Dock = DockStyle.Fill };
@@ -197,11 +197,14 @@ public class SimulatorForm : Form
 
         _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
         _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
-        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
+        // Panel 3 is half its former width (150/7 instead of 300/7), right-justified: the other
+        // 150/7 is an empty spacer column to its left.
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 150f / 7));
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 150f / 7));
         _chartsHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         _chartsHost.Controls.Add(_hourlyChart, 0, 0);
         _chartsHost.Controls.Add(_rthChart, 1, 0);
-        _chartsHost.Controls.Add(_fullChart, 2, 0);
+        _chartsHost.Controls.Add(_fullChart, 3, 0);
 
         Controls.Add(_cmbSymbol);
         Controls.Add(_cmbDate);
