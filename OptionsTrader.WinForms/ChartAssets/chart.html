@@ -4157,7 +4157,8 @@
   }
 
   function evaluateSaltoEffect() {
-    if (!rthSlideWindowBars) return; // panel 2 (15m RTH) only
+    // Only panel 2 ever receives setSaltoToday (C# relays it there), so every other panel exits here.
+    if (!saltoTodayInfo && !saltoEffectAttached) return;
     saltoEffectPrimitive._state = null;
     if (saltoTodayInfo && allCandles.length > 0) {
       const today = Math.floor(allCandles[allCandles.length - 1].time / 86400);

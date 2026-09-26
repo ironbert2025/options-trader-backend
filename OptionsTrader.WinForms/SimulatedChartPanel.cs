@@ -841,6 +841,19 @@ public class SimulatedChartPanel : Panel
     // SMA20/40 + SMA100/200 trend ("up"/"down"/null each) — see ChartPanel.OnTrendStateChanged.
     public event Action<string?, string?>? OnTrendStateChanged;
 
+    // Panel 1: today is (up, prevClose) / isn't (null, null) the matching 1er Salto — relayed to
+    // the 15m chart's "Salto en Efecto" by SimulatorForm. Same as ChartPanel.OnSaltoTodayChanged.
+    public event Action<bool?, decimal?>? OnSaltoTodayChanged;
+
+    public async Task SetSaltoTodayAsync(bool? up, decimal? prevClose)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var upArg = up == null ? "null" : (up.Value ? "true" : "false");
+        var pcArg = prevClose == null ? "null" : prevClose.Value.ToString(inv);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setSaltoToday({upArg}, {pcArg});");
+    }
+
     // Fired so SimulatorForm can (re)start its 15s auto-disarm countdown, same as the live app.
     public event Action? OnDiagonalArrowPlacedEvent;
 
@@ -1022,6 +1035,14 @@ public class SimulatedChartPanel : Panel
                 var arrowP2 = root.GetProperty("p2").GetDecimal();
                 var arrowRed = root.GetProperty("red").GetBoolean();
                 HandleDiagonalArrowPlaced(arrowP1, arrowP2, arrowRed);
+                return;
+            }
+
+            if (type == "salto_today")
+            {
+                bool? up = root.TryGetProperty("up", out var su) && (su.ValueKind == JsonValueKind.True || su.ValueKind == JsonValueKind.False) ? su.GetBoolean() : null;
+                decimal? prevClose = root.TryGetProperty("prevClose", out var sp) && sp.ValueKind == JsonValueKind.Number ? sp.GetDecimal() : null;
+                OnSaltoTodayChanged?.Invoke(up, prevClose);
                 return;
             }
 
