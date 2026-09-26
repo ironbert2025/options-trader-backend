@@ -873,7 +873,7 @@ public class TwoPanelChartsControl : UserControl
             ManualChartMarkdownStore.AppendEntry(fileName, _symbol, imagePath);
         }
 
-        var btnExpEn3 = new Button { Text = "Exp en 3", Size = new Size(70, 24) };
+        var btnExpEn3 = new Button { Text = "Exp en 3", Size = new Size(66, 24) }; // 5% narrower than the original 70
         btnExpEn3.Click += (s, e) => SaveManualSnapshot("ExpEn3", "ExpuestoEn3Charts.md");
 
         var btnCtHora = new Button { Text = "CT Hora", Size = new Size(70, 24) };
