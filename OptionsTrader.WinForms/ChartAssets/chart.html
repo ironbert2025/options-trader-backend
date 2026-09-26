@@ -4796,6 +4796,45 @@
     forceRepaint();
   }
 
+  // ---- Day numbers on the time axis (Daily form's Hora tab only — enableDayNumbers) ----
+  // The day-of-month number under the FIRST candle of every day, drawn as a time-axis label
+  // (primitive timeAxisViews), so each group of 7 hourly candles can be placed on the calendar.
+  class DayNumberPrimitive {
+    constructor() { this._chart = null; this._views = []; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {
+      this._views = [];
+      if (!this._chart || allCandles.length === 0) return;
+      const ts = this._chart.timeScale();
+      let lastDay = null;
+      for (const c of allCandles) {
+        const day = dayStartOf(c.time);
+        if (day === lastDay) continue;
+        lastDay = day;
+        const x = safeTimeToCoordinate(ts, c.time);
+        if (x == null) continue;
+        const text = String(new Date(c.time * 1000).getUTCDate());
+        this._views.push({
+          coordinate: () => x,
+          text: () => text,
+          textColor: () => '#ffeb3b',
+          backColor: () => '#131722',
+          visible: () => true,
+          tickVisible: () => false,
+        });
+      }
+    }
+    timeAxisViews() { return this._views; }
+  }
+  const dayNumberPrimitive = new DayNumberPrimitive();
+  let dayNumbersAttached = false;
+  function enableDayNumbers() {
+    if (dayNumbersAttached) return;
+    candleSeries.attachPrimitive(dayNumberPrimitive);
+    dayNumbersAttached = true;
+    forceRepaint();
+  }
+
   function configureOvernightBands() {
     overnightBandsEnabled = true;
     candleSeries.attachPrimitive(overnightPrimitive);

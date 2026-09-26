@@ -491,6 +491,7 @@ public class DailyChartForm : Form
         var hourlyCandles = HourlyCandleStore.Load(_symbol);
         await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20);
         await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync("enableSalto();"); // "1er Salto": Hora tab only, not Daily
+        await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync("enableDayNumbers();"); // day-of-month under each day's 1st candle: Hora tab only
         _lastHourlyCandle = hourlyCandles.Count > 0 ? hourlyCandles[^1] : null;
         await LoadAndWireTLinesAsync(_hourlyWebView, "DailyHora");
 
