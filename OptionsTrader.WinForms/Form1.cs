@@ -1599,16 +1599,23 @@ public partial class Form1 : Form
                 selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
                 forcedStrikes: _forcedStrikes);
 
-            // Update PnL for open trades against the FULL chain (not the range-filtered grid),
-            // so a trade's current bid keeps updating even after its strike leaves the display range.
-            var callMapForTrades = allQuotes
+            // Update PnL for open trades against the FULL chain (not the range-filtered grid), so a
+            // trade's current bid keeps updating even after its strike leaves the display range.
+            // Keyed by (type, strike, EXPIRATION) — not just (type, strike) — and built from BOTH
+            // the current and next chain (allQuotes/allQuotesNext, same fullChain fetch, both
+            // already resolved above). Tickers with dense/overlapping expirations (e.g. SPX's daily
+            // 0DTE strikes) reuse the same strike across adjacent expirations with very different
+            // premiums — the old (type, strike)-only key silently matched whichever expiration
+            // happened to be in allQuotes, not the trade's OWN one, showing a bid that "difiere
+            // totalmente" from the real current bid. Confirmed live (SPX, laptop).
+            var callMapForTrades = allQuotes.Concat(allQuotesNext)
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call)
-                .GroupBy(q => q.StrikePrice)
-                .ToDictionary(g => ("CALL", g.Key), g => g.First());
-            var putMapForTrades = allQuotes
+                .GroupBy(q => (q.StrikePrice, q.ExpirationDate))
+                .ToDictionary(g => ("CALL", g.Key.StrikePrice, g.Key.ExpirationDate), g => g.First());
+            var putMapForTrades = allQuotes.Concat(allQuotesNext)
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put)
-                .GroupBy(q => q.StrikePrice)
-                .ToDictionary(g => ("PUT", g.Key), g => g.First());
+                .GroupBy(q => (q.StrikePrice, q.ExpirationDate))
+                .ToDictionary(g => ("PUT", g.Key.StrikePrice, g.Key.ExpirationDate), g => g.First());
             UpdateTradesPnL(callMapForTrades, putMapForTrades);
             OnTradesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
 
@@ -4328,8 +4335,8 @@ public partial class Form1 : Form
         }
     }
 
-    private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
-                                  Dictionary<(string, decimal), OptionQuoteDto> putMap)
+    private void UpdateTradesPnL(Dictionary<(string, decimal, DateOnly), OptionQuoteDto> callMap,
+                                  Dictionary<(string, decimal, DateOnly), OptionQuoteDto> putMap)
     {
         var rowsToClose = new List<(DataGridViewRow Row, decimal CurrentBid)>();
 
@@ -4342,8 +4349,11 @@ public partial class Form1 : Form
             if (!decimal.TryParse(row.Cells["colTradeStrike"].Value?.ToString(), out var strike)) continue;
             if (!decimal.TryParse(row.Cells["colTradeEntryPrice"].Value?.ToString(), out var entryPrice)) continue;
             if (!decimal.TryParse(row.Cells["colTradeContracts"].Value?.ToString(), out var contracts)) continue;
+            // The trade's OWN expiration (see TradeRowTag) — never fall back to "whatever expiration
+            // happens to be in the map for this strike" (see this method's caller for why).
+            if (row.Tag is not TradeRowTag tag || tag.ExpirationDate == default) continue;
 
-            var key = (type, strike);
+            var key = (type, strike, tag.ExpirationDate);
             decimal currentBid = 0;
 
             if (type == "CALL" && callMap.TryGetValue(key, out var callQ))
