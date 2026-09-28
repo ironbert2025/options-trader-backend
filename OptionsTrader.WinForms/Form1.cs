@@ -4317,14 +4317,14 @@ public partial class Form1 : Form
         {
             minCell.Value             = pnlPct.ToString("F1");
             minCell.Style.ForeColor   = Color.Red;
-            minCell.ToolTipText       = $"Min {pnlPct:F1}% a las {whenText}";
+            minCell.ToolTipText       = whenText; // just the time — the cell itself already shows "Min"/the value
         }
 
         if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value             = pnlPct.ToString("F1");
             maxCell.Style.ForeColor   = Color.Green;
-            maxCell.ToolTipText       = $"Max {pnlPct:F1}% a las {whenText}";
+            maxCell.ToolTipText       = whenText; // just the time — the cell itself already shows "Max"/the value
         }
     }
 
