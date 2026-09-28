@@ -3318,8 +3318,16 @@ public class ChartPanel : Panel
         var text = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).ToString("HH:mm:ss");
         if (text == _lastArrivalShown) return;
         _lastArrivalShown = text;
-        var core = _webView?.CoreWebView2;
-        if (core != null) _ = core.ExecuteScriptAsync($"setLastTickTime('{text}');");
+        // Streamer_OnNewCandle runs on the streamer's background thread — CoreWebView2 can only be
+        // accessed from the UI thread (confirmed live: threw on every tick, silently aborting the
+        // rest of Streamer_OnNewCandle before it ever reached the premarket-line update below).
+        if (_closing || !IsHandleCreated) return;
+        BeginInvoke(() =>
+        {
+            if (_closing || IsDisposed) return;
+            var core = _webView?.CoreWebView2;
+            if (core != null) _ = core.ExecuteScriptAsync($"setLastTickTime('{text}');");
+        });
     }
 
     private void Streamer_OnNewCandle(string symbol, CandleData candle)
