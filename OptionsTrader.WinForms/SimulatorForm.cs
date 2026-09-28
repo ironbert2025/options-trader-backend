@@ -327,8 +327,11 @@ public class SimulatorForm : Form
         _hourlyChart.OnTrendStateChanged += (shortDir, longDir) =>
         {
             if (IsDisposed) return;
-            var segs = ChartPanel.TrendLogSegments(shortDir, longDir);
-            if (segs != null) LogSimEvent(ChartPanel.SegmentsToPlainText(segs), segs);
+            // Same as the Charts tab's log 1: "Largo - Corto" now lives in the header strip instead
+            // (see ChartPanel's _trendHost), so only the dash-reminder lines (present only when
+            // shortDir == longDir) still go to this log, per explicit request.
+            var segs = ChartPanel.TrendLogSegments(shortDir, longDir)?.Skip(4).ToList();
+            if (segs != null && segs.Count > 0) LogSimEvent(ChartPanel.SegmentsToPlainText(segs), segs);
         };
 
         _rthChart.OnWickTriggerEvent += label =>
