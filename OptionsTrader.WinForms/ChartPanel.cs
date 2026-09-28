@@ -98,6 +98,8 @@ public class ChartPanel : Panel
     // header row next to "SYMBOL — 15m RTH" (right-aligned), not inside the chart itself anymore —
     // per explicit request. Hidden (Visible=false) reserves no space for the other 2 panels/modes.
     private readonly Label _targetPriceHeaderLabel;
+    private FlowLayoutPanel _trendHost = null!;
+    private Label _trendLongLabel = null!, _trendDashLabel = null!, _trendShortLabel = null!;
     private WebView2 _webView = null!;
     private bool _closing;
 
@@ -400,8 +402,24 @@ public class ChartPanel : Panel
             if (_webView.CoreWebView2 != null)
                 await _webView.CoreWebView2.ExecuteScriptAsync("toggleTargetPriceLine();");
         };
+        // "Largo - Corto" trend words, colored per word (see TrendLogSegments) — placed here (top-left
+        // header strip, beside the ticker label) instead of as a chart-canvas overlay, per explicit
+        // request, so it never sits over the candles. Hidden until the first trend_state message.
+        _trendHost = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Left, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight,
+            BackColor = Color.FromArgb(19, 23, 34), Margin = Padding.Empty, Padding = new Padding(6, 0, 0, 0), Visible = false
+        };
+        _trendLongLabel = new Label { AutoSize = true, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(Font, FontStyle.Bold), BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 0) };
+        _trendDashLabel = new Label { AutoSize = true, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(Font, FontStyle.Bold), ForeColor = Color.Silver, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 0), Text = " - " };
+        _trendShortLabel = new Label { AutoSize = true, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(Font, FontStyle.Bold), BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 0) };
+        _trendHost.Controls.Add(_trendLongLabel);
+        _trendHost.Controls.Add(_trendDashLabel);
+        _trendHost.Controls.Add(_trendShortLabel);
+
         var headerRow = new Panel { Dock = DockStyle.Top, Height = 22, BackColor = Color.FromArgb(19, 23, 34) };
         headerRow.Controls.Add(_header);
+        headerRow.Controls.Add(_trendHost);
         headerRow.Controls.Add(_targetPriceHeaderLabel);
 
         InitializeWebView();
@@ -1386,6 +1404,17 @@ public class ChartPanel : Panel
                 {
                     var shortDir = root.TryGetProperty("shortDir", out var sd) && sd.ValueKind == JsonValueKind.String ? sd.GetString() : null;
                     var longDir = root.TryGetProperty("longDir", out var ld) && ld.ValueKind == JsonValueKind.String ? ld.GetString() : null;
+                    var segs = TrendLogSegments(shortDir, longDir);
+                    if (segs == null)
+                    {
+                        _trendHost.Visible = false;
+                    }
+                    else
+                    {
+                        _trendLongLabel.Text = segs[0].Text; _trendLongLabel.ForeColor = segs[0].Color ?? Color.White;
+                        _trendShortLabel.Text = segs[2].Text; _trendShortLabel.ForeColor = segs[2].Color ?? Color.White;
+                        _trendHost.Visible = true;
+                    }
                     OnTrendStateChanged?.Invoke(shortDir, longDir);
                     break;
                 }
