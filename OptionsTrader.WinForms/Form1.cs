@@ -2641,6 +2641,13 @@ public partial class Form1 : Form
             SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
         newRow.Cells["colTradeDemoReal"].Value = isSimulation ? "Simulation" : (isDemo ? "Demo" : "Real");
 
+        // Pin this strike so it keeps showing in dgvQuotes for the rest of the session, regardless
+        // of the "Counts"/"In Range" filter or OTM/ITM — same mechanism DgvTrades_CellClick already
+        // triggers manually on an existing trade's Strike cell, now applied automatically the
+        // moment ANY trade opens (demo/real/simulation, from either options grid), per explicit
+        // request ("no se queda el strike mostrado... cuando se crea un trade").
+        ForceStrikeInQuotesGrid(newRow);
+
         // Per explicit request: a strike opened from the Charts tab's own options grid stays
         // highlighted there (gray/light-green row) for the rest of the session, even after this
         // trade closes — see _chartsTabHighlightedStrikes' own comment. Read-and-reset, same
