@@ -1078,15 +1078,15 @@ public class TwoPanelChartsControl : UserControl
             };
             hourlyPanel.OnTrendStateChanged += (shortDir, longDir) =>
             {
-                var segs = ChartPanel.TrendLogSegments(shortDir, longDir);
-                if (segs == null || IsDisposed) return;
+                // First 4 segments are the "<largo> - <corto>" line + its newline (now shown in the
+                // header strip instead, see ChartPanel's _trendHost) — only the dash-reminder lines
+                // after it (present only when shortDir == longDir) still go to this log, per
+                // explicit request. Nothing logged when there are none.
+                var segs = ChartPanel.TrendLogSegments(shortDir, longDir)?.Skip(4).ToList();
+                if (segs == null || segs.Count == 0 || IsDisposed) return;
                 // Logged immediately, premarket included — the point is to show what panel 1 is
                 // already displaying before the open (AppendLog itself drops pre-9:30 text).
-                BeginInvoke(() =>
-                {
-                    _crossLog.AppendText($"{DateTime.Now:HH:mm:ss}  [{_symbol}]{Environment.NewLine}");
-                    ChartPanel.AppendColored(_crossLog, segs);
-                });
+                BeginInvoke(() => ChartPanel.AppendColored(_crossLog, segs));
             };
         }
 
