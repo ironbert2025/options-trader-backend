@@ -1289,7 +1289,7 @@ public class SimulatorForm : Form
             _simSmaWatchFiredFor.Add(period);
             var direction = above ? "al alza" : "a la baja";
             var pisoTechoLabel = above ? "Techo" : "Piso";
-            LogSimEvent($"{_symbol} rompió el {pisoTechoLabel} SMA{period} (Diario) {direction} — spot {livePrice:F2}, SMA{period} {sma.Value:F2}");
+            LogSimEvent($"{_symbol} rompió el {pisoTechoLabel} {period} (Diario) {direction}");
         }
     }
 

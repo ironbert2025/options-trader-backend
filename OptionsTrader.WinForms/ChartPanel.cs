@@ -2825,7 +2825,7 @@ public class ChartPanel : Panel
             // acting as resistance (Techo) and just broke; a cross DOWN means it was acting as
             // support (Piso).
             var pisoTechoLabel = above ? "Techo" : "Piso";
-            var caption = $"{_symbol} rompió el {pisoTechoLabel} SMA{period} (Diario) {direction} — spot {livePrice:F2}, SMA{period} {sma.Value:F2}";
+            var caption = $"{_symbol} rompió el {pisoTechoLabel} {period} (Diario) {direction}";
             var eventDirection = above ? "Alza" : "Baja";
             EventLogStore.Append(_symbol, "Daily", "SmaCross", eventDirection, caption, livePrice, $"SMA{period}={sma.Value:F2}");
             OnSmaCrossEvent?.Invoke(caption);
