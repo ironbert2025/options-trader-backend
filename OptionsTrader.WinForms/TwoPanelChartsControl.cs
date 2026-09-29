@@ -761,7 +761,7 @@ public class TwoPanelChartsControl : UserControl
                 try { File.WriteAllText(flag, "sent"); } catch { /* best-effort */ }
                 var o = saltoState.Open.Value; var c = saltoState.Close.Value;
                 var dir = o > c ? "al alza" : "a la baja";
-                var caption = $"Salto en Efecto {dir} sigue vigente a las 3:45 PM: Open {o:F2} vs Close ayer {c:F2} (Diff={Math.Abs(o - c):F2})";
+                var caption = $"Salto en Efecto {dir} sigue vigente a las 3:45 PM (Diff={Math.Abs(o - c):F2})";
                 BeginInvoke(() =>
                 {
                     OnSaltoEnEfectoPushDue?.Invoke(caption);
