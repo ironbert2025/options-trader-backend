@@ -608,7 +608,7 @@ public class SimulatedChartPanel : Panel
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
             var evento    = crossed ? "Cruce" : "Rebote";
             var gapTag    = crossedByGapOpen && !crossedByClose ? " (gap)" : "";
-            var caption   = $"{evento}{gapTag} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            var caption   = $"{evento}{gapTag} en {pisoTecho} {watch.Period}";
             OnPisoTechoOutcomeEvent?.Invoke(AppendVolatilityArmSuffix(evento, pisoTecho, caption), justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
         }
 
@@ -652,7 +652,7 @@ public class SimulatedChartPanel : Panel
 
             watch.Done = true;
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
-            var caption = $"Cruce (gap) en {pisoTecho} — SMA{watch.Period} — Open {forming.Open:F2} (SMA{watch.Period} en vivo {liveSma.Value:F2})";
+            var caption = $"Cruce (gap) en {pisoTecho} {watch.Period}";
             OnPisoTechoOutcomeEvent?.Invoke(AppendVolatilityArmSuffix("Cruce", pisoTecho, caption), forming.Close, "PisoTechoCruce", pisoTecho, $"SMA{watch.Period}={liveSma.Value:F2}");
         }
     }

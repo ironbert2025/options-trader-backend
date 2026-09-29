@@ -2113,7 +2113,7 @@ public class ChartPanel : Panel
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
             var evento    = crossed ? "Cruce" : "Rebote";
             var gapTag    = crossedByGapOpen && !crossedByClose ? " (gap)" : "";
-            var caption   = $"{evento}{gapTag} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            var caption   = $"{evento}{gapTag} en {pisoTecho} {watch.Period}";
             // Telegram push for this event is now MultiChartForm's job (combined 3-chart snapshot,
             // see SendPisoTechoTelegramPushAsync) instead of this panel's own single-chart one —
             // per explicit request to only send the combined image.
@@ -2181,7 +2181,7 @@ public class ChartPanel : Panel
 
             watch.Done = true;
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
-            var caption = $"Cruce (gap) en {pisoTecho} — SMA{watch.Period} — Open {_liveBucket.Open:F2} (SMA{watch.Period} en vivo {liveSma.Value:F2})";
+            var caption = $"Cruce (gap) en {pisoTecho} {watch.Period}";
             // See EvaluatePisoTechoWatches — Telegram push is MultiChartForm's job now, combined image only.
             EventLogStore.Append(_symbol, "Hora", "PisoTechoCruce", pisoTecho, caption, livePrice, $"SMA{watch.Period}={liveSma.Value:F2}");
             OnPisoTechoResolvedEvent?.Invoke("Cruce", pisoTecho, AppendVolatilityArmSuffix("Cruce", pisoTecho, caption));
