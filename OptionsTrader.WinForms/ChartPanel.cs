@@ -3338,13 +3338,15 @@ public class ChartPanel : Panel
     // panel. Eastern wall-clock time, same conversion used everywhere else in this class.
     public event Action<DateTime, decimal>? OnLiveTick;
 
-    // Wall-clock (ET) time the last CHART_EQUITY websocket message arrived, drawn in the chart's
-    // bottom-right corner (chart.html setLastTickTime) so a lagging/dead stream is visible.
-    // Throttled to once per second.
+    // Wall-clock (ET) time + spot price of the last websocket message received, drawn in the
+    // chart's bottom-right corner (chart.html setLastTickTime) so a lagging/dead stream — and what
+    // it last saw — is visible. Throttled to once per distinct (time, price) pair, so same-second
+    // repeats with no price change don't spam ExecuteScriptAsync.
     private string _lastArrivalShown = "";
-    private void ShowWebsocketArrivalTime()
+    private void ShowWebsocketArrivalTime(decimal price)
     {
-        var text = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).ToString("HH:mm:ss");
+        var time = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).ToString("HH:mm:ss");
+        var text = $"{time}  {price:F2}";
         if (text == _lastArrivalShown) return;
         _lastArrivalShown = text;
         // Streamer_OnNewCandle runs on the streamer's background thread — CoreWebView2 can only be
@@ -3366,7 +3368,7 @@ public class ChartPanel : Panel
         RestoreHeaderIfWasDisconnected();
 
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(candle.Time, EasternZone);
-        ShowWebsocketArrivalTime();
+        ShowWebsocketArrivalTime(candle.Close);
         OnLiveTick?.Invoke(eastern, candle.Close);
         EvaluatePuntoMedioSlope(); // premarket + RTH alike, see method comment
         EvaluateLastHourCandleBeforeCloseIfNeeded(eastern);
@@ -3589,7 +3591,7 @@ public class ChartPanel : Panel
     private void Streamer_OnLevelOneTick(string symbol, decimal price, DateTime utcTime)
     {
         if (symbol != _symbol) return;
-        ShowWebsocketArrivalTime();
+        ShowWebsocketArrivalTime(price);
         UpdateLivePriceFromExternalSource(price, utcTime);
     }
 
