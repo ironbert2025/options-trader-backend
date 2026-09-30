@@ -345,8 +345,9 @@ public class TwoPanelChartsControl : UserControl
     // "Simulation" — same target/PnL behavior as the other 2 (always with target, auto-closes at
     // target), but the trade never touches TradeHistoryStore/OpenTradesStore/screenshots — see
     // RecordEntryAsync/CloseTradeRowAsync's isSimulation handling in Form1.cs.
-    private readonly RadioButton _rbChartsSimulation = new() { Text = "Simulation", Checked = true, AutoSize = true, ForeColor = Color.Black, Font = new Font("Segoe UI", 8F) };
-    private readonly RadioButton _rbChartsDemoTarget = new() { Text = "Demo-Target", AutoSize = true, ForeColor = Color.DarkOrange, Font = new Font("Segoe UI", 8F, FontStyle.Bold) };
+    // Simulation disabled, Demo-Target default — per explicit request.
+    private readonly RadioButton _rbChartsSimulation = new() { Text = "Simulation", Enabled = false, AutoSize = true, ForeColor = Color.Black, Font = new Font("Segoe UI", 8F) };
+    private readonly RadioButton _rbChartsDemoTarget = new() { Text = "Demo-Target", Checked = true, AutoSize = true, ForeColor = Color.DarkOrange, Font = new Font("Segoe UI", 8F, FontStyle.Bold) };
     private readonly RadioButton _rbChartsRealTarget  = new() { Text = "Real-Target", AutoSize = true, ForeColor = Color.Green, Font = new Font("Segoe UI", 8F) };
     private bool _useRealTrade;
     private bool _useSimulation;
