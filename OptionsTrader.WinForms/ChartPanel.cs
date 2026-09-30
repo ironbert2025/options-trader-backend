@@ -3581,17 +3581,22 @@ public class ChartPanel : Panel
     }
 
     // Real-time last-price update (LEVEL_ONE_EQUITIES, much higher frequency than CHART_EQUITY's
-    // 1-minute bars) — currently never fires, see SubscribeLevelOneEquity's disabled call site.
+    // 1-minute bars) — subscribed in Form1.SetUpLiveFeedAsync, feeds the currently-forming
+    // candle's Close (see UpdateLivePriceFromExternalSource) on every tick instead of waiting a
+    // full minute for the next CHART_EQUITY bar. ShowWebsocketArrivalTime here (not just in
+    // Streamer_OnNewCandle) is what makes the bottom-right "last arrival" label track this
+    // higher-frequency feed once it's flowing, per explicit request.
     private void Streamer_OnLevelOneTick(string symbol, decimal price, DateTime utcTime)
     {
         if (symbol != _symbol) return;
+        ShowWebsocketArrivalTime();
         UpdateLivePriceFromExternalSource(price, utcTime);
     }
 
     // Every ~6s options-chain poll cycle also carries a fresh SpotPrice (Form1's own REST polling,
-    // completely separate from the streaming feed) — while LEVEL_ONE_EQUITIES is disabled, Form1
-    // feeds that spot price here instead so the currently-forming candle still tracks something
-    // closer to real-time than waiting a full minute for the next CHART_EQUITY bar.
+    // completely separate from the streaming feed) — a fallback for whenever LEVEL_ONE_EQUITIES
+    // ticks are sparse/absent for this symbol, so the currently-forming candle still tracks
+    // something closer to real-time than waiting a full minute for the next CHART_EQUITY bar.
     public void FeedPollingPrice(decimal price, DateTime utcTime) => UpdateLivePriceFromExternalSource(price, utcTime);
 
     // Only ever adjusts the CURRENTLY-forming bucket's Close (and extends High/Low if the tick
