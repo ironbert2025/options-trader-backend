@@ -189,6 +189,27 @@ public partial class Form1 : Form
         btnDeleteTelegramPushes.Click += BtnDeleteTelegramPushes_Click;
         tabSettings.Controls.Add(btnDeleteTelegramPushes);
 
+        // Saves THIS window's current screen position (WindowPositionStore), keyed by the
+        // currently selected ticker — applied again on the next app launch, only for the instance
+        // that auto-selects this same ticker at startup (see TickerButton_Click / Form1_Load).
+        var btnSaveWindowPosition = new Button
+        {
+            Location = new Point(518, 480),
+            Size     = new Size(100, 25),
+            Text     = "Guardar Posición"
+        };
+        btnSaveWindowPosition.Click += (s, e) =>
+        {
+            if (_selectedTicker == null)
+            {
+                MessageBox.Show("Selecciona un ticker primero.", "Guardar Posición", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            WindowPositionStore.Save(_selectedTicker.Symbol, Location);
+            MessageBox.Show($"Posición guardada para {_selectedTicker.Symbol}.", "Guardar Posición", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+        tabSettings.Controls.Add(btnSaveWindowPosition);
+
         // "History" tab — Calendar (trading journal) + Trade Log views over TradeHistoryStore.
         // Built entirely in HistoryTabPanel (no designer file), same convention as
         // MultiChartForm/ChartPanel.
@@ -837,6 +858,30 @@ public partial class Form1 : Form
         return entry?.StrikeCount ?? 40;
     }
 
+    // Startup only (see _isInitialTickerSelection): the saved spot for this ticker if there is one
+    // AND it still falls inside some currently-connected monitor — otherwise centers on whichever
+    // screen the window is appearing on (e.g. the saved spot was on a 2nd monitor that's since
+    // been disconnected).
+    private void ApplySavedOrCenteredWindowPosition()
+    {
+        if (_selectedTicker == null) return;
+        var saved = WindowPositionStore.Load(_selectedTicker.Symbol);
+        StartPosition = FormStartPosition.Manual;
+        if (saved.HasValue && Screen.AllScreens.Any(s => s.Bounds.Contains(saved.Value)))
+            Location = saved.Value;
+        else
+            CenterWindowOnCurrentScreen();
+    }
+
+    // Centers this window on whichever monitor it's currently on — per explicit request, every
+    // ticker switch DURING a session (not the initial startup one) lands here, never on a saved spot.
+    private void CenterWindowOnCurrentScreen()
+    {
+        StartPosition = FormStartPosition.Manual;
+        var area = Screen.FromControl(this).WorkingArea;
+        Location = new Point(area.Left + (area.Width - Width) / 2, area.Top + (area.Height - Height) / 2);
+    }
+
     // Applies a just-changed polling interval to the LIVE timer immediately, if it's currently
     // running for this same symbol — no need to disconnect/reconnect. Skipped while the 11 AM
     // throttle is active (that fixed 60s override takes priority; the new value still persists and
@@ -846,6 +891,13 @@ public partial class Form1 : Form
         if (_pollingTimer == null || _selectedTicker?.Symbol != symbol || _throttledAfter11) return;
         _pollingTimer.Interval = Math.Max(1, seconds) * 1000;
     }
+
+    // True only for the VERY FIRST ticker selection of this run — the auto-select
+    // ClaimTickerSlotAndSelect does at startup (PerformClick routes through this same handler).
+    // That one applies the ticker's saved window position (or centers if none/off-screen); any
+    // LATER selection (the user manually clicking a different ticker button) always just centers,
+    // per explicit request — never jumps to that other ticker's saved spot mid-session.
+    private bool _isInitialTickerSelection = true;
 
     private void TickerButton_Click(object? sender, EventArgs e)
     {
@@ -863,6 +915,15 @@ public partial class Form1 : Form
         clicked.Font = new Font(clicked.Font, FontStyle.Bold);
 
         _selectedTicker = clicked.Tag as TickerEntry;
+        if (_isInitialTickerSelection)
+        {
+            _isInitialTickerSelection = false;
+            ApplySavedOrCenteredWindowPosition();
+        }
+        else
+        {
+            CenterWindowOnCurrentScreen();
+        }
         UpdateEarningsStatusLabel();
         UpdateAllTimeHighStatusLabel();
         _forcedStrikes.Clear();
