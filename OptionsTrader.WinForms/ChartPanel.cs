@@ -3346,7 +3346,7 @@ public class ChartPanel : Panel
     private void ShowWebsocketArrivalTime(decimal price)
     {
         var time = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).ToString("HH:mm:ss");
-        var text = $"{time}  {price:F2}";
+        var text = $"{time}    {price:F2}";
         if (text == _lastArrivalShown) return;
         _lastArrivalShown = text;
         // Streamer_OnNewCandle runs on the streamer's background thread — CoreWebView2 can only be
