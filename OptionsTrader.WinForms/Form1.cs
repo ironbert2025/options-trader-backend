@@ -2750,12 +2750,16 @@ public partial class Form1 : Form
         // tomorrow's ExpirationDate, not today's.
         var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         var entrySpotColor = NextEntrySpotColor();
+        // The white/yellow spot line on the chart(s) — live websocket price at click time (see
+        // WireLiveSpotTracking), not the last ~6s poll (_lastSpotPrice), which can already be
+        // stale by the time the trade actually opens.
+        var entrySpot = _lastLiveSpotPrice ?? _lastSpotPrice;
         // Simulation trades get their own LocalId (their tradeId stays 0, shared by every
         // simulation trade, so it can't identify one in SimulationTradesStore) — see that store's
         // own comment.
         var simulationLocalId = isSimulation ? Guid.NewGuid() : (Guid?)null;
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
-            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice, EntrySpotColor: entrySpotColor,
+            ExpirationDate: expDate, EntrySpotPrice: entrySpot, EntrySpotColor: entrySpotColor,
             LocalId: simulationLocalId);
         PadWithBlankRows(dgvTrades, 4);
 
@@ -2771,7 +2775,7 @@ public partial class Form1 : Form
                 ExpirationDate: expDate,
                 Level:          level,
                 PnlTarget:      targetPct.ToString("F0"),
-                EntrySpotPrice: _lastSpotPrice,
+                EntrySpotPrice: entrySpot,
                 IsDemo:         isDemo,
                 EntrySpotColor: entrySpotColor));
         else
@@ -2790,7 +2794,7 @@ public partial class Form1 : Form
                 ExpirationDate: expDate,
                 Level:          level,
                 PnlTarget:      targetPct.ToString("F0"),
-                EntrySpotPrice: _lastSpotPrice,
+                EntrySpotPrice: entrySpot,
                 EntrySpotColor: entrySpotColor));
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
@@ -2801,7 +2805,7 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
         {
             await chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
-            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice, entrySpotColor);
+            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(entrySpot, entrySpotColor);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -2812,7 +2816,7 @@ public partial class Form1 : Form
         {
             if (decimal.TryParse(strike, out var strikeValForChartsTab))
                 await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, entrySpotColor);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor);
         }
 
         if (!isSimulation)
@@ -3387,6 +3391,7 @@ public partial class Form1 : Form
             _candleHubClient = remoteHubClient;
             _historyClient   = CreateSchwabStreamerClient();
             _liveFeed        = remoteHubClient;
+            WireLiveSpotTracking(remoteHubClient);
             return;
         }
 
@@ -3407,6 +3412,7 @@ public partial class Form1 : Form
 
             _historyClient = reconnectedStreamer;
             _liveFeed      = reconnectedStreamer;
+            WireLiveSpotTracking(reconnectedStreamer);
             return;
         }
 
@@ -3435,6 +3441,7 @@ public partial class Form1 : Form
 
             _historyClient = streamer;
             _liveFeed      = streamer; // this instance's own connection IS the live feed
+            WireLiveSpotTracking(streamer);
             return;
         }
 
@@ -3447,6 +3454,22 @@ public partial class Form1 : Form
         _candleHubClient = hubClient;
         _historyClient   = CreateSchwabStreamerClient();
         _liveFeed        = hubClient;
+        WireLiveSpotTracking(hubClient);
+    }
+
+    // Tracks the latest LIVE spot price for the currently selected ticker, straight from the
+    // streaming feed (CHART_EQUITY candle close / LEVEL_ONE_EQUITIES last price — whichever is
+    // more recent), independent of any chart window being open. Used for EntrySpotPrice (the
+    // white/yellow spot line drawn when a trade opens) instead of _lastSpotPrice, which only
+    // reflects the last ~6s options-chain poll — confirmed live: could be stale by several
+    // seconds relative to the actual spot at click time. Falls back to _lastSpotPrice if no live
+    // tick has arrived yet for this symbol (e.g. right at startup, before the first one lands).
+    private decimal? _lastLiveSpotPrice;
+
+    private void WireLiveSpotTracking(ICandleFeed feed)
+    {
+        feed.OnNewCandle    += (symbol, candle) => { if (_selectedTicker != null && symbol == _selectedTicker.Symbol) _lastLiveSpotPrice = candle.Close; };
+        feed.OnLevelOneTick += (symbol, price, time) => { if (_selectedTicker != null && symbol == _selectedTicker.Symbol) _lastLiveSpotPrice = price; };
     }
 
     private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget, bool sendToApi = true) =>
