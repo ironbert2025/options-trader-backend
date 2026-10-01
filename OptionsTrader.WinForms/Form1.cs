@@ -2730,7 +2730,11 @@ public partial class Form1 : Form
         // cuando se confirma el fill ("Real EntryPrice confirmed"), esto es solo el de apertura.
         decimal.TryParse(contracts, out var contractsForPremium);
         var premium = ask * 100 * contractsForPremium;
-        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}  Premium={premium:F2}", Color.White);
+        // Live websocket price at click time (see WireLiveSpotTracking) — the real spot the trade
+        // was opened against, not the last ~6s poll (_lastSpotPrice), per explicit request. Also
+        // reused below for the white/yellow entry-spot marker line.
+        var entrySpot = _lastLiveSpotPrice ?? _lastSpotPrice;
+        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {entrySpot:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}  Premium={premium:F2}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
         System.Windows.Forms.Application.DoEvents();
@@ -2750,10 +2754,6 @@ public partial class Form1 : Form
         // tomorrow's ExpirationDate, not today's.
         var expDate = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
         var entrySpotColor = NextEntrySpotColor();
-        // The white/yellow spot line on the chart(s) — live websocket price at click time (see
-        // WireLiveSpotTracking), not the last ~6s poll (_lastSpotPrice), which can already be
-        // stale by the time the trade actually opens.
-        var entrySpot = _lastLiveSpotPrice ?? _lastSpotPrice;
         // Simulation trades get their own LocalId (their tradeId stays 0, shared by every
         // simulation trade, so it can't identify one in SimulationTradesStore) — see that store's
         // own comment.
@@ -3829,7 +3829,11 @@ public partial class Form1 : Form
         var strike    = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
         var pnl       = row.Cells["colTradePnL"].Value?.ToString() ?? string.Empty;
         var pnlPct    = row.Cells["colTradePnLPercent"].Value?.ToString() ?? string.Empty;
-        var spotPrice = _lastSpotPrice > 0 ? _lastSpotPrice.ToString("F2") : string.Empty;
+        // Live websocket price at close time (see WireLiveSpotTracking) — the real spot the trade
+        // closed against, not the last ~6s poll (_lastSpotPrice), per explicit request. Also reused
+        // below for the ΔS and white/yellow close-spot marker lines.
+        var closeSpot = _lastLiveSpotPrice ?? _lastSpotPrice;
+        var spotPrice = closeSpot > 0 ? closeSpot.ToString("F2") : string.Empty;
         var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
         var duration = TimeSpan.Zero;
@@ -3910,10 +3914,6 @@ public partial class Form1 : Form
             await _chartsTabForm.MarkExpiredOnRthChartAsync();
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
-
-        // Live websocket price at close time (see WireLiveSpotTracking), not the last ~6s poll —
-        // same reasoning as RecordEntryAsync's own entrySpot, extended to the close-time markers.
-        var closeSpot = _lastLiveSpotPrice ?? _lastSpotPrice;
 
         // "ΔS=value" marker on the 15m RTH+Overnight chart — |spot at close - spot at entry|,
         // anchored at the trade's strike (same price as its green "Stk=xxx" line). EntrySpotPrice
