@@ -3911,14 +3911,18 @@ public partial class Form1 : Form
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
+        // Live websocket price at close time (see WireLiveSpotTracking), not the last ~6s poll —
+        // same reasoning as RecordEntryAsync's own entrySpot, extended to the close-time markers.
+        var closeSpot = _lastLiveSpotPrice ?? _lastSpotPrice;
+
         // "ΔS=value" marker on the 15m RTH+Overnight chart — |spot at close - spot at entry|,
         // anchored at the trade's strike (same price as its green "Stk=xxx" line). EntrySpotPrice
         // is 0 for trades opened before this feature shipped (no reliable value to show), so those
         // are skipped rather than drawing a misleading ΔS=<currentSpot>.
-        if (tag is { EntrySpotPrice: > 0 } && _lastSpotPrice > 0 && decimal.TryParse(strike, out var strikeForDelta) &&
+        if (tag is { EntrySpotPrice: > 0 } && closeSpot > 0 && decimal.TryParse(strike, out var strikeForDelta) &&
             _liveChartForms.TryGetValue(symbol, out var chartFormDelta) && !chartFormDelta.IsDisposed)
         {
-            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDelta);
+            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, closeSpot, strikeForDelta);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -3926,19 +3930,19 @@ public partial class Form1 : Form
         // line at close — same marker drawn on entry, mirrors the Simulator.
         var closeSpotColor = tag?.EntrySpotColor ?? "#ffffff";
         var closeIsCall = type.Equals("CALL", StringComparison.OrdinalIgnoreCase);
-        if (_lastSpotPrice > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
+        if (closeSpot > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
         {
-            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice, closeSpotColor, isClose: true, isCall: closeIsCall);
+            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
         // Same white spot-price line on the Charts tab's own panel 2 (15m RTH), per explicit
         // request — see the matching call in TriggerQuoteStrikeClick's entry-open flow.
-        if (_lastSpotPrice > 0 && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+        if (closeSpot > 0 && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
         {
             if (tag is { EntrySpotPrice: > 0 } && decimal.TryParse(strike, out var strikeForDeltaChartsTab))
-                await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDeltaChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, closeSpotColor, isClose: true, isCall: closeIsCall);
+                await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, closeSpot, strikeForDeltaChartsTab);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall);
         }
 
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
