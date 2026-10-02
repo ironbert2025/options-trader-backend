@@ -1953,7 +1953,7 @@ public class SimulatorForm : Form
         // number that isn't actually driving anything.
         var suppressAutoClose = _rbNoTrade.Checked;
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-        var tBid = Math.Round(ask * (1 + targetPct / 100m), 2);
+        var tBid = Math.Round(ask * (1 + targetPct / 100m) + Form1.TargetCommissionPerContract, 2);
         var pnlTargetCell = suppressAutoClose ? string.Empty : targetPct.ToString("F0");
 
         var step = _steps[_currentIndex];

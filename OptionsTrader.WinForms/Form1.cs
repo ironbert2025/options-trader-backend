@@ -92,6 +92,11 @@ public partial class Form1 : Form
     // In-memory only (not persisted across restarts — a trade still open across a restart keeps
     // whatever color OpenTradesStore already saved for it, see TradeRowTag.EntrySpotColor).
     private int _entrySpotColorCounter;
+    // Trade commission per contract, in option-price units (shared by every T_Bid / target-order
+    // price: T_Bid = Round(Ask * (1 + Target%/100) + this, 2)). Added ONCE per target, not per contract
+    // count — T_Bid is a per-contract price. Also used by the Simulator.
+    internal const decimal TargetCommissionPerContract = 0.02m;
+
     private string NextEntrySpotColor() => (++_entrySpotColorCounter % 2 == 1) ? "#ffffff" : "#ffeb3b";
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
@@ -1094,7 +1099,7 @@ public partial class Form1 : Form
             {
                 // Still valid — restore as open trade
                 decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-                var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m), 2);
+                var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
 
                 dgvTrades.Rows.Add(
                     t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
@@ -1152,7 +1157,7 @@ public partial class Form1 : Form
             }
 
             decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-            var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m), 2);
+            var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
 
             dgvTrades.Rows.Add(
                 t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
@@ -2736,7 +2741,7 @@ public partial class Form1 : Form
         decimal targetPct;
         if (overrideTargetPct.HasValue) targetPct = overrideTargetPct.Value;
         else decimal.TryParse(TargetSettingsStore.Load(), out targetPct);
-        var tBid      = Math.Round(ask * (1 + targetPct / 100m), 2);
+        var tBid      = Math.Round(ask * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
         var entryStr  = ask.ToString("F2");
         var entryTime = DateTime.Now;
         var now       = entryTime.ToString("HH:mm:ss");
@@ -3641,7 +3646,7 @@ public partial class Form1 : Form
             return;
         }
 
-        var targetPrice = Math.Round(fill.Value * (1 + targetPct / 100m), 2);
+        var targetPrice = Math.Round(fill.Value * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
 
         Invoke(() =>
         {
