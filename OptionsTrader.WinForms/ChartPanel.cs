@@ -1050,7 +1050,8 @@ public class ChartPanel : Panel
     private async Task ReplayPersistedEntryMarkersAsync()
     {
         if (_mode != ChartPanelMode.Fifteen_RTH && _mode != ChartPanelMode.Fifteen_Full) return;
-        var openTrades = OpenTradesStore.Load().Where(t => t.Symbol == _symbol && t.EntrySpotPrice > 0m);
+        var openTrades = OpenTradesStore.Load().Where(t => t.Symbol == _symbol && t.EntrySpotPrice > 0m
+            && !DeletedEntryMarkersStore.IsDeleted(_symbol, t.EntrySpotPrice, DateOnly.FromDateTime(t.EntryTime)));
         foreach (var trade in openTrades)
             await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime, trade.EntrySpotColor);
     }
@@ -1298,6 +1299,17 @@ public class ChartPanel : Panel
                     var rt2 = root.GetProperty("t2").GetInt64();
                     var rp2 = root.GetProperty("p2").GetDecimal();
                     RectStore.Remove(_symbol, type == "bluerect_delete" ? HoraRectTag : HoraColorRectTag, rt1, rp1, rt2, rp2);
+                    break;
+                }
+                case "entryspot_delete":
+                {
+                    // A trade's open/close spot rayita deleted from the chart (Delete key). Close
+                    // lines were never persisted; an OPEN line is replayed from OpenTradesStore on
+                    // every chart load, so remember the deletion (symbol + price + day) to skip it there.
+                    if (root.TryGetProperty("isClose", out var esc) && esc.ValueKind == JsonValueKind.True) break;
+                    var espPrice = root.GetProperty("price").GetDecimal();
+                    var espDay = DateOnly.FromDateTime(DateTimeOffset.FromUnixTimeSeconds(root.GetProperty("time").GetInt64()).UtcDateTime);
+                    DeletedEntryMarkersStore.Add(_symbol, espPrice, espDay);
                     break;
                 }
                 case "circle_delete":

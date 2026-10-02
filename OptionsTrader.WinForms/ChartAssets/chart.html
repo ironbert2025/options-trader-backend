@@ -791,6 +791,23 @@
   function findBlueRectByBorderClick(px, py) { return findRectBorderIndex(rectanglesPrimitive._rects, px, py); }
   function findColorRectByBorderClick(px, py) { return findRectBorderIndex(colorRectPrimitive._rects, px, py); }
 
+  // Entry/close spot marker segments (EntrySpotLinePrimitive — the short white/yellow rayitas drawn
+  // when a trade opens and closes): index of the one whose 3-bar-wide segment is within a few
+  // pixels of (px,py), or -1. Same geometry as the primitive's own draw().
+  function findEntrySpotLineByClick(px, py) {
+    const ts = chart.timeScale();
+    const barSpacing = ts.options().barSpacing;
+    const lines = entrySpotLinePrimitive._lines;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const l = lines[i];
+      const cx = safeTimeToCoordinate(ts, l.time);
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (cx == null || y == null) continue;
+      if (distToSegment(px, py, cx - barSpacing * 1.5, y, cx + barSpacing * 1.5, y) <= 6) return i;
+    }
+    return -1;
+  }
+
   // Returns the index of the T-Line whose segment is within a few pixels of (px,py), or -1.
   // Same distToSegment helper as the gray rect border check above. Same snap-to-nearest-real-candle
   // fallback TLinePrimitive.draw() and findHLineByClick already use — without it, a T-Line whose
@@ -961,6 +978,20 @@
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'tline_delete', t1: removed.t1, p1: removed.p1, t2: removed.t2, p2: removed.p2 });
+      }
+      return;
+    }
+
+    // Entry/close spot marker: removed here and reported to C# so a still-open trade's ENTRY line
+    // isn't redrawn from OpenTradesStore the next time this chart loads (see
+    // ChartPanel.ReplayPersistedEntryMarkersAsync). Close lines were never persisted anyway.
+    const entrySpotIdx = entrySpotLinePrimitive._lines.findIndex(l => l.selected);
+    if (entrySpotIdx !== -1) {
+      const removedSpot = entrySpotLinePrimitive._lines[entrySpotIdx];
+      entrySpotLinePrimitive._lines.splice(entrySpotIdx, 1);
+      forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'entryspot_delete', price: removedSpot.price, time: removedSpot.time, isClose: !!removedSpot.isClose });
       }
       return;
     }
@@ -1229,6 +1260,22 @@
       const hadStrikeSelection = strikeLinesPrimitive._lines.some(l => l.selected);
       if (hadStrikeSelection) {
         strikeLinesPrimitive._lines.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // Entry/close spot marker click selection (Delete removes it) — before the clickTime/price
+    // guard, same reason as the H-Line/Stk blocks: the segment is only a few bars wide but the
+    // click can land in sparse areas where coordinateToTime returns null.
+    if (entrySpotLinePrimitive._lines.length > 0) {
+      const hitIdx = findEntrySpotLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        entrySpotLinePrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      if (entrySpotLinePrimitive._lines.some(l => l.selected)) {
+        entrySpotLinePrimitive._lines.forEach(l => { l.selected = false; });
         forceRepaint();
       }
     }
@@ -2592,6 +2639,17 @@
                   ctx.moveTo(x1, y * scope.verticalPixelRatio);
                   ctx.lineTo(x2, y * scope.verticalPixelRatio);
                   ctx.stroke();
+                  if (l.selected) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b'; // yellow dashed overlay = selected, ready to delete
+                    ctx.lineWidth = 4 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y * scope.verticalPixelRatio);
+                    ctx.lineTo(x2, y * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
 
                   // "C" (close) marker — per explicit request, only on the CLOSE line, never the
                   // open one. Sits just past the line's right end: above for a Call, below for a
