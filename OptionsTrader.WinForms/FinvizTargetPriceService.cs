@@ -41,9 +41,29 @@ internal static class FinvizTargetPriceService
         @"Target Price</a></div></td>\s*<td class=""snapshot-td2[^""]*""[^>]*>.*?<span[^>]*>([\d]+(?:\.[\d]+)?)</span>",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
+    // Last good value per symbol + when it was fetched, shared by every caller (the Charts tab's
+    // own 30-min refresh AND Form1's status-bar label) so two UI spots showing the same number
+    // never double the scraping — a fetch within CacheTtl of the last one just returns the cached
+    // value. TargetPriceUpdated fires (symbol, price) whenever a FRESH value lands, so a label that
+    // asked earlier (or is showing a stale one) can refresh without polling Finviz itself.
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(25);
+    private static readonly Dictionary<string, (decimal Price, DateTime FetchedAt)> Cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object CacheLock = new();
+    public static event Action<string, decimal?>? TargetPriceUpdated;
+
+    public static decimal? GetCached(string symbol)
+    {
+        lock (CacheLock) return Cache.TryGetValue(symbol, out var c) ? c.Price : null;
+    }
+
     public static async Task<decimal?> GetTargetPriceAsync(string symbol)
     {
         if (!SupportedSymbols.Contains(symbol)) return null;
+
+        lock (CacheLock)
+        {
+            if (Cache.TryGetValue(symbol, out var c) && DateTime.UtcNow - c.FetchedAt < CacheTtl) return c.Price;
+        }
 
         try
         {
@@ -61,6 +81,8 @@ internal static class FinvizTargetPriceService
                 return null;
             }
             DebugLog($"symbol={symbol} OK price={price}");
+            lock (CacheLock) Cache[symbol] = (price, DateTime.UtcNow);
+            try { TargetPriceUpdated?.Invoke(symbol, price); } catch { /* a subscriber's bug never breaks the fetch */ }
             return price;
         }
         catch (Exception ex)

@@ -210,6 +210,29 @@ public partial class Form1 : Form
         };
         tabSettings.Controls.Add(btnSaveWindowPosition);
 
+        // "TargetP= value" (Finviz analyst target) in the bottom status bar, right after "ATH:" —
+        // same number the chart's own top-right TargetP label shows (that one stays where it is).
+        // Added via code, not the designer, same convention as the buttons above.
+        lblTargetPrice = new ToolStripStatusLabel
+        {
+            Name      = "lblTargetPrice",
+            Margin    = new Padding(12, 3, 0, 2),
+            ForeColor = Color.FromArgb(0x26, 0xa6, 0x9a), // same teal as the chart's TargetP label
+            Font      = new Font(statusStrip1.Font, FontStyle.Bold)
+        };
+        statusStrip1.Items.Add(lblTargetPrice);
+        Action<string, decimal?> onTargetPriceUpdated = (symbol, price) =>
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            BeginInvoke(() =>
+            {
+                if (price != null && string.Equals(_selectedTicker?.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+                    lblTargetPrice.Text = FormatTargetPriceStatus(price.Value);
+            });
+        };
+        FinvizTargetPriceService.TargetPriceUpdated += onTargetPriceUpdated;
+        Disposed += (s, e) => FinvizTargetPriceService.TargetPriceUpdated -= onTargetPriceUpdated;
+
         // "History" tab — Calendar (trading journal) + Trade Log views over TradeHistoryStore.
         // Built entirely in HistoryTabPanel (no designer file), same convention as
         // MultiChartForm/ChartPanel.
@@ -926,6 +949,7 @@ public partial class Form1 : Form
         }
         UpdateEarningsStatusLabel();
         UpdateAllTimeHighStatusLabel();
+        UpdateTargetPriceStatusLabel();
         _forcedStrikes.Clear();
         _chartsTabHighlightedStrikes.Clear();
 
@@ -978,6 +1002,25 @@ public partial class Form1 : Form
     // only on ticker selection (same as UpdateEarningsStatusLabel; the ATH itself only ever changes
     // once/day at the 4pm close, so this doesn't need to be live). Blank if no ATH has been
     // persisted yet for this symbol.
+    private ToolStripStatusLabel lblTargetPrice = null!;
+
+    private static string FormatTargetPriceStatus(decimal price) =>
+        $"TargetP= {price.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}";
+
+    // Shows the cached Finviz target price for the selected symbol right away (blank if none yet
+    // or the symbol isn't a supported stock), then asks the service for a fresh one — it caches
+    // for 25 min and shares that cache with the Charts tab's own refresh, so this never adds
+    // scraping beyond one fetch per symbol per window. TargetPriceUpdated fills the label in when
+    // a fresh value lands.
+    private void UpdateTargetPriceStatusLabel()
+    {
+        var symbol = _selectedTicker?.Symbol;
+        if (symbol == null) { lblTargetPrice.Text = string.Empty; return; }
+        var cached = FinvizTargetPriceService.GetCached(symbol);
+        lblTargetPrice.Text = cached != null ? FormatTargetPriceStatus(cached.Value) : string.Empty;
+        _ = FinvizTargetPriceService.GetTargetPriceAsync(symbol);
+    }
+
     private void UpdateAllTimeHighStatusLabel()
     {
         var ath = _selectedTicker != null ? AllTimeHighStore.Load(_selectedTicker.Symbol) : null;
