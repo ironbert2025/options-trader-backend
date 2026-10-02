@@ -1004,12 +1004,12 @@ public partial class Form1 : Form
     // persisted yet for this symbol.
     private ToolStripStatusLabel lblTargetPrice = null!;
 
-    // "TargetP= 337.68  10.02 09.45" — the trailing "MM.dd HH.mm" (24h, this PC's local clock) is
+    // "TargetP= 337.68  10.02 09:45" — the trailing "MM.dd HH:mm" (24h, this PC's local clock) is
     // when Finviz was actually scraped for this value, so a stale number is recognizable. Status
     // bar only — the chart's own TargetP label stays price-only, per explicit request.
     private static string FormatTargetPriceStatus(decimal price, DateTime fetchedAtUtc) =>
         $"TargetP= {price.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}  " +
-        $"{fetchedAtUtc.ToLocalTime().ToString("MM.dd HH.mm", System.Globalization.CultureInfo.InvariantCulture)}";
+        $"{fetchedAtUtc.ToLocalTime().ToString("MM.dd HH:mm", System.Globalization.CultureInfo.InvariantCulture)}";
 
     // Shows the cached Finviz target price for the selected symbol right away (blank if none yet
     // or the symbol isn't a supported stock), then asks the service for a fresh one — it caches
