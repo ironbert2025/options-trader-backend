@@ -221,13 +221,13 @@ public partial class Form1 : Form
             Font      = new Font(statusStrip1.Font, FontStyle.Bold)
         };
         statusStrip1.Items.Add(lblTargetPrice);
-        Action<string, decimal?> onTargetPriceUpdated = (symbol, price) =>
+        Action<string, decimal?, DateTime> onTargetPriceUpdated = (symbol, price, fetchedAtUtc) =>
         {
             if (IsDisposed || !IsHandleCreated) return;
             BeginInvoke(() =>
             {
                 if (price != null && string.Equals(_selectedTicker?.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
-                    lblTargetPrice.Text = FormatTargetPriceStatus(price.Value);
+                    lblTargetPrice.Text = FormatTargetPriceStatus(price.Value, fetchedAtUtc);
             });
         };
         FinvizTargetPriceService.TargetPriceUpdated += onTargetPriceUpdated;
@@ -1004,8 +1004,12 @@ public partial class Form1 : Form
     // persisted yet for this symbol.
     private ToolStripStatusLabel lblTargetPrice = null!;
 
-    private static string FormatTargetPriceStatus(decimal price) =>
-        $"TargetP= {price.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}";
+    // "TargetP= 337.68  10.02 09.45" — the trailing "MM.dd HH.mm" (24h, this PC's local clock) is
+    // when Finviz was actually scraped for this value, so a stale number is recognizable. Status
+    // bar only — the chart's own TargetP label stays price-only, per explicit request.
+    private static string FormatTargetPriceStatus(decimal price, DateTime fetchedAtUtc) =>
+        $"TargetP= {price.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}  " +
+        $"{fetchedAtUtc.ToLocalTime().ToString("MM.dd HH.mm", System.Globalization.CultureInfo.InvariantCulture)}";
 
     // Shows the cached Finviz target price for the selected symbol right away (blank if none yet
     // or the symbol isn't a supported stock), then asks the service for a fresh one — it caches
@@ -1016,8 +1020,8 @@ public partial class Form1 : Form
     {
         var symbol = _selectedTicker?.Symbol;
         if (symbol == null) { lblTargetPrice.Text = string.Empty; return; }
-        var cached = FinvizTargetPriceService.GetCached(symbol);
-        lblTargetPrice.Text = cached != null ? FormatTargetPriceStatus(cached.Value) : string.Empty;
+        var cached = FinvizTargetPriceService.GetCachedWithTime(symbol);
+        lblTargetPrice.Text = cached != null ? FormatTargetPriceStatus(cached.Value.Price, cached.Value.FetchedAtUtc) : string.Empty;
         _ = FinvizTargetPriceService.GetTargetPriceAsync(symbol);
     }
 

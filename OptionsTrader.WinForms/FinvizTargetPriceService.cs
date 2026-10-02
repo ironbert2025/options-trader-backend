@@ -49,11 +49,13 @@ internal static class FinvizTargetPriceService
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(25);
     private static readonly Dictionary<string, (decimal Price, DateTime FetchedAt)> Cache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object CacheLock = new();
-    public static event Action<string, decimal?>? TargetPriceUpdated;
+    public static event Action<string, decimal?, DateTime>? TargetPriceUpdated; // (symbol, price, fetchedAtUtc)
 
-    public static decimal? GetCached(string symbol)
+    // Last good value + the UTC moment it was actually scraped (NOT when it was last read), so a
+    // label can show "updated at ..." — null if nothing cached yet for this symbol.
+    public static (decimal Price, DateTime FetchedAtUtc)? GetCachedWithTime(string symbol)
     {
-        lock (CacheLock) return Cache.TryGetValue(symbol, out var c) ? c.Price : null;
+        lock (CacheLock) return Cache.TryGetValue(symbol, out var c) ? (c.Price, c.FetchedAt) : null;
     }
 
     public static async Task<decimal?> GetTargetPriceAsync(string symbol)
@@ -81,8 +83,9 @@ internal static class FinvizTargetPriceService
                 return null;
             }
             DebugLog($"symbol={symbol} OK price={price}");
-            lock (CacheLock) Cache[symbol] = (price, DateTime.UtcNow);
-            try { TargetPriceUpdated?.Invoke(symbol, price); } catch { /* a subscriber's bug never breaks the fetch */ }
+            var fetchedAt = DateTime.UtcNow;
+            lock (CacheLock) Cache[symbol] = (price, fetchedAt);
+            try { TargetPriceUpdated?.Invoke(symbol, price, fetchedAt); } catch { /* a subscriber's bug never breaks the fetch */ }
             return price;
         }
         catch (Exception ex)
