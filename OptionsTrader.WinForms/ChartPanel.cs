@@ -824,6 +824,18 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markStrike({priceStr});");
     }
 
+    // Fires (pairId, strike) when a trade's open/close spot rayitas were deleted on THIS panel — the
+    // Stk line + ΔS label of that trade went with them here; the host relays this to the sibling
+    // panels' RemoveTradeMarksAsync so the whole trade disappears from every chart.
+    public event Action<string?, decimal?>? OnTradeMarksDeletedEvent;
+
+    public async Task RemoveTradeMarksAsync(string? pairId, decimal? strike)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var strikeArg = strike.HasValue ? strike.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeTradeMarks({JsonSerializer.Serialize(pairId)}, {strikeArg});");
+    }
+
     // Removes a Stk line at the given price — called on the 2 SIBLING panels when OnStrikeDeletedEvent
     // fires from wherever the user actually clicked + pressed Delete (see MultiChartForm).
     public async Task RemoveStrikeLineAsync(decimal strike)
@@ -1029,16 +1041,17 @@ public class ChartPanel : Panel
     // currently forming, same as the original live-tick call site always did.
     // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
     // Call, below for a Put) — omitted for the open call and for replayed still-open trades.
-    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null)
+    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var strikeArg = strike.HasValue ? strike.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
         var timeArg = entryTime.HasValue
             ? new DateTimeOffset(DateTime.SpecifyKind(entryTime.Value, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString()
             : "undefined";
         var isCloseStr = isClose ? "true" : "false";
         var isCallStr = isCall ? "true" : "false";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg});");
     }
 
     // Redraws the white entry-spot line for every trade still open on THIS symbol (per
@@ -1053,7 +1066,8 @@ public class ChartPanel : Panel
         var openTrades = OpenTradesStore.Load().Where(t => t.Symbol == _symbol && t.EntrySpotPrice > 0m
             && !DeletedEntryMarkersStore.IsDeleted(_symbol, t.EntrySpotPrice, DateOnly.FromDateTime(t.EntryTime)));
         foreach (var trade in openTrades)
-            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime, trade.EntrySpotColor, pairId: trade.EntryTime.Ticks.ToString());
+            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime, trade.EntrySpotColor, pairId: trade.EntryTime.Ticks.ToString(),
+                strike: decimal.TryParse(trade.StrikePrice, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var replayStrike) ? replayStrike : null);
     }
 
     // Re-evaluated on every live tick (all 3 panels) — purely visual, flips the ATH line green
@@ -1299,6 +1313,13 @@ public class ChartPanel : Panel
                     var rt2 = root.GetProperty("t2").GetInt64();
                     var rp2 = root.GetProperty("p2").GetDecimal();
                     RectStore.Remove(_symbol, type == "bluerect_delete" ? HoraRectTag : HoraColorRectTag, rt1, rp1, rt2, rp2);
+                    break;
+                }
+                case "trade_marks_delete":
+                {
+                    string? tmPair = root.TryGetProperty("pairId", out var tmp) && tmp.ValueKind == JsonValueKind.String ? tmp.GetString() : null;
+                    decimal? tmStrike = root.TryGetProperty("strike", out var tms) && tms.ValueKind == JsonValueKind.Number ? tms.GetDecimal() : null;
+                    OnTradeMarksDeletedEvent?.Invoke(tmPair, tmStrike);
                     break;
                 }
                 case "entryspot_delete":

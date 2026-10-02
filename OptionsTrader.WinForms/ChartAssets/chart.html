@@ -986,8 +986,19 @@
     // isn't redrawn from OpenTradesStore the next time this chart loads (see
     // ChartPanel.ReplayPersistedEntryMarkersAsync). Close lines were never persisted anyway.
     if (entrySpotLinePrimitive._lines.some(l => l.selected)) {
-      // The whole open+close pair (both flagged selected on click) goes at once.
+      // The whole open+close pair (both flagged selected on click) goes at once, TOGETHER with
+      // everything else drawn for that trade: its green Stk line and ΔS label (removeTradeMarks),
+      // echoed to the sibling panels through C# ('trade_marks_delete').
       const removedSpots = entrySpotLinePrimitive._lines.filter(l => l.selected);
+      const seen = new Set();
+      removedSpots.forEach(r => {
+        const key = `${r.pairId}|${r.strike}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        removeTradeMarks(r.pairId, r.strike);
+        if (window.chrome && window.chrome.webview)
+          window.chrome.webview.postMessage({ type: 'trade_marks_delete', pairId: r.pairId, strike: r.strike });
+      });
       entrySpotLinePrimitive._lines = entrySpotLinePrimitive._lines.filter(l => !l.selected);
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
@@ -2695,7 +2706,8 @@
   // past its right end — above for a Call, below for a Put (see EntrySpotLinePrimitive.draw()).
   // pairId: identifies the trade this line belongs to, shared by its open and close lines, so
   // selecting + deleting one removes the whole pair (null for anything without one).
-  function markEntrySpot(price, time, color, isClose, isCall, pairId) {
+  // strike: the trade's strike, so deleting the pair can also take its green Stk line + ΔS label.
+  function markEntrySpot(price, time, color, isClose, isCall, pairId, strike) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
     let anchorTime = allCandles[allCandles.length - 1].time;
@@ -2712,7 +2724,19 @@
     // part of the key so an open and a close landing on the same candle/price (rare, but possible)
     // don't get treated as the same line and silently drop the close's "C" label.
     const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price && !!l.isClose === !!isClose);
-    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall, pairId: pairId ?? null });
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall, pairId: pairId ?? null, strike: strike ?? null });
+    forceRepaint();
+  }
+
+  // Removes everything drawn for one trade on THIS panel: its open+close spot rayitas (by pairId),
+  // its green Stk= line and its ΔS label (both keyed by the strike price). Also the echo target
+  // for a deletion done on a SIBLING panel (see 'trade_marks_delete') — never posts back out.
+  function removeTradeMarks(pairId, strike) {
+    if (pairId != null) entrySpotLinePrimitive._lines = entrySpotLinePrimitive._lines.filter(l => l.pairId !== pairId);
+    if (strike != null) {
+      strikeLinesPrimitive._lines = strikeLinesPrimitive._lines.filter(l => l.price !== strike);
+      deltaSPrimitive._labels = deltaSPrimitive._labels.filter(l => l.price !== strike);
+    }
     forceRepaint();
   }
 

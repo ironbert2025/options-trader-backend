@@ -233,13 +233,25 @@ public class SimulatedChartPanel : Panel
     // Accumulates, one segment per trade, never auto-removed.
     // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
     // Call, below for a Put) — omitted for the open call.
-    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null)
+    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var strikeArg = strike.HasValue ? strike.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
         var isCloseStr = isClose ? "true" : "false";
         var isCallStr = isCall ? "true" : "false";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg});");
+    }
+
+    // Fires (pairId, strike) when a trade's open/close rayitas are deleted on this chart — SimulatorForm
+    // relays it to the other chart's RemoveTradeMarksAsync (same idea as ChartPanel's own event).
+    public event Action<string?, decimal?>? OnTradeMarksDeletedEvent;
+
+    public async Task RemoveTradeMarksAsync(string? pairId, decimal? strike)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var strikeArg = strike.HasValue ? strike.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeTradeMarks({JsonSerializer.Serialize(pairId)}, {strikeArg});");
     }
 
     // Blue premarket spot-price line — panels 1 (Hourly15) and 2 (Fifteen_RTH) only, per explicit
@@ -1032,6 +1044,14 @@ public class SimulatedChartPanel : Panel
                 var arrowP2 = root.GetProperty("p2").GetDecimal();
                 var arrowRed = root.GetProperty("red").GetBoolean();
                 HandleDiagonalArrowPlaced(arrowP1, arrowP2, arrowRed);
+                return;
+            }
+
+            if (type == "trade_marks_delete")
+            {
+                string? tmPair = root.TryGetProperty("pairId", out var tmp) && tmp.ValueKind == JsonValueKind.String ? tmp.GetString() : null;
+                decimal? tmStrike = root.TryGetProperty("strike", out var tms) && tms.ValueKind == JsonValueKind.Number ? tms.GetDecimal() : null;
+                OnTradeMarksDeletedEvent?.Invoke(tmPair, tmStrike);
                 return;
             }
 

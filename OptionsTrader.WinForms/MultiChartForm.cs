@@ -538,6 +538,11 @@ public class MultiChartForm : Form
                 if (hourlyPanel != null) _ = hourlyPanel.RemoveHLineAsync(price);
                 if (rthPanel != null) _ = rthPanel.RemoveHLineAsync(price);
             };
+            overnightPanel.OnTradeMarksDeletedEvent += (pairId, strike) =>
+            {
+                if (hourlyPanel != null) _ = hourlyPanel.RemoveTradeMarksAsync(pairId, strike);
+                if (rthPanel != null) _ = rthPanel.RemoveTradeMarksAsync(pairId, strike);
+            };
             overnightPanel.OnHLineDrawnEvent += (time, price) =>
             {
                 if (hourlyPanel != null) _ = hourlyPanel.AddMirroredHLineAsync(time, price);
@@ -548,6 +553,7 @@ public class MultiChartForm : Form
         {
             hourlyPanel.OnStrikeDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveStrikeLineAsync(price); };
             hourlyPanel.OnHLineDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveHLineAsync(price); };
+            hourlyPanel.OnTradeMarksDeletedEvent += (pairId, strike) => { if (overnightPanel != null) _ = overnightPanel.RemoveTradeMarksAsync(pairId, strike); };
             hourlyPanel.OnHLineDrawnEvent += (time, price) => { if (overnightPanel != null) _ = overnightPanel.AddMirroredHLineAsync(time, price); };
             // All-Time High: the 1h panel is the only one that persists a new value (at the RTH
             // close, see ChartPanel.EvaluateAllTimeHighAtClose) — mirror it onto the other panels'
@@ -562,6 +568,7 @@ public class MultiChartForm : Form
         {
             rthPanel.OnStrikeDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveStrikeLineAsync(price); };
             rthPanel.OnHLineDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveHLineAsync(price); };
+            rthPanel.OnTradeMarksDeletedEvent += (pairId, strike) => { if (overnightPanel != null) _ = overnightPanel.RemoveTradeMarksAsync(pairId, strike); };
             rthPanel.OnHLineDrawnEvent += (time, price) => { if (overnightPanel != null) _ = overnightPanel.AddMirroredHLineAsync(time, price); };
         }
 
@@ -634,10 +641,10 @@ public class MultiChartForm : Form
     // White spot-price line — panels 2 (15m RTH) and 3 (15m RTH+Overnight), same marker the
     // Simulator already draws on trade open/close. Fired at both. Originally panel 3 only; panel 2
     // added per explicit request.
-    public async Task MarkEntrySpotOnOvernightChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null)
+    public async Task MarkEntrySpotOnOvernightChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
-        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId);
-        if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId);
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
+        if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
     }
 
     // Today's 9:30 AM ET, in the same "ET wall-clock digits disguised as UTC" fake-epoch units the

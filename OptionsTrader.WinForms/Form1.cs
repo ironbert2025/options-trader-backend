@@ -2781,6 +2781,7 @@ public partial class Form1 : Form
         // was opened against, not the last ~6s poll (_lastSpotPrice), per explicit request. Also
         // reused below for the white/yellow entry-spot marker line.
         var entrySpot = _lastLiveSpotPrice ?? _lastSpotPrice;
+        decimal? tradeStrike = decimal.TryParse(strike, out var tradeStrikeParsed) ? tradeStrikeParsed : null;
         LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {entrySpot:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}  Premium={premium:F2}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
@@ -2852,7 +2853,7 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
         {
             await chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
-            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString());
+            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString(), strike: tradeStrike);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -2863,7 +2864,7 @@ public partial class Form1 : Form
         {
             if (decimal.TryParse(strike, out var strikeValForChartsTab))
                 await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString());
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString(), strike: tradeStrike);
         }
 
         if (!isSimulation)
@@ -3206,7 +3207,7 @@ public partial class Form1 : Form
 
             await chartsControl.MarkStrikeOnRthChartAsync(strike);
             if (tag.EntrySpotPrice > 0)
-                await chartsControl.MarkEntrySpotOnRthChartAsync(tag.EntrySpotPrice, tag.EntrySpotColor, pairId: tag.EntryTime.Ticks.ToString());
+                await chartsControl.MarkEntrySpotOnRthChartAsync(tag.EntrySpotPrice, tag.EntrySpotColor, pairId: tag.EntryTime.Ticks.ToString(), strike: strike);
         }
     }
 
@@ -3880,6 +3881,7 @@ public partial class Form1 : Form
         // closed against, not the last ~6s poll (_lastSpotPrice), per explicit request. Also reused
         // below for the ΔS and white/yellow close-spot marker lines.
         var closeSpot = _lastLiveSpotPrice ?? _lastSpotPrice;
+        decimal? closeTradeStrike = decimal.TryParse(strike, out var closeTradeStrikeParsed) ? closeTradeStrikeParsed : null;
         var spotPrice = closeSpot > 0 ? closeSpot.ToString("F2") : string.Empty;
         var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
@@ -3979,7 +3981,7 @@ public partial class Form1 : Form
         var closeIsCall = type.Equals("CALL", StringComparison.OrdinalIgnoreCase);
         if (closeSpot > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
         {
-            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString());
+            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString(), strike: closeTradeStrike);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -3989,7 +3991,7 @@ public partial class Form1 : Form
         {
             if (tag is { EntrySpotPrice: > 0 } && decimal.TryParse(strike, out var strikeForDeltaChartsTab))
                 await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, closeSpot, strikeForDeltaChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString());
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString(), strike: closeTradeStrike);
         }
 
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload

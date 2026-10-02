@@ -317,6 +317,10 @@ public class SimulatorForm : Form
 
         // Trend text (SMA20/40 short-term, SMA100/200 long-term + reminder dashes) on the 1h chart,
         // logged whenever the trend pair changes — see ChartPanel.TrendLogText.
+        // Deleting a trade's rayitas on one 15m chart takes its Stk line / ΔS / rayitas off the other too.
+        _rthChart.OnTradeMarksDeletedEvent  += (pairId, strike) => _ = _fullChart.RemoveTradeMarksAsync(pairId, strike);
+        _fullChart.OnTradeMarksDeletedEvent += (pairId, strike) => _ = _rthChart.RemoveTradeMarksAsync(pairId, strike);
+
         // 1er Salto decided on the 1h chart -> "Salto en Efecto" on the 15m chart.
         _hourlyChart.OnSaltoSetupChanged += (crossUp, saltoDays) =>
         {
@@ -1978,8 +1982,8 @@ public class SimulatorForm : Form
         // entry — panels 2 and 3, bounded to that one candle, mirroring the live app
         // (MultiChartForm.MarkEntrySpotOnOvernightChartAsync — originally panel 3 only, panel 2
         // added later; the simulator hadn't been kept in sync).
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor, pairId: _entrySpotColorCounter.ToString());
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor, pairId: _entrySpotColorCounter.ToString());
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
         var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
@@ -2059,8 +2063,8 @@ public class SimulatorForm : Form
         // same marker as the entry one, panels 2 and 3. isClose: true adds the "C" label (above
         // for a Call, below for a Put), per explicit request.
         var closeIsCall = trade.OptionType.Equals("CALL", StringComparison.OrdinalIgnoreCase);
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId);
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId);
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");

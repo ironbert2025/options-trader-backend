@@ -379,9 +379,9 @@ public class TwoPanelChartsControl : UserControl
     // MarkEntrySpotOnOvernightChartAsync — the Charts tab has no equivalent since it's a whole
     // separate MultiChartForm-less control Form1 never fed this into). Same underlying primitive/
     // persistence (OpenTradesStore) as the popup, just reached through this control directly.
-    public async Task MarkEntrySpotOnRthChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null)
+    public async Task MarkEntrySpotOnRthChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
-        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId);
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
     }
 
     // Green "Stk=xxx" line at trade open — panel 2 (15m RTH) only, same pattern as
@@ -588,6 +588,11 @@ public class TwoPanelChartsControl : UserControl
             {
                 foreach (var sibling in twoPanels)
                     if (sibling != null && sibling != panel) _ = sibling.RemoveHLineAsync(price);
+            };
+            panel.OnTradeMarksDeletedEvent += (pairId, strike) =>
+            {
+                foreach (var sibling in twoPanels)
+                    if (sibling != null && sibling != panel) _ = sibling.RemoveTradeMarksAsync(pairId, strike);
             };
             panel.OnHLineDrawnEvent += (time, price) =>
             {
