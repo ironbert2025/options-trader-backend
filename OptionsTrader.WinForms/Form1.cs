@@ -2852,7 +2852,7 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
         {
             await chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
-            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(entrySpot, entrySpotColor);
+            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString());
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -2863,7 +2863,7 @@ public partial class Form1 : Form
         {
             if (decimal.TryParse(strike, out var strikeValForChartsTab))
                 await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString());
         }
 
         if (!isSimulation)
@@ -3206,7 +3206,7 @@ public partial class Form1 : Form
 
             await chartsControl.MarkStrikeOnRthChartAsync(strike);
             if (tag.EntrySpotPrice > 0)
-                await chartsControl.MarkEntrySpotOnRthChartAsync(tag.EntrySpotPrice, tag.EntrySpotColor);
+                await chartsControl.MarkEntrySpotOnRthChartAsync(tag.EntrySpotPrice, tag.EntrySpotColor, pairId: tag.EntryTime.Ticks.ToString());
         }
     }
 
@@ -3979,7 +3979,7 @@ public partial class Form1 : Form
         var closeIsCall = type.Equals("CALL", StringComparison.OrdinalIgnoreCase);
         if (closeSpot > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
         {
-            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall);
+            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString());
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -3989,7 +3989,7 @@ public partial class Form1 : Form
         {
             if (tag is { EntrySpotPrice: > 0 } && decimal.TryParse(strike, out var strikeForDeltaChartsTab))
                 await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, closeSpot, strikeForDeltaChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString());
         }
 
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload

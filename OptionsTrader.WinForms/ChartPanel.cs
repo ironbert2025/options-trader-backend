@@ -1029,7 +1029,7 @@ public class ChartPanel : Panel
     // currently forming, same as the original live-tick call site always did.
     // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
     // Call, below for a Put) — omitted for the open call and for replayed still-open trades.
-    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null, string color = "#ffffff", bool isClose = false, bool isCall = false)
+    public async Task MarkEntrySpotAsync(decimal price, DateTime? entryTime = null, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -1038,7 +1038,7 @@ public class ChartPanel : Panel
             : "undefined";
         var isCloseStr = isClose ? "true" : "false";
         var isCallStr = isCall ? "true" : "false";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)});");
     }
 
     // Redraws the white entry-spot line for every trade still open on THIS symbol (per
@@ -1053,7 +1053,7 @@ public class ChartPanel : Panel
         var openTrades = OpenTradesStore.Load().Where(t => t.Symbol == _symbol && t.EntrySpotPrice > 0m
             && !DeletedEntryMarkersStore.IsDeleted(_symbol, t.EntrySpotPrice, DateOnly.FromDateTime(t.EntryTime)));
         foreach (var trade in openTrades)
-            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime, trade.EntrySpotColor);
+            await MarkEntrySpotAsync(trade.EntrySpotPrice, trade.EntryTime, trade.EntrySpotColor, pairId: trade.EntryTime.Ticks.ToString());
     }
 
     // Re-evaluated on every live tick (all 3 panels) — purely visual, flips the ATH line green

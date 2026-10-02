@@ -233,13 +233,13 @@ public class SimulatedChartPanel : Panel
     // Accumulates, one segment per trade, never auto-removed.
     // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
     // Call, below for a Put) — omitted for the open call.
-    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false)
+    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var isCloseStr = isClose ? "true" : "false";
         var isCallStr = isCall ? "true" : "false";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)});");
     }
 
     // Blue premarket spot-price line — panels 1 (Hourly15) and 2 (Fifteen_RTH) only, per explicit

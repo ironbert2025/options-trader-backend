@@ -985,13 +985,13 @@
     // Entry/close spot marker: removed here and reported to C# so a still-open trade's ENTRY line
     // isn't redrawn from OpenTradesStore the next time this chart loads (see
     // ChartPanel.ReplayPersistedEntryMarkersAsync). Close lines were never persisted anyway.
-    const entrySpotIdx = entrySpotLinePrimitive._lines.findIndex(l => l.selected);
-    if (entrySpotIdx !== -1) {
-      const removedSpot = entrySpotLinePrimitive._lines[entrySpotIdx];
-      entrySpotLinePrimitive._lines.splice(entrySpotIdx, 1);
+    if (entrySpotLinePrimitive._lines.some(l => l.selected)) {
+      // The whole open+close pair (both flagged selected on click) goes at once.
+      const removedSpots = entrySpotLinePrimitive._lines.filter(l => l.selected);
+      entrySpotLinePrimitive._lines = entrySpotLinePrimitive._lines.filter(l => !l.selected);
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
-        window.chrome.webview.postMessage({ type: 'entryspot_delete', price: removedSpot.price, time: removedSpot.time, isClose: !!removedSpot.isClose });
+        removedSpots.forEach(r => window.chrome.webview.postMessage({ type: 'entryspot_delete', price: r.price, time: r.time, isClose: !!r.isClose }));
       }
       return;
     }
@@ -1270,7 +1270,8 @@
     if (entrySpotLinePrimitive._lines.length > 0) {
       const hitIdx = findEntrySpotLineByClick(param.point.x, param.point.y);
       if (hitIdx !== -1) {
-        entrySpotLinePrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx; });
+        const hitPair = entrySpotLinePrimitive._lines[hitIdx].pairId;
+        entrySpotLinePrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx || (hitPair != null && l.pairId === hitPair); });
         forceRepaint();
         return;
       }
@@ -2692,7 +2693,9 @@
   // each other. Defaults to white for any caller that doesn't pass one (old persisted trades).
   // isClose/isCall: per explicit request, the CLOSE line only (never open) gets a "C" label just
   // past its right end — above for a Call, below for a Put (see EntrySpotLinePrimitive.draw()).
-  function markEntrySpot(price, time, color, isClose, isCall) {
+  // pairId: identifies the trade this line belongs to, shared by its open and close lines, so
+  // selecting + deleting one removes the whole pair (null for anything without one).
+  function markEntrySpot(price, time, color, isClose, isCall, pairId) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
     let anchorTime = allCandles[allCandles.length - 1].time;
@@ -2709,7 +2712,7 @@
     // part of the key so an open and a close landing on the same candle/price (rare, but possible)
     // don't get treated as the same line and silently drop the close's "C" label.
     const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price && !!l.isClose === !!isClose);
-    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall });
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall, pairId: pairId ?? null });
     forceRepaint();
   }
 
