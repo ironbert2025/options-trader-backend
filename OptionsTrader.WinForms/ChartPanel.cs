@@ -836,6 +836,15 @@ public class ChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"removeTradeMarks({JsonSerializer.Serialize(pairId)}, {strikeArg});");
     }
 
+    // Puts an "R" on this strike's existing Stk line — a Refuerzo (2nd trade at the same strike)
+    // happened there; the 2nd/combined trades don't draw a second line (see markStrike).
+    public async Task MarkReinforcementAsync(decimal strike)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var priceStr = strike.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markReinforcement({priceStr});");
+    }
+
     // Removes a Stk line at the given price — called on the 2 SIBLING panels when OnStrikeDeletedEvent
     // fires from wherever the user actually clicked + pressed Delete (see MultiChartForm).
     public async Task RemoveStrikeLineAsync(decimal strike)

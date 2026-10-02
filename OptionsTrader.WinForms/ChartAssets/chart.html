@@ -3603,6 +3603,13 @@
                   ctx.textBaseline = 'bottom';
                   ctx.textAlign = 'left';
                   ctx.fillText(l.label, x * scope.horizontalPixelRatio + 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2);
+                  if (l.reinforced) {
+                    // "R" = a Refuerzo happened at this strike — just past the Stk= label, same baseline.
+                    const labelW = ctx.measureText(l.label).width;
+                    ctx.fillStyle = '#ffeb3b';
+                    ctx.fillText('R', x * scope.horizontalPixelRatio + 4 * scope.horizontalPixelRatio + labelW + 8 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2);
+                    ctx.fillStyle = '#00c853';
+                  }
 
                   if (l.selected) {
                     ctx.save();
@@ -3634,8 +3641,20 @@
   function markStrike(price, label) {
     if (!strikeLinesAttached) { candleSeries.attachPrimitive(strikeLinesPrimitive); strikeLinesAttached = true; }
     if (allCandles.length === 0) return;
+    // A trade-open call (no custom label) at a strike that already has its line — a Refuerzo's 2nd
+    // trade and its combined result row all land on the SAME strike — must not stack another line on
+    // top of the first; markReinforcement puts an "R" on the existing one instead. Calls WITH a
+    // custom label (TimeframeViewerForm's Ask=... lines) are unaffected.
+    if (label == null && strikeLinesPrimitive._lines.some(l => l.price === price)) return;
     const anchorTime = allCandles[allCandles.length - 1].time;
     strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: label || `Stk=${price}`, selected: false });
+    forceRepaint();
+  }
+
+  // Flags the existing Stk line(s) at this strike as reinforced: draws a yellow "R" on top of the
+  // line (next to its Stk= label) so a Refuerzo is visible without drawing a 2nd line.
+  function markReinforcement(price) {
+    strikeLinesPrimitive._lines.forEach(l => { if (l.price === price) l.reinforced = true; });
     forceRepaint();
   }
 

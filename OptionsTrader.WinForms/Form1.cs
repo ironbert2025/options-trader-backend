@@ -2698,6 +2698,16 @@ public partial class Form1 : Form
         reinforcementRow.DefaultCellStyle.BackColor = ReinforcementRowColor;
 
         LogLine($"{DateTime.Now:HH:mm:ss} [Refuerzo] {symbol} {rowType} @ {strike}: {c1}@{p1:F2} + {c2}@{p2:F2} -> {combinedContracts}@{avgPrice:F2} (TradeId {reinforcementId})", Color.Khaki);
+
+        // No 2nd green Stk line on top of the first (markStrike dedupes by strike) — an "R" on the
+        // existing one marks that a Refuerzo happened there, per explicit request.
+        if (decimal.TryParse(strike, out var reinforcedStrike))
+        {
+            if (_liveChartForms.TryGetValue(symbol, out var chartFormReinforced) && !chartFormReinforced.IsDisposed)
+                await chartFormReinforced.MarkReinforcementOnOvernightChartAsync(reinforcedStrike);
+            if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+                await _chartsTabForm.MarkReinforcementOnRthChartAsync(reinforcedStrike);
+        }
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType, OptionsGridColumns cols)

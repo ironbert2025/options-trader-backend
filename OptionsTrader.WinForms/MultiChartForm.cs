@@ -638,6 +638,13 @@ public class MultiChartForm : Form
         if (_overnightPanel != null) await _overnightPanel.MarkStrikeAsync(strike);
     }
 
+    // "R" on the Stk line at a Refuerzo — same two panels MarkStrikeOnOvernightChartAsync draws it on.
+    public async Task MarkReinforcementOnOvernightChartAsync(decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkReinforcementAsync(strike);
+        if (_overnightPanel != null) await _overnightPanel.MarkReinforcementAsync(strike);
+    }
+
     // White spot-price line — panels 2 (15m RTH) and 3 (15m RTH+Overnight), same marker the
     // Simulator already draws on trade open/close. Fired at both. Originally panel 3 only; panel 2
     // added per explicit request.

@@ -384,6 +384,12 @@ public class TwoPanelChartsControl : UserControl
         if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
     }
 
+    // "R" on the Stk line at a Refuerzo — panel 2 (15m RTH) only, mirrors MarkStrikeOnRthChartAsync.
+    public async Task MarkReinforcementOnRthChartAsync(decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkReinforcementAsync(strike);
+    }
+
     // Green "Stk=xxx" line at trade open — panel 2 (15m RTH) only, same pattern as
     // MarkEntrySpotOnRthChartAsync above.
     public async Task MarkStrikeOnRthChartAsync(decimal strike)
