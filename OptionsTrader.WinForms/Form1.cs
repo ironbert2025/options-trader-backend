@@ -92,6 +92,11 @@ public partial class Form1 : Form
     // In-memory only (not persisted across restarts — a trade still open across a restart keeps
     // whatever color OpenTradesStore already saved for it, see TradeRowTag.EntrySpotColor).
     private int _entrySpotColorCounter;
+    // Trade commission per contract, in option-price units (shared by every T_Bid / target-order
+    // price: T_Bid = Round(Ask * (1 + Target%/100) + this, 2)). Added ONCE per target, not per contract
+    // count — T_Bid is a per-contract price. Also used by the Simulator.
+    internal const decimal TargetCommissionPerContract = 0.02m;
+
     private string NextEntrySpotColor() => (++_entrySpotColorCounter % 2 == 1) ? "#ffffff" : "#ffeb3b";
     private CsvLogger? _csvLogger;
     private CsvLogger? _csvLoggerNext;
@@ -189,6 +194,50 @@ public partial class Form1 : Form
         btnDeleteTelegramPushes.Click += BtnDeleteTelegramPushes_Click;
         tabSettings.Controls.Add(btnDeleteTelegramPushes);
 
+        // Saves THIS window's current screen position (WindowPositionStore), keyed by the
+        // currently selected ticker — applied again on the next app launch, only for the instance
+        // that auto-selects this same ticker at startup (see TickerButton_Click / Form1_Load).
+        var btnSaveWindowPosition = new Button
+        {
+            Location = new Point(518, 480),
+            Size     = new Size(100, 25),
+            Text     = "Guardar Posición"
+        };
+        btnSaveWindowPosition.Click += (s, e) =>
+        {
+            if (_selectedTicker == null)
+            {
+                MessageBox.Show("Selecciona un ticker primero.", "Guardar Posición", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            WindowPositionStore.Save(_selectedTicker.Symbol, Location);
+            MessageBox.Show($"Posición guardada para {_selectedTicker.Symbol}.", "Guardar Posición", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+        tabSettings.Controls.Add(btnSaveWindowPosition);
+
+        // "TargetP= value" (Finviz analyst target) in the bottom status bar, right after "ATH:" —
+        // same number the chart's own top-right TargetP label shows (that one stays where it is).
+        // Added via code, not the designer, same convention as the buttons above.
+        lblTargetPrice = new ToolStripStatusLabel
+        {
+            Name      = "lblTargetPrice",
+            Margin    = new Padding(12, 3, 0, 2),
+            ForeColor = Color.FromArgb(0x26, 0xa6, 0x9a), // same teal as the chart's TargetP label
+            Font      = new Font(statusStrip1.Font, FontStyle.Bold)
+        };
+        statusStrip1.Items.Add(lblTargetPrice);
+        Action<string, decimal?, DateTime> onTargetPriceUpdated = (symbol, price, fetchedAtUtc) =>
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            BeginInvoke(() =>
+            {
+                if (price != null && string.Equals(_selectedTicker?.Symbol, symbol, StringComparison.OrdinalIgnoreCase))
+                    lblTargetPrice.Text = FormatTargetPriceStatus(price.Value, fetchedAtUtc);
+            });
+        };
+        FinvizTargetPriceService.TargetPriceUpdated += onTargetPriceUpdated;
+        Disposed += (s, e) => FinvizTargetPriceService.TargetPriceUpdated -= onTargetPriceUpdated;
+
         // "History" tab — Calendar (trading journal) + Trade Log views over TradeHistoryStore.
         // Built entirely in HistoryTabPanel (no designer file), same convention as
         // MultiChartForm/ChartPanel.
@@ -252,6 +301,7 @@ public partial class Form1 : Form
         // the exact same fallback path already used when the API is unreachable or "AWS" is off.
         lblStatusUser.Text = "User: (API bypass)";
         CtLogWriter.WireUp(); // regenerates the CT.md whenever CtRecordStore changes, any symbol/panel
+        ClaimTickerSlotAndSelect();
         /*
         try
         {
@@ -301,6 +351,53 @@ public partial class Form1 : Form
         // stale one in the meantime. Safe to call again later from BeginPolling too — it's a no-op
         // if the timer is already running (see its own guard).
         if (IsPrimaryTickerInstance()) StartTokenKeepAlive();
+
+        if (_selectedTicker != null && MarketHours.IsWithinTwoHoursBeforeOpen)
+            await AutoStartPollingAndOpenChartsAsync();
+    }
+
+    // Kept alive for the whole process lifetime — the OS releases it if the process dies, freeing
+    // the slot for the next launch.
+    private Mutex? _tickerSlotMutex;
+
+    // Each launched instance claims the first free slot i (0..tickers-1) and selects tickers[i] —
+    // launch order = ticker order, per machine (TickerSettingsStore is local to each PC). Slot 0 is
+    // therefore always tickers[0], i.e. the "primary" instance IsPrimaryTickerInstance() expects.
+    // More instances than tickers: no free slot, nothing selected, stays manual as before.
+    private void ClaimTickerSlotAndSelect()
+    {
+        var buttons = flpTickers.Controls.OfType<Button>().ToList();
+        for (int i = 0; i < buttons.Count; i++)
+        {
+            var mutex = new Mutex(initiallyOwned: false, name: $@"Local\OptionsTrader.TickerSlot.{i}");
+            bool acquired;
+            try { acquired = mutex.WaitOne(0); }
+            catch (AbandonedMutexException) { acquired = true; } // previous owner crashed — slot is ours
+            if (!acquired) { mutex.Dispose(); continue; }
+
+            _tickerSlotMutex = mutex;
+            buttons[i].PerformClick();
+            LogLine($"{DateTime.Now:HH:mm:ss} [Startup] Instancia #{i + 1} → ticker {buttons[i].Text}", Color.Cyan);
+            return;
+        }
+    }
+
+    // Launched 7:30–9:30 AM ET on a weekday: Start Polling, wait for the first fetch to fill the
+    // grid(s), then switch to the Charts tab (whose SelectedIndexChanged handler connects it).
+    private async Task AutoStartPollingAndOpenChartsAsync()
+    {
+        try
+        {
+            if (!_isPolling) BeginPolling(showWarnings: false, isAutoCapture: false);
+            if (!_isPolling) { LogLine($"{DateTime.Now:HH:mm:ss} [Startup] Auto Start Polling no pudo iniciar (¿credenciales Schwab?).", Color.Orange); return; }
+
+            if (_lastPollingFetchTask != null) await _lastPollingFetchTask;
+            tabControl.SelectedTab = tabCharts;
+        }
+        catch (Exception ex)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Startup] Auto-arranque falló: {ex.Message}", Color.Orange);
+        }
     }
 
     // Periodically (every 5 min) tries to append today's 9:30-9:35 AM ATM IV snapshot for this
@@ -789,6 +886,30 @@ public partial class Form1 : Form
         return entry?.StrikeCount ?? 40;
     }
 
+    // Startup only (see _isInitialTickerSelection): the saved spot for this ticker if there is one
+    // AND it still falls inside some currently-connected monitor — otherwise centers on whichever
+    // screen the window is appearing on (e.g. the saved spot was on a 2nd monitor that's since
+    // been disconnected).
+    private void ApplySavedOrCenteredWindowPosition()
+    {
+        if (_selectedTicker == null) return;
+        var saved = WindowPositionStore.Load(_selectedTicker.Symbol);
+        StartPosition = FormStartPosition.Manual;
+        if (saved.HasValue && Screen.AllScreens.Any(s => s.Bounds.Contains(saved.Value)))
+            Location = saved.Value;
+        else
+            CenterWindowOnCurrentScreen();
+    }
+
+    // Centers this window on whichever monitor it's currently on — per explicit request, every
+    // ticker switch DURING a session (not the initial startup one) lands here, never on a saved spot.
+    private void CenterWindowOnCurrentScreen()
+    {
+        StartPosition = FormStartPosition.Manual;
+        var area = Screen.FromControl(this).WorkingArea;
+        Location = new Point(area.Left + (area.Width - Width) / 2, area.Top + (area.Height - Height) / 2);
+    }
+
     // Applies a just-changed polling interval to the LIVE timer immediately, if it's currently
     // running for this same symbol — no need to disconnect/reconnect. Skipped while the 11 AM
     // throttle is active (that fixed 60s override takes priority; the new value still persists and
@@ -798,6 +919,13 @@ public partial class Form1 : Form
         if (_pollingTimer == null || _selectedTicker?.Symbol != symbol || _throttledAfter11) return;
         _pollingTimer.Interval = Math.Max(1, seconds) * 1000;
     }
+
+    // True only for the VERY FIRST ticker selection of this run — the auto-select
+    // ClaimTickerSlotAndSelect does at startup (PerformClick routes through this same handler).
+    // That one applies the ticker's saved window position (or centers if none/off-screen); any
+    // LATER selection (the user manually clicking a different ticker button) always just centers,
+    // per explicit request — never jumps to that other ticker's saved spot mid-session.
+    private bool _isInitialTickerSelection = true;
 
     private void TickerButton_Click(object? sender, EventArgs e)
     {
@@ -815,8 +943,18 @@ public partial class Form1 : Form
         clicked.Font = new Font(clicked.Font, FontStyle.Bold);
 
         _selectedTicker = clicked.Tag as TickerEntry;
+        if (_isInitialTickerSelection)
+        {
+            _isInitialTickerSelection = false;
+            ApplySavedOrCenteredWindowPosition();
+        }
+        else
+        {
+            CenterWindowOnCurrentScreen();
+        }
         UpdateEarningsStatusLabel();
         UpdateAllTimeHighStatusLabel();
+        UpdateTargetPriceStatusLabel();
         _forcedStrikes.Clear();
         _chartsTabHighlightedStrikes.Clear();
 
@@ -869,6 +1007,29 @@ public partial class Form1 : Form
     // only on ticker selection (same as UpdateEarningsStatusLabel; the ATH itself only ever changes
     // once/day at the 4pm close, so this doesn't need to be live). Blank if no ATH has been
     // persisted yet for this symbol.
+    private ToolStripStatusLabel lblTargetPrice = null!;
+
+    // "TargetP= 337.68  10.02 09:45" — the trailing "MM.dd HH:mm" (24h, this PC's local clock) is
+    // when Finviz was actually scraped for this value, so a stale number is recognizable. Status
+    // bar only — the chart's own TargetP label stays price-only, per explicit request.
+    private static string FormatTargetPriceStatus(decimal price, DateTime fetchedAtUtc) =>
+        $"TargetP= {price.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}  " +
+        $"{fetchedAtUtc.ToLocalTime().ToString("MM.dd HH:mm", System.Globalization.CultureInfo.InvariantCulture)}";
+
+    // Shows the cached Finviz target price for the selected symbol right away (blank if none yet
+    // or the symbol isn't a supported stock), then asks the service for a fresh one — it caches
+    // for 25 min and shares that cache with the Charts tab's own refresh, so this never adds
+    // scraping beyond one fetch per symbol per window. TargetPriceUpdated fills the label in when
+    // a fresh value lands.
+    private void UpdateTargetPriceStatusLabel()
+    {
+        var symbol = _selectedTicker?.Symbol;
+        if (symbol == null) { lblTargetPrice.Text = string.Empty; return; }
+        var cached = FinvizTargetPriceService.GetCachedWithTime(symbol);
+        lblTargetPrice.Text = cached != null ? FormatTargetPriceStatus(cached.Value.Price, cached.Value.FetchedAtUtc) : string.Empty;
+        _ = FinvizTargetPriceService.GetTargetPriceAsync(symbol);
+    }
+
     private void UpdateAllTimeHighStatusLabel()
     {
         var ath = _selectedTicker != null ? AllTimeHighStore.Load(_selectedTicker.Symbol) : null;
@@ -938,7 +1099,7 @@ public partial class Form1 : Form
             {
                 // Still valid — restore as open trade
                 decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-                var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m), 2);
+                var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
 
                 dgvTrades.Rows.Add(
                     t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
@@ -996,7 +1157,7 @@ public partial class Form1 : Form
             }
 
             decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-            var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m), 2);
+            var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
 
             dgvTrades.Rows.Add(
                 t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
@@ -1325,7 +1486,18 @@ public partial class Form1 : Form
             };
             _marketOpenTimer.Start();
         }
+
+        // Immediate fetch, same as clicking "Fetch Quotes" — per explicit request, every instance
+        // (not just the primary) should show current option quotes in the grid(s) right away
+        // instead of waiting for the first polling-timer tick (or, outside market hours, doing
+        // nothing until the market actually opens). Fire-and-forget: FetchAndUpdateQuotesAsync
+        // already has its own error handling (no blocking MessageBox), safe to not await here.
+        _lastPollingFetchTask = FetchAndUpdateQuotesAsync();
     }
+
+    // The immediate fetch BeginPolling fires last — kept so the startup auto-arranque can await it
+    // (grids populated) before switching to the Charts tab.
+    private Task? _lastPollingFetchTask;
 
     // Proactively renews the Schwab access token every 30 minutes, starting immediately and
     // running through the RTH close (16:00 ET) regardless of whether polling itself is later
@@ -1540,16 +1712,23 @@ public partial class Form1 : Form
                 selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked,
                 forcedStrikes: _forcedStrikes);
 
-            // Update PnL for open trades against the FULL chain (not the range-filtered grid),
-            // so a trade's current bid keeps updating even after its strike leaves the display range.
-            var callMapForTrades = allQuotes
+            // Update PnL for open trades against the FULL chain (not the range-filtered grid), so a
+            // trade's current bid keeps updating even after its strike leaves the display range.
+            // Keyed by (type, strike, EXPIRATION) — not just (type, strike) — and built from BOTH
+            // the current and next chain (allQuotes/allQuotesNext, same fullChain fetch, both
+            // already resolved above). Tickers with dense/overlapping expirations (e.g. SPX's daily
+            // 0DTE strikes) reuse the same strike across adjacent expirations with very different
+            // premiums — the old (type, strike)-only key silently matched whichever expiration
+            // happened to be in allQuotes, not the trade's OWN one, showing a bid that "difiere
+            // totalmente" from the real current bid. Confirmed live (SPX, laptop).
+            var callMapForTrades = allQuotes.Concat(allQuotesNext)
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Call)
-                .GroupBy(q => q.StrikePrice)
-                .ToDictionary(g => ("CALL", g.Key), g => g.First());
-            var putMapForTrades = allQuotes
+                .GroupBy(q => (q.StrikePrice, q.ExpirationDate))
+                .ToDictionary(g => ("CALL", g.Key.StrikePrice, g.Key.ExpirationDate), g => g.First());
+            var putMapForTrades = allQuotes.Concat(allQuotesNext)
                 .Where(q => q.OptionType == OptionsTrader.Domain.Enums.OptionType.Put)
-                .GroupBy(q => q.StrikePrice)
-                .ToDictionary(g => ("PUT", g.Key), g => g.First());
+                .GroupBy(q => (q.StrikePrice, q.ExpirationDate))
+                .ToDictionary(g => ("PUT", g.Key.StrikePrice, g.Key.ExpirationDate), g => g.First());
             UpdateTradesPnL(callMapForTrades, putMapForTrades);
             OnTradesUpdatedEvent?.Invoke(_selectedTicker.Symbol);
 
@@ -1561,7 +1740,12 @@ public partial class Form1 : Form
                     _csvLoggerNext?.AppendRows(TrimQuotesForCsv(allQuotesNext));
 
                 _lastAllQuotesNext = allQuotesNext;
-                (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker);
+                // Same filter as "Hoy" (applyCountsFilter/selectedCounts/Call-Put toggle) — per
+                // explicit request; this used to fall through to the default (range-filtered by
+                // Ask) instead, so "Próxima" showed a different set of strikes than "Hoy" for no
+                // reason other than this call not passing the same params.
+                (_lastOtmCallsNext, _lastOtmPutsNext) = PopulateQuotesGrid(dgvQuotesNext, allQuotesNext, _selectedTicker, applyCountsFilter: true,
+                    selectedCounts: _selectedCounts, callOnly: chkCallFilter.Checked && !chkPutFilter.Checked, putOnly: chkPutFilter.Checked && !chkCallFilter.Checked);
             }
 
             // Live options grid mirrored on the Live Chart window (MultiChartForm) AND the Charts
@@ -2283,15 +2467,12 @@ public partial class Form1 : Form
     }
 
     // Guards the Strike button on the tradable (current-expiration) grid: blocks the trade if
-    // the option is illiquid (bid = 0), the spread is too wide (Sprd >= 6, same cents units
-    // shown in the Sprd column), or there's no room for even 1 contract at the current Position
-    // Size (Conts = 0) — any one of these makes clicking Strike a guaranteed-bad trade.
+    // the option is illiquid (bid = 0), or there's no room for even 1 contract at the current
+    // Position Size (Conts = 0) — either makes clicking Strike a guaranteed-bad trade. The
+    // spread-too-wide (Sprd >= 6) check was removed per explicit request.
     private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName)
     {
         if (IsRowBidZero(row, callBidColName, putBidColName)) return true;
-
-        var sprdColName = row.Tag?.ToString() == "PUT" ? "colPutSprd" : "colCallSprd";
-        if (decimal.TryParse(row.Cells[sprdColName].Value?.ToString(), out var sprd) && sprd >= 6) return true;
 
         if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
 
@@ -2497,10 +2678,18 @@ public partial class Form1 : Form
 
         if (reinforcementRow.Tag is TradeRowTag rTag)
             reinforcementRow.Tag = rTag with { ReinforcementGroupId = reinforcementId, IsReinforcementResult = true };
+        // The 2 original legs stop auto-closing on their OWN (now-stale) target once they're part
+        // of a group — per explicit request, only the combined reinforcement row's target drives
+        // the auto-close from here on (UpdateTradesPnL already skips SuppressAutoClose rows). They
+        // keep running (still get live C_Bid/PnL updates) and still close manually/together with
+        // the group when the reinforcement row itself hits target — see UpdateTradesPnL's own
+        // group-close comment. PnL_Target cleared to blank to match every other suppressed row.
         if (sourceRow.Tag is TradeRowTag sTag)
-            sourceRow.Tag = sTag with { ReinforcementGroupId = reinforcementId };
+            sourceRow.Tag = sTag with { ReinforcementGroupId = reinforcementId, SuppressAutoClose = true };
         if (newRow.Tag is TradeRowTag nTag)
-            newRow.Tag = nTag with { ReinforcementGroupId = reinforcementId };
+            newRow.Tag = nTag with { ReinforcementGroupId = reinforcementId, SuppressAutoClose = true };
+        sourceRow.Cells["colTradePnLTarget"].Value = string.Empty;
+        newRow.Cells["colTradePnLTarget"].Value     = string.Empty;
 
         // Note in trade_history.json (and, via CloseTradeRowAsync -> DailyTradeLogWriter, the
         // Obsidian .md log at close time) that this trade is a Refuerzo result, and which 2 trades
@@ -2514,6 +2703,16 @@ public partial class Form1 : Form
         reinforcementRow.DefaultCellStyle.BackColor = ReinforcementRowColor;
 
         LogLine($"{DateTime.Now:HH:mm:ss} [Refuerzo] {symbol} {rowType} @ {strike}: {c1}@{p1:F2} + {c2}@{p2:F2} -> {combinedContracts}@{avgPrice:F2} (TradeId {reinforcementId})", Color.Khaki);
+
+        // No 2nd green Stk line on top of the first (markStrike dedupes by strike) — an "R" on the
+        // existing one marks that a Refuerzo happened there, per explicit request.
+        if (decimal.TryParse(strike, out var reinforcedStrike))
+        {
+            if (_liveChartForms.TryGetValue(symbol, out var chartFormReinforced) && !chartFormReinforced.IsDisposed)
+                await chartFormReinforced.MarkReinforcementOnOvernightChartAsync(reinforcedStrike);
+            if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+                await _chartsTabForm.MarkReinforcementOnRthChartAsync(reinforcedStrike);
+        }
     }
 
     private static (decimal bid, decimal ask) ReadRowBidAsk(DataGridViewRow row, string rowType, OptionsGridColumns cols)
@@ -2542,7 +2741,7 @@ public partial class Form1 : Form
         decimal targetPct;
         if (overrideTargetPct.HasValue) targetPct = overrideTargetPct.Value;
         else decimal.TryParse(TargetSettingsStore.Load(), out targetPct);
-        var tBid      = Math.Round(ask * (1 + targetPct / 100m), 2);
+        var tBid      = Math.Round(ask * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
         var entryStr  = ask.ToString("F2");
         var entryTime = DateTime.Now;
         var now       = entryTime.ToString("HH:mm:ss");
@@ -2572,6 +2771,13 @@ public partial class Form1 : Form
             SetMoneyness(newRow, rowType, strikeForMoneyness, _lastSpotPrice);
         newRow.Cells["colTradeDemoReal"].Value = isSimulation ? "Simulation" : (isDemo ? "Demo" : "Real");
 
+        // Pin this strike so it keeps showing in dgvQuotes for the rest of the session, regardless
+        // of the "Counts"/"In Range" filter or OTM/ITM — same mechanism DgvTrades_CellClick already
+        // triggers manually on an existing trade's Strike cell, now applied automatically the
+        // moment ANY trade opens (demo/real/simulation, from either options grid), per explicit
+        // request ("no se queda el strike mostrado... cuando se crea un trade").
+        ForceStrikeInQuotesGrid(newRow);
+
         // Per explicit request: a strike opened from the Charts tab's own options grid stays
         // highlighted there (gray/light-green row) for the rest of the session, even after this
         // trade closes — see _chartsTabHighlightedStrikes' own comment. Read-and-reset, same
@@ -2586,7 +2792,12 @@ public partial class Form1 : Form
         // cuando se confirma el fill ("Real EntryPrice confirmed"), esto es solo el de apertura.
         decimal.TryParse(contracts, out var contractsForPremium);
         var premium = ask * 100 * contractsForPremium;
-        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {_lastSpotPrice:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}  Premium={premium:F2}", Color.White);
+        // Live websocket price at click time (see WireLiveSpotTracking) — the real spot the trade
+        // was opened against, not the last ~6s poll (_lastSpotPrice), per explicit request. Also
+        // reused below for the white/yellow entry-spot marker line.
+        var entrySpot = _lastLiveSpotPrice ?? _lastSpotPrice;
+        decimal? tradeStrike = decimal.TryParse(strike, out var tradeStrikeParsed) ? tradeStrikeParsed : null;
+        LogLine($"{now} {entryLabel} ({rowType})  SpotPrice: {entrySpot:F2}  StrikePrice: {strike}  Ask: {ask:F2}  Contracts: {contracts}  Level: {level}  Premium={premium:F2}", Color.White);
         LogLine($"{now} EntryPrice: {entryStr}", Color.LimeGreen);
         LogLine($"{now} Set Target: {tBid:F2}", Color.Orange);
         System.Windows.Forms.Application.DoEvents();
@@ -2611,7 +2822,7 @@ public partial class Form1 : Form
         // own comment.
         var simulationLocalId = isSimulation ? Guid.NewGuid() : (Guid?)null;
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
-            ExpirationDate: expDate, EntrySpotPrice: _lastSpotPrice, EntrySpotColor: entrySpotColor,
+            ExpirationDate: expDate, EntrySpotPrice: entrySpot, EntrySpotColor: entrySpotColor,
             LocalId: simulationLocalId);
         PadWithBlankRows(dgvTrades, 4);
 
@@ -2627,7 +2838,7 @@ public partial class Form1 : Form
                 ExpirationDate: expDate,
                 Level:          level,
                 PnlTarget:      targetPct.ToString("F0"),
-                EntrySpotPrice: _lastSpotPrice,
+                EntrySpotPrice: entrySpot,
                 IsDemo:         isDemo,
                 EntrySpotColor: entrySpotColor));
         else
@@ -2646,7 +2857,7 @@ public partial class Form1 : Form
                 ExpirationDate: expDate,
                 Level:          level,
                 PnlTarget:      targetPct.ToString("F0"),
-                EntrySpotPrice: _lastSpotPrice,
+                EntrySpotPrice: entrySpot,
                 EntrySpotColor: entrySpotColor));
 
         // Green "Stk=xxx" line — panel 3 (15m RTH+Overnight) only — demo and real trades both flow
@@ -2657,7 +2868,7 @@ public partial class Form1 : Form
         if (decimal.TryParse(strike, out var strikeVal) && _liveChartForms.TryGetValue(symbol, out var chartFormForStrike) && !chartFormForStrike.IsDisposed)
         {
             await chartFormForStrike.MarkStrikeOnOvernightChartAsync(strikeVal);
-            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice, entrySpotColor);
+            await chartFormForStrike.MarkEntrySpotOnOvernightChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString(), strike: tradeStrike);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -2668,7 +2879,7 @@ public partial class Form1 : Form
         {
             if (decimal.TryParse(strike, out var strikeValForChartsTab))
                 await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, entrySpotColor);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString(), strike: tradeStrike);
         }
 
         if (!isSimulation)
@@ -2902,14 +3113,16 @@ public partial class Form1 : Form
             AutoSize  = true,
             Font      = new Font("Microsoft Sans Serif", 8.25F, FontStyle.Bold),
             ForeColor = Color.DarkGoldenrod,
-            Anchor    = AnchorStyles.Top | AnchorStyles.Right
+            Anchor    = AnchorStyles.Top | AnchorStyles.Left // positioned manually in RepositionChartsConnectButton
         };
         _lblChartsPollingTime = lblPolling;
 
         void RepositionChartsConnectButton()
         {
             btn.Location = new Point(tabCharts.ClientSize.Width - btn.Width - 8, 3);
-            lblPolling.Location = new Point(btn.Right - lblPolling.Width, btn.Bottom + 4);
+            // PreferredSize, not Width: TextChanged fires before AutoSize applies the new width, so
+            // Width was stale (0/old) and the label landed past the right edge, clipped.
+            lblPolling.Location = new Point(btn.Right - lblPolling.PreferredSize.Width, btn.Bottom + 4);
         }
         RepositionChartsConnectButton();
         tabCharts.Resize += (s, e) => RepositionChartsConnectButton();
@@ -3009,7 +3222,7 @@ public partial class Form1 : Form
 
             await chartsControl.MarkStrikeOnRthChartAsync(strike);
             if (tag.EntrySpotPrice > 0)
-                await chartsControl.MarkEntrySpotOnRthChartAsync(tag.EntrySpotPrice, tag.EntrySpotColor);
+                await chartsControl.MarkEntrySpotOnRthChartAsync(tag.EntrySpotPrice, tag.EntrySpotColor, pairId: tag.EntryTime.Ticks.ToString(), strike: strike);
         }
     }
 
@@ -3241,6 +3454,7 @@ public partial class Form1 : Form
             _candleHubClient = remoteHubClient;
             _historyClient   = CreateSchwabStreamerClient();
             _liveFeed        = remoteHubClient;
+            WireLiveSpotTracking(remoteHubClient);
             return;
         }
 
@@ -3261,6 +3475,7 @@ public partial class Form1 : Form
 
             _historyClient = reconnectedStreamer;
             _liveFeed      = reconnectedStreamer;
+            WireLiveSpotTracking(reconnectedStreamer);
             return;
         }
 
@@ -3289,6 +3504,7 @@ public partial class Form1 : Form
 
             _historyClient = streamer;
             _liveFeed      = streamer; // this instance's own connection IS the live feed
+            WireLiveSpotTracking(streamer);
             return;
         }
 
@@ -3301,6 +3517,22 @@ public partial class Form1 : Form
         _candleHubClient = hubClient;
         _historyClient   = CreateSchwabStreamerClient();
         _liveFeed        = hubClient;
+        WireLiveSpotTracking(hubClient);
+    }
+
+    // Tracks the latest LIVE spot price for the currently selected ticker, straight from the
+    // streaming feed (CHART_EQUITY candle close / LEVEL_ONE_EQUITIES last price — whichever is
+    // more recent), independent of any chart window being open. Used for EntrySpotPrice (the
+    // white/yellow spot line drawn when a trade opens) instead of _lastSpotPrice, which only
+    // reflects the last ~6s options-chain poll — confirmed live: could be stale by several
+    // seconds relative to the actual spot at click time. Falls back to _lastSpotPrice if no live
+    // tick has arrived yet for this symbol (e.g. right at startup, before the first one lands).
+    private decimal? _lastLiveSpotPrice;
+
+    private void WireLiveSpotTracking(ICandleFeed feed)
+    {
+        feed.OnNewCandle    += (symbol, candle) => { if (_selectedTicker != null && symbol == _selectedTicker.Symbol) _lastLiveSpotPrice = candle.Close; };
+        feed.OnLevelOneTick += (symbol, price, time) => { if (_selectedTicker != null && symbol == _selectedTicker.Symbol) _lastLiveSpotPrice = price; };
     }
 
     private async Task PlaceRealTradeAsync(int rowIndex, bool withTarget, bool sendToApi = true) =>
@@ -3414,7 +3646,7 @@ public partial class Form1 : Form
             return;
         }
 
-        var targetPrice = Math.Round(fill.Value * (1 + targetPct / 100m), 2);
+        var targetPrice = Math.Round(fill.Value * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
 
         Invoke(() =>
         {
@@ -3588,7 +3820,16 @@ public partial class Form1 : Form
         }
     }
 
-    private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType)
+    // exitPriceOverride: used ONLY when auto-closing a Refuerzo group by target (see UpdateTradesPnL) —
+    // every row in the group shares the exact same live quote, but each has its OWN entry price and
+    // therefore its own (usually different) T_Bid. When ONE row's C_Bid reaches ITS T_Bid, the whole
+    // group closes together — the other rows almost certainly haven't reached THEIR OWN T_Bid yet, so
+    // letting them close at closeType "TARGET" (which uses each row's own T_Bid) fabricates a price
+    // they never actually hit. Passing the triggering row's real live C_Bid here for every row in the
+    // group makes them all close at the price that's actually true for all of them (same underlying
+    // quote), matching exactly what the MANUAL group-close path already does correctly (see
+    // DgvTrades_CellClick's own comment: "each at its own current C_Bid").
+    private async Task CloseTradeRowAsync(DataGridViewRow row, string closeType, decimal? exitPriceOverride = null)
     {
         var now       = DateTime.Now;
         var nowStr    = now.ToString("HH:mm:ss");
@@ -3651,7 +3892,12 @@ public partial class Form1 : Form
         var strike    = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
         var pnl       = row.Cells["colTradePnL"].Value?.ToString() ?? string.Empty;
         var pnlPct    = row.Cells["colTradePnLPercent"].Value?.ToString() ?? string.Empty;
-        var spotPrice = _lastSpotPrice > 0 ? _lastSpotPrice.ToString("F2") : string.Empty;
+        // Live websocket price at close time (see WireLiveSpotTracking) — the real spot the trade
+        // closed against, not the last ~6s poll (_lastSpotPrice), per explicit request. Also reused
+        // below for the ΔS and white/yellow close-spot marker lines.
+        var closeSpot = _lastLiveSpotPrice ?? _lastSpotPrice;
+        decimal? closeTradeStrike = decimal.TryParse(strike, out var closeTradeStrikeParsed) ? closeTradeStrikeParsed : null;
+        var spotPrice = closeSpot > 0 ? closeSpot.ToString("F2") : string.Empty;
         var symbol    = _selectedTicker?.Symbol ?? "UNK";
 
         var duration = TimeSpan.Zero;
@@ -3672,7 +3918,7 @@ public partial class Form1 : Form
         var tBidStr       = row.Cells["colTradeTBid"].Value?.ToString() ?? string.Empty;
         decimal.TryParse(cBid, out var cBidParsed);
         decimal? targetClosePrice = closeType == "TARGET" && decimal.TryParse(tBidStr, out var tBidParsed) ? tBidParsed : null;
-        var exitBid = realClosePrice ?? targetClosePrice ?? cBidParsed;
+        var exitBid = exitPriceOverride ?? realClosePrice ?? targetClosePrice ?? cBidParsed;
         decimal.TryParse(entryPriceStr, out var entryPrice);
         decimal.TryParse(contractsStr, out var contractsForPnl);
         var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);
@@ -3684,7 +3930,7 @@ public partial class Form1 : Form
         row.Cells["colTradePnLPercent"].Value = pnlPct;
         // Closing PnL% (real fill price, or target price for TARGET closes) can be a new
         // low/high the live ticks never saw.
-        UpdatePnLMinMax(row, pnlPctVal);
+        UpdatePnLMinMax(row, pnlPctVal, nowStr);
         row.Cells["colTradeExitTime"].Value   = nowStr;
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
@@ -3737,10 +3983,10 @@ public partial class Form1 : Form
         // anchored at the trade's strike (same price as its green "Stk=xxx" line). EntrySpotPrice
         // is 0 for trades opened before this feature shipped (no reliable value to show), so those
         // are skipped rather than drawing a misleading ΔS=<currentSpot>.
-        if (tag is { EntrySpotPrice: > 0 } && _lastSpotPrice > 0 && decimal.TryParse(strike, out var strikeForDelta) &&
+        if (tag is { EntrySpotPrice: > 0 } && closeSpot > 0 && decimal.TryParse(strike, out var strikeForDelta) &&
             _liveChartForms.TryGetValue(symbol, out var chartFormDelta) && !chartFormDelta.IsDisposed)
         {
-            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDelta);
+            await chartFormDelta.MarkDeltaSOnOvernightChartAsync(tag.EntrySpotPrice, closeSpot, strikeForDelta);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
@@ -3748,19 +3994,19 @@ public partial class Form1 : Form
         // line at close — same marker drawn on entry, mirrors the Simulator.
         var closeSpotColor = tag?.EntrySpotColor ?? "#ffffff";
         var closeIsCall = type.Equals("CALL", StringComparison.OrdinalIgnoreCase);
-        if (_lastSpotPrice > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
+        if (closeSpot > 0 && _liveChartForms.TryGetValue(symbol, out var chartFormCloseSpot) && !chartFormCloseSpot.IsDisposed)
         {
-            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(_lastSpotPrice, closeSpotColor, isClose: true, isCall: closeIsCall);
+            await chartFormCloseSpot.MarkEntrySpotOnOvernightChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString(), strike: closeTradeStrike);
             await Task.Delay(100); // let the WebView2 repaint before capturing it
         }
 
         // Same white spot-price line on the Charts tab's own panel 2 (15m RTH), per explicit
         // request — see the matching call in TriggerQuoteStrikeClick's entry-open flow.
-        if (_lastSpotPrice > 0 && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
+        if (closeSpot > 0 && _chartsTabForm != null && _chartsTabForm.Symbol == symbol)
         {
             if (tag is { EntrySpotPrice: > 0 } && decimal.TryParse(strike, out var strikeForDeltaChartsTab))
-                await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, _lastSpotPrice, strikeForDeltaChartsTab);
-            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(_lastSpotPrice, closeSpotColor, isClose: true, isCall: closeIsCall);
+                await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, closeSpot, strikeForDeltaChartsTab);
+            await _chartsTabForm.MarkEntrySpotOnRthChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString(), strike: closeTradeStrike);
         }
 
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
@@ -3782,28 +4028,26 @@ public partial class Form1 : Form
         // (no real/demo money or API trade involved).
         var isSameDaySimulationExpiry = isSimulation && closeType == "EXPIRED"
             && tag != null && tag.ExpirationDate == DateOnly.FromDateTime(tag.EntryTime);
-        if (isSameDaySimulationExpiry)
+        // Refuerzo group: only the combined result row pushes to Telegram — the 2 source legs
+        // close in the same instant with the same chart and would just triple the messages.
+        var isReinforcementSourceLeg = tag is { ReinforcementGroupId: not null, IsReinforcementResult: false };
+        if (isReinforcementSourceLeg)
+        {
+            // no push — covered by the group's result row
+        }
+        else if (isSameDaySimulationExpiry)
             _ = SendSimulationExpiredTelegramPushAsync(symbol, type, strike, entryPrice, exitBid, pnlVal, pnlPctVal,
-                tag!.EntryImagePath, closeChartPath);
+                // Refuerzo result: close photo only — it already shows the result trade's open line.
+                tag!.IsReinforcementResult ? null : tag.EntryImagePath, closeChartPath);
         else
             _ = SendTradeCloseTelegramPushAsync(symbol, tradeId, type, strike, closeType, entryPrice, exitBid, pnlVal, pnlPctVal, duration, closeChartPath);
-
-        // Simulation trades stop here for S3/TradeHistoryStore — the Telegram push above is one
-        // exception (per explicit request); the daily-log entry below is another (also per
-        // explicit request) — writes straight to its own "_Sim_Trades.md" using the LOCAL entry/
-        // close snapshot paths already captured (tag.EntryImagePath, closeChartPath), no S3 URL
-        // needed. Everything else below (TradeLog screenshot, S3 upload) still only applies to
-        // real/demo trades — see RecordEntryAsync's matching isSimulation skip on the entry side.
-        if (isSimulation)
-        {
-            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath);
-            return;
-        }
 
         // Screenshot TradeLog (Trades + Logger section of the form) — scroll the just-closed row
         // into view first, per explicit request, so it's actually visible in the capture even if
         // the grid was scrolled elsewhere when the trade closed (CaptureTradeLogScreenshot just
-        // renders whatever's currently on screen).
+        // renders whatever's currently on screen). Captured for Simulation trades too now (per
+        // explicit request) — CaptureTradeLogScreenshot itself is purely local (no S3 involved),
+        // so it's safe to reuse as-is; only the upload below stays real/demo-only.
         if (dgvTrades.Rows.Contains(row))
         {
             dgvTrades.CurrentCell = row.Cells[0];
@@ -3812,6 +4056,17 @@ public partial class Form1 : Form
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
+
+        // Simulation trades stop here for S3/TradeHistoryStore — the Telegram push above is one
+        // exception (per explicit request); the daily-log entry below is another (also per
+        // explicit request) — writes straight to its own "_Sim_Trades.md" using the LOCAL entry/
+        // close/trade-log snapshot paths already captured, no S3 URL needed. The upload below
+        // stays real/demo-only — see RecordEntryAsync's matching isSimulation skip on the entry side.
+        if (isSimulation)
+        {
+            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath, tradeLogPath);
+            return;
+        }
 
         // Uploads Close + TradeLog (fire-and-forget, doesn't block the row from showing "Closed"),
         // then appends today's Obsidian daily-trade-log entry once both S3 URLs are actually known
@@ -3859,6 +4114,25 @@ public partial class Form1 : Form
             Directory.CreateDirectory(folder);
             var fileName = $"{symbol}_{optionType}_{DateTime.Now:yyyyMMdd_HHmmss}_{tag}.png";
             var filePath = Path.Combine(folder, fileName);
+
+            // Per explicit request: stamp the close date onto the "Close" snapshot — the whole
+            // trade entry now gets filed under the day it OPENED (see DailyTradeLogWriter), so a
+            // trade that closed on a LATER day needs something visible in the image itself to
+            // flag that, instead of only being inferable from the ExitTime cell in the grid.
+            if (tag == "Close")
+            {
+                using var g = Graphics.FromImage(combined);
+                var text = $"Cerrado: {DateTime.Now:yyyy-MM-dd}";
+                using var font = new Font("Segoe UI", 11f, FontStyle.Bold);
+                var size = g.MeasureString(text, font);
+                var x = combined.Width - size.Width - 8f;
+                var y = combined.Height - size.Height - 8f;
+                using var backBrush = new SolidBrush(Color.FromArgb(160, 0, 0, 0));
+                g.FillRectangle(backBrush, x - 4f, y - 2f, size.Width + 8f, size.Height + 4f);
+                using var textBrush = new SolidBrush(Color.FromArgb(255, 255, 235, 59)); // yellow
+                g.DrawString(text, font, textBrush, x, y);
+            }
+
             combined.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
             return filePath;
         }
@@ -4190,7 +4464,10 @@ public partial class Form1 : Form
     // been profitable leaves Max blank (no positive value to show) rather than showing "the least
     // negative point reached"; same idea mirrored for Min if it's never gone negative.
     // Session-only — not persisted to OpenTradesStore, so it resets if the app restarts mid-trade.
-    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
+    // whenText (HH:mm:ss) is when this new record happened — stored as the cell's tooltip, so
+    // hovering Min/Max shows the exact time it was reached (TwoPanelChartsControl's mirror grid
+    // copies ToolTipText too).
+    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct, string whenText)
     {
         var minCell = row.Cells["colTradePnLMin"];
         var maxCell = row.Cells["colTradePnLMax"];
@@ -4199,19 +4476,21 @@ public partial class Form1 : Form
         {
             minCell.Value             = pnlPct.ToString("F1");
             minCell.Style.ForeColor   = Color.Red;
+            minCell.ToolTipText       = whenText; // just the time — the cell itself already shows "Min"/the value
         }
 
         if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value             = pnlPct.ToString("F1");
             maxCell.Style.ForeColor   = Color.Green;
+            maxCell.ToolTipText       = whenText; // just the time — the cell itself already shows "Max"/the value
         }
     }
 
-    private void UpdateTradesPnL(Dictionary<(string, decimal), OptionQuoteDto> callMap,
-                                  Dictionary<(string, decimal), OptionQuoteDto> putMap)
+    private void UpdateTradesPnL(Dictionary<(string, decimal, DateOnly), OptionQuoteDto> callMap,
+                                  Dictionary<(string, decimal, DateOnly), OptionQuoteDto> putMap)
     {
-        var rowsToClose = new List<DataGridViewRow>();
+        var rowsToClose = new List<(DataGridViewRow Row, decimal CurrentBid)>();
 
         foreach (DataGridViewRow row in dgvTrades.Rows)
         {
@@ -4222,8 +4501,11 @@ public partial class Form1 : Form
             if (!decimal.TryParse(row.Cells["colTradeStrike"].Value?.ToString(), out var strike)) continue;
             if (!decimal.TryParse(row.Cells["colTradeEntryPrice"].Value?.ToString(), out var entryPrice)) continue;
             if (!decimal.TryParse(row.Cells["colTradeContracts"].Value?.ToString(), out var contracts)) continue;
+            // The trade's OWN expiration (see TradeRowTag) — never fall back to "whatever expiration
+            // happens to be in the map for this strike" (see this method's caller for why).
+            if (row.Tag is not TradeRowTag tag || tag.ExpirationDate == default) continue;
 
-            var key = (type, strike);
+            var key = (type, strike, tag.ExpirationDate);
             decimal currentBid = 0;
 
             if (type == "CALL" && callMap.TryGetValue(key, out var callQ))
@@ -4246,7 +4528,7 @@ public partial class Form1 : Form
             row.Cells["colTradePnLPercent"].Style.ForeColor = pnlPct >= 0 ? Color.Green : Color.Red;
             row.Cells["colTradePnLPercent"].Style.Font      = new Font(dgvTrades.Font, FontStyle.Bold);
 
-            UpdatePnLMinMax(row, pnlPct);
+            UpdatePnLMinMax(row, pnlPct, DateTime.Now.ToString("HH:mm:ss"));
             SetMoneyness(row, type, strike, _lastSpotPrice);
 
             // Auto-close when the current bid reaches the target price (T_Bid).
@@ -4257,7 +4539,7 @@ public partial class Form1 : Form
                 && decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
                 && targetBid > 0 && currentBid >= targetBid)
             {
-                rowsToClose.Add(row);
+                rowsToClose.Add((row, currentBid));
             }
         }
 
@@ -4266,7 +4548,7 @@ public partial class Form1 : Form
         // independently qualify for auto-close in the SAME pass — dedupe by group so the group only
         // gets closed once (closing every still-open row in it), instead of once per qualifying row.
         var closedReinforcementGroups = new HashSet<int>();
-        foreach (var row in rowsToClose)
+        foreach (var (row, currentBid) in rowsToClose)
         {
             if (row.Tag is TradeRowTag { ReinforcementGroupId: { } groupId })
             {
@@ -4275,8 +4557,13 @@ public partial class Form1 : Form
                     .Where(r => r.Tag is TradeRowTag t && t.ReinforcementGroupId == groupId
                         && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()))
                     .ToList();
+                // Only THIS row actually reached its own T_Bid — the other rows in the group almost
+                // certainly haven't reached THEIRS yet (different entry price => different target).
+                // Close every row in the group at the shared live currentBid instead of letting
+                // CloseTradeRowAsync fall back to each row's own (unmet) T_Bid — see its own
+                // exitPriceOverride comment for why that would otherwise fabricate PnL.
                 foreach (var groupRow in groupRows)
-                    _ = CloseTradeRowAsync(groupRow, "TARGET");
+                    _ = CloseTradeRowAsync(groupRow, "TARGET", exitPriceOverride: currentBid);
             }
             else
             {

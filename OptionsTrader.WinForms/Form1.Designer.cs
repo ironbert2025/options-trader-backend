@@ -747,8 +747,8 @@ partial class Form1
         // chkHideNextExpDate
         //
         chkHideNextExpDate.AutoSize = true;
-        chkHideNextExpDate.Checked = true;
-        chkHideNextExpDate.CheckState = CheckState.Checked;
+        chkHideNextExpDate.Checked = false;
+        chkHideNextExpDate.CheckState = CheckState.Unchecked;
         chkHideNextExpDate.Location = new Point(800, 166);
         chkHideNextExpDate.Name = "chkHideNextExpDate";
         chkHideNextExpDate.Size = new Size(115, 19);

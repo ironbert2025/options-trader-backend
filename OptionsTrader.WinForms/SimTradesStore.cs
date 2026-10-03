@@ -12,13 +12,13 @@ internal static class SimTradesStore
     private const string Header = "Symbol,SimDate,OptionType,StrikePrice,Contracts,EntryStepTime,EntryPrice,ExitStepTime,ExitPrice,PnL,PnLPercent";
 
     public static void Append(string symbol, DateOnly simDate, string optionType, decimal strikePrice, int contracts,
-        DateTime entryStepTime, decimal entryPrice, DateTime exitStepTime, decimal exitPrice, decimal pnl, decimal pnlPercent)
+        DateTime entryStepTime, decimal entryPrice, DateTime exitStepTime, decimal exitPrice, decimal pnl, decimal pnlPercent, DateOnly? exp = null)
     {
         try
         {
             var folder = Path.Combine(OutputFolder, symbol);
             Directory.CreateDirectory(folder);
-            var path = Path.Combine(folder, $"{symbol}_{simDate:yyyyMMdd}.csv");
+            var path = Path.Combine(folder, exp.HasValue ? $"{symbol}_{simDate:yyyyMMdd}_exp{exp.Value:yyyyMMdd}.csv" : $"{symbol}_{simDate:yyyyMMdd}.csv");
 
             var isNew = !File.Exists(path);
             using var writer = new StreamWriter(path, append: true);

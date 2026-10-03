@@ -79,7 +79,13 @@ public class SimulatedChartPanel : Panel
             if (_mode == ChartPanelMode.Hourly15)
             {
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureSmas([20,40,100,200]);");
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableSalto();"); // "1er Salto" label, 1h panel only
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableTrendReport();"); // trend text for the log
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureBollinger(20, 2);");
+
+                // Light gray fill between the bands — same as panel 2 (15m RTH), per explicit request.
+                await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
+
                 _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
             }
             else if (_mode == ChartPanelMode.Fifteen_RTH)
@@ -170,7 +176,7 @@ public class SimulatedChartPanel : Panel
         if (myGeneration != _renderGeneration) return; // a newer step/jump landed while this one was still sending
 
         if (_mode == ChartPanelMode.Hourly15 || _mode == ChartPanelMode.Fifteen_Full || _mode == ChartPanelMode.Fifteen_RTH)
-            EvaluateNewlyClosedCandles(candles);
+            EvaluateNewlyClosedCandles(candles, simDate);
 
         if (myGeneration != _renderGeneration) return;
         await DrawPrevDayCloseAsync(candles, myGeneration, simDate);
@@ -227,13 +233,25 @@ public class SimulatedChartPanel : Panel
     // Accumulates, one segment per trade, never auto-removed.
     // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
     // Call, below for a Put) — omitted for the open call.
-    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false)
+    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var strikeArg = strike.HasValue ? strike.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
         var isCloseStr = isClose ? "true" : "false";
         var isCallStr = isCall ? "true" : "false";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr});");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg});");
+    }
+
+    // Fires (pairId, strike) when a trade's open/close rayitas are deleted on this chart — SimulatorForm
+    // relays it to the other chart's RemoveTradeMarksAsync (same idea as ChartPanel's own event).
+    public event Action<string?, decimal?>? OnTradeMarksDeletedEvent;
+
+    public async Task RemoveTradeMarksAsync(string? pairId, decimal? strike)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var strikeArg = strike.HasValue ? strike.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"removeTradeMarks({JsonSerializer.Serialize(pairId)}, {strikeArg});");
     }
 
     // Blue premarket spot-price line — panels 1 (Hourly15) and 2 (Fifteen_RTH) only, per explicit
@@ -330,6 +348,116 @@ public class SimulatedChartPanel : Panel
         };
 
         return System.Text.Json.JsonSerializer.Serialize(candles.Select(Map));
+    }
+
+    // ==================================================================================
+    // "Trigger Call/Put" wick analysis — ported from ChartPanel (RTH chart only). Same rule: armed
+    // once by 2 diagonal Arrows (red smaller than green in Y), stays armed regardless of deleting
+    // either afterward; then watches the FIRST 15m RTH candle of the SIMULATED day (simDate, not
+    // real time) for a wick-then-recover pattern, firing at most once per simulated day.
+    // ==================================================================================
+    private decimal? _lastRedArrowSize;
+    private decimal? _lastGreenArrowSize;
+    private bool _wickAnalysisArmed;
+    private enum WickState { None, DippedBelow, RoseAbove }
+    private WickState _wickState = WickState.None;
+    private decimal _wickLow;
+    private decimal _wickHigh;
+    private bool _wickTriggerFiredForDay;
+    private DateOnly _wickStateSimDate;
+
+    // Fires "Trigger Call"/"Trigger Put" — SimulatorForm logs it via LogSimEvent.
+    public event Action<string>? OnWickTriggerEvent;
+
+    private void HandleDiagonalArrowPlaced(decimal p1, decimal p2, bool red)
+    {
+        var size = Math.Abs(p1 - p2);
+        if (red) _lastRedArrowSize = size; else _lastGreenArrowSize = size;
+
+        // Arms on EITHER inequality now, not just red < green — a pair drawn the other way
+        // (green shorter than red, i.e. arming for the Put scenario) must arm just as well, per
+        // explicit request. Only an exact tie (r == g) leaves it unarmed.
+        if (!_wickAnalysisArmed && _lastRedArrowSize is { } r && _lastGreenArrowSize is { } g && r != g)
+            _wickAnalysisArmed = true;
+    }
+
+    private void HandleDiagonalArrowDeleted(bool red)
+    {
+        // Once armed, deleting an arrow afterward does NOT disarm — only drops the cached size so
+        // a still-not-armed comparison starts fresh, same as the live app.
+        if (red) _lastRedArrowSize = null; else _lastGreenArrowSize = null;
+    }
+
+    // Called once per step, SYNCHRONOUSLY, by SimulatorForm.RenderChartsUpToTime — deliberately
+    // NOT wired through CargarHastaPasoAsync/EvaluateNewlyClosedCandles (both async, awaiting
+    // several WebView2 round trips) because this is pure C# candle-data math with no dependency on
+    // the chart having actually redrawn yet. Calling it from inside that async chain made
+    // OnWickTriggerEvent fire tens of milliseconds AFTER RenderGridForStep already ran and read
+    // the (still unarmed) tracking state — the label update was always one step behind, which
+    // combined with the tight first-15m-candle window meant it almost never fired in time when
+    // stepping forward via ▶/"+1 Min"/"Vela ▶". candles[^1] is the still-forming candle for this
+    // step; it's "the session's first 15m candle" when it's the only candle in the list whose date
+    // matches simDate.
+    // Called once by SimulatorForm.LoadSelectedDay, right after _simDate is set — BEFORE the user
+    // has any chance to draw arrows. Without this, _wickStateSimDate stayed at its default value
+    // until the FIRST EvaluateWickTrigger call of the day, which then saw a "date mismatch" and
+    // wiped out whatever arming had already happened from arrows drawn right after loading but
+    // before ever clicking Adelante/Vela — the analysis looked armed but reset itself the instant
+    // stepping started.
+    public void ResetWickStateForDay(DateOnly simDate)
+    {
+        _wickStateSimDate = simDate;
+        _wickAnalysisArmed = false;
+        _lastRedArrowSize = null;
+        _lastGreenArrowSize = null;
+        _wickState = WickState.None;
+        _wickTriggerFiredForDay = false;
+    }
+
+    public void EvaluateWickTrigger(List<CandleData> candles, DateOnly simDate)
+    {
+        if (_wickStateSimDate != simDate) ResetWickStateForDay(simDate);
+
+        if (!_wickAnalysisArmed || _wickTriggerFiredForDay || candles.Count == 0) return;
+
+        var forming = candles[^1];
+        var formingDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(forming.Time, EasternZone));
+        if (formingDate != simDate) return;
+        // Must be the FIRST candle of simDate in the list — any earlier candle sharing that date
+        // means we're past the session's opening 15m bar.
+        if (candles.Count > 1)
+        {
+            var prevDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(candles[^2].Time, EasternZone));
+            if (prevDate == simDate) return;
+        }
+
+        var open = forming.Open;
+        var price = forming.Close;
+        switch (_wickState)
+        {
+            case WickState.None:
+                if (price < open) { _wickState = WickState.DippedBelow; _wickLow = price; }
+                else if (price > open) { _wickState = WickState.RoseAbove; _wickHigh = price; }
+                break;
+
+            case WickState.DippedBelow:
+                if (price < _wickLow) { _wickLow = price; break; }
+                if (price >= open + (open - _wickLow))
+                {
+                    _wickTriggerFiredForDay = true;
+                    OnWickTriggerEvent?.Invoke("Trigger Call");
+                }
+                break;
+
+            case WickState.RoseAbove:
+                if (price > _wickHigh) { _wickHigh = price; break; }
+                if (price <= open - (_wickHigh - open))
+                {
+                    _wickTriggerFiredForDay = true;
+                    OnWickTriggerEvent?.Invoke("Trigger Put");
+                }
+                break;
+        }
     }
 
     // ==================================================================================
@@ -492,7 +620,7 @@ public class SimulatedChartPanel : Panel
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
             var evento    = crossed ? "Cruce" : "Rebote";
             var gapTag    = crossedByGapOpen && !crossedByClose ? " (gap)" : "";
-            var caption   = $"{evento}{gapTag} en {pisoTecho} — SMA{watch.Period} — cierre {justClosed.Close:F2} (SMA{watch.Period} {currentSma.Value:F2})";
+            var caption   = $"{evento}{gapTag} en {pisoTecho} {watch.Period}";
             OnPisoTechoOutcomeEvent?.Invoke(AppendVolatilityArmSuffix(evento, pisoTecho, caption), justClosed.Close, $"PisoTecho{evento}", pisoTecho, $"SMA{watch.Period}={currentSma.Value:F2}");
         }
 
@@ -536,7 +664,7 @@ public class SimulatedChartPanel : Panel
 
             watch.Done = true;
             var pisoTecho = watch.WatchingUp ? "Techo" : "Piso";
-            var caption = $"Cruce (gap) en {pisoTecho} — SMA{watch.Period} — Open {forming.Open:F2} (SMA{watch.Period} en vivo {liveSma.Value:F2})";
+            var caption = $"Cruce (gap) en {pisoTecho} {watch.Period}";
             OnPisoTechoOutcomeEvent?.Invoke(AppendVolatilityArmSuffix("Cruce", pisoTecho, caption), forming.Close, "PisoTechoCruce", pisoTecho, $"SMA{watch.Period}={liveSma.Value:F2}");
         }
     }
@@ -711,6 +839,33 @@ public class SimulatedChartPanel : Panel
         return result == "true";
     }
 
+    // "Arrow" (diagonal, 2-click) — ported from the live ChartPanel/TwoPanelChartsControl, RTH
+    // chart only (no "panel 1" equivalent here to also arm). Same toggle pattern as DZ/SZ. See
+    // CoreWebView2_WebMessageReceived's "diagonal_arrow_placed"/"diagonal_arrow_deleted" cases for
+    // the "Trigger Call/Put" wick-analysis arming this feeds.
+    public async Task<bool> ToggleArrowModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleArrow();");
+        return result == "true";
+    }
+
+    // SMA20/40 + SMA100/200 trend ("up"/"down"/null each) — see ChartPanel.OnTrendStateChanged.
+    public event Action<string?, string?>? OnTrendStateChanged;
+
+    // Same as ChartPanel.OnSaltoSetupChanged — relayed to the 15m chart by SimulatorForm.
+    public event Action<bool?, long[]>? OnSaltoSetupChanged;
+
+    public async Task SetSaltoSetupAsync(bool? crossUp, long[] saltoDays)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var upArg = crossUp == null ? "null" : (crossUp.Value ? "true" : "false");
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setSaltoSetup({upArg}, [{string.Join(",", saltoDays)}]);");
+    }
+
+    // Fired so SimulatorForm can (re)start its 15s auto-disarm countdown, same as the live app.
+    public event Action? OnDiagonalArrowPlacedEvent;
+
     // Clears everything drawn on THIS chart (same as ClearTLineAsync — chart.html's
     // clearDrawings() is shared/global per WebView instance).
     public async Task ClearDzSzAsync()
@@ -879,6 +1034,44 @@ public class SimulatedChartPanel : Panel
                 var price1 = root.GetProperty("price1").GetDecimal();
                 var price2 = root.GetProperty("price2").GetDecimal();
                 OnDzSzPairDeletedEvent?.Invoke(price1, price2);
+                return;
+            }
+
+            if (type == "diagonal_arrow_placed")
+            {
+                OnDiagonalArrowPlacedEvent?.Invoke();
+                var arrowP1 = root.GetProperty("p1").GetDecimal();
+                var arrowP2 = root.GetProperty("p2").GetDecimal();
+                var arrowRed = root.GetProperty("red").GetBoolean();
+                HandleDiagonalArrowPlaced(arrowP1, arrowP2, arrowRed);
+                return;
+            }
+
+            if (type == "trade_marks_delete")
+            {
+                string? tmPair = root.TryGetProperty("pairId", out var tmp) && tmp.ValueKind == JsonValueKind.String ? tmp.GetString() : null;
+                decimal? tmStrike = root.TryGetProperty("strike", out var tms) && tms.ValueKind == JsonValueKind.Number ? tms.GetDecimal() : null;
+                OnTradeMarksDeletedEvent?.Invoke(tmPair, tmStrike);
+                return;
+            }
+
+            if (type == "salto_setup")
+            {
+                OnSaltoSetupChanged?.Invoke(ChartPanel.ParseSaltoCrossUp(root), ChartPanel.ParseSaltoDays(root));
+                return;
+            }
+
+            if (type == "trend_state")
+            {
+                var shortDir = root.TryGetProperty("shortDir", out var sd) && sd.ValueKind == JsonValueKind.String ? sd.GetString() : null;
+                var longDir = root.TryGetProperty("longDir", out var ld) && ld.ValueKind == JsonValueKind.String ? ld.GetString() : null;
+                OnTrendStateChanged?.Invoke(shortDir, longDir);
+                return;
+            }
+
+            if (type == "diagonal_arrow_deleted")
+            {
+                HandleDiagonalArrowDeleted(root.GetProperty("red").GetBoolean());
                 return;
             }
 
@@ -1081,6 +1274,78 @@ public class SimulatedChartPanel : Panel
         await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyPmLine({anchorFakeEpoch}, {priceStr});");
     }
 
+    // Daily Bollinger Band(20,2) white reference lines — same JS call ChartPanel's live version
+    // uses (see its own comment); ported here for the 1h panel only, per explicit request.
+    public async Task MarkDailyBollingerBandsAsync(decimal upper, decimal lower, long anchorFakeEpoch)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var upperStr = upper.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var lowerStr = lower.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markDailyBollingerBands({anchorFakeEpoch}, {upperStr}, {lowerStr});");
+    }
+
+    // "Stk Call"/"Stk Put" — ported from the live ChartPanel, same setStkCallLines/setStkPutLines
+    // JS primitive. RTH chart only, per explicit request.
+    public async Task SetStkCallLinesAsync(IEnumerable<decimal> prices)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallLines({JsonSerializer.Serialize(prices)});");
+    }
+
+    public async Task SetStkPutLinesAsync(IEnumerable<decimal> prices)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLines({JsonSerializer.Serialize(prices)});");
+    }
+
+    // Simulator-only "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% labels — only takes effect on
+    // strikes whose Stk Call/Put line is already showing (see chart.html's setStkCallLabels' own
+    // comment). SimulatorForm computes the formatted Ask/Bid text and the PnL sign; chart.html
+    // colors each piece independently (Ask green, Bid orange, PnL green/red).
+    public async Task SetStkCallLabelsAsync(IEnumerable<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, label = new { ask = e.Ask, bid = e.Bid, pnlText = e.PnlText, pnlPositive = e.PnlPositive } });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallLabels({JsonSerializer.Serialize(payload)});");
+    }
+
+    public async Task SetStkPutLabelsAsync(IEnumerable<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, label = new { ask = e.Ask, bid = e.Bid, pnlText = e.PnlText, pnlPositive = e.PnlPositive } });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutLabels({JsonSerializer.Serialize(payload)});");
+    }
+
+    // "Reset Stk" button — clears the label without removing the lines/strike-price text.
+    public async Task ClearStkCallLabelsAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearStkCallLabels();");
+    }
+
+    public async Task ClearStkPutLabelsAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("clearStkPutLabels();");
+    }
+
+    // Running Min/Max PnL% shown next to the strike price label, right-justified — runs
+    // continuously the whole time Stk Call/Put is on, no 1st-15m-candle window (unlike the
+    // trigger-fed Ask/Bid/PnL% above the line). Ported from ChartPanel's identical method.
+    public async Task SetStkCallMinMaxAsync(IEnumerable<(decimal Price, string? MinText, string? MaxText)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, minText = e.MinText, maxText = e.MaxText });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkCallMinMax({JsonSerializer.Serialize(payload)});");
+    }
+
+    public async Task SetStkPutMinMaxAsync(IEnumerable<(decimal Price, string? MinText, string? MaxText)> entries)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = entries.Select(e => new { price = e.Price, minText = e.MinText, maxText = e.MaxText });
+        await _webView.CoreWebView2.ExecuteScriptAsync($"setStkPutMinMax({JsonSerializer.Serialize(payload)});");
+    }
+
     // ==================================================================================
     // "BB" (bands currently widening) + "Δ" (distance to nearest band) — ported from ChartPanel.
     // EvaluateBollingerWideningLabel. Purely visual, continuous, independent of the armed/fired
@@ -1148,7 +1413,7 @@ public class SimulatedChartPanel : Panel
     // (e.g. the "Ir a hora" buttons) by evaluating every newly-closed candle in order, not just
     // the latest one, so the Cross-SMA sequence never skips a step.
     // ==================================================================================
-    private void EvaluateNewlyClosedCandles(List<CandleData> candles)
+    private void EvaluateNewlyClosedCandles(List<CandleData> candles, DateOnly simDate)
     {
         var closedNow = candles.Count > 0 ? candles.Take(candles.Count - 1).ToList() : new List<CandleData>();
 

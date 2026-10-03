@@ -29,7 +29,11 @@ internal static class DailyTradeLogWriter
             $"**TradeLog**{nl}![TradeLog]({trade.TradeLogImageUrl}){nl}{nl}" +
             $"---{nl}{nl}";
 
-        Append(suffix, entry);
+        // Filed under the day the trade OPENED, not the day it closed — a trade opened Monday and
+        // closed Tuesday used to land in Tuesday's file (Append used DateTime.Now), splitting its
+        // own Open image away from where the rest of that day's activity lives. Per explicit
+        // request: the whole entry (Open+Close+TradeLog together) belongs with its entry day.
+        Append(suffix, entry, trade.EntryTime.Date);
     }
 
     // Simulation trades (Charts tab "Trade Simulation") never reach AppendTrade above — they skip
@@ -38,26 +42,32 @@ internal static class DailyTradeLogWriter
     // already saved for the entry/close snapshots — embedded via file:// like EventLogMarkdownWriter
     // does, instead of an S3 URL.
     public static void AppendSimTrade(string symbol, string optionType, DateTime entryTime,
-        string? entryImagePath, string? closeImagePath)
+        string? entryImagePath, string? closeImagePath, string? tradeLogImagePath = null)
     {
         var time = entryTime.ToString("HH:mm:ss");
         var nl   = Environment.NewLine;
-        var openLine  = entryImagePath != null ? $"**Open**{nl}![Open]({new Uri(entryImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
-        var closeLine = closeImagePath != null ? $"**Close**{nl}![Close]({new Uri(closeImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
+        var openLine     = entryImagePath != null ? $"**Open**{nl}![Open]({new Uri(entryImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
+        var closeLine    = closeImagePath != null ? $"**Close**{nl}![Close]({new Uri(closeImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
+        // Trade Log (Trades + Logger section screenshot) — per explicit request, saved locally
+        // same as Real/Demo trades already do (see Form1.CaptureTradeLogScreenshot), just embedded
+        // via file:// like everything else here instead of an S3 URL (Simulation never uploads).
+        var tradeLogLine = tradeLogImagePath != null ? $"**TradeLog**{nl}![TradeLog]({new Uri(tradeLogImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
         var entry =
             $"### {symbol} ({optionType}, {time}){nl}{nl}" +
             openLine +
             closeLine +
+            tradeLogLine +
             $"---{nl}{nl}";
 
-        Append("Sim_Trades", entry);
+        // Same "filed under the day it opened" fix as AppendTrade above.
+        Append("Sim_Trades", entry, entryTime.Date);
     }
 
-    private static void Append(string suffix, string entry)
+    private static void Append(string suffix, string entry, DateTime entryDate)
     {
         try
         {
-            var dateStr = DateTime.Now.ToString("yyyy_MM_dd");
+            var dateStr = entryDate.ToString("yyyy_MM_dd");
             var dayFolder = Path.Combine(VaultFolder, dateStr);
             Directory.CreateDirectory(dayFolder);
             var fileName = $"{dateStr}_{Environment.MachineName}_{suffix}.md";

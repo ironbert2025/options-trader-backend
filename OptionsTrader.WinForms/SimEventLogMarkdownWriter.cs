@@ -14,14 +14,14 @@ internal static class SimEventLogMarkdownWriter
 {
     private const string VaultFolder = @"C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades";
 
-    public static void AppendEvent(string symbol, DateOnly runDate, DateOnly dataDate, DateTime simulatedTime, string caption)
+    public static void AppendEvent(string symbol, DateOnly runDate, DateOnly dataDate, DateTime simulatedTime, string caption, DateOnly? exp = null)
     {
         try
         {
             var runDateStr = runDate.ToString("yyyy_MM_dd");
             var dayFolder = Path.Combine(VaultFolder, runDateStr);
             Directory.CreateDirectory(dayFolder);
-            var fileName = $"{runDateStr}_{Environment.MachineName}_{symbol}_Sim_{dataDate:yyyy_MM_dd}_EventLogs.md";
+            var fileName = $"{runDateStr}_{Environment.MachineName}_{symbol}_Sim_{dataDate:yyyy_MM_dd}{(exp.HasValue ? $"_exp{exp.Value:yyyyMMdd}" : "")}_EventLogs.md";
             var path = Path.Combine(dayFolder, fileName);
 
             var nl = Environment.NewLine;

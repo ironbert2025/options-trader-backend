@@ -71,6 +71,7 @@ public class MultiChartForm : Form
         // This window sends its own Piso/Techo Telegram push below (3-panel image) — see
         // SendPisoTechoTelegramPushAsync — so the control's own 2-panel-only push must stay silent.
         _twoPanelControl.SuppressOwnTelegramPushes = true;
+        _twoPanelControl.OnSaltoEnEfectoPushDue += caption => { if (!IsDisposed) BeginInvoke(() => _ = SendSaltoEnEfectoTelegramPushAsync(caption)); };
         var hourlyPanel = _twoPanelControl.HourlyPanel;
         var rthPanel = _twoPanelControl.RthPanel;
 
@@ -537,6 +538,11 @@ public class MultiChartForm : Form
                 if (hourlyPanel != null) _ = hourlyPanel.RemoveHLineAsync(price);
                 if (rthPanel != null) _ = rthPanel.RemoveHLineAsync(price);
             };
+            overnightPanel.OnTradeMarksDeletedEvent += (pairId, strike) =>
+            {
+                if (hourlyPanel != null) _ = hourlyPanel.RemoveTradeMarksAsync(pairId, strike);
+                if (rthPanel != null) _ = rthPanel.RemoveTradeMarksAsync(pairId, strike);
+            };
             overnightPanel.OnHLineDrawnEvent += (time, price) =>
             {
                 if (hourlyPanel != null) _ = hourlyPanel.AddMirroredHLineAsync(time, price);
@@ -547,6 +553,7 @@ public class MultiChartForm : Form
         {
             hourlyPanel.OnStrikeDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveStrikeLineAsync(price); };
             hourlyPanel.OnHLineDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveHLineAsync(price); };
+            hourlyPanel.OnTradeMarksDeletedEvent += (pairId, strike) => { if (overnightPanel != null) _ = overnightPanel.RemoveTradeMarksAsync(pairId, strike); };
             hourlyPanel.OnHLineDrawnEvent += (time, price) => { if (overnightPanel != null) _ = overnightPanel.AddMirroredHLineAsync(time, price); };
             // All-Time High: the 1h panel is the only one that persists a new value (at the RTH
             // close, see ChartPanel.EvaluateAllTimeHighAtClose) — mirror it onto the other panels'
@@ -561,6 +568,7 @@ public class MultiChartForm : Form
         {
             rthPanel.OnStrikeDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveStrikeLineAsync(price); };
             rthPanel.OnHLineDeletedEvent += price => { if (overnightPanel != null) _ = overnightPanel.RemoveHLineAsync(price); };
+            rthPanel.OnTradeMarksDeletedEvent += (pairId, strike) => { if (overnightPanel != null) _ = overnightPanel.RemoveTradeMarksAsync(pairId, strike); };
             rthPanel.OnHLineDrawnEvent += (time, price) => { if (overnightPanel != null) _ = overnightPanel.AddMirroredHLineAsync(time, price); };
         }
 
@@ -630,13 +638,20 @@ public class MultiChartForm : Form
         if (_overnightPanel != null) await _overnightPanel.MarkStrikeAsync(strike);
     }
 
+    // "R" on the Stk line at a Refuerzo — same two panels MarkStrikeOnOvernightChartAsync draws it on.
+    public async Task MarkReinforcementOnOvernightChartAsync(decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkReinforcementAsync(strike);
+        if (_overnightPanel != null) await _overnightPanel.MarkReinforcementAsync(strike);
+    }
+
     // White spot-price line — panels 2 (15m RTH) and 3 (15m RTH+Overnight), same marker the
     // Simulator already draws on trade open/close. Fired at both. Originally panel 3 only; panel 2
     // added per explicit request.
-    public async Task MarkEntrySpotOnOvernightChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false)
+    public async Task MarkEntrySpotOnOvernightChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
-        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall);
-        if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall);
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
+        if (_overnightPanel != null) await _overnightPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
     }
 
     // Today's 9:30 AM ET, in the same "ET wall-clock digits disguised as UTC" fake-epoch units the
@@ -765,6 +780,45 @@ public class MultiChartForm : Form
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SmaCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // 3-chart snapshot push for a "Salto en Efecto" still valid at 3:45 PM.
+    private async Task SendSaltoEnEfectoTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los 3 charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_SaltoEnEfecto_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SaltoEnEfecto", DateTime.Now));
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             else
