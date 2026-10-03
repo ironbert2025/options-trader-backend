@@ -12,6 +12,9 @@ public class SimulatorForm : Form
 {
     private readonly ComboBox _cmbSymbol = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(8, 8), Size = new Size(100, 24) };
     private readonly ComboBox _cmbDate   = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(116, 8), Size = new Size(120, 24) };
+    // Expiration of the option-chain files to replay (a day can have 2+, e.g. 09-25 and 09-28) — defaults to the nearest.
+    private readonly ComboBox _cmbExp    = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(404, 8), Size = new Size(110, 24) };
+    private DateOnly? _simExp;
     private readonly Button _btnCargar   = new() { Text = "Cargar", Location = new Point(244, 8), Size = new Size(70, 24) };
     private readonly Button _btnPlayPause = new() { Text = "Play", Location = new Point(324, 8), Size = new Size(70, 24), Enabled = false };
     private readonly Button _btnAtras    = new() { Text = "◀ Atrás", Location = new Point(8, 40), Size = new Size(90, 26), Enabled = false };
@@ -101,10 +104,22 @@ public class SimulatorForm : Form
     // subscription in the constructor and _rthChartMinFakeEpoch's use in RenderCurrentStep).
     private readonly Panel _pnlDzSz = new() { Location = new Point(590, 202), Size = new Size(440, 30) };
     private long? _rthChartMinFakeEpoch;
-    private readonly TextBox _txtEventLog = new()
+
+    // "Arrow" (diagonal, RTH chart only — arms the "Trigger Call/Put" wick analysis, see
+    // SimulatedChartPanel.OnWickTriggerEvent) + "Stk Call"/"Stk Put" (short strike-marker lines,
+    // captured once at click time from _dgvChain's current first 4 Call/Put strikes) — ported from
+    // the live app's TwoPanelChartsControl, placed beside the tick clock label to avoid overlap.
+    private readonly Panel _pnlArrowStk = new() { Location = new Point(780, 232), Size = new Size(340, 54) };
+
+    // ΔSpot estimado — read at the moment the trigger fires (see ArmTriggerStkTracking), together
+    // with each tracked strike's OWN Delta/Gamma at that same instant, to project a net-of-cost %
+    // return BEFORE the real move happens. Pure estimate, log-only, per explicit request.
+    private readonly Label _lblDeltaSpot = new() { Text = "ΔSpot:", AutoSize = true, Location = new Point(188, 4) };
+    private readonly TextBox _txtDeltaSpot = new() { Location = new Point(228, 1), Size = new Size(50, 20) };
+    private readonly RichTextBox _txtEventLog = new()
     {
         Location = new Point(8, 848), Size = new Size(1050, 90),
-        Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+        Multiline = true, ReadOnly = true, ScrollBars = RichTextBoxScrollBars.Vertical,
         Font = new Font("Consolas", 8.5F), BackColor = Color.Black, ForeColor = Color.LightGreen
     };
 
@@ -135,6 +150,12 @@ public class SimulatorForm : Form
     private readonly RadioButton _rbNoTrade = new() { Text = "No Trade", Checked = true, AutoSize = true, Location = new Point(6, 20) };
     private readonly RadioButton _rbNoTradeTarget = new() { Text = "No Trade-Target", AutoSize = true, Location = new Point(6, 40) };
     private string _selectedCounts    = "6"; // same default as Form1's _selectedCounts
+
+    // Latest OtmCalls/OtmPuts lists PopulateQuotesGrid computed for _dgvChain — captured for the
+    // "Stk Call"/"Stk Put" buttons (BuildArrowStkControls), same source the live app's own
+    // GetQuoteSnapshot uses.
+    private List<OptionQuoteDto> _lastOtmCalls = new();
+    private List<OptionQuoteDto> _lastOtmPuts  = new();
 
     // Strikes force-shown in _dgvChain regardless of the OTM-only filter — same idea as Form1's
     // identical field, set by clicking a trade's Strike button in _dgvTrades. Cleared on day load.
@@ -172,10 +193,13 @@ public class SimulatorForm : Form
         BuildGoToTimeButtons();
         BuildSmaEventControls();
         BuildDzSzControls();
+        BuildArrowStkControls();
 
-        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
-        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 200f / 7));
-        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 300f / 7));
+        // Panels 1 and 2 are 40% wider than the original 200/7 each (280/7); panel 3 stays right-
+        // justified at what's left (140/7, half its former 300/7 minus the 10/7 the widening cost).
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 280f / 7));
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 280f / 7));
+        _chartsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 140f / 7));
         _chartsHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         _chartsHost.Controls.Add(_hourlyChart, 0, 0);
         _chartsHost.Controls.Add(_rthChart, 1, 0);
@@ -183,6 +207,8 @@ public class SimulatorForm : Form
 
         Controls.Add(_cmbSymbol);
         Controls.Add(_cmbDate);
+        Controls.Add(_cmbExp);
+        new ToolTip().SetToolTip(_cmbExp, "Expiración del archivo de opciones a simular (por defecto la más cercana). Presiona Cargar para aplicarla.");
         Controls.Add(_btnCargar);
         Controls.Add(_btnPlayPause);
         Controls.Add(_btnAtras);
@@ -203,11 +229,13 @@ public class SimulatorForm : Form
         Controls.Add(_pnlGoToTime);
         Controls.Add(_pnlSmaEvents);
         Controls.Add(_pnlDzSz);
+        Controls.Add(_pnlArrowStk);
         Controls.Add(_txtEventLog);
         Controls.Add(_chartsHost);
         Controls.Add(_dgvTrades);
 
         _cmbSymbol.SelectedIndexChanged += (s, e) => RefreshAvailableDates();
+        _cmbDate.SelectedIndexChanged += (s, e) => RefreshExpirations();
         _btnCargar.Click    += (s, e) => LoadSelectedDay();
         _btnPlayPause.Click += (s, e) => TogglePlay();
         _btnAtras.Click     += (s, e) => Step(-1);
@@ -252,6 +280,330 @@ public class SimulatorForm : Form
         };
 
         _pnlDzSz.Controls.Add(btnDzSz);
+    }
+
+    // "Arrow" (diagonal, RTH chart only) + "Stk Call"/"Stk Put" — ported from the live app's
+    // TwoPanelChartsControl. Arrow stays armed across multiple draws with the same 15s
+    // auto-disarm-after-last-arrow behavior as the live app; Stk Call/Put are plain toggles that
+    // capture the grid's current first 4 Call/Put strikes once at click time.
+    private void BuildArrowStkControls()
+    {
+        var btnArrow = new Button { Text = "Arrow", Location = new Point(0, 0), Size = new Size(60, 24) };
+        var btnResetStk = new Button { Text = "Reset Stk", Location = new Point(0, 28), Size = new Size(78, 22) };
+        btnResetStk.Click += (s, e) =>
+        {
+            ToggleResetStk();
+            btnResetStk.BackColor = _resetStkOn ? Color.LightYellow : SystemColors.Control;
+        };
+        var arrowAutoDisarmTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+        arrowAutoDisarmTimer.Tick += async (s, e) =>
+        {
+            arrowAutoDisarmTimer.Stop();
+            await _rthChart.ToggleArrowModeAsync();
+            btnArrow.BackColor = SystemColors.Control;
+        };
+        Disposed += (s, e) => arrowAutoDisarmTimer.Dispose();
+        _rthChart.OnDiagonalArrowPlacedEvent += () =>
+        {
+            arrowAutoDisarmTimer.Stop();
+            arrowAutoDisarmTimer.Start();
+        };
+        btnArrow.Click += async (s, e) =>
+        {
+            var on = await _rthChart.ToggleArrowModeAsync();
+            btnArrow.BackColor = on ? Color.LightYellow : SystemColors.Control;
+            if (!on) arrowAutoDisarmTimer.Stop();
+        };
+
+        // Trend text (SMA20/40 short-term, SMA100/200 long-term + reminder dashes) on the 1h chart,
+        // logged whenever the trend pair changes — see ChartPanel.TrendLogText.
+        // Deleting a trade's rayitas on one 15m chart takes its Stk line / ΔS / rayitas off the other too.
+        _rthChart.OnTradeMarksDeletedEvent  += (pairId, strike) => _ = _fullChart.RemoveTradeMarksAsync(pairId, strike);
+        _fullChart.OnTradeMarksDeletedEvent += (pairId, strike) => _ = _rthChart.RemoveTradeMarksAsync(pairId, strike);
+
+        // 1er Salto decided on the 1h chart -> "Salto en Efecto" on the 15m chart.
+        _hourlyChart.OnSaltoSetupChanged += (crossUp, saltoDays) =>
+        {
+            if (IsDisposed) return;
+            BeginInvoke(() => { _ = _rthChart.SetSaltoSetupAsync(crossUp, saltoDays); });
+        };
+
+        _hourlyChart.OnTrendStateChanged += (shortDir, longDir) =>
+        {
+            if (IsDisposed) return;
+            // Same as the Charts tab's log 1: "Largo - Corto" now lives in the header strip instead
+            // (see ChartPanel's _trendHost), so only the dash-reminder lines (present only when
+            // shortDir == longDir) still go to this log, per explicit request.
+            var segs = ChartPanel.TrendLogSegments(shortDir, longDir)?.Skip(4).ToList();
+            if (segs != null && segs.Count > 0) LogSimEvent(ChartPanel.SegmentsToPlainText(segs), segs);
+        };
+
+        _rthChart.OnWickTriggerEvent += label =>
+        {
+            if (IsDisposed) return;
+            // Called synchronously (EvaluateWickTrigger is invoked directly from RenderChartsUpToTime
+            // on the UI thread now, not from an async WebView2 continuation) — BeginInvoke would
+            // defer this past the current RenderCurrentStep call, reintroducing the same 1-step lag
+            // this whole change exists to fix. Arm the tracking state immediately, in order.
+            LogSimEvent(label);
+            ArmTriggerStkTracking(label);
+        };
+
+        var btnStkCall = new Button { Text = "Stk Call", Location = new Point(66, 0), Size = new Size(56, 24), ForeColor = Color.DarkGreen };
+        btnStkCall.Click += async (s, e) =>
+        {
+            _stkCallOn = !_stkCallOn;
+            btnStkCall.BackColor = _stkCallOn ? Color.LightGreen : SystemColors.Control;
+            _callTrack.Entries.Clear(); // toggling either button off/on cancels any in-progress tracking
+            _callMinMax.Clear();
+            if (!_stkCallOn) { _stkCallStrikes.Clear(); await _rthChart.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
+            // OtmCalls is ordered farthest-OTM-first (closest/Level-1 last) — TakeLast, not Take,
+            // same fix applied to the live app's own Stk Call button.
+            _stkCallStrikes = _lastOtmCalls.TakeLast(4).Select(q => q.StrikePrice).ToList();
+            await _rthChart.SetStkCallLinesAsync(_stkCallStrikes);
+            CaptureStkMinMax(isCall: true);
+        };
+
+        var btnStkPut = new Button { Text = "Stk Put", Location = new Point(126, 0), Size = new Size(56, 24), ForeColor = Color.Red };
+        btnStkPut.Click += async (s, e) =>
+        {
+            _stkPutOn = !_stkPutOn;
+            btnStkPut.BackColor = _stkPutOn ? Color.LightSalmon : SystemColors.Control;
+            _putTrack.Entries.Clear();
+            _putMinMax.Clear();
+            if (!_stkPutOn) { _stkPutStrikes.Clear(); await _rthChart.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
+            _stkPutStrikes = _lastOtmPuts.Take(4).Select(q => q.StrikePrice).ToList();
+            await _rthChart.SetStkPutLinesAsync(_stkPutStrikes);
+            CaptureStkMinMax(isCall: false);
+        };
+
+        _pnlArrowStk.Controls.Add(btnArrow);
+        _pnlArrowStk.Controls.Add(btnResetStk);
+        _pnlArrowStk.Controls.Add(btnStkCall);
+        _pnlArrowStk.Controls.Add(btnStkPut);
+        _pnlArrowStk.Controls.Add(_lblDeltaSpot);
+        _pnlArrowStk.Controls.Add(_txtDeltaSpot);
+    }
+
+    // "Stk Call"/"Stk Put" toggle state + the strikes captured when each was last turned on —
+    // needed so the "Trigger Call/Put" Ask/Bid/PnL tracking below knows whether there's anything
+    // to attach to, and which exact strikes.
+    private bool _stkCallOn;
+    private bool _stkPutOn;
+    private List<decimal> _stkCallStrikes = new();
+    private List<decimal> _stkPutStrikes = new();
+
+    // "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% tracking — only starts if the matching Stk
+    // Call/Put button is ON at the moment the trigger fires (per explicit request); does nothing
+    // otherwise. Two independent tracks (not one shared "which side" flag) so Call and Put can each
+    // be armed/reset on their own without clobbering the other — e.g. the "Reset Stk" button below
+    // can restart both at once if both Stk buttons are on.
+    private sealed class StkTrackState
+    {
+        public List<(decimal Strike, decimal FrozenAsk)> Entries = new();
+        // false = armed by the wick trigger (only updates live during the session's 1st 15m candle,
+        // same as before). true = armed/reset by the manual "Reset Stk" button (updates live
+        // indefinitely until that button is pressed again).
+        public bool Manual;
+    }
+    private readonly StkTrackState _callTrack = new();
+    private readonly StkTrackState _putTrack = new();
+
+    // Round-trip broker commission per contract, in premium units (1.30 USD / 100 shares) — fixed,
+    // per explicit request (no UI to change it).
+    private const decimal FixedCostPerContract = 0.013m;
+
+    // Running Min/Max PnL% shown next to the strike label (right-justified) — UNLIKE the
+    // trigger-fed Ask/Bid/PnL% above, this runs continuously for as long as Stk Call/Put stays ON,
+    // no 1st-15m-candle window, per explicit request. Ported from the live app's identical fields.
+    private sealed class StkMinMaxEntry
+    {
+        public decimal Strike;
+        public decimal EntryAsk;
+        public decimal? MinPct;
+        public decimal? MaxPct;
+    }
+    private readonly List<StkMinMaxEntry> _callMinMax = new();
+    private readonly List<StkMinMaxEntry> _putMinMax = new();
+
+    private void CaptureStkMinMax(bool isCall)
+    {
+        var list = isCall ? _callMinMax : _putMinMax;
+        list.Clear();
+        foreach (var (strike, ask) in CaptureStkEntries(isCall))
+            list.Add(new StkMinMaxEntry { Strike = strike, EntryAsk = ask });
+    }
+
+    private async Task UpdateStkMinMaxAsync()
+    {
+        await UpdateOneStkMinMaxSideAsync(_callMinMax, _lastOtmCalls, isCall: true);
+        await UpdateOneStkMinMaxSideAsync(_putMinMax, _lastOtmPuts, isCall: false);
+    }
+
+    private async Task UpdateOneStkMinMaxSideAsync(List<StkMinMaxEntry> list, List<OptionQuoteDto> quotes, bool isCall)
+    {
+        if (list.Count == 0) return;
+
+        var payload = new List<(decimal Price, string? MinText, string? MaxText)>();
+        foreach (var entry in list)
+        {
+            var bid = quotes.FirstOrDefault(q => q.StrikePrice == entry.Strike)?.Bid;
+            if (bid == null || entry.EntryAsk <= 0) continue;
+            var pnlPct = (bid.Value - entry.EntryAsk) / entry.EntryAsk * 100;
+            if (pnlPct < 0 && (entry.MinPct == null || pnlPct < entry.MinPct)) entry.MinPct = pnlPct;
+            if (pnlPct > 0 && (entry.MaxPct == null || pnlPct > entry.MaxPct)) entry.MaxPct = pnlPct;
+            payload.Add((entry.Strike, entry.MinPct.HasValue ? $"{entry.MinPct:F1}%" : null, entry.MaxPct.HasValue ? $"+{entry.MaxPct:F1}%" : null));
+        }
+        if (payload.Count == 0) return;
+
+        if (isCall) await _rthChart.SetStkCallMinMaxAsync(payload);
+        else await _rthChart.SetStkPutMinMaxAsync(payload);
+    }
+
+    // Captures the CURRENT Ask for the given side's already-chosen strikes (_stkCallStrikes/
+    // _stkPutStrikes — which strikes never changes here, only their value) — shared by the
+    // automatic wick-trigger arm and the manual "Reset Stk" button.
+    private List<(decimal Strike, decimal FrozenAsk)> CaptureStkEntries(bool isCall)
+    {
+        var strikes = isCall ? _stkCallStrikes : _stkPutStrikes;
+        var quotes = isCall ? _lastOtmCalls : _lastOtmPuts;
+        return strikes
+            .Select(strike => (Strike: strike, Ask: quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Ask))
+            .Where(e => e.Ask.HasValue)
+            .Select(e => (e.Strike, FrozenAsk: e.Ask!.Value))
+            .ToList();
+    }
+
+    private void ArmTriggerStkTracking(string label)
+    {
+        var isCall = label == "Trigger Call";
+        if (isCall && !_stkCallOn) return;
+        if (!isCall && !_stkPutOn) return;
+
+        var entries = CaptureStkEntries(isCall);
+        if (entries.Count == 0) return;
+
+        var track = isCall ? _callTrack : _putTrack;
+        track.Entries = entries;
+        track.Manual = false;
+
+        LogProjectedStkEstimate(isCall, isCall ? _lastOtmCalls : _lastOtmPuts);
+    }
+
+    // "Reset Stk" toggle — ON: for each side currently shown (Stk Call/Put on), clears the label,
+    // re-captures a fresh Ask for those same 4 strikes right now, re-logs the ΔSpot estimate, and
+    // switches that side to Manual (updates live with no 1st-15m-candle limit). OFF: switches
+    // whichever sides were Manual back to non-manual — since real time is almost certainly past
+    // that window by then, UpdateTriggerStkLabelsAsync's own window check naturally stops updating
+    // it from here on, leaving whatever was last shown in place (no explicit "frozen" flag needed).
+    private bool _resetStkOn;
+    private async void ToggleResetStk()
+    {
+        _resetStkOn = !_resetStkOn;
+        if (!_resetStkOn)
+        {
+            _callTrack.Manual = false;
+            _putTrack.Manual = false;
+            return;
+        }
+
+        if (_stkCallOn)
+        {
+            await _rthChart.ClearStkCallLabelsAsync();
+            CaptureStkMinMax(isCall: true); // "start fresh from this moment" also resets Min/Max
+            var entries = CaptureStkEntries(isCall: true);
+            if (entries.Count > 0)
+            {
+                _callTrack.Entries = entries;
+                _callTrack.Manual = true;
+                LogProjectedStkEstimate(isCall: true, _lastOtmCalls);
+            }
+        }
+        if (_stkPutOn)
+        {
+            await _rthChart.ClearStkPutLabelsAsync();
+            CaptureStkMinMax(isCall: false);
+            var entries = CaptureStkEntries(isCall: false);
+            if (entries.Count > 0)
+            {
+                _putTrack.Entries = entries;
+                _putTrack.Manual = true;
+                LogProjectedStkEstimate(isCall: false, _lastOtmPuts);
+            }
+        }
+    }
+
+    // ΔSpot-based projection — Delta + 0.5*Gamma*ΔSpot^2 (2nd-order Taylor estimate of the premium
+    // move), minus the fixed cost, over the frozen Ask — computed ONCE at trigger time using each
+    // strike's OWN Delta/Gamma at that same instant, ranked best-to-worst. Purely informational,
+    // log-only — does not affect the live Ask/Bid/PnL% tracking above. Skipped entirely if the
+    // ΔSpot textbox is empty or not a valid number, per explicit request (no calc, not a 0% calc).
+    private void LogProjectedStkEstimate(bool isCall, List<OptionQuoteDto> quotes)
+    {
+        if (!decimal.TryParse(_txtDeltaSpot.Text, out var deltaSpot)) return;
+
+        var estimates = new List<(decimal Strike, decimal NetPct)>();
+        foreach (var (strike, frozenAsk) in (isCall ? _callTrack : _putTrack).Entries)
+        {
+            var quote = quotes.FirstOrDefault(q => q.StrikePrice == strike);
+            if (quote == null || frozenAsk <= 0) continue;
+            var projectedMove = quote.Delta * deltaSpot + 0.5m * quote.Gamma * deltaSpot * deltaSpot;
+            var netPct = (projectedMove - FixedCostPerContract) / frozenAsk * 100m;
+            estimates.Add((strike, netPct));
+        }
+        if (estimates.Count == 0) return;
+
+        // Strikes listed highest-to-lowest, top to bottom (per explicit request), NOT sorted by
+        // the projected %; the best one is called out separately with a "<-- mejor" arrow at the
+        // end of its own line instead of reordering the list.
+        var bestPct = estimates.Max(e => e.NetPct);
+        var side = isCall ? "Call" : "Put";
+        var lines = estimates
+            .OrderByDescending(e => e.Strike)
+            .Select(e =>
+            {
+                var pctStr = $"{(e.NetPct >= 0 ? "+" : string.Empty)}{e.NetPct:F1}%";
+                var line = $"    {e.Strike,7:F2}  {pctStr,8}";
+                return e.NetPct == bestPct ? $"{line}  ← mejor" : line;
+            });
+        LogSimEvent($"[Estimación {side}] ΔSpot={deltaSpot:F2}{Environment.NewLine}{string.Join(Environment.NewLine, lines)}");
+    }
+
+    // Called every step (right after _lastOtmCalls/_lastOtmPuts refresh) — updates the live
+    // Bid/PnL% label on the tracked Stk lines. A track armed by the wick trigger (Manual=false)
+    // only updates while still inside the session's first 15m RTH candle; one armed/reset by the
+    // "Reset Stk" button (Manual=true) updates indefinitely, until that button is pressed again.
+    private async Task UpdateTriggerStkLabelsAsync()
+    {
+        if (_currentIndex < 0 || _currentIndex >= _steps.Count) return;
+        var stepEastern = EasternTime(_steps[_currentIndex].Time);
+        var inFirstCandleWindow = DateOnly.FromDateTime(stepEastern) == _simDate
+            && stepEastern.TimeOfDay >= new TimeSpan(9, 30, 0) && stepEastern.TimeOfDay < new TimeSpan(9, 45, 0);
+
+        await UpdateOneSideAsync(_callTrack, isCall: true, inFirstCandleWindow);
+        await UpdateOneSideAsync(_putTrack, isCall: false, inFirstCandleWindow);
+    }
+
+    private async Task UpdateOneSideAsync(StkTrackState track, bool isCall, bool inFirstCandleWindow)
+    {
+        if (track.Entries.Count == 0) return;
+        if (!track.Manual && !inFirstCandleWindow) return;
+
+        var quotes = isCall ? _lastOtmCalls : _lastOtmPuts;
+        var entries = new List<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)>();
+        foreach (var (strike, frozenAsk) in track.Entries)
+        {
+            var bid = quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Bid;
+            if (bid == null) continue;
+            var pnlPct = frozenAsk > 0 ? (bid.Value - frozenAsk) / frozenAsk * 100 : 0m;
+            var pnlPositive = pnlPct >= 0;
+            var sign = pnlPositive ? "+" : string.Empty;
+            entries.Add((strike, frozenAsk.ToString("F2"), bid.Value.ToString("F2"), $"{sign}{pnlPct:F1}%", pnlPositive));
+        }
+        if (entries.Count == 0) return;
+
+        if (isCall) await _rthChart.SetStkCallLabelsAsync(entries);
+        else await _rthChart.SetStkPutLabelsAsync(entries);
     }
 
     // "Real Time" (real recorded pace, per-step gap) plus 4 fixed speeds for "Play" (ticks/sec) —
@@ -649,7 +1001,9 @@ public class SimulatorForm : Form
         };
     }
 
-    private void LogSimEvent(string message)
+    // segments (optional): same text as message but colored per piece — written to the on-screen log
+    // with those colors; the markdown record just gets the plain message.
+    private void LogSimEvent(string message, IReadOnlyList<(string Text, Color? Color)>? segments = null)
     {
         if (IsDisposed) return;
 
@@ -661,13 +1015,22 @@ public class SimulatorForm : Form
             ? EasternTime(_steps[_currentIndex].Time)
             : DateTime.Now;
 
-        void Append() => _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
+        void Append()
+        {
+            if (segments == null)
+            {
+                _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  {message}{Environment.NewLine}");
+                return;
+            }
+            _txtEventLog.AppendText($"{timestamp:HH:mm:ss}  ");
+            ChartPanel.AppendColored(_txtEventLog, segments);
+        }
         if (InvokeRequired) BeginInvoke(Append); else Append();
 
         // Permanent record of this replay — see SimEventLogMarkdownWriter for the rundate vs
         // datadate distinction. runDate is "today" regardless of what step is currently loaded;
         // dataDate is _simDate, the historical day whose ticks were loaded for this replay.
-        SimEventLogMarkdownWriter.AppendEvent(_symbol, DateOnly.FromDateTime(DateTime.Now), _simDate, timestamp, message);
+        SimEventLogMarkdownWriter.AppendEvent(_symbol, DateOnly.FromDateTime(DateTime.Now), _simDate, timestamp, message, _simExp);
     }
 
     private void BuildGoToTimeButtons()
@@ -770,6 +1133,18 @@ public class SimulatorForm : Form
         _availableDates = SimulationDataLoader.GetAvailableDates(symbol);
         foreach (var d in _availableDates) _cmbDate.Items.Add(d.ToString("yyyy-MM-dd"));
         if (_cmbDate.Items.Count > 0) _cmbDate.SelectedIndex = 0;
+        RefreshExpirations();
+    }
+
+    // Lists the expirations available for the selected symbol/day, nearest selected by default;
+    // disabled when there's only one (nothing to choose).
+    private void RefreshExpirations()
+    {
+        _cmbExp.Items.Clear();
+        if (_cmbSymbol.SelectedItem is string symbol && _cmbDate.SelectedItem is string dateStr && DateOnly.TryParse(dateStr, out var date))
+            foreach (var e in SimulationDataLoader.GetAvailableExpirations(symbol, date)) _cmbExp.Items.Add(e.ToString("yyyy-MM-dd"));
+        if (_cmbExp.Items.Count > 0) _cmbExp.SelectedIndex = 0;
+        _cmbExp.Enabled = _cmbExp.Items.Count > 1;
     }
 
     private async void LoadSelectedDay()
@@ -779,6 +1154,17 @@ public class SimulatorForm : Form
 
         PausePlay();
         _forcedStrikes.Clear();
+
+        // New day — the "Trigger Call/Put" wick-armed state itself resets inside SimulatedChartPanel
+        // (keyed off simDate), but the Ask/Bid/PnL tracking here (and the Stk Call/Put toggles
+        // driving it) live in THIS form, so they need their own reset.
+        _callTrack.Entries.Clear();
+        _callTrack.Manual = false;
+        _putTrack.Entries.Clear();
+        _putTrack.Manual = false;
+        _callMinMax.Clear();
+        _putMinMax.Clear();
+        _resetStkOn = false;
 
         var tickers = TickerSettingsStore.Load();
         _ticker = tickers.FirstOrDefault(t => t.Symbol == symbol);
@@ -791,8 +1177,10 @@ public class SimulatorForm : Form
 
         _symbol  = symbol;
         _simDate = date;
+        _rthChart.ResetWickStateForDay(date); // see its own comment — must happen before any arrow gets drawn
         _hourlyChart.WatchStartDate = date; // Piso/Techo Cruce/Rebote must not fire against backfilled prior-context candles
-        _steps   = SimulationDataLoader.LoadDay(symbol, date);
+        _simExp  = _cmbExp.SelectedItem is string expStr && DateOnly.TryParse(expStr, out var expDate) ? expDate : null;
+        _steps   = SimulationDataLoader.LoadDay(symbol, date, _simExp);
         // Same amount of surrounding context the live charts default to (7 days for 1h, 3 for the
         // two 15m panels) — see ChartPanel.LoadHistoryAsync's visibleDays.
         _hourlyCandles   = SimulationDataLoader.LoadHourlyCandlesWithContext(symbol, date);
@@ -905,7 +1293,7 @@ public class SimulatorForm : Form
             _simSmaWatchFiredFor.Add(period);
             var direction = above ? "al alza" : "a la baja";
             var pisoTechoLabel = above ? "Techo" : "Piso";
-            LogSimEvent($"{_symbol} rompió el {pisoTechoLabel} SMA{period} (Diario) {direction} — spot {livePrice:F2}, SMA{period} {sma.Value:F2}");
+            LogSimEvent($"{_symbol} rompió el {pisoTechoLabel} {period} (Diario) {direction}");
         }
     }
 
@@ -977,6 +1365,11 @@ public class SimulatorForm : Form
             var widthYesterday = bandsYesterday.Value.Upper - bandsYesterday.Value.Lower;
             var open = widthToday > widthYesterday;
             _ = _hourlyChart.MarkDailyBbAsync(open);
+
+            // Bollinger Band lines themselves (white, 1h panel only) — same as ChartPanel's live
+            // version, per explicit request.
+            var sessionStartForBands = GetSessionStartFakeEpoch();
+            _ = _hourlyChart.MarkDailyBollingerBandsAsync(bandsToday.Value.Upper, bandsToday.Value.Lower, sessionStartForBands);
         }
 
         if (smaToday != null)
@@ -1223,18 +1616,16 @@ public class SimulatorForm : Form
 
     private void RenderCurrentStep()
     {
-        RenderGridForStep();
-        if (_currentIndex < 0) return;
-        var step = _steps[_currentIndex];
+        // Charts render FIRST, not after — RenderChartsUpToTime is what actually evaluates the
+        // "Trigger Call/Put" wick analysis and arms _callTrack/_putTrack (via
+        // SimulatedChartPanel.OnWickTriggerEvent). RenderGridForStep below reads that same-step
+        // state for its Ask/Bid/PnL% label update; the old order (grid first) made it always read
+        // LAST step's state, so the label almost never caught the trigger before its 1st-15m-candle
+        // window closed when stepping forward with ▶/"+1 Min".
+        if (_currentIndex >= 0 && (!_realTimeMode || !_isPlaying))
+            RenderChartsUpToTime(_steps[_currentIndex].Time);
 
-        // In Real Time Play, the chart candles are driven independently by _tickPlayTimer (at the
-        // raw tick recording's own pace) instead of by this options-step advance — per explicit
-        // request, the options grid and the candle rendering are two separate clocks in that mode.
-        // Re-rendering charts here too would fight the tick clock, snapping candles back to
-        // whatever this (coarser) step's time is every few seconds. Manual stepping (not Play)
-        // always renders charts normally even with Real Time selected.
-        if (!_realTimeMode || !_isPlaying)
-            RenderChartsUpToTime(step.Time);
+        RenderGridForStep();
     }
 
     // Grid/PnL half of RenderCurrentStep — extracted so StepTick (the independent candle-clock
@@ -1253,8 +1644,10 @@ public class SimulatorForm : Form
         var step = _steps[_currentIndex];
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
-        Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts,
+        (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts,
             forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
+        _ = UpdateTriggerStkLabelsAsync();
+        _ = UpdateStkMinMaxAsync();
 
         // PopulateQuotesGrid computes its own Conts column from the REAL (persisted)
         // ContractsSettingsStore — override it here with the simulator's own local Contracts
@@ -1320,6 +1713,10 @@ public class SimulatorForm : Form
             ? SimulatedChartPanel.ToFakeUtcEpochSeconds(rthCandles[0].Time)
             : (long?)null;
 
+        // Synchronous, BEFORE the async CargarHastaPasoAsync calls below — see EvaluateWickTrigger's
+        // own comment for why this can't just live inside that async chain.
+        _rthChart.EvaluateWickTrigger(rthCandles, _simDate);
+
         _ = _hourlyChart.CargarHastaPasoAsync(
             CandleAggregation.AggregateToHourlyRthBuckets(hourlyUpToNow), visibleDays: 7, _simDate);
         _ = _rthChart.CargarHastaPasoAsync(rthCandles, visibleDays: 3, _simDate);
@@ -1359,7 +1756,7 @@ public class SimulatorForm : Form
 
     // ----- Demo trades (practice only — separate from real/demo trades in Form1) -----
 
-    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid, bool SuppressAutoClose, string SpotColor);
+    private sealed record OpenSimTrade(DataGridViewRow Row, string OptionType, decimal StrikePrice, int Contracts, DateTime EntryTime, decimal EntryPrice, decimal TBid, bool SuppressAutoClose, string SpotColor, string PairId);
 
     // Same alternating white/yellow-per-trade convention as Form1.NextEntrySpotColor — total
     // count across the session, not "how many currently open".
@@ -1422,14 +1819,12 @@ public class SimulatorForm : Form
         _dgvTrades.CellContentClick += DgvTrades_CellContentClick;
     }
 
-    // Same rule as Form1's private static IsRowTradeBlocked: bid == 0, OR spread >= 6 (FormatSprd's
-    // stripped-decimal-point encoding, so 6 == a real $0.06 spread), OR 0 contracts.
+    // Same rule as Form1's private static IsRowTradeBlocked: bid == 0, OR 0 contracts — the
+    // spread-too-wide (Sprd >= 6) check was removed per explicit request.
     private static bool IsChainRowTradeBlocked(DataGridViewRow row, string? rowType)
     {
         var bidCol  = rowType == "PUT" ? "colPutBid"  : "colCallBid";
-        var sprdCol = rowType == "PUT" ? "colPutSprd" : "colCallSprd";
         if (!decimal.TryParse(row.Cells[bidCol].Value?.ToString(), out var bid) || bid == 0m) return true;
-        if (decimal.TryParse(row.Cells[sprdCol].Value?.ToString(), out var sprd) && sprd >= 6) return true;
         if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
         return false;
     }
@@ -1558,7 +1953,7 @@ public class SimulatorForm : Form
         // number that isn't actually driving anything.
         var suppressAutoClose = _rbNoTrade.Checked;
         decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-        var tBid = Math.Round(ask * (1 + targetPct / 100m), 2);
+        var tBid = Math.Round(ask * (1 + targetPct / 100m) + Form1.TargetCommissionPerContract, 2);
         var pnlTargetCell = suppressAutoClose ? string.Empty : targetPct.ToString("F0");
 
         var step = _steps[_currentIndex];
@@ -1570,7 +1965,7 @@ public class SimulatorForm : Form
         gridRow.Cells["colSimCBid"].Style.ForeColor = Color.Orange;
 
         var entrySpotColor = NextEntrySpotColor();
-        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid, suppressAutoClose, entrySpotColor));
+        _openSimTrades.Add(new OpenSimTrade(gridRow, rowType, strike, contracts, step.Time, ask, tBid, suppressAutoClose, entrySpotColor, _entrySpotColorCounter.ToString()));
         SetSimMoneyness(gridRow, rowType, strike, step.UnderlyingPrice);
 
         // Pin AND highlight this strike in _dgvChain for the rest of the loaded day, same as the
@@ -1587,8 +1982,8 @@ public class SimulatorForm : Form
         // entry — panels 2 and 3, bounded to that one candle, mirroring the live app
         // (MultiChartForm.MarkEntrySpotOnOvernightChartAsync — originally panel 3 only, panel 2
         // added later; the simulator hadn't been kept in sync).
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor);
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor);
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
         var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
@@ -1623,7 +2018,7 @@ public class SimulatorForm : Form
             trade.Row.Cells["colSimCBid"].Style.ForeColor    = Color.Orange;
             trade.Row.Cells["colSimPnl"].Style.ForeColor     = pnl >= 0 ? Color.LimeGreen : Color.OrangeRed;
             trade.Row.Cells["colSimPnlPct"].Style.ForeColor  = pnlPct >= 0 ? Color.LimeGreen : Color.OrangeRed;
-            UpdatePnLMinMax(trade.Row, pnlPct);
+            UpdatePnLMinMax(trade.Row, pnlPct, EasternTime(step.Time).ToString("HH:mm:ss"));
             SetSimMoneyness(trade.Row, trade.OptionType, trade.StrikePrice, step.UnderlyingPrice);
 
             if (!trade.SuppressAutoClose && quote.Bid >= trade.TBid)
@@ -1651,11 +2046,11 @@ public class SimulatorForm : Form
         var pnlPct = trade.EntryPrice > 0 ? Math.Round((exitPrice - trade.EntryPrice) / trade.EntryPrice * 100, 1) : 0m;
 
         SimTradesStore.Append(_symbol, _simDate, trade.OptionType, trade.StrikePrice, trade.Contracts,
-            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct);
+            EasternTime(trade.EntryTime), trade.EntryPrice, EasternTime(step.Time), exitPrice, pnl, pnlPct, _simExp);
 
         var row = trade.Row;
         row.Cells["colSimExitTime"].Value = EasternTime(step.Time).ToString("HH:mm:ss");
-        UpdatePnLMinMax(row, pnlPct);
+        UpdatePnLMinMax(row, pnlPct, EasternTime(step.Time).ToString("HH:mm:ss"));
 
         // DataGridViewButtonColumn with UseColumnTextForButtonValue=true always shows the
         // column's own Text ("Close") regardless of the cell's Value, so gray out the row instead
@@ -1668,8 +2063,8 @@ public class SimulatorForm : Form
         // same marker as the entry one, panels 2 and 3. isClose: true adds the "C" label (above
         // for a Call, below for a Put), per explicit request.
         var closeIsCall = trade.OptionType.Equals("CALL", StringComparison.OrdinalIgnoreCase);
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall);
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall);
+        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
+        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");
@@ -1695,7 +2090,9 @@ public class SimulatorForm : Form
     // Min only ever tracks NEGATIVE values, Max only ever tracks POSITIVE ones — a trade that's
     // never been profitable leaves Max blank instead of showing "the least negative point
     // reached" (same idea mirrored for Min if it's never gone negative). See Form1's identical copy.
-    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct)
+    // whenText (HH:mm:ss, simulated ET clock) is stored as the cell's tooltip — hover shows the
+    // exact time the Min/Max record was reached.
+    private static void UpdatePnLMinMax(DataGridViewRow row, decimal pnlPct, string whenText)
     {
         var minCell = row.Cells["colSimPnlMin"];
         var maxCell = row.Cells["colSimPnlMax"];
@@ -1704,12 +2101,14 @@ public class SimulatorForm : Form
         {
             minCell.Value           = pnlPct.ToString("F1");
             minCell.Style.ForeColor = Color.Red;
+            minCell.ToolTipText     = $"Min {pnlPct:F1}% a las {whenText}";
         }
 
         if (pnlPct > 0 && (!decimal.TryParse(maxCell.Value?.ToString(), out var max) || pnlPct > max))
         {
             maxCell.Value           = pnlPct.ToString("F1");
             maxCell.Style.ForeColor = Color.Green;
+            maxCell.ToolTipText     = $"Max {pnlPct:F1}% a las {whenText}";
         }
     }
 
@@ -1745,7 +2144,7 @@ public class SimulatorForm : Form
         _forcedStrikes.Add((type, strike));
 
         if (_currentIndex >= 0)
-            Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
+            (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
                 selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
     }
 }

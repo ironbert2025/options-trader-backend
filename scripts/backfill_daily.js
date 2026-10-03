@@ -21,7 +21,9 @@ if (SYMBOLS.length === 0) {
   process.exit(1);
 }
 
-const OUT_DIR = 'C:\\OptionsData\\MarketData\\Candles';
+// Override via BACKFILL_OUT_DIR env var (e.g. to target a different machine's mapped drive,
+// like the laptop's ETF data over a network share) — defaults to this machine's own folder.
+const OUT_DIR = process.env.BACKFILL_OUT_DIR || 'C:\\OptionsData\\MarketData\\Candles';
 const MAX_CANDLES = 3000; // ~12 years — matches DailyCandleStore.cs
 
 function fetchJson(url) {

@@ -59,6 +59,17 @@ public class DailyChartForm : Form
     private CandleData? _lastHourlyCandle;
     private CandleData? _lastFifteenCandle;
 
+    // DZ/SZ — whichever WebView2 is currently armed (null if none), so a tab switch can disarm it
+    // and the toolbar button color stays in sync. See ActiveDzSzWebViewAndTag.
+    private WebView2? _dzSzArmedWebView;
+
+    // Which tab's WebView currently has Rect / Color Rect armed (null = neither) — so a second
+    // click, or a tab switch, turns the RIGHT one off.
+    private WebView2? _rectArmedWebView;
+    private WebView2? _colorRectArmedWebView;
+    private WebView2? _circleArmedWebView;
+    private Button? _btnCircle;
+
     public DailyChartForm(string symbol, List<CandleData> dailyCandles, SchwabStreamerClient historyClient)
     {
         _symbol = symbol;
@@ -98,24 +109,90 @@ public class DailyChartForm : Form
         // the Hora and 15 Min tabs at once (persists via TLineStore, tags "DailyHora"/"Daily15Min"
         // so they never mix with the live chart's own "1h"/"RTH" T-Lines on the same symbol), per
         // explicit request.
-        var toolbar = new Panel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(6, 4, 6, 4) };
+        var toolbar = new Panel { Dock = DockStyle.Top, Height = 60, Padding = new Padding(6, 4, 6, 4) };
         var btnRect = new Button { Text = "Rect", Location = new Point(0, 2), Size = new Size(60, 24) };
         var btnColorRect = new Button { Text = "Color Rect", Location = new Point(66, 2), Size = new Size(80, 24) };
         var btnTLine = new Button { Text = "T-Line", Location = new Point(150, 2), Size = new Size(60, 24) };
         var btnHLine = new Button { Text = "H-Line", Location = new Point(216, 2), Size = new Size(60, 24) };
+        // "DZ/SZ" — pure draw+persist version of the Simulator/live-chart DZ/SZ tool (no rebote
+        // tracking, no cross-chart mirroring). Arms ONLY the currently active tab (Daily/Hora/15
+        // Min) — per explicit request, "the chart you want" — unlike T-Line/H-Line which always
+        // arm Hora+15Min together. Persisted via ZoneStore, one tag per tab so zones never mix
+        // across tabs. See ActiveDzSzWebViewAndTag()/HandleDzSzMessage below.
+        var btnDzSz = new Button { Text = "DZ/SZ", Location = new Point(216, 28), Size = new Size(60, 24) };
+        // "Rect"/"Color Rect" arm the ACTIVE tab only — Daily or Hora (the 15 Min tab has neither),
+        // same idea as DZ/SZ. Hora's rects persist under their own tags and mirror onto the live
+        // 1h panel (see LoadAndWireHoraRectsAsync). Switching tabs while armed disarms, below.
+        WebView2? RectTargetWebView() => tabControl.SelectedIndex switch { 0 => _webView, 1 => _hourlyWebView, _ => null };
         btnRect.Click += async (s, e) =>
         {
-            if (_webView.CoreWebView2 == null) return;
-            var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
-            btnRect.BackColor = result == "true" ? Color.LightGray : SystemColors.Control;
+            if (_rectArmedWebView != null)
+            {
+                if (_rectArmedWebView.CoreWebView2 != null) await _rectArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
+                _rectArmedWebView = null;
+                btnRect.BackColor = SystemColors.Control;
+                return;
+            }
+            var target = RectTargetWebView();
+            if (target?.CoreWebView2 == null) return;
+            await target.CoreWebView2.ExecuteScriptAsync("toggleRect();");
+            _rectArmedWebView = target;
+            btnRect.BackColor = Color.LightGray;
         };
-        // "Color Rect" — Daily tab only, same 2-click draw as "Rect" but filled red/green
-        // depending on drag direction (see ColorRectPrimitive in chart.html), per explicit request.
+        // "Color Rect" — same 2-click draw as "Rect" but filled red/green depending on drag
+        // direction (see ColorRectPrimitive in chart.html), per explicit request.
         btnColorRect.Click += async (s, e) =>
         {
-            if (_webView.CoreWebView2 == null) return;
-            var result = await _webView.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
-            btnColorRect.BackColor = result == "true" ? Color.LightSalmon : SystemColors.Control;
+            if (_colorRectArmedWebView != null)
+            {
+                if (_colorRectArmedWebView.CoreWebView2 != null) await _colorRectArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
+                _colorRectArmedWebView = null;
+                btnColorRect.BackColor = SystemColors.Control;
+                return;
+            }
+            var target = RectTargetWebView();
+            if (target?.CoreWebView2 == null) return;
+            await target.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
+            _colorRectArmedWebView = target;
+            btnColorRect.BackColor = Color.LightSalmon;
+        };
+        // "Circle" — Hora tab only: click 1 = center, drag previews, click 2 = edge (single-shot).
+        // Persisted in RectStore under tag "DailyHoraCircle" (center = t1/p1, edge = t2/p2) and
+        // mirrored onto the live 1h panel, same as the Hora rects.
+        var btnCircle = new Button { Text = "Circle", Location = new Point(282, 2), Size = new Size(60, 24) };
+        _btnCircle = btnCircle;
+        btnCircle.Click += async (s, e) =>
+        {
+            if (_circleArmedWebView != null)
+            {
+                if (_circleArmedWebView.CoreWebView2 != null) await _circleArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleCircle();");
+                _circleArmedWebView = null;
+                btnCircle.BackColor = SystemColors.Control;
+                return;
+            }
+            if (tabControl.SelectedIndex != 1 || _hourlyWebView.CoreWebView2 == null) return;
+            await _hourlyWebView.CoreWebView2.ExecuteScriptAsync("toggleCircle();");
+            _circleArmedWebView = _hourlyWebView;
+            btnCircle.BackColor = Color.Gold;
+        };
+        toolbar.Controls.Add(btnCircle);
+        tabControl.SelectedIndexChanged += async (s, e) =>
+        {
+            if (_circleArmedWebView != null && _circleArmedWebView.CoreWebView2 != null)
+                await _circleArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleCircle();");
+            _circleArmedWebView = null;
+            btnCircle.BackColor = SystemColors.Control;
+        };
+        tabControl.SelectedIndexChanged += async (s, e) =>
+        {
+            if (_rectArmedWebView != null && _rectArmedWebView.CoreWebView2 != null)
+                await _rectArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleRect();");
+            if (_colorRectArmedWebView != null && _colorRectArmedWebView.CoreWebView2 != null)
+                await _colorRectArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleColorRect();");
+            _rectArmedWebView = null;
+            _colorRectArmedWebView = null;
+            btnRect.BackColor = SystemColors.Control;
+            btnColorRect.BackColor = SystemColors.Control;
         };
         btnTLine.Click += async (s, e) =>
         {
@@ -136,17 +213,48 @@ public class DailyChartForm : Form
             await _fifteenWebView.CoreWebView2.ExecuteScriptAsync("toggleHLine();");
             btnHLine.BackColor = result == "true" ? Color.Red : SystemColors.Control;
         };
+        // DZ/SZ stays armed across multiple pairs (same toggle semantics as toggleDzSz() itself —
+        // only turns off via this button again, tab switch, or window close), so there's no
+        // "placed" auto-disarm event to listen for like Rect/T-Line above.
+        btnDzSz.Click += async (s, e) =>
+        {
+            var (webView, _) = ActiveDzSzWebViewAndTag(tabControl);
+            if (webView?.CoreWebView2 == null) return;
+            var result = await webView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
+            if (result == "true")
+            {
+                _dzSzArmedWebView = webView;
+                btnDzSz.BackColor = Color.MediumPurple;
+            }
+            else
+            {
+                _dzSzArmedWebView = null;
+                btnDzSz.BackColor = SystemColors.Control;
+            }
+        };
         toolbar.Controls.Add(btnRect);
         toolbar.Controls.Add(btnColorRect);
         toolbar.Controls.Add(btnTLine);
         toolbar.Controls.Add(btnHLine);
+        toolbar.Controls.Add(btnDzSz);
         // chart.html auto-disarms each tool itself once the 2nd click completes a
         // rectangle/T-Line — reset the button color to match, same pattern the live chart uses.
         // H-Line is a single click-to-place (not 2-click), so chart.html never auto-disarms it —
         // it stays armed until clicked again, same as the live chart's own H-Line button.
-        OnRectPlacedEvent += () => btnRect.BackColor = SystemColors.Control;
-        OnColorRectPlacedEvent += () => btnColorRect.BackColor = SystemColors.Control;
+        OnRectPlacedEvent += () => { _rectArmedWebView = null; btnRect.BackColor = SystemColors.Control; };
+        OnColorRectPlacedEvent += () => { _colorRectArmedWebView = null; btnColorRect.BackColor = SystemColors.Control; };
         OnTLinePlacedEvent += () => btnTLine.BackColor = SystemColors.Control;
+
+        // Switching tabs while DZ/SZ is armed would silently arm a chart the user can no longer
+        // see clicks land on — disarm whichever tab it was armed on and reset the button.
+        tabControl.SelectedIndexChanged += async (s, e) =>
+        {
+            if (_dzSzArmedWebView == null) return;
+            if (_dzSzArmedWebView.CoreWebView2 != null)
+                await _dzSzArmedWebView.CoreWebView2.ExecuteScriptAsync("toggleDzSz();");
+            _dzSzArmedWebView = null;
+            btnDzSz.BackColor = SystemColors.Control;
+        };
 
         // "SMA Watch" — Daily tab only. Unlike Rect/T-Line these aren't 2-click drawing tools:
         // clicking one directly toggles whether that SMA's live-price cross is being watched (see
@@ -318,6 +426,17 @@ public class DailyChartForm : Form
     // Charts only, panel 1/2 — never MultiChartForm/panel 3, per explicit request).
     public event Action<int, bool>? OnDailySmaLineToggledEvent;
 
+    // Maps the currently selected tab (index 0=Daily, 1=Hora, 2=15 Min) to its WebView2 + the
+    // ZoneStore tag for that tab's persisted zones. Same tag convention T-Line uses for Hora/15
+    // Min ("DailyHora"/"Daily15Min"), plus "Daily" for the Daily tab's own chart.
+    private (WebView2? WebView, string Tag) ActiveDzSzWebViewAndTag(TabControl tabControl) => tabControl.SelectedIndex switch
+    {
+        0 => (_webView, "Daily"),
+        1 => (_hourlyWebView, "DailyHora"),
+        2 => (_fifteenWebView, "Daily15Min"),
+        _ => (null, string.Empty)
+    };
+
     private async void RefreshSmaWatchMarkersAsync()
     {
         if (_webView.CoreWebView2 == null) return;
@@ -371,6 +490,9 @@ public class DailyChartForm : Form
         // 15m RTH panel.
         var hourlyCandles = HourlyCandleStore.Load(_symbol);
         await InitChartTabAsync(_hourlyWebView, hourlyCandles, 20);
+        await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync("enableSalto();"); // "1er Salto": Hora tab only, not Daily
+        await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync("enableDayNumbers();"); // day-of-month under each day's 1st candle: Hora tab only
+        await _hourlyWebView.CoreWebView2!.ExecuteScriptAsync("enableCounterSalto();"); // counter-trend "Salto en Efecto": Hora tab only, latest day
         _lastHourlyCandle = hourlyCandles.Count > 0 ? hourlyCandles[^1] : null;
         await LoadAndWireTLinesAsync(_hourlyWebView, "DailyHora");
 
@@ -401,6 +523,88 @@ public class DailyChartForm : Form
             $"{JsonSerializer.Serialize(FifteenCornerNoteCenter)}, {JsonSerializer.Serialize(FifteenCornerNoteRight)});");
 
         await LoadAndWireHLinesAsync();
+        await LoadAndWireHoraRectsAsync();
+
+        await LoadAndWireDzSzAsync(_webView, "Daily");
+        await LoadAndWireDzSzAsync(_hourlyWebView, "DailyHora");
+        await LoadAndWireDzSzAsync(_fifteenWebView, "Daily15Min");
+    }
+
+    // "DZ/SZ" tool persistence (ZoneStore) for one tab — replay whatever was drawn in a previous
+    // session (via addMirroredZoneLine, the same replay hook the Simulator uses for cross-chart
+    // mirroring — here just used for reloading, nothing is actually mirrored), then listen for
+    // new/deleted lines from now on.
+    private async Task LoadAndWireDzSzAsync(WebView2 webView, string tag)
+    {
+        if (webView.CoreWebView2 == null) return;
+        var saved = ZoneStore.Load(_symbol, tag);
+        foreach (var (time, price, color) in saved)
+        {
+            var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            await webView.CoreWebView2.ExecuteScriptAsync($"addMirroredZoneLine({time}, {priceStr}, {JsonSerializer.Serialize(color)});");
+        }
+        webView.CoreWebView2.WebMessageReceived += (s, e) => HandleDzSzMessage(e, tag);
+    }
+
+    private void HandleDzSzMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string tag)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "dzsz" && type != "dzsz_delete") return;
+
+            if (type == "dzsz")
+            {
+                var t = root.GetProperty("time").GetInt64();
+                var p = root.GetProperty("price").GetDecimal();
+                var c = root.GetProperty("color").GetString() ?? "#26a69a";
+                ZoneStore.Append(_symbol, tag, t, p, c);
+            }
+            else
+            {
+                var p1 = root.GetProperty("price1").GetDecimal();
+                var p2 = root.GetProperty("price2").GetDecimal();
+                ZoneStore.Remove(_symbol, tag, p1);
+                ZoneStore.Remove(_symbol, tag, p2);
+            }
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
+    }
+
+    // Fired when a Rect / Color Rect is drawn (added=true) or deleted on the "Hora" tab —
+    // TwoPanelChartsControl.AttachDailyMirroring relays it onto the live 1h panel (panel 1).
+    // (color, added, t1, p1, t2, p2). One-way, Daily -> live.
+    public event Action<bool, bool, long, decimal, long, decimal>? OnHoraRectChangedEvent;
+
+    // "Rect"/"Color Rect" persistence for the "Hora" tab (RectStore, tags "DailyHora"/
+    // "DailyHoraColor") — replay what was drawn in a previous session, then listen for new/
+    // deleted ones and relay them to the live 1h panel.
+    private async Task LoadAndWireHoraRectsAsync()
+    {
+        if (_hourlyWebView.CoreWebView2 == null) return;
+        var rects = RectStore.Load(_symbol, "DailyHora");
+        var rectsJson = JsonSerializer.Serialize(rects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+        await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"loadRects({rectsJson});");
+        var colorRects = RectStore.Load(_symbol, "DailyHoraColor");
+        var colorJson = JsonSerializer.Serialize(colorRects.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+        await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"loadColorRects({colorJson});");
+
+        var circles = RectStore.Load(_symbol, "DailyHoraCircle");
+        var circlesJson = JsonSerializer.Serialize(circles.Select(r => new { t1 = r.T1, p1 = r.P1, t2 = r.T2, p2 = r.P2 }));
+        await _hourlyWebView.CoreWebView2.ExecuteScriptAsync($"loadCircles({circlesJson});");
+        _hourlyWebView.CoreWebView2.WebMessageReceived += (s, e) => HandleCircleMessage(e);
+
+        _hourlyWebView.CoreWebView2.WebMessageReceived += (s, e) =>
+            HandleRectMessage(e, "DailyHora", () => OnRectPlacedEvent?.Invoke(),
+                (added, t1, p1, t2, p2) => OnHoraRectChangedEvent?.Invoke(false, added, t1, p1, t2, p2));
+        _hourlyWebView.CoreWebView2.WebMessageReceived += (s, e) =>
+            HandleColorRectMessage(e, () => OnColorRectPlacedEvent?.Invoke(), "DailyHoraColor",
+                (added, t1, p1, t2, p2) => OnHoraRectChangedEvent?.Invoke(true, added, t1, p1, t2, p2));
     }
 
     // "T-Line" tool persistence (TLineStore) for one of the Hora/15 Min tabs — replay whatever was
@@ -471,7 +675,10 @@ public class DailyChartForm : Form
         }
     }
 
-    private void HandleRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string contextTag, Action onPlaced)
+    // onChanged (added?, t1, p1, t2, p2) — optional relay, used by the Hora tab to mirror the rect
+    // onto the live 1h panel (see OnHoraRectChangedEvent).
+    private void HandleRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, string contextTag, Action onPlaced,
+        Action<bool, long, decimal, long, decimal>? onChanged = null)
     {
         try
         {
@@ -488,6 +695,40 @@ public class DailyChartForm : Form
             var p2 = root.GetProperty("p2").GetDecimal();
             if (type == "bluerect_add") RectStore.Append(_symbol, contextTag, t1, p1, t2, p2);
             else RectStore.Remove(_symbol, contextTag, t1, p1, t2, p2);
+            onChanged?.Invoke(type == "bluerect_add", t1, p1, t2, p2);
+        }
+        catch
+        {
+            // Best-effort — never let a malformed message crash the window.
+        }
+    }
+
+    // (added, t1, p1, t2, p2) — a Circle drawn/deleted on the Hora tab, relayed to the live 1h panel.
+    public event Action<bool, long, decimal, long, decimal>? OnHoraCircleChangedEvent;
+
+    private void HandleCircleMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+            if (type != "circle_add" && type != "circle_delete" && type != "circle_placed") return;
+
+            if (type == "circle_placed")
+            {
+                _circleArmedWebView = null;
+                if (_btnCircle != null) _btnCircle.BackColor = SystemColors.Control;
+                return;
+            }
+
+            var t1 = root.GetProperty("t1").GetInt64();
+            var p1 = root.GetProperty("p1").GetDecimal();
+            var t2 = root.GetProperty("t2").GetInt64();
+            var p2 = root.GetProperty("p2").GetDecimal();
+            if (type == "circle_add") RectStore.Append(_symbol, "DailyHoraCircle", t1, p1, t2, p2);
+            else RectStore.Remove(_symbol, "DailyHoraCircle", t1, p1, t2, p2);
+            OnHoraCircleChangedEvent?.Invoke(type == "circle_add", t1, p1, t2, p2);
         }
         catch
         {
@@ -498,7 +739,8 @@ public class DailyChartForm : Form
     // "Color Rect" tool — same RectStore, own tag "DailyColor" and own message-type prefix
     // ("colorrect_*") so it never collides with the plain gray Rect tool's "bluerect_*"/"rect_*"
     // messages on the same WebMessageReceived stream.
-    private void HandleColorRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, Action onPlaced)
+    private void HandleColorRectMessage(Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e, Action onPlaced,
+        string tag = "DailyColor", Action<bool, long, decimal, long, decimal>? onChanged = null)
     {
         try
         {
@@ -513,8 +755,9 @@ public class DailyChartForm : Form
             var p1 = root.GetProperty("p1").GetDecimal();
             var t2 = root.GetProperty("t2").GetInt64();
             var p2 = root.GetProperty("p2").GetDecimal();
-            if (type == "colorrect_add") RectStore.Append(_symbol, "DailyColor", t1, p1, t2, p2);
-            else RectStore.Remove(_symbol, "DailyColor", t1, p1, t2, p2);
+            if (type == "colorrect_add") RectStore.Append(_symbol, tag, t1, p1, t2, p2);
+            else RectStore.Remove(_symbol, tag, t1, p1, t2, p2);
+            onChanged?.Invoke(type == "colorrect_add", t1, p1, t2, p2);
         }
         catch
         {

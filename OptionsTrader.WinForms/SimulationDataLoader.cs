@@ -69,16 +69,36 @@ internal static class SimulationDataLoader
         return dates.OrderByDescending(d => d).ToList();
     }
 
-    // Builds the full step timeline for one symbol/day. Steps are the options-chain poll
-    // snapshots (Call+Put grouped by Time) — the finest granularity actually recorded.
-    public static List<SimulationStep> LoadDay(string symbol, DateOnly date)
+    // Expiration dates recorded for this symbol on this day that have BOTH a Call and a Put file
+    // (a simulation needs both), ascending — the nearest one is what LoadDay uses by default.
+    public static List<DateOnly> GetAvailableExpirations(string symbol, DateOnly date)
     {
         var dateStr = date.ToString("yyyyMMdd");
+        HashSet<string> Exps(string type) => Directory.Exists(IvFolder)
+            ? Directory.EnumerateFiles(IvFolder, $"{symbol}_{type}_{dateStr}_*.csv")
+                .Select(f => Path.GetFileNameWithoutExtension(f).Split('_'))
+                .Where(p => p.Length >= 4)
+                .Select(p => p[3]).ToHashSet()
+            : new HashSet<string>();
+        var both = Exps("Call").Intersect(Exps("Put"));
+        var result = new List<DateOnly>();
+        foreach (var e in both)
+            if (DateTime.TryParseExact(e, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+                result.Add(DateOnly.FromDateTime(d));
+        return result.OrderBy(d => d).ToList();
+    }
 
-        // If both the current AND next expiration were logged that day, prefer the nearer
+    // Builds the full step timeline for one symbol/day. Steps are the options-chain poll
+    // snapshots (Call+Put grouped by Time) — the finest granularity actually recorded.
+    public static List<SimulationStep> LoadDay(string symbol, DateOnly date, DateOnly? exp = null)
+    {
+        var dateStr = date.ToString("yyyyMMdd");
+        var expPattern = exp.HasValue ? exp.Value.ToString("yyyyMMdd") : "*"; // null = every expiration -> nearest wins below
+
+        // If both the current AND next expiration were logged that day and no expiration was picked, prefer the nearer
         // expiration (smaller date suffix) — same one the live grid shows by default.
-        var callFile = Directory.EnumerateFiles(IvFolder, $"{symbol}_Call_{dateStr}_*.csv").OrderBy(f => f).FirstOrDefault();
-        var putFile  = Directory.EnumerateFiles(IvFolder, $"{symbol}_Put_{dateStr}_*.csv").OrderBy(f => f).FirstOrDefault();
+        var callFile = Directory.EnumerateFiles(IvFolder, $"{symbol}_Call_{dateStr}_{expPattern}.csv").OrderBy(f => f).FirstOrDefault();
+        var putFile  = Directory.EnumerateFiles(IvFolder, $"{symbol}_Put_{dateStr}_{expPattern}.csv").OrderBy(f => f).FirstOrDefault();
 
         var byTime = new SortedDictionary<TimeOnly, List<OptionQuoteDto>>();
         if (callFile != null) ReadQuotesInto(callFile, symbol, OptionType.Call, byTime);

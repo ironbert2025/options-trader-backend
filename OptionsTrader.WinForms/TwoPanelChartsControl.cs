@@ -1,5 +1,7 @@
+using OptionsTrader.Application.DTOs.Options;
 using OptionsTrader.Application.DTOs.Streaming;
 using OptionsTrader.Application.Interfaces;
+using OptionsTrader.Domain.Enums;
 using OptionsTrader.Infrastructure.Schwab;
 using System.Linq;
 
@@ -29,6 +31,267 @@ public class TwoPanelChartsControl : UserControl
     private readonly ICandleFeed _liveFeed;
     private readonly string _symbol;
     private readonly Form1 _form1;
+
+    // "Stk Call"/"Stk Put" toggle state + the strikes captured when each was last turned on —
+    // needed so the "Trigger Call/Put" Ask/Bid/PnL% tracking below knows whether there's anything
+    // to attach to, and which exact strikes. Ported from the Simulator's identical fields.
+    private bool _stkCallOn;
+    private bool _stkPutOn;
+    private List<decimal> _stkCallStrikes = new();
+    private List<decimal> _stkPutStrikes = new();
+
+    // ΔSpot estimate textbox — read at the moment the trigger fires or "Reset Stk" is pressed (see
+    // LogProjectedStkEstimate), next to the Poll(s) control. Built in the constructor (below), so
+    // any use before that point (shouldn't happen) is guarded with a null check.
+    private TextBox? _txtDeltaSpot;
+
+    // Live spot price, updated from every raw tick (rthPanel.OnLiveTick fires premarket too) — used
+    // by Stk Call/Put to pick the 4 nearest strikes when clicked BEFORE market open, since Form1's
+    // own quote polling (and therefore GetQuoteSnapshot's OtmCalls/OtmPuts) doesn't run premarket
+    // and can be stale relative to how far the spot has actually moved overnight by click time.
+    private decimal? _lastLiveSpotPrice;
+
+    // Picks the 4 strikes closest to _lastLiveSpotPrice from the full (unfiltered) chain — Call:
+    // closest 4 AT/ABOVE spot; Put: closest 4 AT/BELOW spot — ignoring whatever stale OTM/spot
+    // classification the snapshot itself carries, since only the STRIKE VALUES need to still be
+    // valid (they don't change intraday), not the rest of that quote's data. Falls back to null if
+    // there's no live tick yet or no chain data at all, so the caller can fall back to the normal
+    // (market-open) path.
+    private List<decimal>? PickStrikesNearLiveSpot(bool isCall)
+    {
+        if (_lastLiveSpotPrice is not { } spot) return null;
+        var allQuotes = _form1.GetQuoteSnapshot(_symbol)?.AllQuotes;
+        if (allQuotes == null || allQuotes.Count == 0) return null;
+
+        var side = isCall ? OptionType.Call : OptionType.Put;
+        var strikes = allQuotes.Where(q => q.OptionType == side).Select(q => q.StrikePrice).Distinct();
+        var picked = isCall
+            ? strikes.Where(s => s >= spot).OrderBy(s => s).Take(4)
+            : strikes.Where(s => s <= spot).OrderByDescending(s => s).Take(4);
+        var result = picked.ToList();
+        return result.Count > 0 ? result : null;
+    }
+
+    // Running Min/Max PnL% shown next to the strike label (right-justified) — UNLIKE the
+    // trigger-fed Ask/Bid/PnL% below, this runs continuously for as long as Stk Call/Put stays ON,
+    // no 1st-15m-candle window, per explicit request. Captured fresh (Min/Max reset) whenever the
+    // Stk button toggles ON, and again whenever "Reset Stk" re-arms that side.
+    private sealed class StkMinMaxEntry
+    {
+        public decimal Strike;
+        public decimal EntryAsk;
+        public decimal? MinPct; // only ever tracks NEGATIVE values, like Form1's own UpdatePnLMinMax
+        public decimal? MaxPct; // only ever tracks POSITIVE values
+    }
+    private readonly List<StkMinMaxEntry> _callMinMax = new();
+    private readonly List<StkMinMaxEntry> _putMinMax = new();
+
+    private void CaptureStkMinMax(bool isCall)
+    {
+        var list = isCall ? _callMinMax : _putMinMax;
+        list.Clear();
+        foreach (var (strike, ask) in CaptureStkEntries(isCall))
+            list.Add(new StkMinMaxEntry { Strike = strike, EntryAsk = ask });
+    }
+
+    private async Task UpdateStkMinMaxAsync(List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, ChartPanel? rthPanel)
+    {
+        if (rthPanel == null) return;
+        await UpdateOneStkMinMaxSideAsync(_callMinMax, otmCalls, isCall: true, rthPanel);
+        await UpdateOneStkMinMaxSideAsync(_putMinMax, otmPuts, isCall: false, rthPanel);
+    }
+
+    private async Task UpdateOneStkMinMaxSideAsync(List<StkMinMaxEntry> list, List<OptionQuoteDto> quotes, bool isCall, ChartPanel rthPanel)
+    {
+        if (list.Count == 0) return;
+
+        var payload = new List<(decimal Price, string? MinText, string? MaxText)>();
+        foreach (var entry in list)
+        {
+            var bid = quotes.FirstOrDefault(q => q.StrikePrice == entry.Strike)?.Bid;
+            if (bid == null || entry.EntryAsk <= 0) continue;
+            var pnlPct = (bid.Value - entry.EntryAsk) / entry.EntryAsk * 100;
+            if (pnlPct < 0 && (entry.MinPct == null || pnlPct < entry.MinPct)) entry.MinPct = pnlPct;
+            if (pnlPct > 0 && (entry.MaxPct == null || pnlPct > entry.MaxPct)) entry.MaxPct = pnlPct;
+            payload.Add((entry.Strike, entry.MinPct.HasValue ? $"{entry.MinPct:F1}%" : null, entry.MaxPct.HasValue ? $"+{entry.MaxPct:F1}%" : null));
+        }
+        if (payload.Count == 0) return;
+
+        if (isCall) await rthPanel.SetStkCallMinMaxAsync(payload);
+        else await rthPanel.SetStkPutMinMaxAsync(payload);
+    }
+
+    // "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% tracking — only starts if the matching Stk
+    // Call/Put button is ON at the moment the trigger fires; does nothing otherwise. Two
+    // independent tracks (not one shared "which side" flag) so Call and Put can each be
+    // armed/reset on their own — e.g. the "Reset Stk" button below can restart both at once if
+    // both Stk buttons are on. Ported from the Simulator's identical StkTrackState.
+    private sealed class StkTrackState
+    {
+        public List<(decimal Strike, decimal FrozenAsk)> Entries = new();
+        // false = armed by the wick trigger (only updates live during the session's real 1st 15m
+        // candle, 9:30-9:45 ET). true = armed/reset by the manual "Reset Stk" button (updates live
+        // indefinitely until that button is pressed again).
+        public bool Manual;
+    }
+    private readonly StkTrackState _callTrack = new();
+    private readonly StkTrackState _putTrack = new();
+
+    // Round-trip broker commission per contract, in premium units (1.30 USD / 100 shares) — fixed,
+    // per explicit request (no UI to change it). Same value as the Simulator's own constant.
+    private const decimal FixedCostPerContract = 0.013m;
+
+    private List<(decimal Strike, decimal FrozenAsk)> CaptureStkEntries(bool isCall)
+    {
+        var strikes = isCall ? _stkCallStrikes : _stkPutStrikes;
+        var quotes = _form1.GetQuoteSnapshot(_symbol)?.AllQuotes ?? new List<OptionQuoteDto>();
+        var side = isCall ? OptionType.Call : OptionType.Put;
+        return strikes
+            .Select(strike => (Strike: strike, Ask: quotes.FirstOrDefault(q => q.OptionType == side && q.StrikePrice == strike)?.Ask))
+            .Where(e => e.Ask.HasValue)
+            .Select(e => (e.Strike, FrozenAsk: e.Ask!.Value))
+            .ToList();
+    }
+
+    private void ArmTriggerStkTracking(string label)
+    {
+        var isCall = label == "Trigger Call";
+        if (isCall && !_stkCallOn) return;
+        if (!isCall && !_stkPutOn) return;
+
+        var entries = CaptureStkEntries(isCall);
+        if (entries.Count == 0) return;
+
+        var track = isCall ? _callTrack : _putTrack;
+        track.Entries = entries;
+        track.Manual = false;
+
+        LogProjectedStkEstimate(isCall);
+    }
+
+    // "Reset Stk" toggle — ON: for each side currently shown (Stk Call/Put on), clears the label,
+    // re-captures a fresh Ask for those same 4 strikes right now, re-logs the ΔSpot estimate, and
+    // switches that side to update live indefinitely (no 1st-15m-candle limit). OFF: reverts to
+    // the time-windowed rule, which — since real time is almost certainly past that window by
+    // then — leaves whatever was last shown in place. Ported from the Simulator's identical
+    // ToggleResetStk.
+    private bool _resetStkOn;
+    private async void ToggleResetStk(ChartPanel? rthPanel)
+    {
+        _resetStkOn = !_resetStkOn;
+        if (!_resetStkOn)
+        {
+            _callTrack.Manual = false;
+            _putTrack.Manual = false;
+            return;
+        }
+        if (rthPanel == null) return;
+
+        var callLogged = false;
+        if (_stkCallOn)
+        {
+            await rthPanel.ClearStkCallLabelsAsync();
+            CaptureStkMinMax(isCall: true); // "start fresh from this moment" also resets Min/Max
+            var entries = CaptureStkEntries(isCall: true);
+            if (entries.Count > 0)
+            {
+                _callTrack.Entries = entries;
+                _callTrack.Manual = true;
+                callLogged = LogProjectedStkEstimate(isCall: true);
+            }
+        }
+        if (_stkPutOn)
+        {
+            await rthPanel.ClearStkPutLabelsAsync();
+            CaptureStkMinMax(isCall: false);
+            var entries = CaptureStkEntries(isCall: false);
+            if (entries.Count > 0)
+            {
+                _putTrack.Entries = entries;
+                _putTrack.Manual = true;
+                LogProjectedStkEstimate(isCall: false, append: callLogged);
+            }
+        }
+    }
+
+    // ΔSpot-based projection — Delta + 0.5*Gamma*ΔSpot^2 (2nd-order Taylor estimate of the premium
+    // move), minus the fixed cost, over the frozen Ask — computed using each strike's OWN
+    // Delta/Gamma at the same instant it's captured, ranked with the strikes listed highest-to-
+    // lowest and the single best one called out with an arrow. Log-only, skipped entirely if the
+    // ΔSpot textbox is empty/invalid. Ported from the Simulator's identical LogProjectedStkEstimate.
+    private bool LogProjectedStkEstimate(bool isCall, bool append = false)
+    {
+        if (_txtDeltaSpot == null || !decimal.TryParse(_txtDeltaSpot.Text, out var deltaSpot)) return false;
+
+        var track = isCall ? _callTrack : _putTrack;
+        var quotes = _form1.GetQuoteSnapshot(_symbol)?.AllQuotes ?? new List<OptionQuoteDto>();
+        var side = isCall ? OptionType.Call : OptionType.Put;
+
+        var estimates = new List<(decimal Strike, decimal NetPct)>();
+        foreach (var (strike, frozenAsk) in track.Entries)
+        {
+            var quote = quotes.FirstOrDefault(q => q.OptionType == side && q.StrikePrice == strike);
+            if (quote == null || frozenAsk <= 0) continue;
+            var projectedMove = quote.Delta * deltaSpot + 0.5m * quote.Gamma * deltaSpot * deltaSpot;
+            var netPct = (projectedMove - FixedCostPerContract) / frozenAsk * 100m;
+            estimates.Add((strike, netPct));
+        }
+        if (estimates.Count == 0) return false;
+
+        var bestPct = estimates.Max(e => e.NetPct);
+        var sideLabel = isCall ? "Call" : "Put";
+        var lines = estimates
+            .OrderByDescending(e => e.Strike)
+            .Select(e =>
+            {
+                var pctStr = $"{(e.NetPct >= 0 ? "+" : string.Empty)}{e.NetPct:F1}%";
+                var line = $"    {e.Strike,7:F2}  {pctStr,8}";
+                return e.NetPct == bestPct ? $"{line}  ← mejor" : line;
+            });
+        // Log 2 (panel 2) only ever shows the latest estimate: each new action replaces the previous
+        // one (append=true only for the Put block right after the Call block of the SAME Reset Stk
+        // press). No premarket filter here, unlike AppendLog.
+        var text = $"{DateTime.Now:HH:mm:ss}  [Estimación {sideLabel}] ΔSpot={deltaSpot:F2}{Environment.NewLine}{string.Join(Environment.NewLine, lines)}{Environment.NewLine}";
+        if (!append) _crossLog2.Clear();
+        _crossLog2.AppendText(text);
+        return true;
+    }
+
+    // Called on every quotes-poll refresh (RefreshOptionsGrid) — updates the live Bid/PnL% label
+    // on the tracked Stk lines. A track armed by the wick trigger (Manual=false) only updates
+    // while still inside the session's real first 15m RTH candle (9:30-9:45 ET); one armed/reset
+    // by the "Reset Stk" button (Manual=true) updates indefinitely, until that button is pressed
+    // again.
+    private async Task UpdateTriggerStkLabelsAsync(List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts, ChartPanel? rthPanel)
+    {
+        if (rthPanel == null) return;
+        var nowEt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
+        var inFirstCandleWindow = nowEt.TimeOfDay >= new TimeSpan(9, 30, 0) && nowEt.TimeOfDay < new TimeSpan(9, 45, 0);
+
+        await UpdateOneStkSideAsync(_callTrack, isCall: true, otmCalls, rthPanel, inFirstCandleWindow);
+        await UpdateOneStkSideAsync(_putTrack, isCall: false, otmPuts, rthPanel, inFirstCandleWindow);
+    }
+
+    private async Task UpdateOneStkSideAsync(StkTrackState track, bool isCall, List<OptionQuoteDto> quotes, ChartPanel rthPanel, bool inFirstCandleWindow)
+    {
+        if (track.Entries.Count == 0) return;
+        if (!track.Manual && !inFirstCandleWindow) return;
+
+        var entries = new List<(decimal Price, string Ask, string Bid, string PnlText, bool PnlPositive)>();
+        foreach (var (strike, frozenAsk) in track.Entries)
+        {
+            var bid = quotes.FirstOrDefault(q => q.StrikePrice == strike)?.Bid;
+            if (bid == null) continue;
+            var pnlPct = frozenAsk > 0 ? (bid.Value - frozenAsk) / frozenAsk * 100 : 0m;
+            var pnlPositive = pnlPct >= 0;
+            var sign = pnlPositive ? "+" : string.Empty;
+            entries.Add((strike, frozenAsk.ToString("F2"), bid.Value.ToString("F2"), $"{sign}{pnlPct:F1}%", pnlPositive));
+        }
+        if (entries.Count == 0) return;
+
+        if (isCall) await rthPanel.SetStkCallLabelsAsync(entries);
+        else await rthPanel.SetStkPutLabelsAsync(entries);
+    }
 
     // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
     // GetQuoteSnapshot) — clicking Strike forwards into Form1.TriggerQuoteStrikeClick, which runs
@@ -82,7 +345,8 @@ public class TwoPanelChartsControl : UserControl
     // "Simulation" — same target/PnL behavior as the other 2 (always with target, auto-closes at
     // target), but the trade never touches TradeHistoryStore/OpenTradesStore/screenshots — see
     // RecordEntryAsync/CloseTradeRowAsync's isSimulation handling in Form1.cs.
-    private readonly RadioButton _rbChartsSimulation = new() { Text = "Simulation", AutoSize = true, ForeColor = Color.Black, Font = new Font("Segoe UI", 8F) };
+    // Simulation disabled, Demo-Target default — per explicit request.
+    private readonly RadioButton _rbChartsSimulation = new() { Text = "Simulation", Enabled = false, AutoSize = true, ForeColor = Color.Black, Font = new Font("Segoe UI", 8F) };
     private readonly RadioButton _rbChartsDemoTarget = new() { Text = "Demo-Target", Checked = true, AutoSize = true, ForeColor = Color.DarkOrange, Font = new Font("Segoe UI", 8F, FontStyle.Bold) };
     private readonly RadioButton _rbChartsRealTarget  = new() { Text = "Real-Target", AutoSize = true, ForeColor = Color.Green, Font = new Font("Segoe UI", 8F) };
     private bool _useRealTrade;
@@ -106,15 +370,24 @@ public class TwoPanelChartsControl : UserControl
     // request that the popup keep working exactly as it did before this control existed.
     public bool SuppressOwnTelegramPushes { get; set; }
 
+    // Raised when the 3:45 PM "Salto en Efecto" push is due (MultiChartForm sends its own 3-panel copy).
+    public event Action<string>? OnSaltoEnEfectoPushDue;
+
     // White entry-spot line above the candle when a trade opens/closes — panel 2 (15m RTH) only,
     // per explicit request that the Charts tab's own panel 2 show it too (previously this only
     // ever reached the popup Live Chart window's rthPanel, via MultiChartForm.
     // MarkEntrySpotOnOvernightChartAsync — the Charts tab has no equivalent since it's a whole
     // separate MultiChartForm-less control Form1 never fed this into). Same underlying primitive/
     // persistence (OpenTradesStore) as the popup, just reached through this control directly.
-    public async Task MarkEntrySpotOnRthChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false)
+    public async Task MarkEntrySpotOnRthChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
-        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall);
+        if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
+    }
+
+    // "R" on the Stk line at a Refuerzo — panel 2 (15m RTH) only, mirrors MarkStrikeOnRthChartAsync.
+    public async Task MarkReinforcementOnRthChartAsync(decimal strike)
+    {
+        if (_rthPanel != null) await _rthPanel.MarkReinforcementAsync(strike);
     }
 
     // Green "Stk=xxx" line at trade open — panel 2 (15m RTH) only, same pattern as
@@ -144,7 +417,8 @@ public class TwoPanelChartsControl : UserControl
     // Small event log fed by panel 1/2 events — MultiChartForm's own panel-3/combined-screenshot
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.
-    private readonly TextBox _crossLog;
+    private readonly RichTextBox _crossLog;
+    private RichTextBox _crossLog2 = null!; // panel 2 log (placement only for now)
 
     // Every "Daily" window currently open for this symbol — see MultiChartForm's original comment
     // (unchanged): removed on FormClosed so a closed window's WebView2 never gets touched again.
@@ -201,7 +475,10 @@ public class TwoPanelChartsControl : UserControl
         toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
         toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
         toolbar.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
-        toolbar.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
+        // Row 2 grew to 42f (was 32f) to fit pnlDeltaSpot (ΔSpot label+textbox stacked, 40px tall) —
+        // that panel doesn't stretch with Dock=Fill like its siblings, so at 32f it stuck out past
+        // the row's own bottom edge and read as "pushed down" no matter what Margin it had.
+        toolbar.RowStyles.Add(new RowStyle(SizeType.Absolute, 42f));
 
         var toolbarLeft = new FlowLayoutPanel
         {
@@ -318,6 +595,11 @@ public class TwoPanelChartsControl : UserControl
                 foreach (var sibling in twoPanels)
                     if (sibling != null && sibling != panel) _ = sibling.RemoveHLineAsync(price);
             };
+            panel.OnTradeMarksDeletedEvent += (pairId, strike) =>
+            {
+                foreach (var sibling in twoPanels)
+                    if (sibling != null && sibling != panel) _ = sibling.RemoveTradeMarksAsync(pairId, strike);
+            };
             panel.OnHLineDrawnEvent += (time, price) =>
             {
                 foreach (var sibling in twoPanels)
@@ -399,6 +681,18 @@ public class TwoPanelChartsControl : UserControl
                 });
             };
 
+            // Daily Bollinger Band white reference lines — panel 1 (1h) ONLY, per explicit request
+            // (unlike D.PM/Daily SMA above, not mirrored to panel 2).
+            hourlyPanel.OnDailyBollingerBandsValueEvent += (upper, lower) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    var sessionStart = GetTodaySessionStartFakeEpoch();
+                    _ = hourlyPanel.MarkDailyBollingerBandsAsync(upper, lower, sessionStart);
+                });
+            };
+
             hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
             {
                 if (IsDisposed) return;
@@ -458,6 +752,32 @@ public class TwoPanelChartsControl : UserControl
                 {
                     AppendLog($"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
                     if (!SuppressOwnTelegramPushes) _ = SendTLineSignalTelegramPushAsync(message, "15Min");
+                });
+            };
+
+            // "Salto en Efecto" still valid at 3:45 PM ET -> one Telegram push per ticker/day. Panel 2
+            // reports its state; the first tick at/after 15:45 (before 16:00) decides. A per-ticker/day
+            // flag file keeps app restarts and extra instances from re-sending.
+            (bool Active, bool Erased, decimal? Open, decimal? Close) saltoState = default;
+            var saltoPushDone = false;
+            rthPanel.OnSaltoEffectStateChanged += (active, erased, open, close) => saltoState = (active, erased, open, close);
+            rthPanel.OnLiveTick += (eastern, livePx) =>
+            {
+                if (saltoPushDone || IsDisposed) return;
+                var tod = eastern.TimeOfDay;
+                if (tod < new TimeSpan(15, 45, 0) || tod >= new TimeSpan(16, 0, 0)) return;
+                saltoPushDone = true; // decide once per app run
+                if (!saltoState.Active || saltoState.Erased || saltoState.Open == null || saltoState.Close == null) return;
+                var flag = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OptionsTrader", $"salto_push_{_symbol}_{eastern:yyyyMMdd}.flag");
+                if (File.Exists(flag)) return;
+                try { File.WriteAllText(flag, "sent"); } catch { /* best-effort */ }
+                var o = saltoState.Open.Value; var c = saltoState.Close.Value;
+                var dir = o > c ? "al alza" : "a la baja";
+                var caption = $"Salto en Efecto {dir} sigue vigente a las 3:45 PM (Diff={Math.Abs(o - c):F2})";
+                BeginInvoke(() =>
+                {
+                    OnSaltoEnEfectoPushDue?.Invoke(caption);
+                    if (!SuppressOwnTelegramPushes) _ = SendSaltoEnEfectoTelegramPushAsync(caption);
                 });
             };
 
@@ -565,14 +885,57 @@ public class TwoPanelChartsControl : UserControl
             ManualChartMarkdownStore.AppendEntry(fileName, _symbol, imagePath);
         }
 
-        var btnExpEn3 = new Button { Text = "Exp en 3", Size = new Size(70, 24) };
+        var btnExpEn3 = new Button { Text = "Exp en 3", Size = new Size(66, 24) }; // 5% narrower than the original 70
         btnExpEn3.Click += (s, e) => SaveManualSnapshot("ExpEn3", "ExpuestoEn3Charts.md");
 
-        var btnCtHora = new Button { Text = "CT Hora", Size = new Size(70, 24) };
+        var btnCtHora = new Button { Text = "CT Hora", Size = new Size(60, 24) }; // 15% narrower than the original 70 (59.5 rounded)
         btnCtHora.Click += (s, e) => SaveManualSnapshot("CTHora", "CTHora.md");
 
         var btnCt15Min = new Button { Text = "CT 15Min", Size = new Size(70, 24) };
         btnCt15Min.Click += (s, e) => SaveManualSnapshot("CT15Min", "CT15Min.md");
+
+        var btnSalBbVol = new Button { Text = "Sal BB Vol", Size = new Size(70, 24) };
+        btnSalBbVol.Click += (s, e) => SaveManualSnapshot("SalBBVol", "SalBBVol.md");
+
+        // "Stk Call"/"Stk Put" — panel 2 only. Toggle: ON captures the grid's closest 4 Call/Put
+        // strikes to spot (Level 1-4) and draws them as short dashed reference lines pinned to
+        // panel 2's right edge; OFF clears them. Captured ONCE at click time — per explicit
+        // request, does NOT stay in sync with the grid afterward.
+        // GetQuoteSnapshot's OtmCalls is ordered DESCENDING by strike (farthest-OTM first, closest/
+        // Level-1 LAST — see PopulateQuotesGrid's own countsFilter branch), the opposite of OtmPuts
+        // (already closest-first) — TakeLast, not Take, to actually get Level 1-4.
+        var btnStkCall = new Button { Text = "Stk Call", Size = new Size(56, 24), ForeColor = Color.DarkGreen };
+        btnStkCall.Click += async (s, e) =>
+        {
+            _stkCallOn = !_stkCallOn;
+            btnStkCall.BackColor = _stkCallOn ? Color.LightGreen : SystemColors.Control;
+            _callTrack.Entries.Clear(); // toggling either button off/on cancels any in-progress tracking
+            _callMinMax.Clear();
+            if (!_stkCallOn) { _stkCallStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(Array.Empty<decimal>()); return; }
+            // Before market open, Form1's own quote polling hasn't started yet — GetQuoteSnapshot's
+            // OtmCalls can be stale relative to how far the spot moved overnight. Pick the nearest
+            // strikes off the live tick instead in that case; once the market is open, unchanged.
+            var snapshot = _form1.GetQuoteSnapshot(_symbol);
+            _stkCallStrikes = (!MarketHours.IsOpen ? PickStrikesNearLiveSpot(isCall: true) : null)
+                ?? snapshot?.OtmCalls.TakeLast(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
+            if (rthPanel != null) await rthPanel.SetStkCallLinesAsync(_stkCallStrikes);
+            CaptureStkMinMax(isCall: true);
+        };
+
+        var btnStkPut = new Button { Text = "Stk Put", Size = new Size(56, 24), ForeColor = Color.Red };
+        btnStkPut.Click += async (s, e) =>
+        {
+            _stkPutOn = !_stkPutOn;
+            btnStkPut.BackColor = _stkPutOn ? Color.LightSalmon : SystemColors.Control;
+            _putTrack.Entries.Clear();
+            _putMinMax.Clear();
+            if (!_stkPutOn) { _stkPutStrikes.Clear(); if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(Array.Empty<decimal>()); return; }
+            var snapshot = _form1.GetQuoteSnapshot(_symbol);
+            _stkPutStrikes = (!MarketHours.IsOpen ? PickStrikesNearLiveSpot(isCall: false) : null)
+                ?? snapshot?.OtmPuts.Take(4).Select(q => q.StrikePrice).ToList() ?? new List<decimal>();
+            if (rthPanel != null) await rthPanel.SetStkPutLinesAsync(_stkPutStrikes);
+            CaptureStkMinMax(isCall: false);
+        };
 
         // Toggles the 1h panel between Daily (last 20 days, aggregated from up to ~200 trading
         // days of persisted hourly history) and plain Hourly candles.
@@ -652,6 +1015,25 @@ public class TwoPanelChartsControl : UserControl
         TextButton = new Button { Text = "Text", Size = new Size(60, 24), Margin = new Padding(3, 3, 3, 3) };
         ArrowButton = new Button { Text = "Arrow", Size = new Size(60, 24) };
 
+        // Auto-disarm H-Line 15s after the last line drawn, same behavior as the Arrow tool below —
+        // per explicit request. Disarms via HLineButton.PerformClick() (only while armed) so every
+        // Click handler attached to this button also runs (MultiChartForm's extra one that toggles
+        // panel 3), instead of leaving that panel armed with a button that says otherwise.
+        var hLineAutoDisarmTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+        hLineAutoDisarmTimer.Tick += (s, e) =>
+        {
+            hLineAutoDisarmTimer.Stop();
+            if (HLineButton.BackColor == Color.LightSalmon) HLineButton.PerformClick();
+        };
+        Disposed += (s, e) => hLineAutoDisarmTimer.Dispose();
+        void RestartHLineAutoDisarmTimer()
+        {
+            hLineAutoDisarmTimer.Stop();
+            hLineAutoDisarmTimer.Start();
+        }
+        if (hourlyPanel != null) hourlyPanel.OnHLineDrawnEvent += (t, p) => RestartHLineAutoDisarmTimer();
+        if (rthPanel != null) rthPanel.OnHLineDrawnEvent += (t, p) => RestartHLineAutoDisarmTimer();
+
         // Panel-1/2 half of the shared H-Line arm/disarm — MultiChartForm attaches its own extra
         // Click handler onto this same button to also toggle panel 3 (see its constructor), same
         // "sequential toggle → last result wins the button color" behavior as before the split.
@@ -661,7 +1043,9 @@ public class TwoPanelChartsControl : UserControl
             if (hourlyPanel != null) on = await hourlyPanel.ToggleHLineModeAsync();
             if (rthPanel != null) on = await rthPanel.ToggleHLineModeAsync();
             HLineButton.BackColor = on ? Color.LightSalmon : SystemColors.Control;
+            if (!on) hLineAutoDisarmTimer.Stop(); // manually turned off — no countdown to run
         };
+
         // "P-Line" — price-alert line, panel 2 (15m RTH) ONLY, per explicit request (unlike
         // H-Line/T-Line/Text/Arrow above, no panel-1 half, no MultiChartForm panel-3 wiring).
         var btnPLine = new Button { Text = "P-Line", Size = new Size(60, 24) };
@@ -689,6 +1073,48 @@ public class TwoPanelChartsControl : UserControl
                     AppendLog($"{DateTime.Now:HH:mm:ss}  [P-Line] {message}{Environment.NewLine}");
                     if (!SuppressOwnTelegramPushes)
                         _ = SendPLineCrossedTelegramPushAsync(message);
+                });
+            };
+        }
+
+        // Trend text (SMA20/40 short-term, SMA100/200 long-term + reminder dashes) from panel 1, logged
+        // whenever the trend pair changes — including premarket (see below).
+        if (hourlyPanel != null)
+        {
+            // Panel 1 decides whether today is the matching 1er Salto; panel 2 draws "Salto en Efecto".
+            // Not replayed: if panel 2's page isn't ready when this fires, it's lost until panel 1's value changes.
+            hourlyPanel.OnSaltoSetupChanged += (crossUp, saltoDays) =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() => { _ = rthPanel?.SetSaltoSetupAsync(crossUp, saltoDays); });
+            };
+            hourlyPanel.OnTrendStateChanged += (shortDir, longDir) =>
+            {
+                // First 4 segments are the "<largo> - <corto>" line + its newline (now shown in the
+                // header strip instead, see ChartPanel's _trendHost) — only the dash-reminder lines
+                // after it (present only when shortDir == longDir) still go to this log, per
+                // explicit request. Nothing logged when there are none.
+                var segs = ChartPanel.TrendLogSegments(shortDir, longDir)?.Skip(4).ToList();
+                if (segs == null || segs.Count == 0 || IsDisposed) return;
+                // Logged immediately, premarket included — the point is to show what panel 1 is
+                // already displaying before the open (AppendLog itself drops pre-9:30 text).
+                BeginInvoke(() => ChartPanel.AppendColored(_crossLog, segs));
+            };
+        }
+
+        // "Trigger Call"/"Trigger Put" wick analysis (panel 2 only) — see ChartPanel.
+        // OnWickTriggerEvent's own comment for the full rule. Logged, no Telegram push. Also arms
+        // the Ask(frozen)/Bid(live)/PnL% tracking on the Stk Call/Put lines — ported from the
+        // Simulator's identical feature — but only if the matching button is already ON.
+        if (rthPanel != null)
+        {
+            rthPanel.OnWickTriggerEvent += label =>
+            {
+                if (IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    AppendLog($"{DateTime.Now:HH:mm:ss}  [{_symbol}] {label}{Environment.NewLine}");
+                    ArmTriggerStkTracking(label);
                 });
             };
         }
@@ -723,12 +1149,35 @@ public class TwoPanelChartsControl : UserControl
         // again" toggle as DZ/SZ (no auto-disarm-on-placement, so no reset wiring needed beyond the
         // toggle's own return value). MultiChartForm attaches an extra Click handler onto this same
         // button to also arm panel 3, same split-button convention as HLineButton/TextButton.
+        // Auto-disarm the diagonal Arrow tool after 15s of no new arrow being drawn — per explicit
+        // request, it stays armed for drawing several in a row (see ArrowButton.Click below,
+        // "stays armed until pressed again"), but shouldn't stay armed indefinitely if the user
+        // just forgets to turn it off. Restarted on every OnDiagonalArrowPlacedEvent below; each new
+        // arrow pushes the deadline back out another 15s instead of the timer running independently.
+        var arrowAutoDisarmTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+        arrowAutoDisarmTimer.Tick += async (s, e) =>
+        {
+            arrowAutoDisarmTimer.Stop();
+            if (hourlyPanel != null) await hourlyPanel.ToggleArrowModeAsync();
+            if (rthPanel != null) await rthPanel.ToggleArrowModeAsync();
+            ArrowButton.BackColor = SystemColors.Control;
+        };
+        Disposed += (s, e) => arrowAutoDisarmTimer.Dispose();
+        void RestartArrowAutoDisarmTimer()
+        {
+            arrowAutoDisarmTimer.Stop();
+            arrowAutoDisarmTimer.Start();
+        }
+        if (hourlyPanel != null) hourlyPanel.OnDiagonalArrowPlacedEvent += RestartArrowAutoDisarmTimer;
+        if (rthPanel != null) rthPanel.OnDiagonalArrowPlacedEvent += RestartArrowAutoDisarmTimer;
+
         ArrowButton.Click += async (s, e) =>
         {
             bool on = false;
             if (hourlyPanel != null) on = await hourlyPanel.ToggleArrowModeAsync();
             if (rthPanel != null) on = await rthPanel.ToggleArrowModeAsync();
             ArrowButton.BackColor = on ? Color.LightYellow : SystemColors.Control;
+            if (!on) arrowAutoDisarmTimer.Stop(); // manually turned off — no countdown to run
         };
 
         // Shows/hides the white Bollinger-band edge markers on this panel — checked by default
@@ -797,6 +1246,19 @@ public class TwoPanelChartsControl : UserControl
             _form1.ApplyLivePollingInterval(_symbol, seconds);
         };
 
+        // "Reset Stk" + ΔSpot — ported from the Simulator, placed next to Poll(s) per explicit
+        // request. See ToggleResetStk/LogProjectedStkEstimate above for the full behavior.
+        var btnResetStk = new Button { Text = "Reset Stk", AutoSize = true, Margin = new Padding(12, 3, 3, 3) };
+        btnResetStk.Click += (s, e) =>
+        {
+            ToggleResetStk(rthPanel);
+            btnResetStk.BackColor = _resetStkOn ? Color.LightYellow : SystemColors.Control;
+        };
+        // No label — per explicit request, just the textbox (tooltip carries the "ΔSpot" meaning
+        // instead of a visible label).
+        _txtDeltaSpot = new TextBox { Width = 50, Margin = new Padding(3, 3, 3, 3) };
+        new ToolTip().SetToolTip(_txtDeltaSpot, "ΔSpot estimado");
+
         // Live "time — price" readout for panel 2's own WebSocket ticks, above panel 2's toolbar —
         // same idea as MultiChartForm's own lblLiveTick (panel 3), per explicit request to have one
         // here too, so a stalled/disconnected feed (no updates) is visible at a glance.
@@ -812,6 +1274,7 @@ public class TwoPanelChartsControl : UserControl
         {
             rthPanel.OnLiveTick += (eastern, price) =>
             {
+                _lastLiveSpotPrice = price; // see PickStrikesNearLiveSpot — fires premarket too
                 if (IsDisposed || lblRthLiveTick.IsDisposed || !lblRthLiveTick.IsHandleCreated) return;
                 lblRthLiveTick.BeginInvoke(() => lblRthLiveTick.Text = $"{eastern:HH:mm:ss}  {price:F2}");
             };
@@ -825,6 +1288,11 @@ public class TwoPanelChartsControl : UserControl
         toolbarLeftRow2.Controls.Add(btnExpEn3);
         toolbarLeftRow2.Controls.Add(btnCtHora);
         toolbarLeftRow2.Controls.Add(btnCt15Min);
+        toolbarLeftRow2.Controls.Add(btnSalBbVol);
+        toolbarLeftRow2.Controls.Add(btnStkCall);
+        toolbarLeftRow2.Controls.Add(btnStkPut);
+        // Tighter spacing (1px instead of the default 3px per side) so all six, Stk Put included, fit.
+        foreach (Control c in toolbarLeftRow2.Controls) c.Margin = new Padding(1, 3, 1, 3);
         toolbarLeft.Controls.Add(chkDayDividers);
         toolbarLeft.Controls.Add(AthCheckBox);
 
@@ -839,6 +1307,8 @@ public class TwoPanelChartsControl : UserControl
         toolbarRightRow2.Controls.Add(chkTelegram);
         toolbarRightRow2.Controls.Add(lblPollingInterval);
         toolbarRightRow2.Controls.Add(numPollingInterval);
+        toolbarRightRow2.Controls.Add(btnResetStk);
+        toolbarRightRow2.Controls.Add(_txtDeltaSpot);
         toolbarRightRow2.Controls.Add(lblRthLiveTick);
 
         // Wraps the toolbar row + its Text-tool note box together so their relative order (toolbar
@@ -855,12 +1325,12 @@ public class TwoPanelChartsControl : UserControl
         // Small event log below the charts — logs Cross-SMA cruce/rebote detections (so the
         // Telegram-push feature can be sanity-checked without digging through Telegram itself).
         // Temporary/diagnostic for now.
-        _crossLog = new TextBox
+        _crossLog = new RichTextBox
         {
             Dock       = DockStyle.Fill,
             Multiline  = true,
             ReadOnly   = true,
-            ScrollBars = ScrollBars.Vertical,
+            ScrollBars = RichTextBoxScrollBars.Vertical,
             Font       = new Font("Consolas", 8.5F),
             BackColor  = Color.Black,
             ForeColor  = Color.LightGreen
@@ -1038,7 +1508,11 @@ public class TwoPanelChartsControl : UserControl
                 if (e.ColumnIndex == sprdCol)
                 {
                     e.CellStyle.ForeColor = Color.Red;
-                    e.CellStyle.Font = new Font(grid.Font, FontStyle.Bold);
+                    // Per explicit request: a wide spread (>= 5) stands out with a slightly bigger
+                    // font on top of the usual bold — the Strike button stays enabled either way,
+                    // this is purely a visual flag to catch the eye.
+                    var wideSpread = decimal.TryParse(e.Value?.ToString(), out var sprdVal) && sprdVal >= 5;
+                    e.CellStyle.Font = new Font(grid.Font.FontFamily, wideSpread ? grid.Font.Size + 2 : grid.Font.Size, FontStyle.Bold);
                 }
                 else if (e.ColumnIndex == askCol)
                 {
@@ -1067,7 +1541,7 @@ public class TwoPanelChartsControl : UserControl
 
             // Strike button: dark green for Call rows, red for Put rows, light gray when blocked —
             // identical to DgvQuotes_CellPainting's colStrikePrice button on Form1's own grid (same
-            // IsRowTradeBlocked rule: bid == 0, OR spread >= 6, OR 0 contracts).
+            // IsRowTradeBlocked rule: bid == 0, OR 0 contracts — spread check removed per explicit request).
             grid.CellPainting += (s, e) =>
             {
                 if (e.RowIndex < 0 || e.ColumnIndex != grid.Columns["colStrikeLive"]!.Index) return;
@@ -1080,7 +1554,6 @@ public class TwoPanelChartsControl : UserControl
 
                 var disabled =
                     !decimal.TryParse(row.Cells["colBidLive"].Value?.ToString(), out var bid) || bid == 0m
-                    || (decimal.TryParse(row.Cells["colSprdLive"].Value?.ToString(), out var sprd) && sprd >= 6)
                     || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0;
 
                 var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
@@ -1173,6 +1646,9 @@ public class TwoPanelChartsControl : UserControl
                 lblExpDate.Text = $"ExpDate: {ExpirationDateResolver.Resolve(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
             if (!lblExpDateNext.IsDisposed)
                 lblExpDateNext.Text = $"Next: {ExpirationDateResolver.ResolveNext(snapshot.Value.Ticker.ExpDate):yyyy-MM-dd}";
+
+            _ = UpdateTriggerStkLabelsAsync(snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, rthPanel);
+            _ = UpdateStkMinMaxAsync(snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, rthPanel);
 
             var snapshotNext = _form1.GetQuoteSnapshotNext(_symbol);
 
@@ -1369,6 +1845,7 @@ public class TwoPanelChartsControl : UserControl
                     {
                         mirrorRow.Cells[i].Style.ForeColor = sourceRow.Cells[i].Style.ForeColor;
                         mirrorRow.Cells[i].Style.BackColor = sourceRow.Cells[i].Style.BackColor;
+                        mirrorRow.Cells[i].ToolTipText = sourceRow.Cells[i].ToolTipText; // Min/Max PnL% record times
                         if (sourceRow.Cells[i].Style.Font != null)
                             mirrorRow.Cells[i].Style.Font = sourceRow.Cells[i].Style.Font;
                     }
@@ -1410,7 +1887,27 @@ public class TwoPanelChartsControl : UserControl
         var logRow = new Panel { Dock = DockStyle.Fill };
         ChartTextTextBox.Dock = DockStyle.Right;
         ChartTextTextBox.Width = optionsGridHost.Width;
-        logRow.Controls.Add(_crossLog);
+        // Two logs side by side (50/50): _crossLog = panel 1 events (still receives EVERYTHING for
+        // now), _crossLog2 = panel 2 events (empty placeholder until events get routed to it).
+        _crossLog2 = new RichTextBox
+        {
+            Dock       = DockStyle.Fill,
+            Multiline  = true,
+            ReadOnly   = true,
+            ScrollBars = RichTextBoxScrollBars.Vertical,
+            Font       = new Font("Consolas", 8.5F),
+            BackColor  = Color.Black,
+            ForeColor  = Color.LightGreen
+        };
+        var logsTable = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        logsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        logsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        logsTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        _crossLog.Margin = new Padding(0, 0, 2, 0);
+        _crossLog2.Margin = new Padding(2, 0, 0, 0);
+        logsTable.Controls.Add(_crossLog, 0, 0);
+        logsTable.Controls.Add(_crossLog2, 1, 0);
+        logRow.Controls.Add(logsTable);
         logRow.Controls.Add(ChartTextTextBox);
 
         var bottomSection = new Panel { Dock = DockStyle.Bottom, Height = tradesGridHost.Height + 90 };
@@ -1483,6 +1980,19 @@ public class TwoPanelChartsControl : UserControl
         {
             _ = _hourlyPanel?.RemoveHLineAsync(price);
             _ = _rthPanel?.RemoveHLineAsync(price);
+        };
+
+        // Rect / Color Rect drawn or deleted on the Daily form's "Hora" tab -> panel 1 (1h) only.
+        dailyForm.OnHoraRectChangedEvent += (color, added, t1, p1, t2, p2) =>
+        {
+            if (IsDisposed) return;
+            BeginInvoke(() => { _ = _hourlyPanel?.MirrorRectAsync(color, added, t1, p1, t2, p2); });
+        };
+
+        dailyForm.OnHoraCircleChangedEvent += (added, t1, p1, t2, p2) =>
+        {
+            if (IsDisposed) return;
+            BeginInvoke(() => { _ = _hourlyPanel?.MirrorCircleAsync(added, t1, p1, t2, p2); });
         };
 
         dailyForm.OnTLineDrawnEvent += (tag, t1, p1, t2, p2) =>
@@ -1745,6 +2255,45 @@ public class TwoPanelChartsControl : UserControl
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
                 TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SmaCross", DateTime.Now));
+            if (ok)
+                EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
+            else
+                LogTelegramPushFailure(detail);
+        }
+        catch (Exception ex)
+        {
+            LogTelegramPushFailure(ex.Message);
+        }
+    }
+
+    // Pushes the combined (panel 1 + 2) snapshot for a "Salto en Efecto" still valid at 3:45 PM.
+    private async Task SendSaltoEnEfectoTelegramPushAsync(string caption)
+    {
+        if (!Form1.IsTelegramEnabledFor(_symbol)) return;
+        try
+        {
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId))
+            {
+                LogTelegramPushFailure("Bot Token o Chat ID vacío");
+                return;
+            }
+
+            using var combined = await CaptureCombinedChartImageAsync();
+            if (combined == null)
+            {
+                LogTelegramPushFailure("No se pudo capturar el snapshot combinado de los charts.");
+                return;
+            }
+
+            var folder = @"C:\OptionsTraderPush";
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"{_symbol}_SaltoEnEfecto_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+            var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
+            if (ok && messageId.HasValue)
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "SaltoEnEfecto", DateTime.Now));
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             else

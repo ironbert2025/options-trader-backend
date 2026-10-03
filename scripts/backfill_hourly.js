@@ -19,7 +19,9 @@ if (SYMBOLS.length === 0) {
   process.exit(1);
 }
 
-const OUT_DIR = 'C:\\OptionsData\\MarketData\\Candles';
+// Override via BACKFILL_OUT_DIR env var (e.g. to target a different machine's mapped drive, same
+// convention as backfill_daily.js) — defaults to this machine's own folder.
+const OUT_DIR = process.env.BACKFILL_OUT_DIR || 'C:\\OptionsData\\MarketData\\Candles';
 const MAX_CANDLES = 1500;
 const RTH_START_MIN = 9 * 60 + 30; // 9:30 ET
 const RTH_END_MIN = 16 * 60;       // 16:00 ET

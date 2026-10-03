@@ -62,6 +62,17 @@ public static class MarketHours
         }
     }
 
+    // Weekday, 7:30 AM up to (not including) the 9:30 AM open — the window in which launching the
+    // app auto-starts polling and opens the Charts tab (see Form1.AutoAssignTickerAndStartAsync).
+    public static bool IsWithinTwoHoursBeforeOpen
+    {
+        get
+        {
+            var time = TimeOnly.FromDateTime(NowEst);
+            return IsWeekday && time >= MarketOpen.AddHours(-2) && time < MarketOpen;
+        }
+    }
+
     public static bool IsOpen
     {
         get

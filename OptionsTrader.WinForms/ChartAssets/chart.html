@@ -419,6 +419,30 @@
 
   // ---- Rect tool: sky-blue rectangle between 2 clicks (opposite corners, no value labels) ----
 
+  // "Range=x   Days=n" label for Rect / Color Rect, drawn centered just above the rect's top edge
+  // in yellow. Range = |p1 - p2|. Days = distinct market days (inclusive of both end days) among
+  // the LOADED candles between the rect's two x-positions — counting dates that actually have
+  // candles is what excludes weekends/holidays, no calendar needed. Works for Daily (1 candle/day)
+  // and Hora (many candles/day, each date counted once). Recomputed each repaint, so already-saved
+  // rects show it too.
+  function drawRectInfoLabel(ctx, scope, r, left, right, top) {
+    const day = (t) => Math.floor(t / 86400);
+    const d1 = day(Math.min(r.t1, r.t2)), d2 = day(Math.max(r.t1, r.t2));
+    const days = new Set();
+    for (let i = 0; i < allCandles.length; i++) {
+      const d = day(allCandles[i].time);
+      if (d >= d1 && d <= d2) days.add(d);
+    }
+    const text = `Range=${Math.abs(r.p1 - r.p2).toFixed(2)}   Days=${days.size}`;
+    ctx.save();
+    ctx.fillStyle = '#ffeb3b';
+    ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(text, (left + right) / 2, top - 4 * scope.verticalPixelRatio);
+    ctx.restore();
+  }
+
   class RectanglesPrimitive {
     constructor() { this._rects = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, selected }, ...]
     attached(param) { this._chart = param.chart; }
@@ -471,6 +495,7 @@
                     ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                     ctx.strokeRect(left, top, right - left, bottom - top);
                   }
+                  drawRectInfoLabel(ctx, scope, r, left, right, top);
                 };
                 self._rects.forEach(r => drawRect(r, 0.35, r.selected));
                 if (self._preview) drawRect(self._preview, 0.18, false); // lighter while still dragging
@@ -542,6 +567,7 @@
                     ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                     ctx.strokeRect(left, top, right - left, bottom - top);
                   }
+                  drawRectInfoLabel(ctx, scope, r, left, right, top);
                 };
                 self._rects.forEach(r => drawRect(r, 0.35, r.selected));
                 if (self._preview) drawRect(self._preview, 0.18, false); // lighter while still dragging
@@ -565,6 +591,79 @@
     rectArmed = !rectArmed;
     rectPending = null;
     return rectArmed;
+  }
+
+  // ---- Circle tool (Daily "Hora" tab, mirrored to live panel 1): yellow, unfilled ellipse anchored
+  // to data — center (t1,p1), edge point (t2,p2); semi-axes are |x2-x1| / |y2-y1| in pixels, so it
+  // follows zoom/scroll with the candles (and is only a true circle when the axes happen to match).
+  class CirclePrimitive {
+    constructor() { this._circles = []; this._preview = null; this._chart = null; } // [{ t1, p1, t2, p2, selected }, ...]
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const drawCircle = (c, selected) => {
+                  const g = circleGeometry(c);
+                  if (!g) return;
+                  ctx.strokeStyle = '#ffeb3b';
+                  ctx.lineWidth = (selected ? 3 : 1.5) * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.ellipse(g.cx * scope.horizontalPixelRatio, g.cy * scope.verticalPixelRatio,
+                    Math.max(g.rx, 0.5) * scope.horizontalPixelRatio, Math.max(g.ry, 0.5) * scope.verticalPixelRatio,
+                    0, 0, Math.PI * 2);
+                  ctx.stroke();
+                };
+                self._circles.forEach(c => drawCircle(c, c.selected));
+                if (self._preview) drawCircle(self._preview, false);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  // Center + semi-axes in CSS pixels for a circle, or null if it can't be placed right now.
+  function circleGeometry(c) {
+    const ts = chart.timeScale();
+    let x1, x2;
+    try { x1 = safeTimeToCoordinate(ts, c.t1); x2 = safeTimeToCoordinate(ts, c.t2); } catch { return null; }
+    const y1 = candleSeries.priceToCoordinate(c.p1);
+    const y2 = candleSeries.priceToCoordinate(c.p2);
+    if (x1 == null || x2 == null || y1 == null || y2 == null) return null;
+    return { cx: x1, cy: y1, rx: Math.abs(x2 - x1), ry: Math.abs(y2 - y1) };
+  }
+
+  // Index of the circle whose outline is within 6px of (px, py), or -1.
+  function findCircleByBorderClick(px, py) {
+    for (let i = circlePrimitive._circles.length - 1; i >= 0; i--) {
+      const g = circleGeometry(circlePrimitive._circles[i]);
+      if (!g || g.rx < 1 || g.ry < 1) continue;
+      const norm = Math.hypot((px - g.cx) / g.rx, (py - g.cy) / g.ry);
+      if (Math.abs(norm - 1) * Math.min(g.rx, g.ry) <= 6) return i;
+    }
+    return -1;
+  }
+
+  const circlePrimitive = new CirclePrimitive();
+  let circleAttached = false;
+  let circleArmed = false;
+  let circlePending = null; // { time, price } of the center click
+
+  // Single-shot per arm: click 1 = center, mouse move previews, click 2 = edge, draws and disarms.
+  function toggleCircle() {
+    if (!circleAttached) { candleSeries.attachPrimitive(circlePrimitive); circleAttached = true; }
+    circleArmed = !circleArmed;
+    circlePending = null;
+    circlePrimitive._preview = null;
+    return circleArmed;
   }
 
   const colorRectPrimitive = new ColorRectPrimitive();
@@ -691,6 +790,23 @@
   function findGrayRectByBorderClick(px, py) { return findRectBorderIndex(grayRectPrimitive._rects, px, py); }
   function findBlueRectByBorderClick(px, py) { return findRectBorderIndex(rectanglesPrimitive._rects, px, py); }
   function findColorRectByBorderClick(px, py) { return findRectBorderIndex(colorRectPrimitive._rects, px, py); }
+
+  // Entry/close spot marker segments (EntrySpotLinePrimitive — the short white/yellow rayitas drawn
+  // when a trade opens and closes): index of the one whose 3-bar-wide segment is within a few
+  // pixels of (px,py), or -1. Same geometry as the primitive's own draw().
+  function findEntrySpotLineByClick(px, py) {
+    const ts = chart.timeScale();
+    const barSpacing = ts.options().barSpacing;
+    const lines = entrySpotLinePrimitive._lines;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const l = lines[i];
+      const cx = safeTimeToCoordinate(ts, l.time);
+      const y = candleSeries.priceToCoordinate(l.price);
+      if (cx == null || y == null) continue;
+      if (distToSegment(px, py, cx - barSpacing * 1.5, y, cx + barSpacing * 1.5, y) <= 6) return i;
+    }
+    return -1;
+  }
 
   // Returns the index of the T-Line whose segment is within a few pixels of (px,py), or -1.
   // Same distToSegment helper as the gray rect border check above. Same snap-to-nearest-real-candle
@@ -844,6 +960,17 @@
       return;
     }
 
+    const circleIdx = circlePrimitive._circles.findIndex(c => c.selected);
+    if (circleIdx !== -1) {
+      const removedCircle = circlePrimitive._circles[circleIdx];
+      circlePrimitive._circles.splice(circleIdx, 1);
+      forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'circle_delete', t1: removedCircle.t1, p1: removedCircle.p1, t2: removedCircle.t2, p2: removedCircle.p2 });
+      }
+      return;
+    }
+
     const lineIdx = tLinePrimitive._lines.findIndex(l => l.selected);
     if (lineIdx !== -1) {
       const removed = tLinePrimitive._lines[lineIdx];
@@ -851,6 +978,31 @@
       forceRepaint();
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ type: 'tline_delete', t1: removed.t1, p1: removed.p1, t2: removed.t2, p2: removed.p2 });
+      }
+      return;
+    }
+
+    // Entry/close spot marker: removed here and reported to C# so a still-open trade's ENTRY line
+    // isn't redrawn from OpenTradesStore the next time this chart loads (see
+    // ChartPanel.ReplayPersistedEntryMarkersAsync). Close lines were never persisted anyway.
+    if (entrySpotLinePrimitive._lines.some(l => l.selected)) {
+      // The whole open+close pair (both flagged selected on click) goes at once, TOGETHER with
+      // everything else drawn for that trade: its green Stk line and ΔS label (removeTradeMarks),
+      // echoed to the sibling panels through C# ('trade_marks_delete').
+      const removedSpots = entrySpotLinePrimitive._lines.filter(l => l.selected);
+      const seen = new Set();
+      removedSpots.forEach(r => {
+        const key = `${r.pairId}|${r.strike}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        removeTradeMarks(r.pairId, r.strike);
+        if (window.chrome && window.chrome.webview)
+          window.chrome.webview.postMessage({ type: 'trade_marks_delete', pairId: r.pairId, strike: r.strike });
+      });
+      entrySpotLinePrimitive._lines = entrySpotLinePrimitive._lines.filter(l => !l.selected);
+      forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        removedSpots.forEach(r => window.chrome.webview.postMessage({ type: 'entryspot_delete', price: r.price, time: r.time, isClose: !!r.isClose }));
       }
       return;
     }
@@ -958,12 +1110,16 @@
       return;
     }
 
-    // Diagonal Arrow: session-only (not persisted anywhere), nothing to report to C# — just
-    // remove it locally, same as click-text below.
+    // Diagonal Arrow: session-only (not persisted anywhere) — still reports the color to C# (see
+    // "diagonal_arrow_placed") so it can drop its cached red/green size if this was the tracked one.
     const diagArrowIdx = arrowPrimitive._arrows.findIndex(a => a.selected);
     if (diagArrowIdx !== -1) {
+      const removedRed = arrowPrimitive._arrows[diagArrowIdx].red;
       arrowPrimitive._arrows.splice(diagArrowIdx, 1);
       forceRepaint();
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage({ type: 'diagonal_arrow_deleted', red: removedRed });
+      }
       return;
     }
 
@@ -1065,9 +1221,18 @@
         arrowPending = { logical: logicalX, price: arrowPrice };
       } else {
         const red = arrowPending.price > arrowPrice; // 1st click above (higher price than) 2nd -> red
+        const arrowP1 = arrowPending.price;
         arrowPrimitive._arrows.push({ l1: arrowPending.logical, p1: arrowPending.price, l2: logicalX, p2: arrowPrice, red, selected: false });
         arrowPrimitive._preview = null;
         arrowPending = null;
+        // Reported to C# so it can (re)start the 15s auto-disarm countdown (per explicit request,
+        // this tool stays armed for drawing several arrows in a row, but should turn itself off
+        // after 15s of no new arrow being drawn instead of staying armed forever until re-clicked)
+        // and so it can compare this arrow's vertical size (red vs green) for the "Trigger Call/
+        // Put" wick analysis — see ChartPanel's "diagonal_arrow_placed" handling.
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'diagonal_arrow_placed', p1: arrowP1, p2: arrowPrice, red });
+        }
         forceRepaint();
       }
       return;
@@ -1106,6 +1271,23 @@
       const hadStrikeSelection = strikeLinesPrimitive._lines.some(l => l.selected);
       if (hadStrikeSelection) {
         strikeLinesPrimitive._lines.forEach(l => { l.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // Entry/close spot marker click selection (Delete removes it) — before the clickTime/price
+    // guard, same reason as the H-Line/Stk blocks: the segment is only a few bars wide but the
+    // click can land in sparse areas where coordinateToTime returns null.
+    if (entrySpotLinePrimitive._lines.length > 0) {
+      const hitIdx = findEntrySpotLineByClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        const hitPair = entrySpotLinePrimitive._lines[hitIdx].pairId;
+        entrySpotLinePrimitive._lines.forEach((l, i) => { l.selected = i === hitIdx || (hitPair != null && l.pairId === hitPair); });
+        forceRepaint();
+        return;
+      }
+      if (entrySpotLinePrimitive._lines.some(l => l.selected)) {
+        entrySpotLinePrimitive._lines.forEach(l => { l.selected = false; });
         forceRepaint();
       }
     }
@@ -1200,6 +1382,20 @@
       const hadColorSelection = colorRectPrimitive._rects.some(r => r.selected);
       if (hadColorSelection) {
         colorRectPrimitive._rects.forEach(r => { r.selected = false; });
+        forceRepaint();
+      }
+    }
+
+    // Circle outline-click selection (Delete key removes it).
+    if (circlePrimitive._circles.length > 0) {
+      const hitIdx = findCircleByBorderClick(param.point.x, param.point.y);
+      if (hitIdx !== -1) {
+        circlePrimitive._circles.forEach((c, i) => { c.selected = i === hitIdx; });
+        forceRepaint();
+        return;
+      }
+      if (circlePrimitive._circles.some(c => c.selected)) {
+        circlePrimitive._circles.forEach(c => { c.selected = false; });
         forceRepaint();
       }
     }
@@ -1369,6 +1565,23 @@
       }
     }
 
+    if (circleArmed) {
+      if (!circlePending) {
+        circlePending = { time: clickTime, price };
+      } else {
+        const c = { t1: circlePending.time, p1: circlePending.price, t2: clickTime, p2: price, selected: false };
+        circlePrimitive._circles.push(c);
+        circlePrimitive._preview = null;
+        circlePending = null;
+        circleArmed = false;
+        forceRepaint();
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'circle_placed' });
+          window.chrome.webview.postMessage({ type: 'circle_add', t1: c.t1, p1: c.p1, t2: c.t2, p2: c.p2 });
+        }
+      }
+    }
+
     if (grayRectArmed) {
       if (!grayRectPending) {
         grayRectPending = { time: clickTime, price };
@@ -1484,6 +1697,16 @@
       const price = candleSeries.coordinateToPrice(param.point.y);
       if (price != null) {
         rectanglesPrimitive._preview = { t1: rectPending.time, p1: rectPending.price, t2: param.time, p2: price };
+        forceRepaint();
+      }
+    }
+
+    if (!circleArmed || !circlePending) {
+      if (circlePrimitive._preview) { circlePrimitive._preview = null; forceRepaint(); }
+    } else if (param.point && param.time !== undefined) {
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price != null) {
+        circlePrimitive._preview = { t1: circlePending.time, p1: circlePending.price, t2: param.time, p2: price };
         forceRepaint();
       }
     }
@@ -1765,6 +1988,192 @@
     return pLineArmed;
   }
 
+  // "Stk Call"/"Stk Put" toolbar buttons (panel 2 only) — short dashed reference lines at up to 4
+  // fixed strike prices, captured once at click time (not re-synced to the grid afterward, per
+  // explicit request). Unlike every other line primitive here, this one deliberately does NOT span
+  // from an anchor time to the right edge — it's a short ~30px segment pinned to the right edge
+  // itself, so it reads as "a marker on the price axis" rather than a line crossing the chart.
+  const StkLineSegmentPx = 100;
+  class StkLinesPrimitive {
+    // _callLines/_putLines: [{ price, label }, ...] — label is null for a plain line (the usual
+    // manual toggle case); Simulator-only "Trigger Call/Put" tracking (setStkCallLabels/
+    // setStkPutLabels) fills it in for whichever entries match by price, without touching the
+    // others or requiring the whole set to be resent.
+    constructor() { this._callLines = []; this._putLines = []; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const right = scope.bitmapSize.width;
+                const left = right - StkLineSegmentPx * scope.horizontalPixelRatio;
+                const drawSet = (lines, color) => {
+                  ctx.strokeStyle = color;
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.setLineDash([5 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
+                  lines.forEach(({ price }) => {
+                    const y = candleSeries.priceToCoordinate(price);
+                    if (y == null) return;
+                    ctx.beginPath();
+                    ctx.moveTo(left, y * scope.verticalPixelRatio);
+                    ctx.lineTo(right, y * scope.verticalPixelRatio);
+                    ctx.stroke();
+                  });
+                  ctx.setLineDash([]);
+
+                  // Trigger-fed label (Ask frozen / Bid live / PnL%) — drawn ABOVE the segment,
+                  // centered over it, each piece its own color: Ask green, Bid orange, PnL%
+                  // green/red depending on sign.
+                  ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textAlign = 'left';
+                  ctx.textBaseline = 'bottom';
+                  lines.forEach(({ price, label }) => {
+                    if (!label) return;
+                    const y = candleSeries.priceToCoordinate(price);
+                    if (y == null) return;
+                    const gap = ' ';
+                    // Same colors the grid itself uses: Ask/positive PnL = DarkGreen (#006400,
+                    // matches DgvQuotes_CellFormatting's Ask column), negative PnL = plain Red
+                    // (#FF0000, matches its Sprd column) — per explicit request.
+                    const pieces = [
+                      { text: label.ask, color: '#006400' },
+                      { text: label.bid, color: '#ffa726' },
+                      { text: label.pnlText, color: label.pnlPositive ? '#006400' : '#FF0000' },
+                    ];
+                    const widths = pieces.map(p => ctx.measureText(p.text).width);
+                    const gapWidth = ctx.measureText(gap).width;
+                    const totalWidth = widths.reduce((a, b) => a + b, 0) + gapWidth * (pieces.length - 1);
+                    let x = (left + right) / 2 - totalWidth / 2;
+                    const ty = y * scope.verticalPixelRatio - 4 * scope.verticalPixelRatio;
+                    pieces.forEach((p, i) => {
+                      ctx.fillStyle = p.color;
+                      ctx.fillText(p.text, x, ty);
+                      x += widths[i] + gapWidth;
+                    });
+                  });
+
+                  // Strike price + running Min/Max PnL% (see setStkCallMinMax/setStkPutMinMax),
+                  // below the segment, right-justified — so the line stays identifiable even
+                  // without a trigger label above it, and the min/max reads right next to the
+                  // strike it belongs to. Min red (only shown once it's gone negative at least
+                  // once), Max green (only shown once it's gone positive at least once) — same
+                  // "Min only tracks negative, Max only tracks positive" convention as Form1's own
+                  // UpdatePnLMinMax for real/demo trades.
+                  ctx.font = `${10 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textAlign = 'left';
+                  ctx.textBaseline = 'top';
+                  lines.forEach(({ price, minMax }) => {
+                    const y = candleSeries.priceToCoordinate(price);
+                    if (y == null) return;
+                    // No trailing ".00" for whole-number strikes, per explicit request.
+                    const priceText = Number.isInteger(price) ? String(price) : price.toFixed(2);
+                    const ty = y * scope.verticalPixelRatio + 3 * scope.verticalPixelRatio;
+                    // Strike at the left end of the segment.
+                    ctx.fillStyle = color;
+                    ctx.fillText(priceText, left, ty);
+                    const strikeWidth = ctx.measureText(priceText).width;
+                    // (Min/Max) at the right end, kept at least 8px away from the strike.
+                    if (minMax && (minMax.minText || minMax.maxText)) {
+                      const pieces = [{ text: '(', color }];
+                      if (minMax.minText) pieces.push({ text: minMax.minText, color: '#FF0000' });
+                      if (minMax.minText && minMax.maxText) pieces.push({ text: '/', color });
+                      if (minMax.maxText) pieces.push({ text: minMax.maxText, color: '#006400' });
+                      pieces.push({ text: ')', color });
+                      const widths = pieces.map(p => ctx.measureText(p.text).width);
+                      const totalWidth = widths.reduce((a, b) => a + b, 0);
+                      let x = Math.max(right - totalWidth, left + strikeWidth + 8 * scope.horizontalPixelRatio);
+                      pieces.forEach((p, i) => {
+                        ctx.fillStyle = p.color;
+                        ctx.fillText(p.text, x, ty);
+                        x += widths[i];
+                      });
+                    }
+                  });
+                };
+                drawSet(self._callLines, '#26a69a');
+                drawSet(self._putLines, '#ef5350');
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const stkLinesPrimitive = new StkLinesPrimitive();
+  let stkLinesAttached = false;
+
+  function setStkCallLines(prices) {
+    if (!stkLinesAttached) { candleSeries.attachPrimitive(stkLinesPrimitive); stkLinesAttached = true; }
+    stkLinesPrimitive._callLines = (prices || []).map(price => ({ price, label: null, minMax: null }));
+    forceRepaint();
+  }
+
+  function setStkPutLines(prices) {
+    if (!stkLinesAttached) { candleSeries.attachPrimitive(stkLinesPrimitive); stkLinesAttached = true; }
+    stkLinesPrimitive._putLines = (prices || []).map(price => ({ price, label: null, minMax: null }));
+    forceRepaint();
+  }
+
+  // Running Min/Max PnL% next to the strike label — entries: [{ price, minText, maxText }, ...],
+  // matched onto the already-set _callLines/_putLines by price (set via setStkCallLines/
+  // setStkPutLines above). minText/maxText are pre-formatted strings (e.g. "-5.2%") or null —
+  // C# decides when there's nothing to show yet, this just renders whatever it's given.
+  function setStkCallMinMax(entries) {
+    (entries || []).forEach(({ price, minText, maxText }) => {
+      const line = stkLinesPrimitive._callLines.find(l => l.price === price);
+      if (line) line.minMax = { minText, maxText };
+    });
+    forceRepaint();
+  }
+
+  function setStkPutMinMax(entries) {
+    (entries || []).forEach(({ price, minText, maxText }) => {
+      const line = stkLinesPrimitive._putLines.find(l => l.price === price);
+      if (line) line.minMax = { minText, maxText };
+    });
+    forceRepaint();
+  }
+
+  // Simulator-only "Trigger Call/Put" Ask(frozen)/Bid(live)/PnL% tracking — entries:
+  // [{ price, label: { ask, bid, pnlText, pnlPositive } }, ...], matched onto the already-set
+  // _callLines/_putLines by price (set via setStkCallLines/setStkPutLines above); a price with no
+  // matching line is ignored (the trigger only ever tracks strikes whose line is already showing,
+  // per explicit request).
+  function setStkCallLabels(entries) {
+    (entries || []).forEach(({ price, label }) => {
+      const line = stkLinesPrimitive._callLines.find(l => l.price === price);
+      if (line) line.label = label;
+    });
+    forceRepaint();
+  }
+
+  function setStkPutLabels(entries) {
+    (entries || []).forEach(({ price, label }) => {
+      const line = stkLinesPrimitive._putLines.find(l => l.price === price);
+      if (line) line.label = label;
+    });
+    forceRepaint();
+  }
+
+  // Simulator-only "Reset Stk" button — clears the Ask/Bid/PnL% label without touching the lines
+  // themselves (strike price stays visible), so a fresh cycle can start from a clean slate.
+  function clearStkCallLabels() {
+    stkLinesPrimitive._callLines.forEach(l => { l.label = null; });
+    forceRepaint();
+  }
+
+  function clearStkPutLabels() {
+    stkLinesPrimitive._putLines.forEach(l => { l.label = null; });
+    forceRepaint();
+  }
+
   // Current reference price for deciding 'above'/'below' at draw time — same "most recent real
   // bar's close, by time" lookup sharedAutoscaleInfoProvider uses, not just series[len-1] (see
   // that function's own comment on why the array's order isn't trusted).
@@ -2023,6 +2432,63 @@
     forceRepaint();
   }
 
+  // Daily Bollinger Band(20,2) upper/lower reference lines — 1h panel only, white to distinguish
+  // from the 1h panel's own (colored) Bollinger bands, per explicit request. Same
+  // draw-from-anchor-time-to-right-edge + snap-to-nearest-real-candle convention as
+  // DailyPmLinePrimitive above, just 2 lines and no "D" label.
+  class DailyBollingerBandsPrimitive {
+    constructor() { this._time = null; this._upper = null; this._lower = null; this._chart = null; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || self._time == null || self._upper == null || self._lower == null) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const ts = self._chart.timeScale();
+                let snappedTime = self._time;
+                if (safeTimeToCoordinate(ts, snappedTime) == null && allCandles.length > 0) {
+                  let floor = null;
+                  for (let i = allCandles.length - 1; i >= 0; i--) {
+                    if (allCandles[i].time <= self._time) { floor = allCandles[i].time; break; }
+                  }
+                  snappedTime = floor ?? allCandles[0].time;
+                }
+                const xRaw = safeTimeToCoordinate(ts, snappedTime);
+                const x = xRaw == null ? 0 : xRaw;
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                [self._upper, self._lower].forEach(price => {
+                  const y = candleSeries.priceToCoordinate(price);
+                  if (y == null) return;
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+
+  const dailyBollingerBandsPrimitive = new DailyBollingerBandsPrimitive();
+  let dailyBollingerBandsAttached = false;
+
+  function markDailyBollingerBands(time, upper, lower) {
+    if (!dailyBollingerBandsAttached) { candleSeries.attachPrimitive(dailyBollingerBandsPrimitive); dailyBollingerBandsAttached = true; }
+    dailyBollingerBandsPrimitive._time = time;
+    dailyBollingerBandsPrimitive._upper = upper;
+    dailyBollingerBandsPrimitive._lower = lower;
+    forceRepaint();
+  }
+
   // Generalized counterpart to DailyPmLinePrimitive above for the Daily SMA40/100/200 lines — tab
   // Charts only (panel 1/2), per explicit request; D.PM (period 20, all 3 panels) is untouched and
   // stays on its own separate primitive/functions above. One entry per period so more than one CAN
@@ -2185,6 +2651,17 @@
                   ctx.moveTo(x1, y * scope.verticalPixelRatio);
                   ctx.lineTo(x2, y * scope.verticalPixelRatio);
                   ctx.stroke();
+                  if (l.selected) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ffeb3b'; // yellow dashed overlay = selected, ready to delete
+                    ctx.lineWidth = 4 * scope.horizontalPixelRatio;
+                    ctx.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio]);
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y * scope.verticalPixelRatio);
+                    ctx.lineTo(x2, y * scope.verticalPixelRatio);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
 
                   // "C" (close) marker — per explicit request, only on the CLOSE line, never the
                   // open one. Sits just past the line's right end: above for a Call, below for a
@@ -2227,7 +2704,10 @@
   // each other. Defaults to white for any caller that doesn't pass one (old persisted trades).
   // isClose/isCall: per explicit request, the CLOSE line only (never open) gets a "C" label just
   // past its right end — above for a Call, below for a Put (see EntrySpotLinePrimitive.draw()).
-  function markEntrySpot(price, time, color, isClose, isCall) {
+  // pairId: identifies the trade this line belongs to, shared by its open and close lines, so
+  // selecting + deleting one removes the whole pair (null for anything without one).
+  // strike: the trade's strike, so deleting the pair can also take its green Stk line + ΔS label.
+  function markEntrySpot(price, time, color, isClose, isCall, pairId, strike) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
     let anchorTime = allCandles[allCandles.length - 1].time;
@@ -2244,7 +2724,19 @@
     // part of the key so an open and a close landing on the same candle/price (rare, but possible)
     // don't get treated as the same line and silently drop the close's "C" label.
     const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price && !!l.isClose === !!isClose);
-    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall });
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall, pairId: pairId ?? null, strike: strike ?? null });
+    forceRepaint();
+  }
+
+  // Removes everything drawn for one trade on THIS panel: its open+close spot rayitas (by pairId),
+  // its green Stk= line and its ΔS label (both keyed by the strike price). Also the echo target
+  // for a deletion done on a SIBLING panel (see 'trade_marks_delete') — never posts back out.
+  function removeTradeMarks(pairId, strike) {
+    if (pairId != null) entrySpotLinePrimitive._lines = entrySpotLinePrimitive._lines.filter(l => l.pairId !== pairId);
+    if (strike != null) {
+      strikeLinesPrimitive._lines = strikeLinesPrimitive._lines.filter(l => l.price !== strike);
+      deltaSPrimitive._labels = deltaSPrimitive._labels.filter(l => l.price !== strike);
+    }
     forceRepaint();
   }
 
@@ -2359,6 +2851,8 @@
     preMarketLinePrimitive._price = price;
     preMarketLinePrimitive._exposed = exposed || null;
     forceRepaint();
+    evaluateSaltoEffect(); // "Salto en Efecto" follows the premarket price
+    evaluateCounterSalto();
 
     // "Pot Sal BB Vol Alza/Baja" — panel 2 (15m RTH) only, per explicit request. Symmetric: price
     // above OR below yesterday's close (prevDayCloseLinePrimitive, the red dashed "C" line) while
@@ -3102,12 +3596,20 @@
                   ctx.lineTo(scope.bitmapSize.width, y * scope.verticalPixelRatio);
                   ctx.stroke();
 
+                  // Label sits where the line itself starts (its anchor candle), not at the right
+                  // edge, per explicit request — stays there as the line extends rightward.
                   ctx.fillStyle = '#00c853';
                   ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
                   ctx.textBaseline = 'bottom';
-                  ctx.textAlign = 'right';
-                  ctx.fillText(l.label, scope.bitmapSize.width - 4, y * scope.verticalPixelRatio - 2);
-                  ctx.textAlign = 'left'; // reset — other primitives assume the default
+                  ctx.textAlign = 'left';
+                  ctx.fillText(l.label, x * scope.horizontalPixelRatio + 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2);
+                  if (l.reinforced) {
+                    // "R" = a Refuerzo happened at this strike — just past the Stk= label, same baseline.
+                    const labelW = ctx.measureText(l.label).width;
+                    ctx.fillStyle = '#ffeb3b';
+                    ctx.fillText('R', x * scope.horizontalPixelRatio + 4 * scope.horizontalPixelRatio + labelW + 8 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2);
+                    ctx.fillStyle = '#00c853';
+                  }
 
                   if (l.selected) {
                     ctx.save();
@@ -3139,8 +3641,20 @@
   function markStrike(price, label) {
     if (!strikeLinesAttached) { candleSeries.attachPrimitive(strikeLinesPrimitive); strikeLinesAttached = true; }
     if (allCandles.length === 0) return;
+    // A trade-open call (no custom label) at a strike that already has its line — a Refuerzo's 2nd
+    // trade and its combined result row all land on the SAME strike — must not stack another line on
+    // top of the first; markReinforcement puts an "R" on the existing one instead. Calls WITH a
+    // custom label (TimeframeViewerForm's Ask=... lines) are unaffected.
+    if (label == null && strikeLinesPrimitive._lines.some(l => l.price === price)) return;
     const anchorTime = allCandles[allCandles.length - 1].time;
     strikeLinesPrimitive._lines.push({ time: anchorTime, price, label: label || `Stk=${price}`, selected: false });
+    forceRepaint();
+  }
+
+  // Flags the existing Stk line(s) at this strike as reinforced: draws a yellow "R" on top of the
+  // line (next to its Stk= label) so a Refuerzo is visible without drawing a 2nd line.
+  function markReinforcement(price) {
+    strikeLinesPrimitive._lines.forEach(l => { if (l.price === price) l.reinforced = true; });
     forceRepaint();
   }
 
@@ -3581,6 +4095,387 @@
       smaSeries[p].setData(data);
       smaLastPoint[p] = data.length > 0 ? data[data.length - 1] : null;
     });
+    recalcSalto();
+    reportTrendState();
+    evaluateSaltoEffect();
+    evaluateCounterSalto();
+  }
+
+  // Trend state for the log (1h panels only, opt-in via enableTrendReport): SMA20 vs SMA40 =
+  // short-term trend, SMA100 vs SMA200 = long-term trend ('up' bullish / 'down' bearish / null),
+  // straight off the same SMA values just drawn. Posted to C# only when the (short, long) pair actually changes, so a stable trend
+  // logs once, not per tick — C# formats/logs it (see ChartPanel.TrendLogText).
+  let trendReportEnabled = false;
+  // Websocket arrival time (ET), bottom-right corner under the time axis.
+  function setLastTickTime(text) {
+    let el = document.getElementById('lastTickTime');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'lastTickTime';
+      el.style.cssText = 'position:absolute; right:4px; bottom:2px; pointer-events:none; z-index:5; font:bold 11px sans-serif; color:#B8860B;'; /* DarkGoldenrod, same as the grid's lblLastUpdate */
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+  }
+  let lastTrendPosted = null;
+  function enableTrendReport() { trendReportEnabled = true; reportTrendState(); }
+  function reportTrendState() {
+    if (!trendReportEnabled || dailyMode) return;
+    const v = (p) => smaLastPoint[p] ? smaLastPoint[p].value : null;
+    const s20 = v(20), s40 = v(40), s100 = v(100), s200 = v(200);
+    const dir = (a, b) => (a == null || b == null || a === b) ? null : (a > b ? 'up' : 'down');
+    const shortDir = dir(s20, s40);  // SMA20 vs SMA40 — short-term trend
+    const longDir = dir(s100, s200); // SMA100 vs SMA200 — long-term trend
+    const key = `${shortDir}|${longDir}`;
+    if (key === lastTrendPosted) return;
+    lastTrendPosted = key;
+    // "Largo - Corto" now lives in the WinForms header strip (ChartPanel.cs, next to the ticker
+    // label) instead of this chart canvas overlay — kept overlapping the candles otherwise.
+    if (window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage({ type: 'trend_state', shortDir, longDir });
+  }
+
+  // ---- "1er Salto" (1h panel, i.e. wherever SMA20 AND SMA40 are configured) ----
+  // A "Salto" is a day whose OPEN differs from the PREVIOUS day's CLOSE: Open > prevClose = Salto
+  // al Alza, Open < prevClose = Salto a la Baja. "1er Salto" = the FIRST such day after the most
+  // recent SMA20/SMA40 cross, and it's only marked when it goes the same way as that cross (cross
+  // up + Salto al Alza, cross down + Salto a la Baja); a first Salto in the opposite direction
+  // marks nothing (and nothing later does either — it's no longer the first). Shown in yellow to
+  // the LEFT of the previous day's close, just above that price, so the right side stays free for
+  // the new day's candles, with Diff = |Open - prevClose|. Runs on every SMA recalculation, so it
+  // covers live updates, history loads and the Simulator's step-by-step replays alike.
+  class SaltoLabelPrimitive {
+    constructor() { this._label = null; this._chart = null; } // { time, price, text }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || !self._label) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const x = safeTimeToCoordinate(self._chart.timeScale(), self._label.time);
+                const y = candleSeries.priceToCoordinate(self._label.price);
+                if (x == null || y == null) return;
+                ctx.save();
+                ctx.fillStyle = '#ffeb3b';
+                ctx.font = `bold ${12 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'bottom';
+                ctx.fillText(self._label.text, x * scope.horizontalPixelRatio - 6 * scope.horizontalPixelRatio,
+                  y * scope.verticalPixelRatio - 4 * scope.verticalPixelRatio);
+                ctx.restore();
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const saltoLabelPrimitive = new SaltoLabelPrimitive();
+  let saltoLabelAttached = false;
+
+  // Opt-in per page (called from C# for the 1h panels and the Daily form's Hora tab only — NOT the
+  // Daily tab, per explicit request); a page that never calls this never shows the label.
+  let saltoEnabled = false;
+  function enableSalto() { saltoEnabled = true; recalcSalto(); }
+
+  // Tells C# (only when it changes) the history panel 2 needs to decide "Salto en Efecto":
+  // { crossUp, saltoDays } = direction of the latest SMA20/40 cross + day keys (floor(t/86400)) of
+  // every Salto after it, or null when there's no cross yet. Panel 2 does the rest itself.
+  let lastSaltoSetupKey = null;
+  function reportSaltoSetup(info) {
+    const key = info ? `${info.crossUp}|${info.saltoDays.join(',')}` : 'null';
+    if (key === lastSaltoSetupKey) return;
+    lastSaltoSetupKey = key;
+    if (window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage({ type: 'salto_setup', crossUp: info ? info.crossUp : null, saltoDays: info ? info.saltoDays : [] });
+  }
+
+  // ---- "Salto en Efecto" (panel 2 = 15m RTH only, fed by panel 1 via C# -> setSaltoSetup) ----
+  // Today is the matching 1er Salto (short-term trend up + Salto al alza, or down + a la baja,
+  // decided ONCE by panel 1, so a later trend change doesn't flicker it). While no RTH candle
+  // (from 9:30) has traded back to yesterday's close the gap is "en Efecto" — text under the blue
+  // Open line, right-justified. Once one does (Low <= close for an up-gap, High >= close for a
+  // down-gap) it's "Borrado": just the word "Salto" with a red strike-through, for the rest of the
+  // day. Live only for now.
+  let saltoSetup = null;       // { crossUp, saltoDays } from panel 1 (see reportSaltoSetup)
+  let saltoErasedDay = null;   // day key the gap got erased on
+  class SaltoEffectPrimitive {
+    constructor() { this._state = null; this._chart = null; } // { price, erased }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || !self._state) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const y = candleSeries.priceToCoordinate(self._state.price);
+                if (y == null) return;
+                const text = self._state.erased ? 'Salto' : 'Salto en Efecto';
+                ctx.font = `bold ${13 * scope.verticalPixelRatio}px sans-serif`;
+                ctx.fillStyle = '#2196f3';
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'top';
+                const rx = scope.bitmapSize.width - 6 * scope.horizontalPixelRatio;
+                const ty = y * scope.verticalPixelRatio + 5 * scope.verticalPixelRatio;
+                ctx.fillText(text, rx, ty);
+                if (self._state.erased) {
+                  const w = ctx.measureText(text).width;
+                  ctx.strokeStyle = '#ff0000';
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(rx - w, ty + 7 * scope.verticalPixelRatio);
+                  ctx.lineTo(rx, ty + 7 * scope.verticalPixelRatio);
+                  ctx.stroke();
+                }
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const saltoEffectPrimitive = new SaltoEffectPrimitive();
+  let saltoEffectAttached = false;
+
+  function setSaltoSetup(crossUp, saltoDays) {
+    saltoSetup = (crossUp === null || crossUp === undefined) ? null : { crossUp, saltoDays: saltoDays || [] };
+    evaluateSaltoEffect();
+  }
+
+  // Open = the blue line's price: follows premarket ticks, frozen at 9:30 (C# stops updating it).
+  // Falls back to the first 9:30 candle's open when the line was never armed (app opened later).
+  // Direction must match the last cross, no Salto may have happened since it (before today), and
+  // price must sit on the gap side of yesterday's close ("C" line). Premarket: text just follows
+  // that condition live. From the 9:30 candles on, touching the close erases it (sticky).
+  function evaluateSaltoEffect() {
+    if (!saltoSetup && !saltoEffectAttached) return;
+    saltoEffectPrimitive._state = null;
+    const level = prevDayCloseLinePrimitive._price;
+    if (saltoSetup && level != null && allCandles.length > 0) {
+      const lineArmed = preMarketLinePrimitive._armed && preMarketLinePrimitive._price != null;
+      const today = Math.floor((lineArmed && preMarketLinePrimitive._time != null ? preMarketLinePrimitive._time : allCandles[allCandles.length - 1].time) / 86400);
+      const rth = allCandles.filter(c => Math.floor(c.time / 86400) === today && (c.time % 86400) >= 34200); // from 9:30
+      const openPrice = lineArmed ? preMarketLinePrimitive._price : (rth.length > 0 ? rth[0].open : null);
+      const eligible = !saltoSetup.saltoDays.some(d => d < today);
+      if (eligible && openPrice != null && ((openPrice > level && saltoSetup.crossUp) || (openPrice < level && !saltoSetup.crossUp))) {
+        const up = openPrice > level;
+        if (saltoErasedDay !== today && rth.some(c => up ? c.low <= level : c.high >= level)) saltoErasedDay = today;
+        saltoEffectPrimitive._state = { price: openPrice, erased: saltoErasedDay === today };
+      }
+    }
+    if (saltoEffectPrimitive._state && !saltoEffectAttached) { candleSeries.attachPrimitive(saltoEffectPrimitive); saltoEffectAttached = true; }
+    if (saltoEffectAttached) forceRepaint();
+    reportSaltoEffectState(level);
+  }
+
+  // Tells C# the current state (only when it changes) — C# sends the 3:45 PM Telegram push if it's
+  // still active and not erased by then.
+  let lastSaltoEffectKey = null;
+  function reportSaltoEffectState(level) {
+    const st = saltoEffectPrimitive._state;
+    const key = st ? `1|${st.erased}|${st.price}|${level}` : '0';
+    if (key === lastSaltoEffectKey) return;
+    lastSaltoEffectKey = key;
+    if (window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage({ type: 'salto_effect_state', active: !!st, erased: st ? st.erased : false, open: st ? st.price : null, close: st ? level : null });
+  }
+
+  // ---- Counter-trend "Salto en Efecto" (panel 1 = 1h, live only — enableCounterSalto) ----
+  // Once the SMA20/40 trend has run >= 3 trading days since its cross, look for a Salto AGAINST it:
+  // uptrend -> Open gaps DOWN (below yesterday's close) AND sits below SMA20 and/or SMA40; downtrend
+  // -> mirror image. Open = the blue premarket line's price (moves until 9:30, then frozen). SMAs are
+  // the last CLOSED hourly candles before today. Shown under the Open line, right-justified: orange
+  // when it beats both SMAs, lighter when only one; once a candle of today touches yesterday's close
+  // the word "Salto" stays with a red strike-through for the rest of the day.
+  let counterSaltoEnabled = false;
+  let counterSaltoErasedDay = null;
+  let counterCtx = null; // cached per (today, last history candle)
+  class CounterSaltoPrimitive {
+    constructor() { this._state = null; this._chart = null; } // { price, line1, line2, strong, erased }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!self._chart || !self._state) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const y = candleSeries.priceToCoordinate(self._state.price);
+                if (y == null) return;
+                ctx.fillStyle = self._state.strong ? '#ff9800' : '#ffcc80';
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'top';
+                const rx = scope.bitmapSize.width - 6 * scope.horizontalPixelRatio;
+                if (self._state.erased) {
+                  // "Salto" only, strike-through — line2 (SMA numbers) drops once erased.
+                  const text = self._state.line1.split(' ')[0];
+                  ctx.font = `bold ${13 * scope.verticalPixelRatio}px sans-serif`;
+                  const ty = y * scope.verticalPixelRatio + 5 * scope.verticalPixelRatio;
+                  ctx.fillText(text, rx, ty);
+                  const w = ctx.measureText(text).width;
+                  ctx.strokeStyle = '#ff0000';
+                  ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(rx - w, ty + 7 * scope.verticalPixelRatio);
+                  ctx.lineTo(rx, ty + 7 * scope.verticalPixelRatio);
+                  ctx.stroke();
+                  return;
+                }
+                // Active: "Salto en Efecto ▼" on top, the shorter "20-40"/"20"/"40" below it — keeps
+                // the line itself narrow (no "SMA" prefix) while the arrow still shows direction.
+                ctx.font = `bold ${13 * scope.verticalPixelRatio}px sans-serif`;
+                const ty1 = y * scope.verticalPixelRatio + 5 * scope.verticalPixelRatio;
+                ctx.fillText(self._state.line1, rx, ty1);
+                ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
+                const ty2 = ty1 + 15 * scope.verticalPixelRatio;
+                ctx.fillText(self._state.line2, rx, ty2);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const counterSaltoPrimitive = new CounterSaltoPrimitive();
+  let counterSaltoAttached = false;
+  function enableCounterSalto() { counterSaltoEnabled = true; evaluateCounterSalto(); }
+
+  // Trend/SMA context from the closed candles before `today`; null when not enough history/cross.
+  function computeCounterContext(today) {
+    const hist = allCandles.filter(c => Math.floor(c.time / 86400) < today);
+    if (hist.length < 42) return null;
+    const key = `${today}|${hist[hist.length - 1].time}|${hist.length}`;
+    if (counterCtx && counterCtx.key === key) return counterCtx.value;
+    const n = hist.length;
+    const sma = (p) => {
+      const out = new Array(n).fill(null);
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        sum += hist[i].close;
+        if (i >= p) sum -= hist[i - p].close;
+        if (i >= p - 1) out[i] = sum / p;
+      }
+      return out;
+    };
+    const s20 = sma(20), s40 = sma(40);
+    let crossIdx = -1;
+    for (let i = 1; i < n; i++) {
+      if (s20[i] == null || s40[i] == null || s20[i - 1] == null || s40[i - 1] == null) continue;
+      const prev = s20[i - 1] - s40[i - 1], cur = s20[i] - s40[i];
+      if ((prev <= 0 && cur > 0) || (prev >= 0 && cur < 0)) crossIdx = i;
+    }
+    let value = null;
+    if (crossIdx >= 0 && s20[n - 1] != null && s40[n - 1] != null && s20[n - 1] !== s40[n - 1]) {
+      const crossDay = Math.floor(hist[crossIdx].time / 86400);
+      const daysSince = new Set(hist.filter(c => Math.floor(c.time / 86400) > crossDay).map(c => Math.floor(c.time / 86400))).size;
+      value = { up: s20[n - 1] > s40[n - 1], daysSince, s20: s20[n - 1], s40: s40[n - 1], prevClose: hist[n - 1].close };
+    }
+    counterCtx = { key, value };
+    return value;
+  }
+
+  function evaluateCounterSalto() {
+    if (!counterSaltoEnabled || dailyMode || allCandles.length === 0) return;
+    counterSaltoPrimitive._state = null;
+    const lineArmed = preMarketLinePrimitive._armed && preMarketLinePrimitive._price != null;
+    const today = Math.floor((lineArmed && preMarketLinePrimitive._time != null ? preMarketLinePrimitive._time : allCandles[allCandles.length - 1].time) / 86400);
+    const ctx = computeCounterContext(today);
+    if (ctx && ctx.daysSince >= 3) {
+      const todays = allCandles.filter(c => Math.floor(c.time / 86400) === today);
+      const openPrice = lineArmed ? preMarketLinePrimitive._price : (todays.length > 0 ? todays[0].open : null);
+      if (openPrice != null) {
+        // Uptrend -> gap DOWN below SMA(s); downtrend -> gap UP above SMA(s).
+        const gapOk = ctx.up ? openPrice < ctx.prevClose : openPrice > ctx.prevClose;
+        const beats20 = ctx.up ? openPrice < ctx.s20 : openPrice > ctx.s20;
+        const beats40 = ctx.up ? openPrice < ctx.s40 : openPrice > ctx.s40;
+        if (gapOk && (beats20 || beats40)) {
+          const arrow = ctx.up ? '▼' : '▲';
+          const which = beats20 && beats40 ? '20-40' : (beats20 ? '20' : '40');
+          if (counterSaltoErasedDay !== today && todays.some(c => ctx.up ? c.high >= ctx.prevClose : c.low <= ctx.prevClose)) counterSaltoErasedDay = today;
+          counterSaltoPrimitive._state = {
+            price: openPrice, strong: beats20 && beats40, erased: counterSaltoErasedDay === today,
+            line1: `Salto en Efecto ${arrow}`, line2: which,
+          };
+        }
+      }
+    }
+    if (counterSaltoPrimitive._state && !counterSaltoAttached) { candleSeries.attachPrimitive(counterSaltoPrimitive); counterSaltoAttached = true; }
+    if (counterSaltoAttached) forceRepaint();
+  }
+
+  function recalcSalto() {
+    saltoLabelPrimitive._label = null;
+    if (!saltoEnabled) return;
+    if (!smaPeriods.includes(20) || !smaPeriods.includes(40) || dailyMode || allCandles.length < 42) {
+      if (saltoLabelAttached) forceRepaint();
+      reportSaltoSetup(null);
+      return;
+    }
+
+    // SMA20/SMA40 over the whole loaded history, then the most recent cross of the two.
+    const n = allCandles.length;
+    const sma = (p) => {
+      const out = new Array(n).fill(null);
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        sum += allCandles[i].close;
+        if (i >= p) sum -= allCandles[i - p].close;
+        if (i >= p - 1) out[i] = sum / p;
+      }
+      return out;
+    };
+    const s20 = sma(20), s40 = sma(40);
+    let crossIdx = -1, crossUp = false;
+    for (let i = 1; i < n; i++) {
+      if (s20[i] == null || s40[i] == null || s20[i - 1] == null || s40[i - 1] == null) continue;
+      const prev = s20[i - 1] - s40[i - 1], cur = s20[i] - s40[i];
+      if (prev <= 0 && cur > 0) { crossIdx = i; crossUp = true; }
+      else if (prev >= 0 && cur < 0) { crossIdx = i; crossUp = false; }
+    }
+    if (crossIdx < 0) { if (saltoLabelAttached) forceRepaint(); reportSaltoSetup(null); return; }
+
+    // Per-day open/close, in order. The cross candle's own day is excluded: its open came before the cross.
+    const day = (t) => Math.floor(t / 86400);
+    const days = [];
+    for (let i = 0; i < n; i++) {
+      const d = day(allCandles[i].time);
+      if (days.length === 0 || days[days.length - 1].d !== d)
+        days.push({ d, open: allCandles[i].open, close: allCandles[i].close, lastTime: allCandles[i].time });
+      else { const last = days[days.length - 1]; last.close = allCandles[i].close; last.lastTime = allCandles[i].time; }
+    }
+    const crossDay = day(allCandles[crossIdx].time);
+    for (let k = 1; k < days.length; k++) {
+      if (days[k].d <= crossDay) continue;
+      // First day after the cross = the first Salto (any nonzero Open vs prev Close difference).
+      const diff = days[k].open - days[k - 1].close;
+      if (diff === 0) continue;
+      const up = diff > 0;
+      if (up === crossUp) {
+        saltoLabelPrimitive._label = {
+          time: days[k - 1].lastTime, price: days[k - 1].close,
+          text: `1er Salto ${up ? '▲' : '▼'} Diff=${Math.abs(diff).toFixed(2)}`,
+        };
+      }
+      break; // only the FIRST Salto after the cross counts, matching direction or not
+    }
+    const saltoDays = [];
+    for (let k = 1; k < days.length; k++)
+      if (days[k].d > crossDay && days[k].open !== days[k - 1].close) saltoDays.push(days[k].d);
+    reportSaltoSetup({ crossUp, saltoDays });
+    if (saltoLabelPrimitive._label && !saltoLabelAttached) { candleSeries.attachPrimitive(saltoLabelPrimitive); saltoLabelAttached = true; }
+    if (saltoLabelAttached) forceRepaint();
   }
 
   function upsertCandle(candle) {
@@ -4120,6 +5015,45 @@
     forceRepaint();
   }
 
+  // ---- Day numbers on the time axis (Daily form's Hora tab only — enableDayNumbers) ----
+  // The day-of-month number under the FIRST candle of every day, drawn as a time-axis label
+  // (primitive timeAxisViews), so each group of 7 hourly candles can be placed on the calendar.
+  class DayNumberPrimitive {
+    constructor() { this._chart = null; this._views = []; }
+    attached(param) { this._chart = param.chart; }
+    updateAllViews() {
+      this._views = [];
+      if (!this._chart || allCandles.length === 0) return;
+      const ts = this._chart.timeScale();
+      let lastDay = null;
+      for (const c of allCandles) {
+        const day = dayStartOf(c.time);
+        if (day === lastDay) continue;
+        lastDay = day;
+        const x = safeTimeToCoordinate(ts, c.time);
+        if (x == null) continue;
+        const text = String(new Date(c.time * 1000).getUTCDate());
+        this._views.push({
+          coordinate: () => x,
+          text: () => text,
+          textColor: () => '#ffeb3b',
+          backColor: () => '#131722',
+          visible: () => true,
+          tickVisible: () => false,
+        });
+      }
+    }
+    timeAxisViews() { return this._views; }
+  }
+  const dayNumberPrimitive = new DayNumberPrimitive();
+  let dayNumbersAttached = false;
+  function enableDayNumbers() {
+    if (dayNumbersAttached) return;
+    candleSeries.attachPrimitive(dayNumberPrimitive);
+    dayNumbersAttached = true;
+    forceRepaint();
+  }
+
   function configureOvernightBands() {
     overnightBandsEnabled = true;
     candleSeries.attachPrimitive(overnightPrimitive);
@@ -4226,6 +5160,43 @@
   function loadColorRects(rects) {
     if (!colorRectAttached) { candleSeries.attachPrimitive(colorRectPrimitive); colorRectAttached = true; }
     colorRectPrimitive._rects = (rects || []).map(r => ({ t1: r.t1, p1: r.p1, t2: r.t2, p2: r.p2, selected: false }));
+    forceRepaint();
+  }
+
+  // Single add/remove of a blue / Color Rect — used by the live 1h panel to mirror a rect drawn or
+  // deleted on DailyChartForm's "Hora" tab while both are open (loadRects/loadColorRects above
+  // replace the whole set instead). Never postMessage back out, so no ping-pong.
+  function addMirroredRect(t1, p1, t2, p2) {
+    if (!rectAttached) { candleSeries.attachPrimitive(rectanglesPrimitive); rectAttached = true; }
+    rectanglesPrimitive._rects.push({ t1, p1, t2, p2, selected: false });
+    forceRepaint();
+  }
+  function removeMirroredRect(t1, p1, t2, p2) {
+    rectanglesPrimitive._rects = rectanglesPrimitive._rects.filter(r => !(r.t1 === t1 && r.p1 === p1 && r.t2 === t2 && r.p2 === p2));
+    forceRepaint();
+  }
+  function addMirroredColorRect(t1, p1, t2, p2) {
+    if (!colorRectAttached) { candleSeries.attachPrimitive(colorRectPrimitive); colorRectAttached = true; }
+    colorRectPrimitive._rects.push({ t1, p1, t2, p2, selected: false });
+    forceRepaint();
+  }
+  // Circle tool (Hora tab) — seed persisted circles / mirror a single add/remove onto panel 1.
+  function loadCircles(circles) {
+    if (!circleAttached) { candleSeries.attachPrimitive(circlePrimitive); circleAttached = true; }
+    circlePrimitive._circles = (circles || []).map(c => ({ t1: c.t1, p1: c.p1, t2: c.t2, p2: c.p2, selected: false }));
+    forceRepaint();
+  }
+  function addMirroredCircle(t1, p1, t2, p2) {
+    if (!circleAttached) { candleSeries.attachPrimitive(circlePrimitive); circleAttached = true; }
+    circlePrimitive._circles.push({ t1, p1, t2, p2, selected: false });
+    forceRepaint();
+  }
+  function removeMirroredCircle(t1, p1, t2, p2) {
+    circlePrimitive._circles = circlePrimitive._circles.filter(c => !(c.t1 === t1 && c.p1 === p1 && c.t2 === t2 && c.p2 === p2));
+    forceRepaint();
+  }
+  function removeMirroredColorRect(t1, p1, t2, p2) {
+    colorRectPrimitive._rects = colorRectPrimitive._rects.filter(r => !(r.t1 === t1 && r.p1 === p1 && r.t2 === t2 && r.p2 === p2));
     forceRepaint();
   }
 
