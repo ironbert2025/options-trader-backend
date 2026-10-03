@@ -1047,7 +1047,7 @@ public class SimulatorForm : Form
     // Rewinding rebuilds the state silently; the high-water mark keeps every event logged at most once.
     private static readonly TimeSpan BbMovingWindow = TimeSpan.FromSeconds(5); // "moving up/down" = vs 5 s ago; calibrate if needed
     private BollingerMomentumDetector? _bbDetector;
-    private BbRearmPolicy _bbRearm = BbRearmPolicy.Immediate;
+    private BbRearmPolicy _bbRearm = BbRearmPolicy.NextCandle; // default: one cycle per 15m candle per direction (calibrated: Immediate chatters at the band edge)
     private bool _bbAvailable;               // false when the loaded day has no Level 1 file / no RTH ticks
     private int _bbFirstIdx = -1;            // index in _intradayCandles of today's first RTH tick
     private int _bbCursor = -1;              // last tick index fed to _bbDetector
@@ -1060,7 +1060,7 @@ public class SimulatorForm : Form
     private void BuildBbControls()
     {
         _cmbBbRearm.Items.AddRange(new object[] { "Inmediato", "A los 60 s", "Siguiente vela", "Vuelta al medio" });
-        _cmbBbRearm.SelectedIndex = 0;
+        _cmbBbRearm.SelectedIndex = (int)_bbRearm; // item order matches BbRearmPolicy
         new ToolTip().SetToolTip(_cmbBbRearm, "Cuándo puede validar de nuevo la misma dirección después de un toque a la banda.");
         new ToolTip().SetToolTip(_btnBbScan, "Recorre todo el día al instante y lista en el log cada validación/toque Bollinger con su hora exacta.");
         _cmbBbRearm.SelectedIndexChanged += (s, e) =>
