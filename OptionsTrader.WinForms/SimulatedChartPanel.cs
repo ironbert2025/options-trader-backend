@@ -218,6 +218,40 @@ public class SimulatedChartPanel : Panel
 
     // Same green "Stk=xxx" line as the live ChartPanel.MarkStrikeAsync — fired when a demo trade
     // opens in the Simulator. Accumulates, never auto-removed.
+    // Screenshot of this panel's chart (the WebView2 content) — same approach as the live
+    // ChartPanel.CaptureImageAsync: force a repaint and give the compositor a moment BEFORE
+    // CapturePreview (ExecuteScriptAsync resolving only means the JS ran, not that the frame was
+    // painted), with a timeout so a minimized/non-composited window gives null instead of hanging.
+    // Used by SimulatorForm's RTH Price Action notes. Returns null on any failure.
+    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(15);
+
+    public async Task<Bitmap?> CaptureImageAsync()
+    {
+        try
+        {
+            if (_webView.CoreWebView2 == null) return null;
+            await _webView.CoreWebView2.ExecuteScriptAsync("forceRepaint();");
+            await Task.Delay(80);
+
+            var captureTask = CapturePreviewBitmapAsync();
+            var completed = await Task.WhenAny(captureTask, Task.Delay(CaptureTimeout));
+            return completed == captureTask ? await captureTask : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<Bitmap> CapturePreviewBitmapAsync()
+    {
+        using var stream = new MemoryStream();
+        await _webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
+        stream.Position = 0;
+        using var decoded = new Bitmap(stream);
+        return new Bitmap(decoded); // independent copy — a Bitmap decoded from a stream needs that stream alive
+    }
+
     public async Task MarkStrikeAsync(decimal strike)
     {
         if (_webView.CoreWebView2 == null) return;
