@@ -166,7 +166,7 @@ public class TwoPanelChartsControl : UserControl
         track.Entries = entries;
         track.Manual = false;
 
-        LogProjectedStkEstimate(isCall);
+        LogProjectedStkEstimate(isCall, append: true); // below the Trigger line already in log 2, don't clear it
     }
 
     // "Reset Stk" toggle — ON: for each side currently shown (Stk Call/Put on), clears the label,
@@ -1113,7 +1113,12 @@ public class TwoPanelChartsControl : UserControl
                 if (IsDisposed) return;
                 BeginInvoke(() =>
                 {
-                    AppendLog($"{DateTime.Now:HH:mm:ss}  [{_symbol}] {label}{Environment.NewLine}");
+                    // Log 2 (under panel 2) holds the latest "set": this Trigger line, with its
+                    // [Estimación] block (if any) appended right below by ArmTriggerStkTracking. Moved
+                    // out of log 1, per explicit request. Plain text, no premarket filter (the Trigger
+                    // only fires inside the session's first 15m candle anyway).
+                    _crossLog2.Clear();
+                    _crossLog2.AppendText($"{DateTime.Now:HH:mm:ss}  [{_symbol}] {label}{Environment.NewLine}");
                     ArmTriggerStkTracking(label);
                 });
             };
