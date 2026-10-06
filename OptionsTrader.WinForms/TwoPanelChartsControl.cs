@@ -1616,12 +1616,17 @@ public class TwoPanelChartsControl : UserControl
         {
             hourlyPanel.OnPreMarketPriceUpdated += price =>
             {
+                if (IsDisposed || !IsHandleCreated) return;
                 var dailyDir  = ChartPanel.GetDailyBollingerDirection(_symbol, price);
                 var hourlyDir = hourlyPanel.GetBollingerDirection(price);
                 var rthDir    = rthPanel.GetBollingerDirection(price);
 
                 var exposed = dailyDir != BollingerDirection.None && dailyDir == hourlyDir && dailyDir == rthDir;
-                _ = exposed ? rthPanel.ShowExposureBannerAsync("Expuesto en 3 charts") : rthPanel.HideExposureBannerAsync();
+                // This event is raised on the streamer's background thread, and Show/HideExposureBannerAsync
+                // touch WebView2.CoreWebView2 — which only works on the UI thread. Called directly from here
+                // the property threw inside the (discarded) async Task, so the banner silently never appeared
+                // even with all 3 charts exposed. Marshaled like every other premarket JS call in ChartPanel.
+                BeginInvoke(() => { _ = exposed ? rthPanel.ShowExposureBannerAsync("Expuesto en 3 charts") : rthPanel.HideExposureBannerAsync(); });
             };
         }
 
