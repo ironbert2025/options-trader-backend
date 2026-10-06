@@ -340,6 +340,11 @@ public class SimulatorForm : Form
             if (segs != null && segs.Count > 0) LogSimEvent(ChartPanel.SegmentsToPlainText(segs), segs);
         };
 
+        // Arrow pair armed the Trigger -> default ΔSpot to 1 (only if still empty), same as the Charts tab.
+        _rthChart.OnWickAnalysisArmedEvent += () =>
+        {
+            if (string.IsNullOrWhiteSpace(_txtDeltaSpot.Text)) _txtDeltaSpot.Text = "1";
+        };
         _rthChart.OnWickTriggerEvent += label =>
         {
             if (IsDisposed) return;

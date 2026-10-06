@@ -403,6 +403,10 @@ public class SimulatedChartPanel : Panel
     // Fires "Trigger Call"/"Trigger Put" — SimulatorForm logs it via LogSimEvent.
     public event Action<string>? OnWickTriggerEvent;
 
+    // Fires ONCE, the moment the arrow pair arms the wick analysis (the "Trigger Call/Put" watch) —
+    // the host uses it to default the ΔSpot textbox to 1 so the estimate can be computed right away.
+    public event Action? OnWickAnalysisArmedEvent;
+
     private void HandleDiagonalArrowPlaced(decimal p1, decimal p2, bool red)
     {
         var size = Math.Abs(p1 - p2);
@@ -412,7 +416,10 @@ public class SimulatedChartPanel : Panel
         // (green shorter than red, i.e. arming for the Put scenario) must arm just as well, per
         // explicit request. Only an exact tie (r == g) leaves it unarmed.
         if (!_wickAnalysisArmed && _lastRedArrowSize is { } r && _lastGreenArrowSize is { } g && r != g)
+        {
             _wickAnalysisArmed = true;
+            OnWickAnalysisArmedEvent?.Invoke();
+        }
     }
 
     private void HandleDiagonalArrowDeleted(bool red)

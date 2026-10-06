@@ -1108,6 +1108,12 @@ public class TwoPanelChartsControl : UserControl
         // Simulator's identical feature — but only if the matching button is already ON.
         if (rthPanel != null)
         {
+            // Arrow pair armed the Trigger -> default ΔSpot to 1 (only if still empty, never over a value
+            // the user typed) so the [Estimación] is computed from the very first Trigger.
+            rthPanel.OnWickAnalysisArmedEvent += () =>
+            {
+                if (_txtDeltaSpot != null && string.IsNullOrWhiteSpace(_txtDeltaSpot.Text)) _txtDeltaSpot.Text = "1";
+            };
             rthPanel.OnWickTriggerEvent += label =>
             {
                 if (IsDisposed) return;
