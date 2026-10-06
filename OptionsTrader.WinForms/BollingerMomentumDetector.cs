@@ -48,6 +48,10 @@ internal sealed class BollingerMomentumDetector
     private readonly List<double> _closes;                 // COMPLETED candle closes, chronological
     private readonly LinkedList<(DateTime T, double P)> _recent = new(); // last tick <= now-window stays at the head
 
+    // "Moving up/down" is judged against the price this long ago — shared by every caller.
+    public static readonly TimeSpan DefaultMovingWindow = TimeSpan.FromSeconds(5);
+
+    private DateOnly? _lastDate;   // ET date of the previous accepted tick — a change starts a new session
     private int _formingBucket = -1;
     private double _formingLast;
     private bool _hasPrev;
@@ -60,6 +64,8 @@ internal sealed class BollingerMomentumDetector
         public bool Locked;
         public int LockBucket;
         public DateTime LockTime;
+
+        public void Reset() { Pending = false; LostLogged = false; Locked = false; }
     }
     private readonly Cycle _bull = new();
     private readonly Cycle _bear = new();
@@ -96,6 +102,19 @@ internal sealed class BollingerMomentumDetector
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(timeUtc, Eastern);
         var tod = eastern.TimeOfDay;
         if (tod < RthStart || tod >= RthEnd) return NoEvents;
+
+        // A new RTH session (the live app keeps one detector alive across days): the last candle of
+        // yesterday still completes through the normal bucket change below, but "price 5 s ago" must
+        // not reach back into yesterday and both directions start the day armed. A detector that only
+        // ever sees ONE day (the Simulator) never triggers this.
+        var date = DateOnly.FromDateTime(eastern);
+        if (_lastDate.HasValue && date != _lastDate.Value)
+        {
+            _recent.Clear();
+            _bull.Reset();
+            _bear.Reset();
+        }
+        _lastDate = date;
 
         var spot = (double)price;
         var bucket = (int)Math.Floor((tod - RthStart).TotalMinutes / BucketMinutes);

@@ -196,6 +196,65 @@ public class ChartPanel : Panel
     // the host uses it to default the ΔSpot textbox to 1 so the estimate can be computed right away.
     public event Action? OnWickAnalysisArmedEvent;
 
+    // ==================================================================================
+    // Bollinger momentum (panel 2 / Fifteen_RTH only) — the live port of what the Simulator's
+    // "Validación / Toque" detection does; see BollingerMomentumDetector for the rule. Fed ONLY by the
+    // Level 1 ticks (Streamer_OnLevelOneTick: ordered, with their own trade time — the 6 s polling
+    // feed and the 1 min CHART_EQUITY bars are not ticks). One detector lives for the whole process
+    // and carries across days (it resets its per-session state itself). Re-arm policy and the 5 s
+    // "moving" window are fixed (NextCandle / default), no selector in the live app. Events reach
+    // the UI thread through OnBbMomentumEvent (the ticks arrive on the feed's own thread).
+    // ==================================================================================
+    internal event Action<BbMomentumEvent>? OnBbMomentumEvent;
+    private BollingerMomentumDetector? _bbMomentum;
+
+    private void FeedBbMomentum(decimal price, DateTime utcTime)
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay >= new TimeSpan(16, 0, 0)) return;
+
+        if (_bbMomentum == null)
+        {
+            var seed = BuildBbMomentumSeed(eastern);
+            if (seed == null) return; // history not loaded yet (or too short) — try again on the next tick
+            _bbMomentum = new BollingerMomentumDetector(seed, BbRearmPolicy.NextCandle, BollingerMomentumDetector.DefaultMovingWindow);
+        }
+
+        var events = _bbMomentum.OnTick(utcTime, price);
+        if (events.Count == 0 || _closing || !IsHandleCreated) return;
+        foreach (var ev in events)
+        {
+            var e = ev;
+            BeginInvoke(() => OnBbMomentumEvent?.Invoke(e));
+        }
+    }
+
+    // Closes of the already-COMPLETED 15m RTH candles at this moment: every candle of earlier days plus
+    // today's whose bucket is before the one now forming. _closedCandles can also hold the candle still
+    // forming (the history load seeds the live bucket with the last historical bar) and, after a bucket
+    // change, the same candle twice — both are filtered/deduped here. Needs 20 for a first band value.
+    private List<decimal>? BuildBbMomentumSeed(DateTime easternNow)
+    {
+        List<CandleData> snapshot;
+        try { snapshot = _closedCandles.ToList(); }
+        catch { return null; } // history load mutating the list right now — next tick
+
+        static int BucketOf(TimeSpan tod) => (int)Math.Floor((tod - new TimeSpan(9, 30, 0)).TotalMinutes / 15.0);
+        var currentBucket = BucketOf(easternNow.TimeOfDay);
+
+        var closes = snapshot
+            .Select(c => (Candle: c, Eastern: TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone)))
+            .Where(x => x.Eastern.Date < easternNow.Date
+                        || (x.Eastern.Date == easternNow.Date && x.Eastern.TimeOfDay >= new TimeSpan(9, 30, 0) && BucketOf(x.Eastern.TimeOfDay) < currentBucket))
+            .GroupBy(x => x.Candle.Time)
+            .Select(g => g.Last().Candle)
+            .OrderBy(c => c.Time)
+            .Select(c => c.Close)
+            .ToList();
+        return closes.Count >= 20 ? closes : null;
+    }
+
     private void HandleDiagonalArrowPlaced(decimal p1, decimal p2, bool red)
     {
         if (_mode != ChartPanelMode.Fifteen_RTH) return;
@@ -3641,6 +3700,7 @@ public class ChartPanel : Panel
     {
         if (symbol != _symbol) return;
         ShowWebsocketArrivalTime(price);
+        FeedBbMomentum(price, utcTime); // panel 2 only, ticks only
         UpdateLivePriceFromExternalSource(price, utcTime);
     }
 

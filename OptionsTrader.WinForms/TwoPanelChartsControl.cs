@@ -252,8 +252,7 @@ public class TwoPanelChartsControl : UserControl
         // one (append=true only for the Put block right after the Call block of the SAME Reset Stk
         // press). No premarket filter here, unlike AppendLog.
         var text = $"{DateTime.Now:HH:mm:ss}  [Estimación {sideLabel}] ΔSpot={deltaSpot:F2}{Environment.NewLine}{string.Join(Environment.NewLine, lines)}{Environment.NewLine}";
-        if (!append) _crossLog2.Clear();
-        _crossLog2.AppendText(text);
+        SetLog2Set(text, append);
         return true;
     }
 
@@ -418,7 +417,43 @@ public class TwoPanelChartsControl : UserControl
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.
     private readonly RichTextBox _crossLog;
-    private RichTextBox _crossLog2 = null!; // panel 2 log (placement only for now)
+    private RichTextBox _crossLog2 = null!; // panel 2 log
+
+    // Log 2 has two zones, redrawn together: TOP = the latest Trigger / [Estimación] / Reset Stk "set"
+    // (replaced as a unit, never accumulates), BELOW = the day's Bollinger momentum events (only
+    // accumulates; cleared when the trading day changes). Redrawing the whole box each time is what lets
+    // a new set replace the top without wiping the history underneath.
+    private string _log2Set = string.Empty;
+    private readonly List<(string Text, Color Color)> _log2Bb = new();
+    private DateOnly _log2BbDay;
+    private const int Log2BbMaxLines = 400;
+
+    private void SetLog2Set(string text, bool append)
+    {
+        _log2Set = append ? _log2Set + text : text;
+        RenderLog2(scrollToEnd: false);
+    }
+
+    private void AddLog2Bb(DateTime eventUtc, string text, Color color)
+    {
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(eventUtc, EasternZone);
+        var day = DateOnly.FromDateTime(eastern);
+        if (day != _log2BbDay) { _log2Bb.Clear(); _log2BbDay = day; }
+        _log2Bb.Add(($"{eastern:HH:mm:ss.fff}  {text}", color));
+        if (_log2Bb.Count > Log2BbMaxLines) _log2Bb.RemoveAt(0);
+        RenderLog2(scrollToEnd: true);
+    }
+
+    private void RenderLog2(bool scrollToEnd)
+    {
+        _crossLog2.Clear();
+        if (_log2Set.Length > 0) _crossLog2.AppendText(_log2Set);
+        if (_log2Set.Length > 0 && _log2Bb.Count > 0) _crossLog2.AppendText(Environment.NewLine);
+        foreach (var (text, color) in _log2Bb)
+            ChartPanel.AppendColored(_crossLog2, new[] { (text + Environment.NewLine, (Color?)color) });
+        _crossLog2.SelectionStart = scrollToEnd ? _crossLog2.TextLength : 0; // a new event shows the newest line; a new set shows its top
+        _crossLog2.ScrollToCaret();
+    }
 
     // Every "Daily" window currently open for this symbol — see MultiChartForm's original comment
     // (unchanged): removed on FormClosed so a closed window's WebView2 never gets touched again.
@@ -1110,6 +1145,14 @@ public class TwoPanelChartsControl : UserControl
         {
             // Arrow pair armed the Trigger -> default ΔSpot to 1 (only if still empty, never over a value
             // the user typed) so the [Estimación] is computed from the very first Trigger.
+            // Bollinger momentum (Validación / Toque / perdida), fed by panel 2's Level 1 ticks — see
+            // ChartPanel.FeedBbMomentum. Goes to the history zone of log 2, below the Trigger set.
+            rthPanel.OnBbMomentumEvent += ev =>
+            {
+                if (IsDisposed) return;
+                var (text, color) = BbMomentumText.For(ev);
+                AddLog2Bb(ev.TimeUtc, text, color);
+            };
             rthPanel.OnWickAnalysisArmedEvent += () =>
             {
                 if (_txtDeltaSpot != null && string.IsNullOrWhiteSpace(_txtDeltaSpot.Text)) _txtDeltaSpot.Text = "1";
@@ -1123,8 +1166,7 @@ public class TwoPanelChartsControl : UserControl
                     // [Estimación] block (if any) appended right below by ArmTriggerStkTracking. Moved
                     // out of log 1, per explicit request. Plain text, no premarket filter (the Trigger
                     // only fires inside the session's first 15m candle anyway).
-                    _crossLog2.Clear();
-                    _crossLog2.AppendText($"{DateTime.Now:HH:mm:ss}  [{_symbol}] {label}{Environment.NewLine}");
+                    SetLog2Set($"{DateTime.Now:HH:mm:ss}  [{_symbol}] {label}{Environment.NewLine}", append: false);
                     ArmTriggerStkTracking(label);
                 });
             };

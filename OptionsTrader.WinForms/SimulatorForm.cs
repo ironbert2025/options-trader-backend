@@ -1050,7 +1050,7 @@ public class SimulatorForm : Form
     // in order as the chart clock advances (Real Time Play, the fixed speeds, ◀/▶ Vela, jumps): the
     // cursor walks ONLY the new ticks, so a late-firing timer that skips ahead never skips detection.
     // Rewinding rebuilds the state silently; the high-water mark keeps every event logged at most once.
-    private static readonly TimeSpan BbMovingWindow = TimeSpan.FromSeconds(5); // "moving up/down" = vs 5 s ago; calibrate if needed
+    private static readonly TimeSpan BbMovingWindow = BollingerMomentumDetector.DefaultMovingWindow; // "moving up/down" = vs 5 s ago; calibrate if needed
     private BollingerMomentumDetector? _bbDetector;
     private BbRearmPolicy _bbRearm = BbRearmPolicy.NextCandle; // default: one cycle per 15m candle per direction (calibrated: Immediate chatters at the band edge)
     private bool _bbAvailable;               // false when the loaded day has no Level 1 file / no RTH ticks
@@ -1150,15 +1150,7 @@ public class SimulatorForm : Form
 
     private void LogBbEvent(BbMomentumEvent ev, string prefix, bool recordPriceAction = false)
     {
-        var (text, color) = (ev.Kind, ev.Bullish) switch
-        {
-            (BbMomentumEventKind.Validation, true)  => ($"Validación Alcista — PM↑ BBsup↑ spot entre ambas ↑ (spot {ev.Spot:F2})", Color.LimeGreen),
-            (BbMomentumEventKind.Validation, false) => ($"Validación Bajista — PM↓ BBinf↓ spot entre ambas ↓ (spot {ev.Spot:F2})", Color.Red),
-            (BbMomentumEventKind.Touch, true)       => ($"Toque Banda Superior (spot {ev.Spot:F2})", Color.LimeGreen),
-            (BbMomentumEventKind.Touch, false)      => ($"Toque Banda Inferior (spot {ev.Spot:F2})", Color.Red),
-            (BbMomentumEventKind.Lost, true)        => ("Validación Alcista perdida antes del toque", Color.Orange),
-            _                                       => ("Validación Bajista perdida antes del toque", Color.Orange),
-        };
+        var (text, color) = BbMomentumText.For(ev);
         var message = prefix + text;
         LogSimEvent(message, new List<(string Text, Color? Color)> { (message, color), (Environment.NewLine, null) }, ev.TimeUtc);
         if (recordPriceAction) RecordPriceActionEvent(ev, text); // never from the quick scan: no chart playing there
