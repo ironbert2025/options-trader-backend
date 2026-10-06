@@ -417,6 +417,135 @@ public class TwoPanelChartsControl : UserControl
     // events also write into this SAME textbox (via AppendLog below) so the popup window still
     // shows one unified log, exactly like before the extraction.
     private readonly RichTextBox _crossLog;
+    // ===== Live "RTH Price Action" note (Charts tab) =====
+    // The same note the Simulator writes (SimPriceActionMarkdownWriter), live: a combined panel 1 + panel 2
+    // screenshot when a 15m RTH candle closes (ChartPanel.OnRthCandleClosedEvent, from the Level 1 ticks)
+    // and at each Bollinger Validación / Toque. One note per symbol per day. Only the FIRST control opened
+    // for a symbol records (the tab and the popup both host panels 1/2). CapturePreview needs the chart
+    // actually composited, so a capture is skipped — and noted — while the tab/popup isn't visible; the
+    // user's tab is never switched for them.
+    private static readonly HashSet<string> PriceActionClaims = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan PriceActionPaintDelay = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan LateCandleTolerance = TimeSpan.FromSeconds(20);
+    private bool _recordsPriceAction;
+    private SimPriceActionRun? _prRun;
+    private DateOnly _prRunDay;
+    private readonly HashSet<(DateOnly Day, int Bucket)> _prCaptured = new();
+    private readonly Queue<PrLiveRequest> _prQueue = new();
+    private bool _prWorking;
+
+    private sealed record PrLiveRequest(DateOnly Day, string Label, string FileName, bool IsEvent);
+
+    private void ClaimPriceAction()
+    {
+        lock (PriceActionClaims) _recordsPriceAction = PriceActionClaims.Add(_symbol);
+    }
+
+    // The first control opened claims in its constructor; a control that didn't get it tries again the
+    // moment it has something to record — so when the owner is disposed (Disconnect, popup closed) the
+    // other one takes over instead of the symbol going unrecorded.
+    private bool EnsurePriceActionClaim()
+    {
+        if (!_recordsPriceAction) ClaimPriceAction();
+        return _recordsPriceAction;
+    }
+
+    private void ReleasePriceAction()
+    {
+        if (!_recordsPriceAction) return;
+        lock (PriceActionClaims) PriceActionClaims.Remove(_symbol);
+        _recordsPriceAction = false;
+    }
+
+    private SimPriceActionRun GetPriceActionRun(DateOnly day)
+    {
+        if (_prRun == null || _prRunDay != day)
+        {
+            _prRun = SimPriceActionMarkdownWriter.CreateLiveRun(_symbol, day);
+            _prRunDay = day;
+        }
+        return _prRun;
+    }
+
+    private bool IsPriceActionVisible() =>
+        IsHandleCreated && Visible && FindForm() is { Visible: true, WindowState: not FormWindowState.Minimized };
+
+    private void OnLiveCandleClosed(int bucket, DateTime tickUtc)
+    {
+        if (IsDisposed || !EnsurePriceActionClaim()) return;
+        var tickEastern = TimeZoneInfo.ConvertTimeFromUtc(tickUtc, EasternZone);
+        var day = DateOnly.FromDateTime(tickEastern);
+        if (!_prCaptured.Add((day, bucket))) return; // once per candle per day
+
+        var boundaryEastern = day.ToDateTime(new TimeOnly(9, 30)).AddMinutes(15 * (bucket + 1));
+        var boundaryUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(boundaryEastern, DateTimeKind.Unspecified), EasternZone);
+        var label = boundaryEastern.ToString("HH:mm:ss");
+        if (tickUtc - boundaryUtc > LateCandleTolerance)
+        {
+            // No tick near the boundary (a gap) — the chart no longer looks like that moment.
+            SimPriceActionMarkdownWriter.AppendCandleClose(GetPriceActionRun(day), label, null, "sin imagen: sin ticks en el cierre");
+            return;
+        }
+        EnqueuePriceAction(new PrLiveRequest(day, label, label.Replace(":", "") + ".png", IsEvent: false));
+    }
+
+    private void RecordPriceActionEvent(BbMomentumEvent ev, string description)
+    {
+        if (IsDisposed || !EnsurePriceActionClaim()) return;
+        if (ev.Kind != BbMomentumEventKind.Validation && ev.Kind != BbMomentumEventKind.Touch) return; // "perdida" has no image
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(ev.TimeUtc, EasternZone);
+        var timeLabel = eastern.ToString("HH:mm:ss.fff");
+        var fileName = $"{timeLabel.Replace(":", "").Replace(".", "")}_{(ev.Kind == BbMomentumEventKind.Validation ? "val" : "touch")}_{(ev.Bullish ? "bull" : "bear")}.png";
+        EnqueuePriceAction(new PrLiveRequest(DateOnly.FromDateTime(eastern), $"{timeLabel} — {description}", fileName, IsEvent: true));
+    }
+
+    private void EnqueuePriceAction(PrLiveRequest req)
+    {
+        _prQueue.Enqueue(req);
+        if (!_prWorking) _ = DrainPriceActionQueueAsync();
+    }
+
+    private async Task DrainPriceActionQueueAsync()
+    {
+        _prWorking = true;
+        try
+        {
+            while (_prQueue.Count > 0 && !IsDisposed)
+            {
+                var req = _prQueue.Dequeue();
+                var run = GetPriceActionRun(req.Day);
+                string? imagePath = null;
+                string? note = null;
+                try
+                {
+                    await Task.Delay(PriceActionPaintDelay); // let the charts paint the tick that triggered this
+                    if (IsDisposed) break;
+                    if (!IsPriceActionVisible())
+                    {
+                        note = "sin imagen: chart no visible";
+                    }
+                    else
+                    {
+                        using var img = await CaptureCombinedChartImageAsync();
+                        if (img != null)
+                        {
+                            Directory.CreateDirectory(run.ImageFolder);
+                            imagePath = Path.Combine(run.ImageFolder, req.FileName);
+                            img.Save(imagePath, System.Drawing.Imaging.ImageFormat.Png);
+                        }
+                    }
+                }
+                catch
+                {
+                    imagePath = null; // a failed screenshot never disturbs the charts — noted in the md
+                }
+                if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(run, req.Label, imagePath, note ?? "sin imagen: captura no disponible");
+                else SimPriceActionMarkdownWriter.AppendCandleClose(run, req.Label, imagePath, note);
+            }
+        }
+        finally { _prWorking = false; }
+    }
+
     private RichTextBox _crossLog2 = null!; // panel 2 log
 
     // Log 2 has two zones, redrawn together: TOP = the latest Trigger / [Estimación] / Reset Stk "set"
@@ -1152,7 +1281,13 @@ public class TwoPanelChartsControl : UserControl
                 if (IsDisposed) return;
                 var (text, color) = BbMomentumText.For(ev);
                 AddLog2Bb(ev.TimeUtc, text, color);
+                RecordPriceActionEvent(ev, text);
             };
+            // 15m candle closes (from the same Level 1 ticks) -> RTH Price Action screenshots. The first
+            // control opened for this symbol is the one that records.
+            ClaimPriceAction();
+            Disposed += (s, e) => ReleasePriceAction();
+            rthPanel.OnRthCandleClosedEvent += OnLiveCandleClosed;
             rthPanel.OnWickAnalysisArmedEvent += () =>
             {
                 if (_txtDeltaSpot != null && string.IsNullOrWhiteSpace(_txtDeltaSpot.Text)) _txtDeltaSpot.Text = "1";

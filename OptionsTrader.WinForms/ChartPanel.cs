@@ -208,6 +208,37 @@ public class ChartPanel : Panel
     internal event Action<BbMomentumEvent>? OnBbMomentumEvent;
     private BollingerMomentumDetector? _bbMomentum;
 
+    // Fires (closed bucket 0..25, the tick's UTC time) when a Level 1 tick shows a 15m RTH candle just
+    // closed — i.e. the first tick of the next bucket (bucket 26 = the first tick from 16:00 on, which
+    // closes the 15:45 candle). Drives the live RTH Price Action screenshots. A tick far from the boundary
+    // (a long gap with no ticks) still reports it; the host decides whether it is too late to image.
+    internal event Action<int, DateTime>? OnRthCandleClosedEvent;
+    private int _lastRthBucket = -2;           // -2 = no tick yet; -1 premarket; 0..25 RTH; 26 from 16:00
+    private DateOnly _lastRthBucketDay;
+
+    private void TrackRthCandleClose(DateTime utcTime)
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        var tod = eastern.TimeOfDay;
+        var bucket = tod < new TimeSpan(9, 30, 0) ? -1
+                   : tod >= new TimeSpan(16, 0, 0) ? 26
+                   : (int)Math.Floor((tod - new TimeSpan(9, 30, 0)).TotalMinutes / 15.0);
+
+        var day = DateOnly.FromDateTime(eastern);
+        if (day != _lastRthBucketDay) { _lastRthBucketDay = day; _lastRthBucket = bucket; return; } // new session / first tick ever
+        if (bucket <= _lastRthBucket) return;                                                    // same bucket (or an out-of-order tick)
+
+        var previous = _lastRthBucket;
+        _lastRthBucket = bucket;
+        if (previous < 0 || _closing || !IsHandleCreated) return;                               // premarket closes nothing
+        for (var k = previous; k <= Math.Min(bucket - 1, 25); k++)
+        {
+            var closed = k;
+            BeginInvoke(() => OnRthCandleClosedEvent?.Invoke(closed, utcTime));
+        }
+    }
+
     private void FeedBbMomentum(decimal price, DateTime utcTime)
     {
         if (_mode != ChartPanelMode.Fifteen_RTH) return;
@@ -3700,6 +3731,7 @@ public class ChartPanel : Panel
     {
         if (symbol != _symbol) return;
         ShowWebsocketArrivalTime(price);
+        TrackRthCandleClose(utcTime);   // panel 2 only, ticks only
         FeedBbMomentum(price, utcTime); // panel 2 only, ticks only
         UpdateLivePriceFromExternalSource(price, utcTime);
     }

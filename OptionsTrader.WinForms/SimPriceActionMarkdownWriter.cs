@@ -11,6 +11,7 @@ internal sealed class SimPriceActionRun
     public required string MdPath { get; init; }
     public required string ImageFolder { get; init; }
     public string HeaderLine { get; init; } = string.Empty;
+    public string ReloadLabel { get; init; } = "Recarga"; // separator word when this run appends to an existing note
     public bool HeaderDone { get; set; }
 }
 
@@ -46,13 +47,32 @@ internal static class SimPriceActionMarkdownWriter
         };
     }
 
+    // Live Charts tab: ONE note per symbol per trading day ({date}_{PC}_{SYMBOL}_RTH_PriceAction.md), kept
+    // apart from the all-tickers Open/Close note (DailyChartSnapshotsMarkdownWriter), which is rewritten
+    // whole at the close and would erase these entries. Images sit with the other live snapshots.
+    public static SimPriceActionRun CreateLiveRun(string symbol, DateOnly day)
+    {
+        var started = DateTime.Now;
+        var dayStr = day.ToString("yyyy_MM_dd");
+        return new SimPriceActionRun
+        {
+            Symbol = symbol,
+            DataDate = day,
+            Started = started,
+            MdPath = Path.Combine(VaultFolder, dayStr, $"{dayStr}_{Environment.MachineName}_{symbol}_RTH_PriceAction.md"),
+            ImageFolder = Path.Combine(@"C:\OptionsData\ChartSnapshots", symbol, "PriceAction", day.ToString("yyyyMMdd")),
+            HeaderLine = $"# {symbol} — Price Action RTH — {day:yyyy-MM-dd}",
+            ReloadLabel = "Reinicio"
+        };
+    }
+
     private static string ImageMarkdown(string imagePath) => $"![]({new Uri(imagePath).AbsoluteUri})";
 
     // Candle close: label (just the time) + image, left margin.
-    public static void AppendCandleClose(SimPriceActionRun run, string timeLabel, string? imagePath) =>
+    public static void AppendCandleClose(SimPriceActionRun run, string timeLabel, string? imagePath, string? noteWhenNoImage = null) =>
         Append(run, imagePath != null
             ? $"**{timeLabel}**\n\n{ImageMarkdown(imagePath)}\n\n"
-            : $"**{timeLabel}** _(sin imagen: captura no disponible)_\n\n");
+            : $"**{timeLabel}** _({noteWhenNoImage ?? "sin imagen: captura no disponible"})_\n\n");
 
     // Event: label (time + description) + image, indented. note replaces the image when there is none.
     public static void AppendEvent(SimPriceActionRun run, string label, string? imagePath, string? noteWhenNoImage) =>
@@ -75,7 +95,7 @@ internal static class SimPriceActionMarkdownWriter
                 // First write of this Cargar: file header if the note is new, otherwise a reload separator.
                 prefix = isNew
                     ? $"{run.HeaderLine}\n\nCorrida: {run.Started:yyyy-MM-dd HH:mm:ss}\n\n---\n\n"
-                    : $"---\n\n_Recarga {run.Started:HH:mm:ss}_\n\n";
+                    : $"---\n\n_{run.ReloadLabel} {run.Started:HH:mm:ss}_\n\n";
             }
             var text = (prefix + block).Replace("\n", Environment.NewLine);
 
