@@ -1119,6 +1119,18 @@ public class SimulatorForm : Form
     }
 
     // Last index in _intradayCandles (sorted by time) at or before uptoUtc, or -1.
+    // Where the charts' clock last rendered (RenderChartsUpToTime) — the tick the user is looking at.
+    private DateTime _lastChartClockUtc = DateTime.MinValue;
+
+    // Spot for an open/close mark and its log line: the price of the tick the chart clock is showing
+    // right now, not the (~6 s coarser) options-grid step's. Falls back to the step's price before
+    // the first tick.
+    private decimal CurrentTickSpot(SimulationStep step)
+    {
+        var idx = LastIntradayIndexAtOrBefore(_lastChartClockUtc);
+        return idx >= 0 ? _intradayCandles[idx].Close : step.UnderlyingPrice;
+    }
+
     private int LastIntradayIndexAtOrBefore(DateTime uptoUtc)
     {
         int lo = 0, hi = _intradayCandles.Count - 1, ans = -1;
@@ -2024,6 +2036,7 @@ public class SimulatorForm : Form
     private void RenderChartsUpToTime(DateTime uptoUtc)
     {
         _lblTickClock.Text = $"Vela: {EasternTime(uptoUtc):HH:mm:ss}";
+        _lastChartClockUtc = uptoUtc;
         var targetIdx = LastIntradayIndexAtOrBefore(uptoUtc);
         TrackPriceActionClock(uptoUtc, targetIdx);
         AdvanceBbDetector(targetIdx);
@@ -2311,12 +2324,13 @@ public class SimulatorForm : Form
         // entry — panels 2 and 3, bounded to that one candle, mirroring the live app
         // (MultiChartForm.MarkEntrySpotOnOvernightChartAsync — originally panel 3 only, panel 2
         // added later; the simulator hadn't been kept in sync).
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
+        var entrySpot = CurrentTickSpot(step);
+        _ = _rthChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
+        _ = _fullChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
         var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
-        LogSimEvent($"{nowStr} Trade Manual ({rowType})  SpotPrice: {step.UnderlyingPrice:F2}  StrikePrice: {strike:F2}  Ask: {ask:F2}  Contracts: {contracts}");
+        LogSimEvent($"{nowStr} Trade Manual ({rowType})  SpotPrice: {entrySpot:F2}  StrikePrice: {strike:F2}  Ask: {ask:F2}  Contracts: {contracts}");
         LogSimEvent($"{nowStr} EntryPrice: {ask:F2}");
         LogSimEvent($"{nowStr} Set Target: {tBid:F2}");
     }
@@ -2392,14 +2406,15 @@ public class SimulatorForm : Form
         // same marker as the entry one, panels 2 and 3. isClose: true adds the "C" label (above
         // for a Call, below for a Put), per explicit request.
         var closeIsCall = trade.OptionType.Equals("CALL", StringComparison.OrdinalIgnoreCase);
-        _ = _rthChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
-        _ = _fullChart.MarkEntrySpotAsync(step.UnderlyingPrice, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
+        var closeSpot = CurrentTickSpot(step);
+        _ = _rthChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
+        _ = _fullChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");
         var closeType   = auto ? "TARGET (auto)" : "MANUAL";
         var duration    = step.Time - trade.EntryTime;
-        LogSimEvent($"{nowStr} Close {closeType} ({trade.OptionType})  SpotPrice: {step.UnderlyingPrice:F2}  Strike: {trade.StrikePrice:F2}  C_Bid: {exitPrice:F2}");
+        LogSimEvent($"{nowStr} Close {closeType} ({trade.OptionType})  SpotPrice: {closeSpot:F2}  Strike: {trade.StrikePrice:F2}  C_Bid: {exitPrice:F2}");
         LogSimEvent($"{nowStr} PnL: {pnl:F2}  PnL_Percent: {pnlPct:F1}");
         LogSimEvent($"{nowStr} Duration: {duration:hh\\:mm\\:ss}");
     }
