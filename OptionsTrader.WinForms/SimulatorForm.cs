@@ -2193,6 +2193,9 @@ public class SimulatorForm : Form
         {
             e.CellStyle.ForeColor = Color.Red;
             e.CellStyle.Font = new Font(_dgvChain.Font, FontStyle.Bold);
+            // Value above 5 (a real spread above $0.05, see FormatSprd) → light-red background too.
+            if (decimal.TryParse(e.Value?.ToString(), out var sprdValue) && sprdValue > 5m)
+                e.CellStyle.BackColor = Color.FromArgb(255, 200, 200);
         }
 
         if (e.ColumnIndex == callAskCol || e.ColumnIndex == putAskCol)
@@ -2211,16 +2214,6 @@ public class SimulatorForm : Form
         {
             e.CellStyle.BackColor = decimal.TryParse(row.Cells["colPutSprd"].Value?.ToString(), out var putSprd) && putSprd <= 2
                 ? Color.LightGreen : _dgvChain.DefaultCellStyle.BackColor;
-        }
-
-        // Bid above 5 → light-red background with the value in bold red; wins over the light green
-        // spread rule above.
-        if ((e.ColumnIndex == callBidCol || e.ColumnIndex == putBidCol)
-            && decimal.TryParse(e.Value?.ToString(), out var bidValue) && bidValue > 5m)
-        {
-            e.CellStyle.BackColor = Color.FromArgb(255, 200, 200);
-            e.CellStyle.ForeColor = Color.Red;
-            e.CellStyle.Font = new Font(_dgvChain.Font, FontStyle.Bold);
         }
 
         // Range: same rule as Form1.DgvQuotes_CellFormatting's identical colRange handling — the
