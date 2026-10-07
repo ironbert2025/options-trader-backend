@@ -1817,6 +1817,9 @@ public partial class Form1 : Form
         {
             e.CellStyle.ForeColor = Color.Red;
             e.CellStyle.Font = new Font(dgvQuotes.Font, FontStyle.Bold);
+            // Value above 5 (a real spread above $0.05, see FormatSprd) → light-red background too.
+            if (decimal.TryParse(e.Value?.ToString(), out var sprdValue) && sprdValue > 5m)
+                e.CellStyle.BackColor = Color.FromArgb(255, 200, 200);
         }
 
         // Ask columns: bold + dark green
