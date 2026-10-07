@@ -2213,6 +2213,16 @@ public class SimulatorForm : Form
                 ? Color.LightGreen : _dgvChain.DefaultCellStyle.BackColor;
         }
 
+        // Bid above 5 → light-red background with the value in bold red; wins over the light green
+        // spread rule above.
+        if ((e.ColumnIndex == callBidCol || e.ColumnIndex == putBidCol)
+            && decimal.TryParse(e.Value?.ToString(), out var bidValue) && bidValue > 5m)
+        {
+            e.CellStyle.BackColor = Color.FromArgb(255, 200, 200);
+            e.CellStyle.ForeColor = Color.Red;
+            e.CellStyle.Font = new Font(_dgvChain.Font, FontStyle.Bold);
+        }
+
         // Range: same rule as Form1.DgvQuotes_CellFormatting's identical colRange handling — the
         // Strike button active (not blocked) AND this row's own Ask actually falls within the
         // ticker's Low-High → green, same as the Bid columns above.
