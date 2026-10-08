@@ -1706,6 +1706,8 @@ public class TwoPanelChartsControl : UserControl
                     // this is purely a visual flag to catch the eye.
                     var wideSpread = decimal.TryParse(e.Value?.ToString(), out var sprdVal) && sprdVal >= 5;
                     e.CellStyle.Font = new Font(grid.Font.FontFamily, wideSpread ? grid.Font.Size + 2 : grid.Font.Size, FontStyle.Bold);
+                    // Value above 5 (a real spread above $0.05, see FormatSprd) → light-red background too.
+                    if (sprdVal > 5m) e.CellStyle.BackColor = Color.FromArgb(255, 200, 200);
                 }
                 else if (e.ColumnIndex == askCol)
                 {
