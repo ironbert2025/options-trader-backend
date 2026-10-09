@@ -3484,6 +3484,7 @@ public class ChartPanel : Panel
     private string _lastArrivalShown = "";
     private void ShowWebsocketArrivalTime(decimal price)
     {
+        if (_mode == ChartPanelMode.Hourly15) return; // per explicit request: panel 1 (1h) doesn't show it
         var time = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).ToString("HH:mm:ss");
         var text = $"{time}    {price:F2}";
         if (text == _lastArrivalShown) return;
