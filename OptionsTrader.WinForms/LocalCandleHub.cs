@@ -23,10 +23,14 @@ public sealed class CandleHubServer : IDisposable
     private readonly object _lock = new();
     private CancellationTokenSource? _cts;
 
-    // One line sent to EVERY client the moment it connects, before it joins the broadcast list —
-    // currently the futures candles snapshot (see FuturesCandleHubFeed). Null result = nothing to send.
-    private Func<string?>? _snapshotProvider;
-    public void SetSnapshotProvider(Func<string?> provider) => _snapshotProvider = provider;
+    // One line per provider sent to EVERY client the moment it connects, before it joins the broadcast
+    // list — currently one futures candles snapshot per symbol (see FuturesCandleHubFeed).
+    // Keyed by symbol, so a feed re-created after the 4pm reconnect replaces its own provider.
+    private readonly Dictionary<string, Func<string?>> _snapshotProviders = new();
+    public void SetSnapshotProvider(string key, Func<string?> provider)
+    {
+        lock (_lock) { _snapshotProviders[key] = provider; }
+    }
 
     // Tries to become the hub by binding the fixed port on all network interfaces. Returns false
     // if another instance ON THIS MACHINE already owns it (that instance is already the hub) —
@@ -76,9 +80,12 @@ public sealed class CandleHubServer : IDisposable
                 var client = await _listener!.AcceptTcpClientAsync(ct);
                 try
                 {
-                    var snapshot = _snapshotProvider?.Invoke();
-                    if (!string.IsNullOrEmpty(snapshot))
+                    List<Func<string?>> providers;
+                    lock (_lock) { providers = _snapshotProviders.Values.ToList(); }
+                    foreach (var provider in providers)
                     {
+                        var snapshot = provider();
+                        if (string.IsNullOrEmpty(snapshot)) continue;
                         var bytes = Encoding.UTF8.GetBytes(snapshot + "\n");
                         await client.GetStream().WriteAsync(bytes, ct);
                     }

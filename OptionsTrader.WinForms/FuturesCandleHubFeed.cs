@@ -136,9 +136,23 @@ internal sealed class FuturesCandleHubFeed
         _builder = new FuturesCandleBuilder(symbol);
     }
 
+    // One feed per hardcoded futures symbol; each loads its own history once (sequentially, so a
+    // failure on one doesn't hold up the hub for the others longer than its own request).
+    public static async Task<List<FuturesCandleHubFeed>> StartAllAsync(SchwabStreamerClient streamer, CandleHubServer hub)
+    {
+        var feeds = new List<FuturesCandleHubFeed>();
+        foreach (var symbol in SchwabFuturesSymbols.Symbols)
+        {
+            var feed = new FuturesCandleHubFeed(streamer, hub, symbol);
+            await feed.StartAsync();
+            feeds.Add(feed);
+        }
+        return feeds;
+    }
+
     public async Task StartAsync()
     {
-        _hub.SetSnapshotProvider(() => _builder.BuildSnapshotJson());
+        _hub.SetSnapshotProvider(_symbol, () => _builder.BuildSnapshotJson());
         _streamer.OnLevelOneTick += OnTick;
         await LoadHistoryAsync();
     }
