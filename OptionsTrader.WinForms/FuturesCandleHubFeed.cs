@@ -9,7 +9,7 @@ namespace OptionsTrader.WinForms;
 // the LEVELONE_FUTURES last price. Pure logic, no I/O, so it can be checked on its own.
 internal sealed class FuturesCandleBuilder
 {
-    private const int MaxCompleted = 400;
+    private const int MaxCompleted = 1500; // 10 days of 15m candles is ~610
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(15);
     private readonly object _lock = new();
     private readonly List<CandleData> _completed = new();
@@ -22,18 +22,25 @@ internal sealed class FuturesCandleBuilder
     public static DateTime BucketStart(DateTime utc) =>
         new(utc.Ticks - utc.Ticks % Interval.Ticks, DateTimeKind.Utc);
 
-    // Replaces the history with a fresh REST window. A candle whose period already ended is
-    // completed; the one containing "now" is the forming one — merged with what the ticks built
-    // there since, so a refresh never loses a tick-observed high/low or the latest close.
-    public void Seed(IEnumerable<CandleData> restCandles, DateTime nowUtc)
+    // Loads a REST window. merge=false replaces the whole history (startup); merge=true is the light
+    // refresh: only candles from the window's first one onward are replaced, everything older that
+    // is already held stays. A candle whose period already ended is completed; the one containing
+    // "now" is the forming one — merged with what the ticks built there since, so a refresh never
+    // loses a tick-observed high/low or the latest close.
+    public void Seed(IEnumerable<CandleData> restCandles, DateTime nowUtc, bool merge = false)
     {
         lock (_lock)
         {
             var previousForming = _forming;
+            var rest = restCandles.OrderBy(c => c.Time).ToList();
+            var older = merge && rest.Count > 0
+                ? _completed.Where(c => c.Time < rest[0].Time).ToList()
+                : new List<CandleData>();
             _completed.Clear();
+            _completed.AddRange(older);
             _forming = null;
 
-            foreach (var c in restCandles.OrderBy(c => c.Time))
+            foreach (var c in rest)
             {
                 if (c.Time + Interval <= nowUtc) _completed.Add(c);
                 else if (c.Time <= nowUtc) _forming = c;
@@ -154,14 +161,11 @@ internal sealed class FuturesCandleHubFeed
         await RefreshAsync(broadcast: true);
     }
 
-    // Session = since the most recent 18:00 ET (Globex reopen), so the morning view has the whole night.
-    private static DateTime SessionStartUtc(DateTime nowUtc)
-    {
-        var eastern = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, EasternZone);
-        var start = eastern.Date.AddHours(18);
-        if (eastern < start) start = start.AddDays(-1);
-        return TimeZoneInfo.ConvertTimeToUtc(start, EasternZone);
-    }
+    // Startup loads this many days back in one request (10 days = ~605 candles, probed); every later
+    // refresh only re-requests the last RefreshDays and merges them over what is already held.
+    private const int HistoryDays = 10;
+    private const int RefreshDays = 2;
+    private bool _hasHistory; // true once a full-window load succeeded
 
     private async Task RefreshAsync(bool broadcast)
     {
@@ -169,9 +173,12 @@ internal sealed class FuturesCandleHubFeed
         try
         {
             var now = DateTime.UtcNow;
+            var light = _hasHistory;
+            var from = now.AddDays(-(light ? RefreshDays : HistoryDays));
             var candles = await _streamer.GetCandlesAsync(_symbol, 15,
-                new DateTimeOffset(SessionStartUtc(now), TimeSpan.Zero), new DateTimeOffset(now.AddMinutes(1), TimeSpan.Zero));
-            _builder.Seed(candles, DateTime.UtcNow);
+                new DateTimeOffset(from, TimeSpan.Zero), new DateTimeOffset(now.AddMinutes(1), TimeSpan.Zero));
+            _builder.Seed(candles, DateTime.UtcNow, merge: light);
+            if (candles.Count > 0) _hasHistory = true;
             if (broadcast) _hub.BroadcastRawLine(_builder.BuildSnapshotJson());
         }
         catch
