@@ -71,6 +71,7 @@ public partial class Form1 : Form
     private CandleHubServer? _candleHubServer;
     private CandleHubClient? _candleHubClient;
     private SchwabStreamerClient? _historyClient;
+    private FuturesCandleHubFeed? _futuresFeed; // 15m candles of the futures symbol, served to hub clients
     private ICandleFeed? _liveFeed;
     private readonly Dictionary<string, MultiChartForm> _liveChartForms = new();
 
@@ -3474,6 +3475,8 @@ public partial class Form1 : Form
             await reconnectedStreamer.SubscribeChartEquity(symbols);
             await reconnectedStreamer.SubscribeLevelOneEquity(symbols);
             await reconnectedStreamer.SubscribeLevelOneFutures(SchwabFuturesSymbols.Symbols);
+            _futuresFeed = new FuturesCandleHubFeed(reconnectedStreamer, _candleHubServer, SchwabFuturesSymbols.Symbols[0]);
+            await _futuresFeed.StartAsync();
             reconnectedStreamer.OnNewCandle    += (symbol, candle) => _candleHubServer.Broadcast(symbol, candle);
             reconnectedStreamer.OnLevelOneTick += (symbol, price, time) => _candleHubServer.BroadcastLevelOne(symbol, price, time);
 
@@ -3506,6 +3509,8 @@ public partial class Form1 : Form
             // Micro E-mini S&P futures (hardcoded, see SchwabFuturesSymbols) — only this instance,
             // the one that owns the Schwab connection, asks for them; the hub relays the ticks.
             await streamer.SubscribeLevelOneFutures(SchwabFuturesSymbols.Symbols);
+            _futuresFeed = new FuturesCandleHubFeed(streamer, hubServer, SchwabFuturesSymbols.Symbols[0]);
+            await _futuresFeed.StartAsync();
             streamer.OnNewCandle += (symbol, candle) => hubServer.Broadcast(symbol, candle);
             streamer.OnLevelOneTick += (symbol, price, time) => hubServer.BroadcastLevelOne(symbol, price, time);
 

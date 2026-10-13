@@ -246,6 +246,41 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
         return candles;
     }
 
+    // Candles of any minute frequency (1, 5, 10, 15, 30) for an explicit time window — used for the
+    // futures history (extended hours always included, volume filled), where the day-count based
+    // GetHistoricalCandlesAsync above doesn't fit. Works for futures keys ("/MESZ26", confirmed).
+    public async Task<List<CandleData>> GetCandlesAsync(string symbol, int frequencyMinutes,
+        DateTimeOffset start, DateTimeOffset end, CancellationToken ct = default)
+    {
+        var token = await GetTokenAsync();
+        var url = $"{PriceHistoryUrl}?symbol={Uri.EscapeDataString(symbol)}&periodType=day&frequencyType=minute" +
+                  $"&frequency={frequencyMinutes}&startDate={start.ToUnixTimeMilliseconds()}" +
+                  $"&endDate={end.ToUnixTimeMilliseconds()}&needExtendedHoursData=true";
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+        var response = await _httpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+
+        var root = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct)).RootElement;
+        var candles = new List<CandleData>();
+        if (!root.TryGetProperty("candles", out var candlesArray)) return candles;
+
+        foreach (var c in candlesArray.EnumerateArray())
+        {
+            candles.Add(new CandleData
+            {
+                Open   = c.GetProperty("open").GetDecimal(),
+                High   = c.GetProperty("high").GetDecimal(),
+                Low    = c.GetProperty("low").GetDecimal(),
+                Close  = c.GetProperty("close").GetDecimal(),
+                Volume = c.TryGetProperty("volume", out var v) && v.TryGetInt64(out var vol) ? vol : 0,
+                Time   = DateTimeOffset.FromUnixTimeMilliseconds(c.GetProperty("datetime").GetInt64()).UtcDateTime
+            });
+        }
+        return candles;
+    }
+
     // Walks back `tradingDays` weekdays (Mon-Fri) from `from`, so the resulting range always
     // covers that many actual trading sessions regardless of how many weekend days it spans.
     private static DateTimeOffset ComputeStartDate(DateTimeOffset from, int tradingDays)

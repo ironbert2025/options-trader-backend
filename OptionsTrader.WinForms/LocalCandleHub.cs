@@ -23,6 +23,15 @@ public sealed class CandleHubServer : IDisposable
     private readonly object _lock = new();
     private CancellationTokenSource? _cts;
 
+    // One line sent to EVERY client the moment it connects, before it joins the broadcast list —
+    // currently the futures candles snapshot (see FuturesCandleHubFeed). Null result = nothing to send.
+    private Func<string?>? _snapshotProvider;
+    public void SetSnapshotProvider(Func<string?> provider) => _snapshotProvider = provider;
+
+    // Pushes an already-serialized line to every connected client (used to re-send a refreshed
+    // futures snapshot).
+    public void BroadcastRawLine(string json) => BroadcastLine(json);
+
     // Tries to become the hub by binding the fixed port on all network interfaces. Returns false
     // if another instance ON THIS MACHINE already owns it (that instance is already the hub) —
     // the caller should fall back to CandleHubClient in that case, not treat this as an error.
@@ -69,6 +78,20 @@ public sealed class CandleHubServer : IDisposable
             while (!ct.IsCancellationRequested)
             {
                 var client = await _listener!.AcceptTcpClientAsync(ct);
+                try
+                {
+                    var snapshot = _snapshotProvider?.Invoke();
+                    if (!string.IsNullOrEmpty(snapshot))
+                    {
+                        var bytes = Encoding.UTF8.GetBytes(snapshot + "\n");
+                        await client.GetStream().WriteAsync(bytes, ct);
+                    }
+                }
+                catch
+                {
+                    try { client.Dispose(); } catch { /* best effort */ }
+                    continue;
+                }
                 lock (_lock) { _clients.Add(client); }
             }
         }
@@ -300,6 +323,9 @@ public sealed class CandleHubClient : ICandleFeed, IAsyncDisposable
             // was already updated by ReceiveLoopAsync before calling here, so there's nothing else
             // to do with it.
             if (type == "heartbeat") return;
+
+            // Futures candles snapshot — meant for external readers of the hub; nothing in the app consumes it.
+            if (type == "candles15") return;
 
             // wsevent carries no symbol/time — a connection status line, not a price update.
             if (type == "wsevent")
