@@ -3450,7 +3450,7 @@ public partial class Form1 : Form
             // open (9:30 ET) onward, per explicit request, matching the same gate applied at the
             // hub's own SchwabStreamerClient.HandleMessage save calls.
             remoteHubClient.OnNewCandle    += (symbol, candle) => { if (IsAtOrAfterMarketOpen(candle.Time)) TickPriceStore.Append(symbol, candle.Time, candle.Close); };
-            remoteHubClient.OnLevelOneTick += (symbol, price, time) => { if (IsAtOrAfterMarketOpen(time)) LevelOneTickStore.Append(symbol, time, price); };
+            remoteHubClient.OnLevelOneTick += (symbol, price, time) => { if (SchwabFuturesSymbols.IsFutures(symbol) || IsAtOrAfterMarketOpen(time)) LevelOneTickStore.Append(symbol, time, price); };
 
             await remoteHubClient.ConnectAsync(LiveHubPort, remoteHost);
 
@@ -3473,6 +3473,7 @@ public partial class Form1 : Form
             await reconnectedStreamer.ConnectAsync();
             await reconnectedStreamer.SubscribeChartEquity(symbols);
             await reconnectedStreamer.SubscribeLevelOneEquity(symbols);
+            await reconnectedStreamer.SubscribeLevelOneFutures(SchwabFuturesSymbols.Symbols);
             reconnectedStreamer.OnNewCandle    += (symbol, candle) => _candleHubServer.Broadcast(symbol, candle);
             reconnectedStreamer.OnLevelOneTick += (symbol, price, time) => _candleHubServer.BroadcastLevelOne(symbol, price, time);
 
@@ -3502,6 +3503,9 @@ public partial class Form1 : Form
             // "LEVELONE_EQUITIES", confirmed against a working third-party SDK). Watch ws_raw.log
             // on first use after this change to confirm the ADD actually succeeds this time.
             await streamer.SubscribeLevelOneEquity(symbols);
+            // Micro E-mini S&P futures (hardcoded, see SchwabFuturesSymbols) — only this instance,
+            // the one that owns the Schwab connection, asks for them; the hub relays the ticks.
+            await streamer.SubscribeLevelOneFutures(SchwabFuturesSymbols.Symbols);
             streamer.OnNewCandle += (symbol, candle) => hubServer.Broadcast(symbol, candle);
             streamer.OnLevelOneTick += (symbol, price, time) => hubServer.BroadcastLevelOne(symbol, price, time);
 

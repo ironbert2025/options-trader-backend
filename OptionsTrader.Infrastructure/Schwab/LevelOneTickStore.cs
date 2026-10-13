@@ -25,6 +25,8 @@ public static class LevelOneTickStore
         try
         {
             var eastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcTime, DateTimeKind.Utc), EasternZone);
+            // Futures keys start with "/" ("/MESZ26") — not valid in a file name.
+            symbol = symbol.TrimStart('/');
             var symbolFolder = Path.Combine(OutputFolder, symbol);
             var path = Path.Combine(symbolFolder, $"{symbol}_L1Ticks_{eastern:yyyyMMdd}.csv");
 
