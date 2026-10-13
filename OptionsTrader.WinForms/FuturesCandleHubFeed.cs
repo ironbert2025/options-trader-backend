@@ -22,25 +22,18 @@ internal sealed class FuturesCandleBuilder
     public static DateTime BucketStart(DateTime utc) =>
         new(utc.Ticks - utc.Ticks % Interval.Ticks, DateTimeKind.Utc);
 
-    // Loads a REST window. merge=false replaces the whole history (startup); merge=true is the light
-    // refresh: only candles from the window's first one onward are replaced, everything older that
-    // is already held stays. A candle whose period already ended is completed; the one containing
-    // "now" is the forming one — merged with what the ticks built there since, so a refresh never
-    // loses a tick-observed high/low or the latest close.
-    public void Seed(IEnumerable<CandleData> restCandles, DateTime nowUtc, bool merge = false)
+    // Loads the REST history, once. A candle whose period already ended is completed; the one
+    // containing "now" is the forming one — merged with what the ticks built there meanwhile, so
+    // the load never loses a tick-observed high/low or the latest close.
+    public void Seed(IEnumerable<CandleData> restCandles, DateTime nowUtc)
     {
         lock (_lock)
         {
             var previousForming = _forming;
-            var rest = restCandles.OrderBy(c => c.Time).ToList();
-            var older = merge && rest.Count > 0
-                ? _completed.Where(c => c.Time < rest[0].Time).ToList()
-                : new List<CandleData>();
             _completed.Clear();
-            _completed.AddRange(older);
             _forming = null;
 
-            foreach (var c in rest)
+            foreach (var c in restCandles.OrderBy(c => c.Time))
             {
                 if (c.Time + Interval <= nowUtc) _completed.Add(c);
                 else if (c.Time <= nowUtc) _forming = c;
@@ -120,19 +113,20 @@ internal sealed class FuturesCandleBuilder
     }
 }
 
-// Runs on the hub instance: seeds the futures candles from REST, follows the Level 1 futures ticks to
-// draw the forming candle, re-syncs with REST each time a candle closes (the official OHLC + volume
-// replace the tick-built ones), and hands the whole state to every client when it connects.
+// Runs on the hub instance: loads the futures history from REST ONCE, then follows the Level 1
+// futures ticks to build the candles from there on (the one forming and each one that closes).
+// Every client gets the state — history + candles built so far + forming — when it connects;
+// after that it only needs the relayed l1 ticks. No periodic re-sync with REST, on purpose.
 internal sealed class FuturesCandleHubFeed
 {
-    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-    private static readonly TimeSpan RefreshDelayAfterClose = TimeSpan.FromSeconds(5);
+    private const int HistoryDays = 10; // 10 days = ~605 candles of 15m in one request (probed)
 
     private readonly SchwabStreamerClient _streamer;
     private readonly CandleHubServer _hub;
     private readonly string _symbol;
     private readonly FuturesCandleBuilder _builder;
-    private int _refreshing;
+    private int _loading;
+    private bool _historyLoaded;
 
     public FuturesCandleHubFeed(SchwabStreamerClient streamer, CandleHubServer hub, string symbol)
     {
@@ -146,49 +140,35 @@ internal sealed class FuturesCandleHubFeed
     {
         _hub.SetSnapshotProvider(() => _builder.BuildSnapshotJson());
         _streamer.OnLevelOneTick += OnTick;
-        await RefreshAsync(broadcast: false);
+        await LoadHistoryAsync();
     }
 
     private void OnTick(string symbol, decimal price, DateTime utcTime)
     {
         if (symbol != _symbol) return;
-        if (_builder.OnTick(utcTime, price)) _ = RefreshAfterCloseAsync();
+        if (_builder.OnTick(utcTime, price) && !_historyLoaded) _ = LoadHistoryAsync();
     }
 
-    private async Task RefreshAfterCloseAsync()
+    // The single history load. Only if it FAILED (token, network) is it tried again, at the next
+    // candle boundary — never once it succeeded.
+    private async Task LoadHistoryAsync()
     {
-        try { await Task.Delay(RefreshDelayAfterClose); } catch { return; }
-        await RefreshAsync(broadcast: true);
-    }
-
-    // Startup loads this many days back in one request (10 days = ~605 candles, probed); every later
-    // refresh only re-requests the last RefreshDays and merges them over what is already held.
-    private const int HistoryDays = 10;
-    private const int RefreshDays = 2;
-    private bool _hasHistory; // true once a full-window load succeeded
-
-    private async Task RefreshAsync(bool broadcast)
-    {
-        if (Interlocked.Exchange(ref _refreshing, 1) == 1) return;
+        if (_historyLoaded || Interlocked.Exchange(ref _loading, 1) == 1) return;
         try
         {
             var now = DateTime.UtcNow;
-            var light = _hasHistory;
-            var from = now.AddDays(-(light ? RefreshDays : HistoryDays));
             var candles = await _streamer.GetCandlesAsync(_symbol, 15,
-                new DateTimeOffset(from, TimeSpan.Zero), new DateTimeOffset(now.AddMinutes(1), TimeSpan.Zero));
-            _builder.Seed(candles, DateTime.UtcNow, merge: light);
-            if (candles.Count > 0) _hasHistory = true;
-            if (broadcast) _hub.BroadcastRawLine(_builder.BuildSnapshotJson());
+                new DateTimeOffset(now.AddDays(-HistoryDays), TimeSpan.Zero), new DateTimeOffset(now.AddMinutes(1), TimeSpan.Zero));
+            _builder.Seed(candles, DateTime.UtcNow);
+            _historyLoaded = candles.Count > 0;
         }
         catch
         {
-            // REST failed (token, network, closed market): the ticks keep building the forming candle
-            // and the next candle close tries again. Never let this reach the hub's receive loop.
+            // REST failed: the ticks keep building candles meanwhile. Never reaches the hub's receive loop.
         }
         finally
         {
-            Interlocked.Exchange(ref _refreshing, 0);
+            Interlocked.Exchange(ref _loading, 0);
         }
     }
 }

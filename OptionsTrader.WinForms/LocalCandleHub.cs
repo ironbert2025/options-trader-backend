@@ -28,10 +28,6 @@ public sealed class CandleHubServer : IDisposable
     private Func<string?>? _snapshotProvider;
     public void SetSnapshotProvider(Func<string?> provider) => _snapshotProvider = provider;
 
-    // Pushes an already-serialized line to every connected client (used to re-send a refreshed
-    // futures snapshot).
-    public void BroadcastRawLine(string json) => BroadcastLine(json);
-
     // Tries to become the hub by binding the fixed port on all network interfaces. Returns false
     // if another instance ON THIS MACHINE already owns it (that instance is already the hub) —
     // the caller should fall back to CandleHubClient in that case, not treat this as an error.
