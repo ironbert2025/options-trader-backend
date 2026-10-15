@@ -173,13 +173,14 @@ public sealed class CandleHubServer : IDisposable
         foreach (var conn in snapshot)
         {
             // Never blocks: a full queue means this client is not draining — drop it.
-            if (!conn.Queue.Writer.TryWrite(bytes)) DropClient(conn);
+            if (!conn.Queue.Writer.TryWrite(bytes)) DropClient(conn, "queue full (client not draining)");
         }
     }
 
     // One writer per client, so lines stay in order. Any failure or a stuck write ends the client.
     private async Task WriteLoopAsync(ClientConn conn, CancellationToken ct)
     {
+        var reason = "writer ended";
         try
         {
             var stream = conn.Client.GetStream();
@@ -190,23 +191,37 @@ public sealed class CandleHubServer : IDisposable
                 var delay = Task.Delay(WriteTimeout, timeoutCts.Token);
                 var finished = await Task.WhenAny(write, delay);
                 timeoutCts.Cancel();
-                if (finished != write) throw new TimeoutException("client not draining");
+                if (finished != write) throw new TimeoutException($"write blocked more than {WriteTimeout.TotalSeconds:0}s");
                 await write;
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Disconnected, timed out or cancelled — fall through to DropClient.
+            reason = ex.Message;
         }
         finally
         {
-            DropClient(conn);
+            DropClient(conn, reason);
         }
     }
 
-    private void DropClient(ClientConn conn)
+    private static readonly string ClientLogPath = @"C:\OptionsData\EventLog\hub_clients.log";
+
+    private void DropClient(ClientConn conn, string reason)
     {
-        lock (_lock) { _clients.Remove(conn); }
+        bool wasListed;
+        lock (_lock) { wasListed = _clients.Remove(conn); }
+        if (wasListed) // log once per client, with who it was and why — to tell a stuck client from a normal close
+        {
+            try
+            {
+                var remote = conn.Client.Client?.RemoteEndPoint?.ToString() ?? "?";
+                Directory.CreateDirectory(Path.GetDirectoryName(ClientLogPath)!);
+                File.AppendAllText(ClientLogPath, $"[{DateTime.Now:O}] hub dropped client {remote}: {reason}{Environment.NewLine}");
+            }
+            catch { /* diagnostics only */ }
+        }
         conn.Queue.Writer.TryComplete();
         try { conn.Client.Dispose(); } catch { /* best effort */ }
     }
