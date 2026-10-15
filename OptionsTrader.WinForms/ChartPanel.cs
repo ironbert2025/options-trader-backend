@@ -3501,6 +3501,58 @@ public class ChartPanel : Panel
         });
     }
 
+    // Everything the pre-market price drives on the 1h and 15m RTH panels — the blue line, its
+    // "Expuesto" text, the live Piso/Techo validation, the "BB" widening label and the prev-day
+    // High/Low lines. Fed by BOTH the 1-minute CHART_EQUITY bars (Streamer_OnNewCandle) and the
+    // LEVELONE_EQUITIES ticks (Streamer_OnLevelOneTick): Schwab sends the bars only sporadically
+    // before ~7-8:30 AM (first one of the day: 07:01 / 08:29 / 08:40 on recent days) while ticks
+    // arrive every second, so with bars alone the line stayed missing for the first part of the
+    // morning. Callers have already checked mode and that it is before 9:30 ET.
+    private void ApplyPreMarketPrice(decimal price, DateTime eastern)
+    {
+        if (_closing || !IsHandleCreated) return; // BeginInvoke below needs a live handle
+
+        // Blue premarket line as an extra live validation of Piso/Techo, ahead of the
+        // 9:30 open check — see ValidatePisoTechoAgainstLivePrice.
+        if (_mode == ChartPanelMode.Hourly15) ValidatePisoTechoAgainstLivePrice(price);
+
+        // "BB" next to "PM" — also live during premarket now (previously only evaluated
+        // once RTH ticks started forming today's bucket), so a trader watching premarket
+        // already sees whether the bands are opening before the open, not just after.
+        EvaluateBollingerWideningLabel(price);
+
+        // "Expuesto" text next to the blue premarket line itself — this panel's OWN
+        // Bollinger(20,2) band (not the 3-chart combo check MultiChartForm does elsewhere):
+        // above the line if price already broke the upper band, below it if it broke the
+        // lower one, hidden otherwise.
+        var exposedDir = GetBollingerDirection(price);
+        var exposedArg = exposedDir switch
+        {
+            BollingerDirection.Above => "'above'",
+            BollingerDirection.Below => "'below'",
+            _ => "null"
+        };
+        s_preMarketLineState[$"{_symbol}_{_mode}"] = (DateOnly.FromDateTime(eastern), price, exposedDir);
+
+        BeginInvoke(async () =>
+        {
+            if (_webView.CoreWebView2 == null) return;
+            await _webView.CoreWebView2.ExecuteScriptAsync(
+                $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {exposedArg});");
+
+            // First pre-market tick this session (and only the first — DrawPrevDayHiLoAsync
+            // is itself once-only) is also this panel's first real "current price", so
+            // that's the moment the auto-drawn prev-day High/Low red lines get evaluated —
+            // deferred here instead of at chart-open per explicit request ("que se dibuje
+            // luego que se muestre la línea azul de precio premarket").
+            await DrawPrevDayHiLoAsync(_rawHistory, price);
+        });
+
+        // Only from the 1h panel (fires on every premarket tick, not just the first) —
+        // MultiChartForm re-evaluates the "Expuesto en 3 charts" Bollinger check from here.
+        if (_mode == ChartPanelMode.Hourly15) OnPreMarketPriceUpdated?.Invoke(price);
+    }
+
     private void Streamer_OnNewCandle(string symbol, CandleData candle)
     {
         if (symbol != _symbol) return; // one shared connection carries all 4 tickers — ignore ticks for the others
@@ -3522,49 +3574,7 @@ public class ChartPanel : Panel
             // 9:30 AM ET hits this branch stops firing for that reason, which is what freezes the
             // line in place with no extra "freeze" logic needed.
             if ((_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15) && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
-            {
-                var price = candle.Close;
-
-                // Blue premarket line as an extra live validation of Piso/Techo, ahead of the
-                // 9:30 open check — see ValidatePisoTechoAgainstLivePrice.
-                if (_mode == ChartPanelMode.Hourly15) ValidatePisoTechoAgainstLivePrice(price);
-
-                // "BB" next to "PM" — also live during premarket now (previously only evaluated
-                // once RTH ticks started forming today's bucket), so a trader watching premarket
-                // already sees whether the bands are opening before the open, not just after.
-                EvaluateBollingerWideningLabel(price);
-
-                // "Expuesto" text next to the blue premarket line itself — this panel's OWN
-                // Bollinger(20,2) band (not the 3-chart combo check MultiChartForm does elsewhere):
-                // above the line if price already broke the upper band, below it if it broke the
-                // lower one, hidden otherwise.
-                var exposedDir = GetBollingerDirection(price);
-                var exposedArg = exposedDir switch
-                {
-                    BollingerDirection.Above => "'above'",
-                    BollingerDirection.Below => "'below'",
-                    _ => "null"
-                };
-                s_preMarketLineState[$"{_symbol}_{_mode}"] = (DateOnly.FromDateTime(eastern), price, exposedDir);
-
-                BeginInvoke(async () =>
-                {
-                    if (_webView.CoreWebView2 == null) return;
-                    await _webView.CoreWebView2.ExecuteScriptAsync(
-                        $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {exposedArg});");
-
-                    // First pre-market tick this session (and only the first — DrawPrevDayHiLoAsync
-                    // is itself once-only) is also this panel's first real "current price", so
-                    // that's the moment the auto-drawn prev-day High/Low red lines get evaluated —
-                    // deferred here instead of at chart-open per explicit request ("que se dibuje
-                    // luego que se muestre la línea azul de precio premarket").
-                    await DrawPrevDayHiLoAsync(_rawHistory, price);
-                });
-
-                // Only from the 1h panel (fires on every premarket tick, not just the first) —
-                // MultiChartForm re-evaluates the "Expuesto en 3 charts" Bollinger check from here.
-                if (_mode == ChartPanelMode.Hourly15) OnPreMarketPriceUpdated?.Invoke(price);
-            }
+                ApplyPreMarketPrice(candle.Close, eastern);
             return; // outside this panel's session — ignore the tick entirely
         }
 
@@ -3728,11 +3738,24 @@ public class ChartPanel : Panel
     // full minute for the next CHART_EQUITY bar. ShowWebsocketArrivalTime here (not just in
     // Streamer_OnNewCandle) is what makes the bottom-right "last arrival" label track this
     // higher-frequency feed once it's flowing, per explicit request.
+    private decimal _lastPreMarketTickPrice;
+
     private void Streamer_OnLevelOneTick(string symbol, decimal price, DateTime utcTime)
     {
         if (symbol != _symbol) return;
         ShowWebsocketArrivalTime(price);
         TrackRthCandleClose(utcTime);   // panel 2 only, ticks only
+        // Pre-market tick on the 1h / 15m RTH panels: feeds the blue line etc. (see ApplyPreMarketPrice).
+        // Only when the price changed — ticks come every second, most repeat the last trade.
+        if (_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15)
+        {
+            var tickEastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+            if (tickEastern.TimeOfDay < new TimeSpan(9, 30, 0) && price != _lastPreMarketTickPrice)
+            {
+                _lastPreMarketTickPrice = price;
+                ApplyPreMarketPrice(price, tickEastern);
+            }
+        }
         FeedBbMomentum(price, utcTime); // panel 2 only, ticks only
         UpdateLivePriceFromExternalSource(price, utcTime);
     }
