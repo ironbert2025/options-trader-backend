@@ -57,7 +57,7 @@ public class SchwabAuthService : IBrokerAuthService
                     return diskToken;
             }
 
-            throw new InvalidOperationException(
+            throw new HubTokenNotRenewedException(
                 "El hub no ha renovado el access token todavía. Revisá que la instancia primaria (hub) esté abierta y conectada.");
         }
 
@@ -121,4 +121,12 @@ public class SchwabAuthService : IBrokerAuthService
 
         return (accessToken, refreshToken, expiresIn);
     }
+}
+
+// Thrown by a non-hub instance (allowRefresh = false) when the hub has not written a fresh access
+// token yet after the short wait — a transient condition (the hub renews on its own schedule), so
+// callers can retry instead of treating it as a hard failure.
+public sealed class HubTokenNotRenewedException : InvalidOperationException
+{
+    public HubTokenNotRenewedException(string message) : base(message) { }
 }

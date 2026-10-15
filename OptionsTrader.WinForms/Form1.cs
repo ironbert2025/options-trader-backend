@@ -1686,6 +1686,7 @@ public partial class Form1 : Form
             var fromDate  = DateOnly.FromDateTime(MarketHours.NowEst);
             var strikeCount = GetStrikeCountFor(_selectedTicker.Symbol);
             var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate, strikeCount)).ToList();
+            _hubTokenWaitCycles = 0; // got data — any earlier wait for the hub's token is over
 
             var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();
             var allQuotesNext = fullChain.Where(q => q.ExpirationDate == nextExpDate).ToList();
@@ -1766,6 +1767,25 @@ public partial class Form1 : Form
             await Task.Delay(60000);
             if (_isPolling) _pollingTimer?.Start();
         }
+        catch (HubTokenNotRenewedException ex)
+        {
+            // The hub hasn't written a renewed token yet (it renews on its own schedule — a gap of a
+            // minute or two happened live and used to kill the polling of every non-hub instance for
+            // the rest of the day). Keep polling: pause the timer, show it, and try again shortly.
+            // Gives up (the old behaviour: stop + log) only after ~15 minutes of continuous waiting.
+            _hubTokenWaitCycles++;
+            if (_hubTokenWaitCycles == 1) LogPollingException(ex, stopped: false);
+            if (_hubTokenWaitCycles > MaxHubTokenWaitCycles)
+            {
+                StopPolling();
+                LogPollingException(ex);
+                return;
+            }
+            _pollingTimer?.Stop();
+            lblLastUpdate.Text = "Esperando el token del hub...";
+            await Task.Delay(5000);
+            if (_isPolling) _pollingTimer?.Start();
+        }
         catch (Exception ex)
         {
             StopPolling();
@@ -1778,14 +1798,22 @@ public partial class Form1 : Form
         }
     }
 
+    // Consecutive polling cycles that ended waiting for the hub's token (each ~15 s: the 10 s wait in
+    // GetAccessTokenAsync + the 5 s pause above); 60 of them is ~15 minutes.
+    private int _hubTokenWaitCycles;
+    private const int MaxHubTokenWaitCycles = 60;
+
     private static readonly string PollingExceptionLogPath = @"C:\OptionsData\EventLog\polling_exceptions.log";
     private static readonly object PollingExceptionLogLock = new();
 
-    private void LogPollingException(Exception ex)
+    private void LogPollingException(Exception ex, bool stopped = true)
     {
         try
         {
-            LogLine($"{DateTime.Now:HH:mm:ss} [Polling] Stopped due to error: {ex.Message}", Color.Red);
+            LogLine(stopped
+                ? $"{DateTime.Now:HH:mm:ss} [Polling] Stopped due to error: {ex.Message}"
+                : $"{DateTime.Now:HH:mm:ss} [Polling] Waiting for the hub's token (will keep retrying): {ex.Message}",
+                stopped ? Color.Red : Color.Orange);
             Directory.CreateDirectory(Path.GetDirectoryName(PollingExceptionLogPath)!);
             lock (PollingExceptionLogLock)
             {

@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using OptionsTrader.Application.DTOs.Streaming;
 using OptionsTrader.Application.Interfaces;
 
@@ -19,8 +20,23 @@ namespace OptionsTrader.WinForms;
 public sealed class CandleHubServer : IDisposable
 {
     private TcpListener? _listener;
-    private readonly List<TcpClient> _clients = new();
+    private readonly List<ClientConn> _clients = new();
     private readonly object _lock = new();
+
+    // Each client has its OWN bounded queue drained by its own writer task, so BroadcastLine (called
+    // from the thread that reads the Schwab socket) only enqueues and returns — it can never be held
+    // up by a slow or stuck client (a blocking Write there stalled the Schwab read, the heartbeats
+    // and every other client at once). A client whose queue fills, or whose single write makes no
+    // progress for WriteTimeout, is disconnected; it reconnects on its own and gets a fresh snapshot.
+    private const int MaxQueuedMessages = 5000;
+    private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(10);
+
+    private sealed class ClientConn
+    {
+        public required TcpClient Client { get; init; }
+        public Channel<byte[]> Queue { get; } = Channel.CreateBounded<byte[]>(
+            new BoundedChannelOptions(MaxQueuedMessages) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+    }
     private CancellationTokenSource? _cts;
 
     // One line per provider sent to EVERY client the moment it connects, before it joins the broadcast
@@ -78,6 +94,7 @@ public sealed class CandleHubServer : IDisposable
             while (!ct.IsCancellationRequested)
             {
                 var client = await _listener!.AcceptTcpClientAsync(ct);
+                var conn = new ClientConn { Client = client };
                 try
                 {
                     List<Func<string?>> providers;
@@ -86,8 +103,7 @@ public sealed class CandleHubServer : IDisposable
                     {
                         var snapshot = provider();
                         if (string.IsNullOrEmpty(snapshot)) continue;
-                        var bytes = Encoding.UTF8.GetBytes(snapshot + "\n");
-                        await client.GetStream().WriteAsync(bytes, ct);
+                        conn.Queue.Writer.TryWrite(Encoding.UTF8.GetBytes(snapshot + "\n"));
                     }
                 }
                 catch
@@ -95,7 +111,8 @@ public sealed class CandleHubServer : IDisposable
                     try { client.Dispose(); } catch { /* best effort */ }
                     continue;
                 }
-                lock (_lock) { _clients.Add(client); }
+                lock (_lock) { _clients.Add(conn); }
+                _ = WriteLoopAsync(conn, ct);
             }
         }
         catch
@@ -144,7 +161,7 @@ public sealed class CandleHubServer : IDisposable
 
     private void BroadcastLine(string json)
     {
-        List<TcpClient> snapshot;
+        List<ClientConn> snapshot;
         lock (_lock)
         {
             if (_clients.Count == 0) return;
@@ -153,19 +170,45 @@ public sealed class CandleHubServer : IDisposable
 
         var bytes = Encoding.UTF8.GetBytes(json + "\n");
 
-        foreach (var client in snapshot)
+        foreach (var conn in snapshot)
         {
-            try
+            // Never blocks: a full queue means this client is not draining — drop it.
+            if (!conn.Queue.Writer.TryWrite(bytes)) DropClient(conn);
+        }
+    }
+
+    // One writer per client, so lines stay in order. Any failure or a stuck write ends the client.
+    private async Task WriteLoopAsync(ClientConn conn, CancellationToken ct)
+    {
+        try
+        {
+            var stream = conn.Client.GetStream();
+            await foreach (var bytes in conn.Queue.Reader.ReadAllAsync(ct))
             {
-                client.GetStream().Write(bytes, 0, bytes.Length);
-            }
-            catch
-            {
-                // Client disconnected — drop it.
-                lock (_lock) { _clients.Remove(client); }
-                try { client.Dispose(); } catch { /* best effort */ }
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var write = stream.WriteAsync(bytes, ct).AsTask();
+                var delay = Task.Delay(WriteTimeout, timeoutCts.Token);
+                var finished = await Task.WhenAny(write, delay);
+                timeoutCts.Cancel();
+                if (finished != write) throw new TimeoutException("client not draining");
+                await write;
             }
         }
+        catch
+        {
+            // Disconnected, timed out or cancelled — fall through to DropClient.
+        }
+        finally
+        {
+            DropClient(conn);
+        }
+    }
+
+    private void DropClient(ClientConn conn)
+    {
+        lock (_lock) { _clients.Remove(conn); }
+        conn.Queue.Writer.TryComplete();
+        try { conn.Client.Dispose(); } catch { /* best effort */ }
     }
 
     public void Dispose()
@@ -174,7 +217,7 @@ public sealed class CandleHubServer : IDisposable
         try { _listener?.Stop(); } catch { /* best effort */ }
         lock (_lock)
         {
-            foreach (var c in _clients) { try { c.Dispose(); } catch { /* best effort */ } }
+            foreach (var c in _clients) { try { c.Client.Dispose(); } catch { /* best effort */ } }
             _clients.Clear();
         }
         _cts?.Dispose();
