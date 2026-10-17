@@ -2143,6 +2143,29 @@ public partial class Form1 : Form
     // cell except Strike. Optional and defaults to null so every EXISTING caller (Form1's own
     // dgvQuotes/dgvQuotesNext — the Options Quotes tab) is unaffected; only the Simulator's
     // _dgvChain passes it, reusing its own _forcedStrikes set for both purposes.
+    // "+1C" / "+1P" buttons (Charts tab options column + Simulator): while armed, the FIRST in-the-money
+    // strike of that side is shown in the grid with the usual ITM highlight, whichever strike that is
+    // as the spot moves. First ITM Call = the highest strike below spot; first ITM Put = the lowest
+    // strike above spot. Looked up in the FULL chain so it exists even when the OTM filter dropped it.
+    internal static decimal? FirstItmStrike(IEnumerable<OptionQuoteDto> allQuotes, bool isCall)
+    {
+        var side = isCall ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
+        var itm = allQuotes.Where(q => q.OptionType == side && q.InTheMoney).Select(q => (decimal?)q.StrikePrice);
+        return isCall ? itm.Max() : itm.Min();
+    }
+
+    // Looks of the two toggles: green "+1C" / red "+1P" like the Strike buttons; armed = thick gold border.
+    internal static void StyleFirstItmToggle(Button button, bool isCall, bool armed)
+    {
+        button.FlatStyle = FlatStyle.Flat;
+        button.BackColor = isCall ? Color.DarkGreen : Color.Red;
+        button.ForeColor = Color.White;
+        button.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+        button.UseVisualStyleBackColor = false;
+        button.FlatAppearance.BorderColor = armed ? Color.Gold : Color.DimGray;
+        button.FlatAppearance.BorderSize = armed ? 3 : 1;
+    }
+
     internal static (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
         DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false,
         string? selectedCounts = null, bool callOnly = false, bool putOnly = false,

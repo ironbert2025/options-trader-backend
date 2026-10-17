@@ -26,6 +26,11 @@ public class SimulatorForm : Form
     // Below the DZ/SZ button row.
     private readonly Button _btnTickAtras    = new() { Text = "◀ Vela", Location = new Point(590, 256), Size = new Size(70, 26), Enabled = false };
     private readonly Button _btnTickAdelante = new() { Text = "Vela ▶", Location = new Point(664, 256), Size = new Size(70, 26), Enabled = false };
+    // "+1C" / "+1P": show the first ITM strike of that side (see Form1.FirstItmStrike). Toggles; they stay
+    // armed across "Cargar" (a view preference), and the strike is recomputed on every step.
+    private bool _showFirstItmCall, _showFirstItmPut;
+    private readonly Button _btnFirstItmCall = new() { Text = "+1C", Location = new Point(590, 74), Size = new Size(60, 24) };
+    private readonly Button _btnFirstItmPut  = new() { Text = "+1P", Location = new Point(656, 74), Size = new Size(60, 24) };
     private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
 
@@ -205,6 +210,8 @@ public class SimulatorForm : Form
         Controls.Add(_btnTickAtras);
         Controls.Add(_btnTickAdelante);
         Controls.Add(_btnPlus1Min);
+        Controls.Add(_btnFirstItmCall);
+        Controls.Add(_btnFirstItmPut);
         Controls.Add(_lblStep);
         Controls.Add(_dgvChain);
         Controls.Add(_grpCounts);
@@ -232,6 +239,20 @@ public class SimulatorForm : Form
         _btnTickAtras.Click    += (s, e) => StepTick(-1);
         _btnTickAdelante.Click += (s, e) => StepTick(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
+        Form1.StyleFirstItmToggle(_btnFirstItmCall, isCall: true, armed: false);
+        Form1.StyleFirstItmToggle(_btnFirstItmPut, isCall: false, armed: false);
+        _btnFirstItmCall.Click += (s, e) =>
+        {
+            _showFirstItmCall = !_showFirstItmCall;
+            Form1.StyleFirstItmToggle(_btnFirstItmCall, isCall: true, armed: _showFirstItmCall);
+            if (_currentIndex >= 0) RenderGridForStep();
+        };
+        _btnFirstItmPut.Click += (s, e) =>
+        {
+            _showFirstItmPut = !_showFirstItmPut;
+            Form1.StyleFirstItmToggle(_btnFirstItmPut, isCall: false, armed: _showFirstItmPut);
+            if (_currentIndex >= 0) RenderGridForStep();
+        };
         _playTimer.Tick     += PlayTimer_Tick;
         _tickPlayTimer.Tick += TickPlayTimer_Tick;
         _dgvChain.CellClick     += DgvChain_CellClick;
@@ -1972,7 +1993,7 @@ public class SimulatorForm : Form
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
         (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts,
-            forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
+            forcedStrikes: ShownStrikes(step.Quotes), highlightedStrikes: ShownStrikes(step.Quotes));
         _ = UpdateTriggerStkLabelsAsync();
         _ = UpdateStkMinMaxAsync();
 
@@ -2485,6 +2506,16 @@ public class SimulatorForm : Form
 
         if (_currentIndex >= 0)
             (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
-                selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
+                selectedCounts: _selectedCounts, forcedStrikes: ShownStrikes(_steps[_currentIndex].Quotes), highlightedStrikes: ShownStrikes(_steps[_currentIndex].Quotes));
+    }
+
+    // The pinned (trade) strikes plus, for each armed +1C/+1P, the current first ITM strike of that side. A fresh
+    // set each time — _forcedStrikes itself is never touched, other code depends on its lifetime.
+    private HashSet<(string Type, decimal Strike)> ShownStrikes(List<OptionQuoteDto> quotes)
+    {
+        var shown = new HashSet<(string Type, decimal Strike)>(_forcedStrikes);
+        if (_showFirstItmCall && Form1.FirstItmStrike(quotes, isCall: true) is { } call) shown.Add(("CALL", call));
+        if (_showFirstItmPut && Form1.FirstItmStrike(quotes, isCall: false) is { } put) shown.Add(("PUT", put));
+        return shown;
     }
 }

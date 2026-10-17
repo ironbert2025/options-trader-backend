@@ -295,6 +295,19 @@ public class TwoPanelChartsControl : UserControl
     // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
     // GetQuoteSnapshot) — clicking Strike forwards into Form1.TriggerQuoteStrikeClick, which runs
     // the exact same click handler Form1's own grid would (same currently-selected trade mode).
+    // +1C / +1P state and the strikes they currently show (per grid: Hoy and Próxima have their own chain).
+    private bool _showFirstItmCall, _showFirstItmPut;
+    private HashSet<(string Type, decimal Strike)> _firstItmToday = new();
+    private HashSet<(string Type, decimal Strike)> _firstItmNext = new();
+
+    private HashSet<(string Type, decimal Strike)> FirstItmStrikes(IEnumerable<OptionQuoteDto> allQuotes)
+    {
+        var shown = new HashSet<(string Type, decimal Strike)>();
+        if (_showFirstItmCall && Form1.FirstItmStrike(allQuotes, isCall: true) is { } call) shown.Add(("CALL", call));
+        if (_showFirstItmPut && Form1.FirstItmStrike(allQuotes, isCall: false) is { } put) shown.Add(("PUT", put));
+        return shown;
+    }
+
     private readonly DataGridView _dgvOptions = new()
     {
         Dock = DockStyle.Fill,
@@ -1696,7 +1709,8 @@ public class TwoPanelChartsControl : UserControl
                 // cell (not e.Value) since it isn't tied to whichever column is currently painting.
                 if (e.ColumnIndex != strikeCol && row.Tag is string rowType &&
                     decimal.TryParse(row.Cells["colStrikeLive"].Value?.ToString(), out var rowStrike) &&
-                    _form1.IsChartsTabStrikeHighlighted(rowType, rowStrike))
+                    (_form1.IsChartsTabStrikeHighlighted(rowType, rowStrike)
+                     || (grid == _dgvOptions ? _firstItmToday : _firstItmNext).Contains((rowType.ToUpperInvariant(), rowStrike))))
                 {
                     var inTheMoney = row.Cells["colStrikeLive"].Tag is true;
                     e.CellStyle.BackColor = inTheMoney ? Color.LightGreen : Color.LightGray;
@@ -1826,8 +1840,20 @@ public class TwoPanelChartsControl : UserControl
         // Grid fills the rest of this column — the Text-tool note box (ChartTextTextBox) moved out
         // of here entirely, per explicit request: it now sits next to the crossLog, below the
         // trades grid (see bottomSection further down), not stacked inside the options column.
+        // "+1C" / "+1P" — on the "Next: ..." row, at its right: show the first ITM strike of that side
+        // (Form1.FirstItmStrike) in the Hoy / Próxima grids with the ITM highlight, recomputed every refresh.
+        var btnFirstItmCall = new Button { Text = "+1C", Dock = DockStyle.Right, Width = 40, Margin = Padding.Empty };
+        var btnFirstItmPut  = new Button { Text = "+1P", Dock = DockStyle.Right, Width = 40, Margin = Padding.Empty };
+        Form1.StyleFirstItmToggle(btnFirstItmCall, isCall: true, armed: false);
+        Form1.StyleFirstItmToggle(btnFirstItmPut, isCall: false, armed: false);
+        var nextRow = new Panel { Dock = DockStyle.Top, Height = 22 };
+        lblExpDateNext.Dock = DockStyle.Fill;
+        nextRow.Controls.Add(lblExpDateNext);
+        nextRow.Controls.Add(btnFirstItmCall);
+        nextRow.Controls.Add(btnFirstItmPut);
+
         optionsGridHost.Controls.Add(tabOptions);
-        optionsGridHost.Controls.Add(lblExpDateNext);
+        optionsGridHost.Controls.Add(nextRow);
         optionsGridHost.Controls.Add(lblExpDate);
 
         void RefreshOptionsGrid()
@@ -1862,9 +1888,12 @@ public class TwoPanelChartsControl : UserControl
             // (which is what made the "Próxima" tab render its headers but never any rows/data).
             _dgvOptions.BeginInvoke(() =>
             {
+                _firstItmToday = FirstItmStrikes(snapshot.Value.AllQuotes);
+                var shownToday = new HashSet<(string Type, decimal Strike)>(_form1.GetChartsTabHighlightedStrikes());
+                shownToday.UnionWith(_firstItmToday);
                 Form1.PopulateSingleSideOptionsGrid(
                     _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker,
-                    _form1.GetChartsTabHighlightedStrikes());
+                    shownToday);
 
                 // "Próxima" tab: only present while Form1 itself shows the next-expiration chain
                 // (mirrors chkHideNextExpDate) — added/removed here instead of once at startup so
@@ -1877,11 +1906,26 @@ public class TwoPanelChartsControl : UserControl
 
                 if (shouldShowNext && snapshotNext != null)
                 {
+                    _firstItmNext = FirstItmStrikes(snapshotNext.Value.AllQuotes);
                     Form1.PopulateSingleSideOptionsGrid(
-                        _dgvOptionsNext, snapshotNext.Value.AllQuotes, snapshotNext.Value.OtmCalls, snapshotNext.Value.OtmPuts, snapshotNext.Value.Ticker);
+                        _dgvOptionsNext, snapshotNext.Value.AllQuotes, snapshotNext.Value.OtmCalls, snapshotNext.Value.OtmPuts, snapshotNext.Value.Ticker,
+                        _firstItmNext);
                 }
             });
         }
+
+        btnFirstItmCall.Click += (s, e) =>
+        {
+            _showFirstItmCall = !_showFirstItmCall;
+            Form1.StyleFirstItmToggle(btnFirstItmCall, isCall: true, armed: _showFirstItmCall);
+            RefreshOptionsGrid();
+        };
+        btnFirstItmPut.Click += (s, e) =>
+        {
+            _showFirstItmPut = !_showFirstItmPut;
+            Form1.StyleFirstItmToggle(btnFirstItmPut, isCall: false, armed: _showFirstItmPut);
+            RefreshOptionsGrid();
+        };
 
         // Strike click: forwards into Form1's own click handler — opens a trade using whatever
         // radio mode (No Trade / No Trade-Target / Trade / Trade-Target) is currently selected on
