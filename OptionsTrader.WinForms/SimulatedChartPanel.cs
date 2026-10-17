@@ -894,6 +894,13 @@ public class SimulatedChartPanel : Panel
     // SMA20/40 + SMA100/200 trend ("up"/"down"/null each) — see ChartPanel.OnTrendStateChanged.
     public event Action<string?, string?>? OnTrendStateChanged;
 
+    // Last trend state seen from the page + the header title, for the combined images' header strip
+    // (CombinedChartHeader) — this panel's own header shows only the title, the trend words reach the log.
+    private string? _trendShortDir, _trendLongDir;
+    internal string HeaderTitle => _header.Text;
+    internal IReadOnlyList<(string Text, Color Color)>? TrendHeaderSegments() =>
+        CombinedChartHeader.TrendSegments(_trendShortDir, _trendLongDir);
+
     // Same as ChartPanel.OnSaltoSetupChanged — relayed to the 15m chart by SimulatorForm.
     public event Action<bool?, long[]>? OnSaltoSetupChanged;
 
@@ -1106,6 +1113,8 @@ public class SimulatedChartPanel : Panel
             {
                 var shortDir = root.TryGetProperty("shortDir", out var sd) && sd.ValueKind == JsonValueKind.String ? sd.GetString() : null;
                 var longDir = root.TryGetProperty("longDir", out var ld) && ld.ValueKind == JsonValueKind.String ? ld.GetString() : null;
+                _trendShortDir = shortDir;
+                _trendLongDir = longDir;
                 OnTrendStateChanged?.Invoke(shortDir, longDir);
                 return;
             }

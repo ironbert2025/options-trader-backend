@@ -3962,6 +3962,20 @@ public class ChartPanel : Panel
     // auto-reconnect (previously nothing ever reverted it).
     private bool _headerShowsDisconnected;
 
+    // What the header strip of a captured image shows (see CombinedChartHeader): the title, and the
+    // colored "Largo - Corto" words when this panel currently displays them (null otherwise).
+    internal string HeaderTitle => NormalHeaderText();
+
+    internal IReadOnlyList<(string Text, Color Color)>? TrendHeaderSegments() =>
+        _trendHost.Visible
+            ? new List<(string, Color)>
+              {
+                  (_trendLongLabel.Text, _trendLongLabel.ForeColor),
+                  (" - ", Color.Silver),
+                  (_trendShortLabel.Text, _trendShortLabel.ForeColor)
+              }
+            : null;
+
     private string NormalHeaderText() => _mode == ChartPanelMode.Fifteen_Full
         ? $"{_symbol} — {_intervalMinutes}m RTH+Overnight"
         : $"{_symbol} — {ModeLabel(_mode)}";

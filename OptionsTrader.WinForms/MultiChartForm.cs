@@ -956,8 +956,6 @@ public class MultiChartForm : Form
     // yellow timeframe label centered at the top of each one — order matches the panels array.
     private const int PanelGap = 6;
     private static readonly Color PanelGapColor = Color.FromArgb(58, 58, 58);
-    private static readonly Color PanelLabelColor = Color.FromArgb(245, 216, 0);
-    private static readonly string[] PanelLabels = { "1 Hour", "15Min RTH", "15Min RTH+OVN" };
 
     public async Task<Bitmap?> CaptureCombinedChartImageAsync()
     {
@@ -977,23 +975,19 @@ public class MultiChartForm : Form
             if (images.Any(img => img == null)) return null;
 
             var width  = images.Sum(img => img!.Width) + PanelGap * (images.Length - 1);
-            var height = images.Max(img => img!.Height);
+            var scale = CombinedChartHeader.ScaleFor(images[0]!, panels[0]);
+            var stripH = CombinedChartHeader.StripHeight(scale);
+            var height = images.Max(img => img!.Height) + stripH;
             var combined = new Bitmap(width, height);
             using (var g = Graphics.FromImage(combined))
-            using (var labelFont = new Font("Segoe UI", 11f, FontStyle.Bold))
-            using (var labelBrush = new SolidBrush(PanelLabelColor))
             {
                 g.Clear(PanelGapColor);
                 var x = 0;
                 for (int i = 0; i < images.Length; i++)
                 {
                     var img = images[i]!;
-                    g.DrawImage(img, x, 0);
-
-                    var labelSize = g.MeasureString(PanelLabels[i], labelFont);
-                    var labelX = x + (img.Width - labelSize.Width) / 2f;
-                    g.DrawString(PanelLabels[i], labelFont, labelBrush, labelX, 8f);
-
+                    CombinedChartHeader.Draw(g, x, img.Width, scale, panels[i].HeaderTitle, panels[i].TrendHeaderSegments());
+                    g.DrawImage(img, x, stripH);
                     x += img.Width + PanelGap;
                 }
             }

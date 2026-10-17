@@ -1337,7 +1337,7 @@ public class SimulatorForm : Form
         finally { _prWorking = false; }
     }
 
-    // Panel 1 (1h) + panel 2 (15m RTH) side by side, same layout/labels as the live app's combined image.
+    // Panel 1 (1h) + panel 2 (15m RTH) side by side, same layout and header strips as the live app's combined image.
     private async Task<Bitmap?> CaptureCombinedPanels12Async()
     {
         Bitmap? hourly = null, rth = null;
@@ -1348,19 +1348,16 @@ public class SimulatorForm : Form
             if (hourly == null || rth == null) return null;
 
             const int gap = 4;
-            var combined = new Bitmap(hourly.Width + gap + rth.Width, Math.Max(hourly.Height, rth.Height));
+            var scale = CombinedChartHeader.ScaleFor(hourly, _hourlyChart);
+            var stripH = CombinedChartHeader.StripHeight(scale);
+            var combined = new Bitmap(hourly.Width + gap + rth.Width, Math.Max(hourly.Height, rth.Height) + stripH);
             using var g = Graphics.FromImage(combined);
-            using var font = new Font("Segoe UI", 11f, FontStyle.Bold);
-            using var brush = new SolidBrush(Color.White);
             g.Clear(Color.Black);
-            void Place(Bitmap img, int x, string label)
-            {
-                g.DrawImage(img, x, 0);
-                var size = g.MeasureString(label, font);
-                g.DrawString(label, font, brush, x + (img.Width - size.Width) / 2f, 8f);
-            }
-            Place(hourly, 0, "1 Hour");
-            Place(rth, hourly.Width + gap, "15Min RTH");
+            CombinedChartHeader.Draw(g, 0, hourly.Width, scale, _hourlyChart.HeaderTitle, _hourlyChart.TrendHeaderSegments());
+            g.DrawImage(hourly, 0, stripH);
+            var rthX = hourly.Width + gap;
+            CombinedChartHeader.Draw(g, rthX, rth.Width, scale, _rthChart.HeaderTitle, _rthChart.TrendHeaderSegments());
+            g.DrawImage(rth, rthX, stripH);
             return combined;
         }
         catch
