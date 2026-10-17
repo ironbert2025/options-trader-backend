@@ -3553,6 +3553,132 @@ public class ChartPanel : Panel
         if (_mode == ChartPanelMode.Hourly15) OnPreMarketPriceUpdated?.Invoke(price);
     }
 
+    // ---- Candle buckets: a Level 1 tick decides which candle it belongs to, by its own trade time ----
+    // The 1-minute CHART_EQUITY bar of minute m is delivered AFTER m ends, so letting bars alone open
+    // each new 15m/1h candle made the candle at 9:45:34 still the 9:30 one (ticks of 9:45 were folded
+    // into it) and the new candle only appeared once the 9:45 bar arrived at ~9:46:00. Now the first tick
+    // at/after the boundary closes the forming candle (it keeps exactly the ticks before the boundary)
+    // and opens the next; bars only reconcile (official High/Low/Close, the bucket's first-minute Open).
+    private DateTime _lastTickUtc = DateTime.MinValue; // trade time of the newest tick applied to _liveBucket
+
+    // Start of the bucket `index` (UTC) — what both ticks and bars use as the candle's Time, so the
+    // chart's upsert-by-time never sees two different keys for the same candle.
+    private DateTime LiveBucketStartUtc(long index, DateTime eventUtc)
+    {
+        if (_mode == ChartPanelMode.Hourly15) return CandleAggregation.HourlyRthBucketStartUtc(eventUtc);
+        var startEastern = _liveAnchor.AddMinutes(index * _intervalMinutes);
+        return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(startEastern, DateTimeKind.Unspecified), EasternZone);
+    }
+
+    // Closes the forming candle (every per-mode evaluation that used to live inline in
+    // Streamer_OnNewCandle) and opens the one for `index`, seeded with the given prices.
+    private void RollLiveBucket(long index, DateTime eventUtc, DateTime eastern,
+        decimal open, decimal high, decimal low, decimal close, out bool hourlyNewDayFirstBucket)
+    {
+        hourlyNewDayFirstBucket = false;
+        if (_liveBucket == null) return;
+
+        if (_mode == ChartPanelMode.Hourly15)
+        {
+            _closedCandles.Add(_liveBucket);
+            EvaluateDailyPmAndBb(close); // "D.PM"/"BB" — recomputed once per hourly close, see method comment
+
+            // At market open the first live event of the day always looks like "a new bucket" compared
+            // to whatever _liveBucket was seeded with from history (LoadHistoryAsync seeds it with
+            // YESTERDAY's last hourly bar), and that seeded bucket already closed yesterday — it must NOT
+            // be evaluated again just because today's session started (that fired T-Line events at ~9:31
+            // using yesterday's stale close). Only evaluate when the outgoing bucket is from the SAME
+            // trading day as the new one (HourlyRthBucketKey = dayNumber*100+slot).
+            var sameDay = _liveBucketIndex is { } prevIndex && prevIndex / 100 == index / 100;
+            if (sameDay)
+            {
+                EvaluateTLineSignal(_liveBucket);
+                EvaluatePisoTechoWatches(_liveBucket);
+
+                // The Piso/Techo reference line (15m RTH/RTH+Overnight panels) tracks the live SMA, not
+                // just its pre-market snapshot — re-fire with each period's CURRENT value on every closed
+                // candle so MultiChartForm redraws it in place.
+                FirePisoTechoLevelReady(20, s_pisoTechoResult20);
+                FirePisoTechoLevelReady(40, s_pisoTechoResult40);
+                FirePisoTechoLevelReady(100, s_pisoTechoResult100);
+                FirePisoTechoLevelReady(200, s_pisoTechoResult200);
+            }
+            else
+            {
+                // This transition IS today's market open — `open` is the RTH opening price.
+                ValidatePisoTechoAgainstOpen(open);
+                FinalizePreMarketLineAtOpen(open, eastern);
+                hourlyNewDayFirstBucket = true;
+            }
+        }
+        else if (_mode == ChartPanelMode.Fifteen_Full)
+        {
+            EvaluateDemandZoneRebounds(_liveBucket);
+            EvaluateSupplyZoneRebounds(_liveBucket);
+
+            // Fires on EVERY closed 15m candle while armed — MultiChartForm captures+pushes the
+            // combined 3-chart snapshot each time.
+            if (_autoZonePushArmed) OnAutoZonePushTickEvent?.Invoke(_liveBucket);
+        }
+        else if (_mode == ChartPanelMode.Fifteen_RTH)
+        {
+            _closedCandles.Add(_liveBucket);
+            EvaluateTLineSignal(_liveBucket);
+        }
+
+        _liveBucketIndex = index;
+        _liveBucket = new CandleData { Time = LiveBucketStartUtc(index, eventUtc), Open = open, High = high, Low = low, Close = close };
+    }
+
+    // A bar of the bucket now forming. Adds its official extremes; its Open replaces the tick-derived
+    // one when it is the bucket's first minute; its Close only when no newer tick exists already.
+    private void ReconcileLiveBucketWithBar(CandleData bar, DateTime barEastern)
+    {
+        if (_liveBucket == null) return;
+        _liveBucket.High = Math.Max(_liveBucket.High, bar.High);
+        _liveBucket.Low  = Math.Min(_liveBucket.Low, bar.Low);
+        if (bar.Time == _liveBucket.Time)
+        {
+            _liveBucket.Open = bar.Open;
+            // The session's first bucket: its official open is the real RTH open — redraw the blue line there.
+            if (barEastern.TimeOfDay == new TimeSpan(9, 30, 0) && _mode != ChartPanelMode.Fifteen_Full)
+                FinalizePreMarketLineAtOpen(bar.Open, barEastern);
+        }
+        if (bar.Time.AddMinutes(1) > _lastTickUtc) _liveBucket.Close = bar.Close;
+    }
+
+    private int BucketLengthMinutes(DateTime bucketStartUtc)
+    {
+        if (_mode != ChartPanelMode.Hourly15) return _intervalMinutes;
+        return TimeZoneInfo.ConvertTimeFromUtc(bucketStartUtc, EasternZone).TimeOfDay == new TimeSpan(9, 30, 0) ? 30 : 60;
+    }
+
+    // Late bar for a candle a tick already closed: official High/Low always, Open if it is the first
+    // minute, Close if it is the last minute. Re-sent through resetToNewDayCandle (upsert + full
+    // re-render) because series.update() cannot touch a bar older than the last one.
+    private void ReconcileClosedBucketWithBar(CandleData bar, long index)
+    {
+        if (_mode == ChartPanelMode.Fifteen_Full || _closedCandles.Count == 0) return;
+        var start = LiveBucketStartUtc(index, bar.Time);
+        CandleData? closed = null;
+        for (var i = _closedCandles.Count - 1; i >= 0 && i >= _closedCandles.Count - 4; i--)
+            if (_closedCandles[i].Time == start) { closed = _closedCandles[i]; break; }
+        if (closed == null) return;
+
+        var changed = false;
+        if (bar.High > closed.High) { closed.High = bar.High; changed = true; }
+        if (bar.Low < closed.Low) { closed.Low = bar.Low; changed = true; }
+        if (bar.Time == start && closed.Open != bar.Open) { closed.Open = bar.Open; changed = true; }
+        if (bar.Time.AddMinutes(1) >= start.AddMinutes(BucketLengthMinutes(start)) && closed.Close != bar.Close)
+        {
+            closed.Close = bar.Close; changed = true;
+        }
+        if (!changed || _closing || !IsHandleCreated) return;
+
+        var copy = new CandleData { Time = closed.Time, Open = closed.Open, High = closed.High, Low = closed.Low, Close = closed.Close };
+        BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", copy));
+    }
+
     private void Streamer_OnNewCandle(string symbol, CandleData candle)
     {
         if (symbol != _symbol) return; // one shared connection carries all 4 tickers — ignore ticks for the others
@@ -3645,71 +3771,24 @@ public class ChartPanel : Panel
             var index = isHourly
                 ? CandleAggregation.HourlyRthBucketKey(candle.Time)
                 : CandleAggregation.BucketIndex(candle.Time, _liveAnchor, _intervalMinutes);
-            if (index != _liveBucketIndex)
+            var currentBucketIndex = _liveBucketIndex ?? long.MinValue;
+            if (index > currentBucketIndex)
             {
-                if (_mode == ChartPanelMode.Hourly15)
-                {
-                    _closedCandles.Add(_liveBucket);
-                    EvaluateDailyPmAndBb(candle.Close); // "D.PM"/"BB" — recomputed once per hourly close, see method comment
-
-                    // At market open, the first live tick of the day always looks like "a new
-                    // bucket" compared to whatever _liveBucket was seeded with from history
-                    // (LoadHistoryAsync seeds it with YESTERDAY's last hourly bar, e.g. 15:00-16:00,
-                    // so live ticks extend it correctly instead of starting a spurious bucket).
-                    // That seeded bucket already closed yesterday — it must NOT be evaluated again
-                    // here just because today's session started; doing so previously fired T-Line
-                    // events at ~9:31 AM using yesterday's stale close. Only evaluate when the
-                    // outgoing bucket is from the SAME trading day as this tick (HourlyRthBucketKey
-                    // = dayNumber*100+slot, so dividing by 100 isolates the day).
-                    var sameDay = _liveBucketIndex is { } prevIndex && prevIndex / 100 == index / 100;
-                    if (sameDay)
-                    {
-                        EvaluateTLineSignal(_liveBucket);
-                        EvaluatePisoTechoWatches(_liveBucket);
-
-                        // The Piso/Techo reference line (15m RTH/RTH+Overnight panels) tracks the
-                        // live SMA, not just its pre-market snapshot — re-fire with each period's
-                        // CURRENT value on every closed candle so MultiChartForm redraws it in
-                        // place (markPisoTechoRefLine already replaces the old entry per period).
-                        FirePisoTechoLevelReady(20, s_pisoTechoResult20);
-                        FirePisoTechoLevelReady(40, s_pisoTechoResult40);
-                        FirePisoTechoLevelReady(100, s_pisoTechoResult100);
-                        FirePisoTechoLevelReady(200, s_pisoTechoResult200);
-                    }
-                    else
-                    {
-                        // This transition IS today's market open (the outgoing bucket was
-                        // yesterday's) — candle.Open below is the actual RTH opening price.
-                        ValidatePisoTechoAgainstOpen(candle.Open);
-                        FinalizePreMarketLineAtOpen(candle.Open, eastern);
-                        isHourlyNewDayFirstBucket = true;
-                    }
-                }
-                else if (_mode == ChartPanelMode.Fifteen_Full)
-                {
-                    EvaluateDemandZoneRebounds(_liveBucket);
-                    EvaluateSupplyZoneRebounds(_liveBucket);
-
-                    // Fires on EVERY closed 15m candle while armed (a rebote just confirmed above,
-                    // possibly on this very candle, or on an earlier one still in progress) —
-                    // MultiChartForm captures+pushes the combined 3-chart snapshot each time.
-                    if (_autoZonePushArmed) OnAutoZonePushTickEvent?.Invoke(_liveBucket);
-                }
-                else if (_mode == ChartPanelMode.Fifteen_RTH)
-                {
-                    _closedCandles.Add(_liveBucket);
-                    EvaluateTLineSignal(_liveBucket);
-                }
-
-                _liveBucketIndex = index;
-                var newTime = isHourly ? CandleAggregation.HourlyRthBucketStartUtc(candle.Time) : candle.Time;
-                _liveBucket = new CandleData { Time = newTime, Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close };
+                // Fallback only: normally a Level 1 tick has already rolled the bucket at its exact
+                // boundary (see UpdateLivePriceFromExternalSource), so this bar finds the bucket open.
+                // Reached when no tick opened it (ticks absent, or the feed was down across the boundary).
+                RollLiveBucket(index, candle.Time, eastern, candle.Open, candle.High, candle.Low, candle.Close, out isHourlyNewDayFirstBucket);
+            }
+            else if (index == currentBucketIndex)
+            {
+                ReconcileLiveBucketWithBar(candle, eastern);
             }
             else
             {
-                _liveBucket.High  = Math.Max(_liveBucket.High, candle.High);
-                _liveBucket.Low   = Math.Min(_liveBucket.Low, candle.Low);
-                _liveBucket.Close = candle.Close;
+                // A bar of a bucket that a tick has ALREADY closed (the last minute of a candle is
+                // delivered after the boundary): fold its official High/Low/Close into that closed candle.
+                ReconcileClosedBucketWithBar(candle, index);
+                return; // an old bar says nothing about the candle now forming
             }
         }
 
@@ -3757,7 +3836,7 @@ public class ChartPanel : Panel
             }
         }
         FeedBbMomentum(price, utcTime); // panel 2 only, ticks only
-        UpdateLivePriceFromExternalSource(price, utcTime);
+        UpdateLivePriceFromExternalSource(price, utcTime, decidesBucket: true);
     }
 
     // Every ~6s options-chain poll cycle also carries a fresh SpotPrice (Form1's own REST polling,
@@ -3771,7 +3850,7 @@ public class ChartPanel : Panel
     // from it, it just makes the live price shown track more recent data than waiting for the
     // next full CHART_EQUITY bar. Shared by both possible sources (LEVEL_ONE_EQUITIES ticks and
     // Form1's options-chain polling) so there's exactly one place this logic lives.
-    private void UpdateLivePriceFromExternalSource(decimal price, DateTime utcTime)
+    private void UpdateLivePriceFromExternalSource(decimal price, DateTime utcTime, bool decidesBucket = false)
     {
         if (_closing || !IsHandleCreated) return;
         RestoreHeaderIfWasDisconnected();
@@ -3809,8 +3888,16 @@ public class ChartPanel : Panel
             {
                 _liveAnchor      = eastern.Date.AddHours(9).AddMinutes(30);
                 _liveBucketIndex = CandleAggregation.BucketIndex(utcTime, _liveAnchor, _intervalMinutes);
-                _liveBucket      = new CandleData { Time = utcTime, Open = price, High = price, Low = price, Close = price };
+                _liveBucket      = new CandleData { Time = LiveBucketStartUtc(_liveBucketIndex ?? 0, utcTime), Open = price, High = price, Low = price, Close = price };
                 var freshBucket  = _liveBucket;
+                if (decidesBucket)
+                {
+                    // The tick is the first event of the day (a Level 1 tick now beats the bar here):
+                    // do what the bar path's day reset does, with the tick price as the open.
+                    _pmCrossLastSide = null;
+                    _pmCrossLastFiredAt = null;
+                    FinalizePreMarketLineAtOpen(price, eastern);
+                }
                 BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                 return;
             }
@@ -3824,17 +3911,36 @@ public class ChartPanel : Panel
                 var start        = CandleAggregation.HourlyRthBucketStartUtc(utcTime);
                 _liveBucket      = new CandleData { Time = start, Open = price, High = price, Low = price, Close = price };
                 var freshBucket  = _liveBucket;
+                if (decidesBucket)
+                {
+                    ValidatePisoTechoAgainstOpen(price);
+                    FinalizePreMarketLineAtOpen(price, eastern);
+                }
                 BeginInvoke(async () => await RunScriptAsync("resetToNewDayCandle", freshBucket));
                 return;
             }
         }
+
+        var hourlyNewDayFirstBucket = false;
+        if (decidesBucket && _liveBucketIndex is { } currentIndex && !(_rthOnly && eastern.TimeOfDay >= new TimeSpan(16, 0, 0)))
+        {
+            var tickIndex = _mode == ChartPanelMode.Hourly15
+                ? CandleAggregation.HourlyRthBucketKey(utcTime)
+                : CandleAggregation.BucketIndex(utcTime, _liveAnchor, _intervalMinutes);
+            if (tickIndex > currentIndex)
+                RollLiveBucket(tickIndex, utcTime, eastern, price, price, price, price, out hourlyNewDayFirstBucket);
+            else if (tickIndex < currentIndex)
+                return; // late tick of a candle that is already closed — its bar reconciles it
+        }
+        if (utcTime > _lastTickUtc) _lastTickUtc = utcTime;
 
         _liveBucket.High  = Math.Max(_liveBucket.High, price);
         _liveBucket.Low   = Math.Min(_liveBucket.Low, price);
         _liveBucket.Close = price;
 
         var toSend = _liveBucket;
-        BeginInvoke(async () => await RunScriptAsync("updateLastCandle", toSend));
+        var liveJs = hourlyNewDayFirstBucket ? "resetToNewDayCandle" : "updateLastCandle";
+        BeginInvoke(async () => await RunScriptAsync(liveJs, toSend));
 
         if (_mode == ChartPanelMode.Fifteen_RTH)
         {
