@@ -3956,7 +3956,15 @@ public partial class Form1 : Form
         var tBidStr       = row.Cells["colTradeTBid"].Value?.ToString() ?? string.Empty;
         decimal.TryParse(cBid, out var cBidParsed);
         decimal? targetClosePrice = closeType == "TARGET" && decimal.TryParse(tBidStr, out var tBidParsed) ? tBidParsed : null;
-        var exitBid = exitPriceOverride ?? realClosePrice ?? targetClosePrice ?? cBidParsed;
+        // Overnight trade whose target is already beaten by the gap at the next day's open: a resting
+        // LIMIT sell fills at the book's bid, not at its own (lower) limit — so book the better of the
+        // two. Only in the first minute of the session after the day the trade was opened; anywhere
+        // else the target price stays the exit (the order fills as the bid first crosses it).
+        // Seen live: AAPL CALL 345 held from 15-oct, target 1.30, bid 2.01 at the 16-oct 9:30 open.
+        if (targetClosePrice.HasValue && tag != null && tag.EntryTime.Date < now.Date &&
+            now.TimeOfDay >= new TimeSpan(9, 30, 0) && now.TimeOfDay < new TimeSpan(9, 31, 0))
+            targetClosePrice = Math.Max(targetClosePrice.Value, cBidParsed);
+        var exitBid =exitPriceOverride ?? realClosePrice ?? targetClosePrice ?? cBidParsed;
         decimal.TryParse(entryPriceStr, out var entryPrice);
         decimal.TryParse(contractsStr, out var contractsForPnl);
         var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);
