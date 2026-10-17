@@ -252,6 +252,16 @@ public class SimulatedChartPanel : Panel
         return new Bitmap(decoded); // independent copy — a Bitmap decoded from a stream needs that stream alive
     }
 
+    // Bottom-right "HH:mm:ss    price" overlay, same one the live Charts tab shows (chart.html
+    // setLastTickTime). Skips identical text so a render that changes nothing doesn't repaint.
+    private string _lastTickText = string.Empty;
+    public void SetLastTickTime(string text)
+    {
+        if (text == _lastTickText || _webView.CoreWebView2 == null) return;
+        _lastTickText = text;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync($"setLastTickTime('{text}');");
+    }
+
     public async Task MarkStrikeAsync(decimal strike)
     {
         if (_webView.CoreWebView2 == null) return;

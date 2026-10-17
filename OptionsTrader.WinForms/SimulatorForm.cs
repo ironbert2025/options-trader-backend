@@ -23,23 +23,11 @@ public class SimulatorForm : Form
     // Second pair of ◀/▶, independent of the grid-driven ones above — per explicit request, these
     // step the candle-clock (see StepTick) one raw tick at a time, with the options grid following
     // along to whichever step is closest to that tick's own time.
-    // Directly below the "Vela: HH:mm:ss" label (_lblTickClock at (590,234), size (180,20)).
+    // Below the DZ/SZ button row.
     private readonly Button _btnTickAtras    = new() { Text = "◀ Vela", Location = new Point(590, 256), Size = new Size(70, 26), Enabled = false };
     private readonly Button _btnTickAdelante = new() { Text = "Vela ▶", Location = new Point(664, 256), Size = new Size(70, 26), Enabled = false };
     private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
-
-    // Shows the actual tick time currently rendered on the charts — per explicit request, so the
-    // independent Real Time candle clock (_tickPlayTimer) is visibly moving even though it isn't
-    // tied to the options grid's own (coarser) step advance, which otherwise looks like nothing is
-    // happening between grid updates. Updated by both the normal step-driven render and the
-    // Real Time tick clock (see RenderChartsUpToTime), so it's accurate outside Real Time too.
-    // Directly below the DZ/SZ button (_pnlDzSz at (590,202), size (440,30) -> bottom=232).
-    private readonly Label _lblTickClock = new()
-    {
-        Location = new Point(590, 234), Size = new Size(180, 20),
-        Font = new Font("Segoe UI", 9F, FontStyle.Bold), ForeColor = Color.Orange
-    };
 
     // "Play" auto-advances through _steps at the selected cadence, same effect as clicking ▶
     // repeatedly (each tick goes through RenderCurrentStep — PnL, Min/Max, auto-close, chart/grid
@@ -218,7 +206,6 @@ public class SimulatorForm : Form
         Controls.Add(_btnTickAdelante);
         Controls.Add(_btnPlus1Min);
         Controls.Add(_lblStep);
-        Controls.Add(_lblTickClock);
         Controls.Add(_dgvChain);
         Controls.Add(_grpCounts);
         Controls.Add(_grpContracts);
@@ -2037,9 +2024,13 @@ public class SimulatorForm : Form
     // (_tickPlayTimer) can push chart updates without touching the options grid/PnL at all.
     private void RenderChartsUpToTime(DateTime uptoUtc)
     {
-        _lblTickClock.Text = $"Vela: {EasternTime(uptoUtc):HH:mm:ss}";
         _lastChartClockUtc = uptoUtc;
         var targetIdx = LastIntradayIndexAtOrBefore(uptoUtc);
+
+        // Time of the tick clock and the price of the last tick, bottom-right of panel 2 — same overlay
+        // and format as the live Charts tab. Replaces the "Vela: HH:mm:ss" label that sat above the ◀/▶ Vela buttons.
+        if (targetIdx >= 0)
+            _rthChart.SetLastTickTime($"{EasternTime(uptoUtc):HH:mm:ss}    {_intradayCandles[targetIdx].Close:F2}");
         TrackPriceActionClock(uptoUtc, targetIdx);
         AdvanceBbDetector(targetIdx);
 
