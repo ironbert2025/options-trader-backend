@@ -71,6 +71,7 @@ public partial class Form1 : Form
     private CandleHubServer? _candleHubServer;
     private CandleHubClient? _candleHubClient;
     private SchwabStreamerClient? _historyClient;
+    private List<FuturesCandleHubFeed> _futuresFeeds = new(); // 15m candles of each futures symbol, served to hub clients
     private ICandleFeed? _liveFeed;
     private readonly Dictionary<string, MultiChartForm> _liveChartForms = new();
 
@@ -1685,6 +1686,7 @@ public partial class Form1 : Form
             var fromDate  = DateOnly.FromDateTime(MarketHours.NowEst);
             var strikeCount = GetStrikeCountFor(_selectedTicker.Symbol);
             var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate, strikeCount)).ToList();
+            _hubTokenWaitCycles = 0; // got data — any earlier wait for the hub's token is over
 
             var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();
             var allQuotesNext = fullChain.Where(q => q.ExpirationDate == nextExpDate).ToList();
@@ -1765,6 +1767,25 @@ public partial class Form1 : Form
             await Task.Delay(60000);
             if (_isPolling) _pollingTimer?.Start();
         }
+        catch (HubTokenNotRenewedException ex)
+        {
+            // The hub hasn't written a renewed token yet (it renews on its own schedule — a gap of a
+            // minute or two happened live and used to kill the polling of every non-hub instance for
+            // the rest of the day). Keep polling: pause the timer, show it, and try again shortly.
+            // Gives up (the old behaviour: stop + log) only after ~15 minutes of continuous waiting.
+            _hubTokenWaitCycles++;
+            if (_hubTokenWaitCycles == 1) LogPollingException(ex, stopped: false);
+            if (_hubTokenWaitCycles > MaxHubTokenWaitCycles)
+            {
+                StopPolling();
+                LogPollingException(ex);
+                return;
+            }
+            _pollingTimer?.Stop();
+            lblLastUpdate.Text = "Esperando el token del hub...";
+            await Task.Delay(5000);
+            if (_isPolling) _pollingTimer?.Start();
+        }
         catch (Exception ex)
         {
             StopPolling();
@@ -1777,14 +1798,22 @@ public partial class Form1 : Form
         }
     }
 
+    // Consecutive polling cycles that ended waiting for the hub's token (each ~15 s: the 10 s wait in
+    // GetAccessTokenAsync + the 5 s pause above); 60 of them is ~15 minutes.
+    private int _hubTokenWaitCycles;
+    private const int MaxHubTokenWaitCycles = 60;
+
     private static readonly string PollingExceptionLogPath = @"C:\OptionsData\EventLog\polling_exceptions.log";
     private static readonly object PollingExceptionLogLock = new();
 
-    private void LogPollingException(Exception ex)
+    private void LogPollingException(Exception ex, bool stopped = true)
     {
         try
         {
-            LogLine($"{DateTime.Now:HH:mm:ss} [Polling] Stopped due to error: {ex.Message}", Color.Red);
+            LogLine(stopped
+                ? $"{DateTime.Now:HH:mm:ss} [Polling] Stopped due to error: {ex.Message}"
+                : $"{DateTime.Now:HH:mm:ss} [Polling] Waiting for the hub's token (will keep retrying): {ex.Message}",
+                stopped ? Color.Red : Color.Orange);
             Directory.CreateDirectory(Path.GetDirectoryName(PollingExceptionLogPath)!);
             lock (PollingExceptionLogLock)
             {
@@ -1817,6 +1846,9 @@ public partial class Form1 : Form
         {
             e.CellStyle.ForeColor = Color.Red;
             e.CellStyle.Font = new Font(dgvQuotes.Font, FontStyle.Bold);
+            // Value above 5 (a real spread above $0.05, see FormatSprd) → light-red background too.
+            if (decimal.TryParse(e.Value?.ToString(), out var sprdValue) && sprdValue > 5m)
+                e.CellStyle.BackColor = Color.FromArgb(255, 200, 200);
         }
 
         // Ask columns: bold + dark green
@@ -3447,7 +3479,7 @@ public partial class Form1 : Form
             // open (9:30 ET) onward, per explicit request, matching the same gate applied at the
             // hub's own SchwabStreamerClient.HandleMessage save calls.
             remoteHubClient.OnNewCandle    += (symbol, candle) => { if (IsAtOrAfterMarketOpen(candle.Time)) TickPriceStore.Append(symbol, candle.Time, candle.Close); };
-            remoteHubClient.OnLevelOneTick += (symbol, price, time) => { if (IsAtOrAfterMarketOpen(time)) LevelOneTickStore.Append(symbol, time, price); };
+            remoteHubClient.OnLevelOneTick += (symbol, price, time) => { if (SchwabFuturesSymbols.IsFutures(symbol) || IsAtOrAfterMarketOpen(time)) LevelOneTickStore.Append(symbol, time, price); };
 
             await remoteHubClient.ConnectAsync(LiveHubPort, remoteHost);
 
@@ -3470,6 +3502,8 @@ public partial class Form1 : Form
             await reconnectedStreamer.ConnectAsync();
             await reconnectedStreamer.SubscribeChartEquity(symbols);
             await reconnectedStreamer.SubscribeLevelOneEquity(symbols);
+            await reconnectedStreamer.SubscribeLevelOneFutures(SchwabFuturesSymbols.Symbols);
+            _futuresFeeds = await FuturesCandleHubFeed.StartAllAsync(reconnectedStreamer, _candleHubServer);
             reconnectedStreamer.OnNewCandle    += (symbol, candle) => _candleHubServer.Broadcast(symbol, candle);
             reconnectedStreamer.OnLevelOneTick += (symbol, price, time) => _candleHubServer.BroadcastLevelOne(symbol, price, time);
 
@@ -3499,6 +3533,10 @@ public partial class Form1 : Form
             // "LEVELONE_EQUITIES", confirmed against a working third-party SDK). Watch ws_raw.log
             // on first use after this change to confirm the ADD actually succeeds this time.
             await streamer.SubscribeLevelOneEquity(symbols);
+            // Micro E-mini S&P futures (hardcoded, see SchwabFuturesSymbols) — only this instance,
+            // the one that owns the Schwab connection, asks for them; the hub relays the ticks.
+            await streamer.SubscribeLevelOneFutures(SchwabFuturesSymbols.Symbols);
+            _futuresFeeds = await FuturesCandleHubFeed.StartAllAsync(streamer, hubServer);
             streamer.OnNewCandle += (symbol, candle) => hubServer.Broadcast(symbol, candle);
             streamer.OnLevelOneTick += (symbol, price, time) => hubServer.BroadcastLevelOne(symbol, price, time);
 
@@ -3918,7 +3956,15 @@ public partial class Form1 : Form
         var tBidStr       = row.Cells["colTradeTBid"].Value?.ToString() ?? string.Empty;
         decimal.TryParse(cBid, out var cBidParsed);
         decimal? targetClosePrice = closeType == "TARGET" && decimal.TryParse(tBidStr, out var tBidParsed) ? tBidParsed : null;
-        var exitBid = exitPriceOverride ?? realClosePrice ?? targetClosePrice ?? cBidParsed;
+        // Overnight trade whose target is already beaten by the gap at the next day's open: a resting
+        // LIMIT sell fills at the book's bid, not at its own (lower) limit — so book the better of the
+        // two. Only in the first minute of the session after the day the trade was opened; anywhere
+        // else the target price stays the exit (the order fills as the bid first crosses it).
+        // Seen live: AAPL CALL 345 held from 15-oct, target 1.30, bid 2.01 at the 16-oct 9:30 open.
+        if (targetClosePrice.HasValue && tag != null && tag.EntryTime.Date < now.Date &&
+            now.TimeOfDay >= new TimeSpan(9, 30, 0) && now.TimeOfDay < new TimeSpan(9, 31, 0))
+            targetClosePrice = Math.Max(targetClosePrice.Value, cBidParsed);
+        var exitBid =exitPriceOverride ?? realClosePrice ?? targetClosePrice ?? cBidParsed;
         decimal.TryParse(entryPriceStr, out var entryPrice);
         decimal.TryParse(contractsStr, out var contractsForPnl);
         var pnlVal    = Math.Round((exitBid - entryPrice) * contractsForPnl * 100, 2);

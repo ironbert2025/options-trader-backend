@@ -9,4 +9,7 @@ public class CandleData
     public decimal High { get; set; }
     public decimal Low { get; set; }
     public decimal Close { get; set; }
+
+    // Only filled where the source provides it (pricehistory REST); 0 otherwise.
+    public long Volume { get; set; }
 }
