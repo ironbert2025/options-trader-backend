@@ -1165,7 +1165,12 @@ public class SimulatorForm : Form
         var (text, color) = BbMomentumText.For(ev);
         var message = prefix + text;
         LogSimEvent(message, new List<(string Text, Color? Color)> { (message, color), (Environment.NewLine, null) }, ev.TimeUtc);
-        if (recordPriceAction) RecordPriceActionEvent(ev, text); // never from the quick scan: no chart playing there
+        // WORKAROUND (disabled on purpose): the Bollinger momentum events (Validación / Toque) used to be
+        // recorded in the RTH_PriceAction note as indented entries with their own screenshot. Only the
+        // 15-minute candle-close images are kept for now. To bring the indented entries back, uncomment the
+        // line below (the Simulator has its twin in SimulatorForm.LogBbEvent); the writer, the queue and
+        // RecordPriceActionEvent are untouched.
+        // if (recordPriceAction) RecordPriceActionEvent(ev, text); // never from the quick scan: no chart playing there
     }
 
     // Walks the WHOLE day's RTH ticks instantly with a fresh detector (independent of the play clock,

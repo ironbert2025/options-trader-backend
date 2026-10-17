@@ -1281,7 +1281,12 @@ public class TwoPanelChartsControl : UserControl
                 if (IsDisposed) return;
                 var (text, color) = BbMomentumText.For(ev);
                 AddLog2Bb(ev.TimeUtc, text, color);
-                RecordPriceActionEvent(ev, text);
+                // WORKAROUND (disabled on purpose): the Bollinger momentum events (Validación / Toque) used to be
+                // recorded in the RTH_PriceAction note as indented entries with their own screenshot. Only the
+                // 15-minute candle-close images are kept for now. To bring the indented entries back, uncomment the
+                // line below (the Simulator has its twin in SimulatorForm.LogBbEvent); the writer, the queue and
+                // RecordPriceActionEvent are untouched.
+                // RecordPriceActionEvent(ev, text);
             };
             // 15m candle closes (from the same Level 1 ticks) -> RTH Price Action screenshots. The first
             // control opened for this symbol is the one that records.
