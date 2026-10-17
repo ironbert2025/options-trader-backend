@@ -77,6 +77,10 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     // to one service without the other.
     private readonly HashSet<string> _levelOneSymbols = new();
 
+    // Futures contracts (LEVELONE_FUTURES) — a separate service with its own field numbering, so
+    // tracked separately for the reconnect re-ADD too.
+    private readonly HashSet<string> _futuresSymbols = new();
+
     // Fires once per candle update the streamer sends (Schwab's CHART_EQUITY service pushes a
     // new/updated 1-minute candle per subscribed symbol — one connection can carry several
     // symbols at once, so the symbol is included for the caller to route on).
@@ -242,6 +246,41 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
         return candles;
     }
 
+    // Candles of any minute frequency (1, 5, 10, 15, 30) for an explicit time window — used for the
+    // futures history (extended hours always included, volume filled), where the day-count based
+    // GetHistoricalCandlesAsync above doesn't fit. Works for futures keys ("/MESZ26", confirmed).
+    public async Task<List<CandleData>> GetCandlesAsync(string symbol, int frequencyMinutes,
+        DateTimeOffset start, DateTimeOffset end, CancellationToken ct = default)
+    {
+        var token = await GetTokenAsync();
+        var url = $"{PriceHistoryUrl}?symbol={Uri.EscapeDataString(symbol)}&periodType=day&frequencyType=minute" +
+                  $"&frequency={frequencyMinutes}&startDate={start.ToUnixTimeMilliseconds()}" +
+                  $"&endDate={end.ToUnixTimeMilliseconds()}&needExtendedHoursData=true";
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+        var response = await _httpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+
+        var root = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct)).RootElement;
+        var candles = new List<CandleData>();
+        if (!root.TryGetProperty("candles", out var candlesArray)) return candles;
+
+        foreach (var c in candlesArray.EnumerateArray())
+        {
+            candles.Add(new CandleData
+            {
+                Open   = c.GetProperty("open").GetDecimal(),
+                High   = c.GetProperty("high").GetDecimal(),
+                Low    = c.GetProperty("low").GetDecimal(),
+                Close  = c.GetProperty("close").GetDecimal(),
+                Volume = c.TryGetProperty("volume", out var v) && v.TryGetInt64(out var vol) ? vol : 0,
+                Time   = DateTimeOffset.FromUnixTimeMilliseconds(c.GetProperty("datetime").GetInt64()).UtcDateTime
+            });
+        }
+        return candles;
+    }
+
     // Walks back `tradingDays` weekdays (Mon-Fri) from `from`, so the resulting range always
     // covers that many actual trading sessions regardless of how many weekend days it spans.
     private static DateTimeOffset ComputeStartDate(DateTimeOffset from, int tradingDays)
@@ -375,6 +414,38 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
     public Task SubscribeLevelOneEquity(string symbol, CancellationToken ct = default) =>
         SubscribeLevelOneEquity(new[] { symbol }, ct);
 
+    // Real-time futures quotes (LEVELONE_FUTURES), e.g. "/MESZ26". ADD, not SUBS — SUBS would
+    // replace whatever this service already carries. Field numbers are NOT the equities ones:
+    // 0=symbol 1=bid 2=ask 3=last 10=quote time 11=trade time (ms epoch) 12=high 13=low 14=close
+    // 18=open 24=mark (35 is the expiration date here, unlike equities where it is the trade time).
+    // Updates are deltas — a message only carries the fields that changed.
+    public Task SubscribeLevelOneFutures(IEnumerable<string> symbols, CancellationToken ct = default)
+    {
+        var symbolList = symbols.ToList();
+        foreach (var s in symbolList) _futuresSymbols.Add(s);
+
+        var payload = new
+        {
+            requests = new[]
+            {
+                new
+                {
+                    service   = "LEVELONE_FUTURES",
+                    command   = "ADD",
+                    requestid = NextRequestId(),
+                    SchwabClientCustomerId = _schwabClientCustomerId,
+                    SchwabClientCorrelId   = _schwabClientCorrelId,
+                    parameters = new
+                    {
+                        keys   = string.Join(",", symbolList),
+                        fields = "0,1,2,3,10,11,12,13,14,18,24"
+                    }
+                }
+            }
+        };
+        return SendAsync(payload, ct);
+    }
+
     private int NextRequestId() => Interlocked.Increment(ref _requestId);
 
     private async Task SendAsync(object payload, CancellationToken ct)
@@ -459,6 +530,18 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
             {
                 foreach (var entry in responseArray.EnumerateArray())
                 {
+                    // A rejected futures ADD (wrong key format, no futures entitlement...) is surfaced
+                    // on the status line instead of vanishing — the ack is otherwise ignored.
+                    if (entry.TryGetProperty("service", out var futSvc) && futSvc.GetString() == "LEVELONE_FUTURES"
+                        && entry.TryGetProperty("content", out var futContent)
+                        && futContent.TryGetProperty("code", out var futCode) && futCode.TryGetInt32(out var futCodeValue)
+                        && futCodeValue != 0)
+                    {
+                        var futMsg = futContent.TryGetProperty("msg", out var futMsgEl) ? futMsgEl.GetString() : null;
+                        OnWsStatusEvent?.Invoke($"Futures subscription rejected ({futCodeValue}): {futMsg}");
+                        continue;
+                    }
+
                     if (!entry.TryGetProperty("service", out var svc) || svc.GetString() != "ADMIN") continue;
                     if (!entry.TryGetProperty("command", out var cmd) || cmd.GetString() != "LOGIN") continue;
 
@@ -530,6 +613,28 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                             LevelOneTickStore.Append(symbol, tradeTime, lastPrice);
                         if (lastPrice > 0)
                             RaiseOnLevelOneTick(symbol, lastPrice, tradeTime);
+                    }
+                }
+                else if (serviceName == "LEVELONE_FUTURES")
+                {
+                    foreach (var item in content.EnumerateArray())
+                    {
+                        var symbol = item.TryGetProperty("key", out var keyEl) ? keyEl.GetString() : null;
+                        if (string.IsNullOrEmpty(symbol)) continue;
+
+                        // Delta updates: a message without field 3 is a bid/ask/size change, not a trade.
+                        var lastPrice = GetDecimal(item, "3");
+                        if (lastPrice <= 0) continue;
+
+                        // 11 = trade time, 10 = quote time (fallback), both ms since epoch.
+                        var tradeTime = item.TryGetProperty("11", out var tt) && tt.TryGetInt64(out var tradeMs) ? DateTimeOffset.FromUnixTimeMilliseconds(tradeMs).UtcDateTime
+                                      : item.TryGetProperty("10", out var qt) && qt.TryGetInt64(out var quoteMs) ? DateTimeOffset.FromUnixTimeMilliseconds(quoteMs).UtcDateTime
+                                      : DateTime.UtcNow;
+
+                        // No IsAtOrAfterMarketOpen gate: futures trade nearly 24 h and the overnight
+                        // session is the point of having them.
+                        LevelOneTickStore.Append(symbol, tradeTime, lastPrice);
+                        RaiseOnLevelOneTick(symbol, lastPrice, tradeTime);
                     }
                 }
             }
@@ -648,6 +753,8 @@ public class SchwabStreamerClient : ICandleFeed, IAsyncDisposable
                     await SubscribeChartEquity(_subscribedSymbols.ToList());
                 if (_levelOneSymbols.Count > 0)
                     await SubscribeLevelOneEquity(_levelOneSymbols.ToList());
+                if (_futuresSymbols.Count > 0)
+                    await SubscribeLevelOneFutures(_futuresSymbols.ToList());
                 _reconnectAttempt = 0;
                 return;
             }

@@ -51,6 +51,11 @@ internal static class SimulationDataLoader
         return Array.Empty<string>();
     }
 
+    // True when this symbol/day has a Level 1 tick file — the Bollinger momentum detection needs real
+    // tick-resolution prices to form the 15m candle (the TickPriceStore fallback is 1-minute bars).
+    public static bool HasLevelOneTicks(string symbol, DateOnly date) =>
+        File.Exists(Path.Combine(TicksLevelOneFolder, symbol, $"{symbol}_L1Ticks_{date:yyyyMMdd}.csv"));
+
     // Days that actually have recorded options-chain data for this symbol, newest first — used
     // to limit the simulator's date picker to dates that can actually be replayed.
     public static List<DateOnly> GetAvailableDates(string symbol)

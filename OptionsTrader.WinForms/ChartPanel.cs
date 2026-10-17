@@ -192,6 +192,100 @@ public class ChartPanel : Panel
     // TwoPanelChartsControl into Form1.LogLine.
     public event Action<string>? OnWickTriggerEvent;
 
+    // Fires ONCE, the moment the arrow pair arms the wick analysis (the "Trigger Call/Put" watch) —
+    // the host uses it to default the ΔSpot textbox to 1 so the estimate can be computed right away.
+    public event Action? OnWickAnalysisArmedEvent;
+
+    // ==================================================================================
+    // Bollinger momentum (panel 2 / Fifteen_RTH only) — the live port of what the Simulator's
+    // "Validación / Toque" detection does; see BollingerMomentumDetector for the rule. Fed ONLY by the
+    // Level 1 ticks (Streamer_OnLevelOneTick: ordered, with their own trade time — the 6 s polling
+    // feed and the 1 min CHART_EQUITY bars are not ticks). One detector lives for the whole process
+    // and carries across days (it resets its per-session state itself). Re-arm policy and the 5 s
+    // "moving" window are fixed (NextCandle / default), no selector in the live app. Events reach
+    // the UI thread through OnBbMomentumEvent (the ticks arrive on the feed's own thread).
+    // ==================================================================================
+    internal event Action<BbMomentumEvent>? OnBbMomentumEvent;
+    private BollingerMomentumDetector? _bbMomentum;
+
+    // Fires (closed bucket 0..25, the tick's UTC time) when a Level 1 tick shows a 15m RTH candle just
+    // closed — i.e. the first tick of the next bucket (bucket 26 = the first tick from 16:00 on, which
+    // closes the 15:45 candle). Drives the live RTH Price Action screenshots. A tick far from the boundary
+    // (a long gap with no ticks) still reports it; the host decides whether it is too late to image.
+    internal event Action<int, DateTime>? OnRthCandleClosedEvent;
+    private int _lastRthBucket = -2;           // -2 = no tick yet; -1 premarket; 0..25 RTH; 26 from 16:00
+    private DateOnly _lastRthBucketDay;
+
+    private void TrackRthCandleClose(DateTime utcTime)
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        var tod = eastern.TimeOfDay;
+        var bucket = tod < new TimeSpan(9, 30, 0) ? -1
+                   : tod >= new TimeSpan(16, 0, 0) ? 26
+                   : (int)Math.Floor((tod - new TimeSpan(9, 30, 0)).TotalMinutes / 15.0);
+
+        var day = DateOnly.FromDateTime(eastern);
+        if (day != _lastRthBucketDay) { _lastRthBucketDay = day; _lastRthBucket = bucket; return; } // new session / first tick ever
+        if (bucket <= _lastRthBucket) return;                                                    // same bucket (or an out-of-order tick)
+
+        var previous = _lastRthBucket;
+        _lastRthBucket = bucket;
+        if (previous < 0 || _closing || !IsHandleCreated) return;                               // premarket closes nothing
+        for (var k = previous; k <= Math.Min(bucket - 1, 25); k++)
+        {
+            var closed = k;
+            BeginInvoke(() => OnRthCandleClosedEvent?.Invoke(closed, utcTime));
+        }
+    }
+
+    private void FeedBbMomentum(decimal price, DateTime utcTime)
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay >= new TimeSpan(16, 0, 0)) return;
+
+        if (_bbMomentum == null)
+        {
+            var seed = BuildBbMomentumSeed(eastern);
+            if (seed == null) return; // history not loaded yet (or too short) — try again on the next tick
+            _bbMomentum = new BollingerMomentumDetector(seed, BbRearmPolicy.NextCandle, BollingerMomentumDetector.DefaultMovingWindow);
+        }
+
+        var events = _bbMomentum.OnTick(utcTime, price);
+        if (events.Count == 0 || _closing || !IsHandleCreated) return;
+        foreach (var ev in events)
+        {
+            var e = ev;
+            BeginInvoke(() => OnBbMomentumEvent?.Invoke(e));
+        }
+    }
+
+    // Closes of the already-COMPLETED 15m RTH candles at this moment: every candle of earlier days plus
+    // today's whose bucket is before the one now forming. _closedCandles can also hold the candle still
+    // forming (the history load seeds the live bucket with the last historical bar) and, after a bucket
+    // change, the same candle twice — both are filtered/deduped here. Needs 20 for a first band value.
+    private List<decimal>? BuildBbMomentumSeed(DateTime easternNow)
+    {
+        List<CandleData> snapshot;
+        try { snapshot = _closedCandles.ToList(); }
+        catch { return null; } // history load mutating the list right now — next tick
+
+        static int BucketOf(TimeSpan tod) => (int)Math.Floor((tod - new TimeSpan(9, 30, 0)).TotalMinutes / 15.0);
+        var currentBucket = BucketOf(easternNow.TimeOfDay);
+
+        var closes = snapshot
+            .Select(c => (Candle: c, Eastern: TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone)))
+            .Where(x => x.Eastern.Date < easternNow.Date
+                        || (x.Eastern.Date == easternNow.Date && x.Eastern.TimeOfDay >= new TimeSpan(9, 30, 0) && BucketOf(x.Eastern.TimeOfDay) < currentBucket))
+            .GroupBy(x => x.Candle.Time)
+            .Select(g => g.Last().Candle)
+            .OrderBy(c => c.Time)
+            .Select(c => c.Close)
+            .ToList();
+        return closes.Count >= 20 ? closes : null;
+    }
+
     private void HandleDiagonalArrowPlaced(decimal p1, decimal p2, bool red)
     {
         if (_mode != ChartPanelMode.Fifteen_RTH) return;
@@ -204,7 +298,10 @@ public class ChartPanel : Panel
         // arming for the Put scenario) must arm just as well, per explicit request. Only an exact
         // tie (r == g) leaves it unarmed.
         if (!_wickAnalysisArmed && _lastRedArrowSize is { } r && _lastGreenArrowSize is { } g && r != g)
+        {
             _wickAnalysisArmed = true;
+            OnWickAnalysisArmedEvent?.Invoke();
+        }
     }
 
     private void HandleDiagonalArrowDeleted(bool red)
@@ -3387,6 +3484,7 @@ public class ChartPanel : Panel
     private string _lastArrivalShown = "";
     private void ShowWebsocketArrivalTime(decimal price)
     {
+        if (_mode == ChartPanelMode.Hourly15) return; // per explicit request: panel 1 (1h) doesn't show it
         var time = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone).ToString("HH:mm:ss");
         var text = $"{time}    {price:F2}";
         if (text == _lastArrivalShown) return;
@@ -3401,6 +3499,58 @@ public class ChartPanel : Panel
             var core = _webView?.CoreWebView2;
             if (core != null) _ = core.ExecuteScriptAsync($"setLastTickTime('{text}');");
         });
+    }
+
+    // Everything the pre-market price drives on the 1h and 15m RTH panels — the blue line, its
+    // "Expuesto" text, the live Piso/Techo validation, the "BB" widening label and the prev-day
+    // High/Low lines. Fed by BOTH the 1-minute CHART_EQUITY bars (Streamer_OnNewCandle) and the
+    // LEVELONE_EQUITIES ticks (Streamer_OnLevelOneTick): Schwab sends the bars only sporadically
+    // before ~7-8:30 AM (first one of the day: 07:01 / 08:29 / 08:40 on recent days) while ticks
+    // arrive every second, so with bars alone the line stayed missing for the first part of the
+    // morning. Callers have already checked mode and that it is before 9:30 ET.
+    private void ApplyPreMarketPrice(decimal price, DateTime eastern)
+    {
+        if (_closing || !IsHandleCreated) return; // BeginInvoke below needs a live handle
+
+        // Blue premarket line as an extra live validation of Piso/Techo, ahead of the
+        // 9:30 open check — see ValidatePisoTechoAgainstLivePrice.
+        if (_mode == ChartPanelMode.Hourly15) ValidatePisoTechoAgainstLivePrice(price);
+
+        // "BB" next to "PM" — also live during premarket now (previously only evaluated
+        // once RTH ticks started forming today's bucket), so a trader watching premarket
+        // already sees whether the bands are opening before the open, not just after.
+        EvaluateBollingerWideningLabel(price);
+
+        // "Expuesto" text next to the blue premarket line itself — this panel's OWN
+        // Bollinger(20,2) band (not the 3-chart combo check MultiChartForm does elsewhere):
+        // above the line if price already broke the upper band, below it if it broke the
+        // lower one, hidden otherwise.
+        var exposedDir = GetBollingerDirection(price);
+        var exposedArg = exposedDir switch
+        {
+            BollingerDirection.Above => "'above'",
+            BollingerDirection.Below => "'below'",
+            _ => "null"
+        };
+        s_preMarketLineState[$"{_symbol}_{_mode}"] = (DateOnly.FromDateTime(eastern), price, exposedDir);
+
+        BeginInvoke(async () =>
+        {
+            if (_webView.CoreWebView2 == null) return;
+            await _webView.CoreWebView2.ExecuteScriptAsync(
+                $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {exposedArg});");
+
+            // First pre-market tick this session (and only the first — DrawPrevDayHiLoAsync
+            // is itself once-only) is also this panel's first real "current price", so
+            // that's the moment the auto-drawn prev-day High/Low red lines get evaluated —
+            // deferred here instead of at chart-open per explicit request ("que se dibuje
+            // luego que se muestre la línea azul de precio premarket").
+            await DrawPrevDayHiLoAsync(_rawHistory, price);
+        });
+
+        // Only from the 1h panel (fires on every premarket tick, not just the first) —
+        // MultiChartForm re-evaluates the "Expuesto en 3 charts" Bollinger check from here.
+        if (_mode == ChartPanelMode.Hourly15) OnPreMarketPriceUpdated?.Invoke(price);
     }
 
     private void Streamer_OnNewCandle(string symbol, CandleData candle)
@@ -3424,49 +3574,7 @@ public class ChartPanel : Panel
             // 9:30 AM ET hits this branch stops firing for that reason, which is what freezes the
             // line in place with no extra "freeze" logic needed.
             if ((_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15) && eastern.TimeOfDay < new TimeSpan(9, 30, 0))
-            {
-                var price = candle.Close;
-
-                // Blue premarket line as an extra live validation of Piso/Techo, ahead of the
-                // 9:30 open check — see ValidatePisoTechoAgainstLivePrice.
-                if (_mode == ChartPanelMode.Hourly15) ValidatePisoTechoAgainstLivePrice(price);
-
-                // "BB" next to "PM" — also live during premarket now (previously only evaluated
-                // once RTH ticks started forming today's bucket), so a trader watching premarket
-                // already sees whether the bands are opening before the open, not just after.
-                EvaluateBollingerWideningLabel(price);
-
-                // "Expuesto" text next to the blue premarket line itself — this panel's OWN
-                // Bollinger(20,2) band (not the 3-chart combo check MultiChartForm does elsewhere):
-                // above the line if price already broke the upper band, below it if it broke the
-                // lower one, hidden otherwise.
-                var exposedDir = GetBollingerDirection(price);
-                var exposedArg = exposedDir switch
-                {
-                    BollingerDirection.Above => "'above'",
-                    BollingerDirection.Below => "'below'",
-                    _ => "null"
-                };
-                s_preMarketLineState[$"{_symbol}_{_mode}"] = (DateOnly.FromDateTime(eastern), price, exposedDir);
-
-                BeginInvoke(async () =>
-                {
-                    if (_webView.CoreWebView2 == null) return;
-                    await _webView.CoreWebView2.ExecuteScriptAsync(
-                        $"updatePreMarketLine({price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {exposedArg});");
-
-                    // First pre-market tick this session (and only the first — DrawPrevDayHiLoAsync
-                    // is itself once-only) is also this panel's first real "current price", so
-                    // that's the moment the auto-drawn prev-day High/Low red lines get evaluated —
-                    // deferred here instead of at chart-open per explicit request ("que se dibuje
-                    // luego que se muestre la línea azul de precio premarket").
-                    await DrawPrevDayHiLoAsync(_rawHistory, price);
-                });
-
-                // Only from the 1h panel (fires on every premarket tick, not just the first) —
-                // MultiChartForm re-evaluates the "Expuesto en 3 charts" Bollinger check from here.
-                if (_mode == ChartPanelMode.Hourly15) OnPreMarketPriceUpdated?.Invoke(price);
-            }
+                ApplyPreMarketPrice(candle.Close, eastern);
             return; // outside this panel's session — ignore the tick entirely
         }
 
@@ -3630,10 +3738,25 @@ public class ChartPanel : Panel
     // full minute for the next CHART_EQUITY bar. ShowWebsocketArrivalTime here (not just in
     // Streamer_OnNewCandle) is what makes the bottom-right "last arrival" label track this
     // higher-frequency feed once it's flowing, per explicit request.
+    private decimal _lastPreMarketTickPrice;
+
     private void Streamer_OnLevelOneTick(string symbol, decimal price, DateTime utcTime)
     {
         if (symbol != _symbol) return;
         ShowWebsocketArrivalTime(price);
+        TrackRthCandleClose(utcTime);   // panel 2 only, ticks only
+        // Pre-market tick on the 1h / 15m RTH panels: feeds the blue line etc. (see ApplyPreMarketPrice).
+        // Only when the price changed — ticks come every second, most repeat the last trade.
+        if (_mode == ChartPanelMode.Fifteen_RTH || _mode == ChartPanelMode.Hourly15)
+        {
+            var tickEastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+            if (tickEastern.TimeOfDay < new TimeSpan(9, 30, 0) && price != _lastPreMarketTickPrice)
+            {
+                _lastPreMarketTickPrice = price;
+                ApplyPreMarketPrice(price, tickEastern);
+            }
+        }
+        FeedBbMomentum(price, utcTime); // panel 2 only, ticks only
         UpdateLivePriceFromExternalSource(price, utcTime);
     }
 
