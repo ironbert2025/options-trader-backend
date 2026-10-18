@@ -1267,6 +1267,8 @@ public class ChartPanel : Panel
     // markPisoTechoRefLine/removePisoTechoRefLine in chart.html for the rendering.
     public async Task MarkPisoTechoRefLineAsync(int period, decimal price, long sessionStartFakeEpoch, long sessionEndFakeEpoch)
     {
+        // "Piso" or "Techo" — the title of this line in the candle-detail window
+        var kind = period switch { 20 => s_pisoTechoResult20, 40 => s_pisoTechoResult40, 100 => s_pisoTechoResult100, 200 => s_pisoTechoResult200, _ => null };
         // Temporary diagnostic — chasing a report where this silently never reaches chart.html on
         // ONE panel (confirmed via pisoTechoRefLineAttached staying false in DevTools) while the
         // sibling panel, called from the exact same C# call site, works fine. Safe to remove once
@@ -1279,7 +1281,7 @@ public class ChartPanel : Panel
         try
         {
             var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch}, {sessionEndFakeEpoch});");
+            await _webView.CoreWebView2.ExecuteScriptAsync($"markPisoTechoRefLine({period}, {priceStr}, {sessionStartFakeEpoch}, {sessionEndFakeEpoch}, {JsonSerializer.Serialize(kind)});");
             DebugLog($"MarkPisoTechoRefLineAsync OK: symbol={_symbol} mode={_mode} period={period} price={priceStr}");
         }
         catch (Exception ex)

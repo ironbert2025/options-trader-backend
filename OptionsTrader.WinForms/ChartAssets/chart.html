@@ -4017,10 +4017,10 @@
   // necessarily populated yet (SimulatorForm calls EvaluatePisoTecho before RenderCurrentStep, and
   // both are fire-and-forget into the WebView, so the order isn't guaranteed). Fixed, independently
   // computed timestamps sidestep that race entirely.
-  function markPisoTechoRefLine(period, price, sessionStartTime, sessionEndTime) {
+  function markPisoTechoRefLine(period, price, sessionStartTime, sessionEndTime, kind) {
     if (!pisoTechoRefLineAttached) { candleSeries.attachPrimitive(pisoTechoRefLinePrimitive); pisoTechoRefLineAttached = true; }
     pisoTechoRefLinePrimitive._lines = pisoTechoRefLinePrimitive._lines.filter(l => l.period !== period);
-    pisoTechoRefLinePrimitive._lines.push({ period, time: sessionStartTime, timeEnd: sessionEndTime, price, color: smaColors[period] || '#888888', selected: false });
+    pisoTechoRefLinePrimitive._lines.push({ period, time: sessionStartTime, timeEnd: sessionEndTime, price, color: smaColors[period] || '#888888', kind: kind || null, selected: false });
     forceRepaint();
   }
 
@@ -5350,10 +5350,10 @@
     const lines = [];
     try {
       if (preMarketLinePrimitive._armed && preMarketLinePrimitive._price != null)
-        lines.push({ price: preMarketLinePrimitive._price, color: '#2196f3', width: 2, title: '' });
+        lines.push({ price: preMarketLinePrimitive._price, color: '#2196f3', width: 2, title: 'Open' });
       if (prevDayCloseLinePrimitive._price != null)
-        lines.push({ price: prevDayCloseLinePrimitive._price, color: '#ffeb3b', width: 1, title: 'C' });
-      pisoTechoRefLinePrimitive._lines.forEach(l => lines.push({ price: l.price, color: l.color, width: 2, title: '' }));
+        lines.push({ price: prevDayCloseLinePrimitive._price, color: '#ffeb3b', width: 1, title: 'Close' });
+      pisoTechoRefLinePrimitive._lines.forEach(l => lines.push({ price: l.price, color: l.color, width: 2, title: (l.kind || 'SMA') + ' ' + l.period }));
       // trade open/close rayitas (exact event time, so the detail window can put each on its 1-minute candle)
       entrySpotLinePrimitive._lines.forEach(l => {
         if (l.eventTime != null) lines.push({ kind: 'trade', price: l.price, eventTime: l.eventTime, isClose: !!l.isClose });
@@ -5529,7 +5529,7 @@
 
   // Reference lines copied from the main chart at the moment of the double click (see dblclick above):
   // dashed horizontal lines that start at the FIRST 1-minute candle (minute 1) and run to the right edge —
-  // not across the empty space before it. No axis labels; the previous-day close keeps its "C".
+  // not across the empty space before it. No axis labels; each line has a yellow title under its left end.
   let detailRefLines = []; // [{ price, color, width, title }]
   class DetailRefLinesPrimitive {
     attached() {}
@@ -5558,11 +5558,12 @@
                   ctx.stroke();
                   ctx.setLineDash([]);
                   if (l.title) {
-                    ctx.fillStyle = l.color;
-                    ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
-                    ctx.textAlign = 'right';
-                    ctx.textBaseline = 'bottom';
-                    ctx.fillText(l.title, x2 - 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                    // yellow, at the left end of the line (right where it is born) and just under it
+                    ctx.fillStyle = '#ffeb3b';
+                    ctx.font = `bold ${11 * scope.verticalPixelRatio}px sans-serif`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(l.title, x1 + 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio + 2 * scope.verticalPixelRatio);
                   }
                 });
               });
@@ -5582,16 +5583,28 @@
     forceRepaint();
   }
 
-  function detailApplyView() {
-    if (!detailView) return;
-    detailApplying = true;
+  function detailSetRange() {
     const paneWidth = chart.paneSize().width;
-    // The first candle (logical index 0) sits at 20 % of the plot width; the rest of the candles go to its right.
     const slots = paneWidth / detailView.barSpacing;
     // the first candle sits at a fixed pixel offset from the left edge (or 20 % of the plot if none was given)
     const from = detailView.firstCandlePx != null ? -detailView.firstCandlePx / detailView.barSpacing : -0.2 * slots;
     chart.timeScale().setVisibleLogicalRange({ from, to: from + slots });
-    setTimeout(() => { detailApplying = false; detailRenderIndexLabels(); }, 0);
+  }
+
+  // Applied twice: right away, and again once the chart has finished laying itself out — the first call can
+  // land before the freshly loaded data is in place and be undone by it (seen as a view zoomed far out).
+  function detailApplyView() {
+    if (!detailView) return;
+    detailApplying = true;
+    detailSetRange();
+    // and again a little later: replacing the data with a different number of candles shifts the range once
+    // more after the first re-apply (seen on re-target)
+    setTimeout(() => { if (detailView && !detailView.userMoved) detailSetRange(); detailRenderIndexLabels(); }, 60);
+    setTimeout(() => {
+      if (detailView && !detailView.userMoved) detailSetRange();
+      detailApplying = false;
+      detailRenderIndexLabels();
+    }, 250);
   }
 
   // Replaces the candles; the view is only (re)applied for a new target or while the user has not touched it.
