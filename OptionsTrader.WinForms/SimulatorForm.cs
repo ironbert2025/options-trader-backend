@@ -241,9 +241,9 @@ public class SimulatorForm : Form
         _btnTickAtras.Click    += (s, e) => StepTick(-1);
         _btnTickAdelante.Click += (s, e) => StepTick(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
-        _rthChart.OnCandleDetailRequested += (bucketStartUtc, priceMin, priceMax) =>
+        _rthChart.OnCandleDetailRequested += (bucketStartUtc, priceMin, priceMax, barSpacing) =>
         {
-            if (!IsDisposed) BeginInvoke(() => _ = OpenCandleDetailAsync(bucketStartUtc, priceMin, priceMax));
+            if (!IsDisposed) BeginInvoke(() => _ = OpenCandleDetailAsync(bucketStartUtc, priceMin, priceMax, barSpacing));
         };
         Form1.StyleFirstItmToggle(_btnFirstItmCall, isCall: true, armed: false);
         Form1.StyleFirstItmToggle(_btnFirstItmPut, isCall: false, armed: false);
@@ -2050,7 +2050,7 @@ public class SimulatorForm : Form
     // Double click on a panel-2 candle: the window shows that candle's 1-minute candles up to the replay
     // clock (_lastChartClockUtc). It follows the clock — redrawn from RenderChartsUpToTime — so a candle in
     // formation fills in minute by minute and stops changing once the clock passes its end.
-    private async Task OpenCandleDetailAsync(DateTime bucketStartUtc, double? priceMin, double? priceMax)
+    private async Task OpenCandleDetailAsync(DateTime bucketStartUtc, double? priceMin, double? priceMax, double? barSpacing)
     {
         if (_candleDetail == null || _candleDetail.IsDisposed)
         {
@@ -2062,7 +2062,7 @@ public class SimulatorForm : Form
             await _candleDetail.ShowBucketAsync(bucketStartUtc,
                 (start, end) => MinuteCandleStore.FromTicks(_intradayCandles, start, end, _lastChartClockUtc),
                 start => _lastChartClockUtc < start.AddMinutes(15) ? MinuteBucketState.Forming : MinuteBucketState.Closed,
-                freezeWhenClosed: false, priceMin, priceMax);
+                freezeWhenClosed: false, priceMin, priceMax, barSpacing);
         }
         catch { /* diagnostics window — never disturb the playback */ }
     }

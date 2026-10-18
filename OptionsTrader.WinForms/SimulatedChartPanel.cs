@@ -906,7 +906,7 @@ public class SimulatedChartPanel : Panel
     public event Action<string?, string?>? OnTrendStateChanged;
 
     // Double click on a candle of the 15m RTH chart -> the 15-minute bucket's start (UTC); see SimulatorForm.OpenCandleDetail.
-    public event Action<DateTime, double?, double?>? OnCandleDetailRequested;
+    public event Action<DateTime, double?, double?, double?>? OnCandleDetailRequested;
 
     // Last trend state seen from the page + the header title, for the combined images' header strip
     // (CombinedChartHeader) — this panel's own header shows only the title, the trend words reach the log.
@@ -1127,7 +1127,7 @@ public class SimulatedChartPanel : Panel
             {
                 if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))
                     OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(ChartPanel.UtcFromFakeEpochSeconds(cdSeconds)),
-                        ChartPanel.ReadNullableDouble(root, "priceMin"), ChartPanel.ReadNullableDouble(root, "priceMax"));
+                        ChartPanel.ReadNullableDouble(root, "priceMin"), ChartPanel.ReadNullableDouble(root, "priceMax"), ChartPanel.ReadNullableDouble(root, "barSpacing"));
                 return;
             }
 

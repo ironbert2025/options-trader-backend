@@ -25,7 +25,7 @@ internal sealed class CandleDetailForm : Form
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
     private bool _pendingViewReset = true;
-    private const double CandlesShareOfWidth = 0.8; // 15 candles take this share of the plot width at the initial zoom
+    private const double CandlesShareOfWidth = 0.8; // fallback only: 15 candles take this share of the plot width
     private const double PriceAxisWidthPx = 60;
 
     // panelHeight: the height of the 15m panel it came from, so both charts have the same vertical size.
@@ -63,7 +63,7 @@ internal sealed class CandleDetailForm : Form
     // getState says whether the bucket is still forming. freezeWhenClosed: stop following once it is over
     // (the live case); the Simulator keeps following because its clock can be rewound.
     public async Task ShowBucketAsync(DateTime bucketStartUtc, Func<DateTime, DateTime, List<CandleData>> getMinutes,
-        Func<DateTime, MinuteBucketState> getState, bool freezeWhenClosed, double? priceMin, double? priceMax)
+        Func<DateTime, MinuteBucketState> getState, bool freezeWhenClosed, double? priceMin, double? priceMax, double? parentBarSpacing)
     {
         _bucketStartUtc = bucketStartUtc;
         _getMinutes = getMinutes;
@@ -76,8 +76,11 @@ internal sealed class CandleDetailForm : Form
 
         // New target: lay the view out once — a fixed bar width (15 candles take ~80 % of the plot), the
         // price axis over the same span the 15m chart shows. Redraws then leave the view alone.
+        // Each 1-minute candle gets the SAME width in pixels as the 15-minute candle it belongs to (the
+        // parent chart's bar width at its current zoom). Only without it (unknown) is a width derived from
+        // this window's size.
         var plotWidth = Math.Max(200, _web.Width - PriceAxisWidthPx);
-        var barSpacing = plotWidth * CandlesShareOfWidth / 15.0;
+        var barSpacing = parentBarSpacing is > 0 ? parentBarSpacing.Value : plotWidth * CandlesShareOfWidth / 15.0;
         var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax });
         await _web.CoreWebView2.ExecuteScriptAsync($"configureDetailView({viewJson});");
         _pendingViewReset = true;

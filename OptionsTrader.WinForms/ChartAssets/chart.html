@@ -5338,14 +5338,15 @@
     if (!hit) return;
     // The price range this chart shows right now (top and bottom of the plot area), so the detail window can
     // draw its 1-minute candles over the SAME price span and the two charts line up.
-    let priceMax = null, priceMin = null;
+    let priceMax = null, priceMin = null, barSpacing = null;
     try {
+      barSpacing = chart.timeScale().options().barSpacing; // CSS px per bar at this chart's current zoom
       const paneH = chart.paneSize().height;
       priceMax = candleSeries.coordinateToPrice(0);
       priceMin = candleSeries.coordinateToPrice(paneH);
     } catch (e) { /* range unknown — the window falls back to its own autoscale */ }
     if (window.chrome && window.chrome.webview) {
-      window.chrome.webview.postMessage({ type: 'candle_detail', time: hit.time, priceMin, priceMax });
+      window.chrome.webview.postMessage({ type: 'candle_detail', time: hit.time, priceMin, priceMax, barSpacing });
     }
   });
 

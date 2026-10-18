@@ -195,7 +195,7 @@ public class ChartPanel : Panel
     private readonly MinuteCandleStore _minuteStore = new();
 
     // Fired with the 15-minute bucket's start (UTC) when the user double-clicks one of this panel's candles.
-    internal event Action<DateTime, double?, double?>? OnCandleDetailRequested; // bucket start, price min, price max of this chart's view
+    internal event Action<DateTime, double?, double?, double?>? OnCandleDetailRequested; // bucket start, price min, price max and bar width (px) of this chart's view
 
     // Fired (on the UI thread) when the 1-minute candles changed — a tick or a bar; the window redraws.
     internal event Action? OnMinuteCandlesChanged;
@@ -1585,7 +1585,7 @@ public class ChartPanel : Panel
                 {
                     if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))
                         OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(UtcFromFakeEpochSeconds(cdSeconds)),
-                            ReadNullableDouble(root, "priceMin"), ReadNullableDouble(root, "priceMax"));
+                            ReadNullableDouble(root, "priceMin"), ReadNullableDouble(root, "priceMax"), ReadNullableDouble(root, "barSpacing"));
                     break;
                 }
                 case "trend_state":
