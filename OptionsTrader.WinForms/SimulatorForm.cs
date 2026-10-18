@@ -979,9 +979,8 @@ public class SimulatorForm : Form
         {
             var sessionStart = GetSessionStartFakeEpoch();
             var sessionEnd   = GetSessionEndFakeEpoch();
-            _pisoTechoKinds.TryGetValue(period, out var kind);
-            _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd, kind);
-            _ = _fullChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd, kind);
+            _ = _rthChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
+            _ = _fullChart.MarkPisoTechoRefLineAsync(period, price, sessionStart, sessionEnd);
         };
 
         // "Abriendo la Volatilidad" (15m RTH chart) — armed above when the 1h chart resolves a
@@ -1842,12 +1841,8 @@ public class SimulatorForm : Form
         return SimulatedChartPanel.ToFakeUtcEpochSeconds(sessionEndUtc);
     }
 
-    // Piso or Techo per SMA period, as last decided — titles the reference lines in the candle-detail window.
-    private readonly Dictionary<int, string> _pisoTechoKinds = new();
-
     private async Task ApplyPisoTechoRefLine(List<CandleData> bars, int period, string? result)
     {
-        if (result != null) _pisoTechoKinds[period] = result; else _pisoTechoKinds.Remove(period);
         if (result != null && bars.Count >= period)
         {
             decimal sum = 0;
@@ -1855,8 +1850,8 @@ public class SimulatorForm : Form
             var sma = sum / period;
             var sessionStart = GetSessionStartFakeEpoch();
             var sessionEnd   = GetSessionEndFakeEpoch();
-            await _rthChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart, sessionEnd, result);
-            await _fullChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart, sessionEnd, result);
+            await _rthChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart, sessionEnd);
+            await _fullChart.MarkPisoTechoRefLineAsync(period, sma, sessionStart, sessionEnd);
         }
         else
         {
