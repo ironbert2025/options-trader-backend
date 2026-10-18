@@ -5458,7 +5458,7 @@
               if (self._bucketStart == null || allCandles.length === 0) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
-                ctx.strokeStyle = '#9aa0aa';
+                ctx.strokeStyle = '#1f2530'; // same color and thickness (1 px) as the chart's horizontal gray grid lines
                 ctx.lineWidth = 1 * scope.horizontalPixelRatio;
                 ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
                 self._minutes.forEach(m => {
