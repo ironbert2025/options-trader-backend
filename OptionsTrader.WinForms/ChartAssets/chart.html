@@ -5358,7 +5358,16 @@
   let detailApplying = false;
 
   function configureDetailView(opts) {
-    detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, userMoved: false };
+    detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, bucketStart: opts.bucketStart, userMoved: false };
+    // The X axis shows the minute's position inside the 15-minute candle (1..15), not the clock time.
+    const minuteIndex = t => {
+      const i = Math.round((t - detailView.bucketStart) / 60) + 1;
+      return i >= 1 && i <= 15 ? String(i) : '';
+    };
+    chart.applyOptions({
+      timeScale: { tickMarkFormatter: () => '' }, // the native ticks are replaced by detailRenderIndexLabels (one label per candle)
+      localization: { timeFormatter: time => (typeof time === 'number' ? minuteIndex(time) : '') }
+    });
     chart.timeScale().applyOptions({ barSpacing: opts.barSpacing, rightOffset: 0, fixLeftEdge: false });
     // Same price span as the 15m chart, widened if the data ever leaves it (never clips a candle).
     candleSeries.applyOptions({
@@ -5380,6 +5389,33 @@
     candleSeries.priceScale().applyOptions({ autoScale: true, scaleMargins: { top: 0, bottom: 0 } });
   }
 
+  // 1..15 under each candle of the detail window, positioned from the time scale (the native axis only
+  // labels some ticks and picks them by time). Thinned out only when candles are too narrow for two digits.
+  function detailRenderIndexLabels() {
+    if (!detailView) return;
+    let host = document.getElementById('detailIdx');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'detailIdx';
+      host.style.cssText = 'position:absolute; left:0; bottom:3px; height:14px; pointer-events:none; z-index:5; font:11px sans-serif; color:#9aa0aa;';
+      document.body.appendChild(host);
+    }
+    const spacing = chart.timeScale().options().barSpacing;
+    const step = spacing >= 16 ? 1 : (spacing >= 8 ? 2 : 5);
+    let html = '';
+    for (const c of allCandles) {
+      const idx = Math.round((c.time - detailView.bucketStart) / 60) + 1;
+      if (idx < 1 || idx > 15) continue;
+      if (idx !== 1 && idx % step !== 0) continue;
+      const x = chart.timeScale().timeToCoordinate(c.time);
+      if (x == null) continue;
+      html += '<span style="position:absolute; left:' + x + 'px; transform:translateX(-50%);">' + idx + '</span>';
+    }
+    host.innerHTML = html;
+  }
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => detailRenderIndexLabels());
+  window.addEventListener('resize', () => detailRenderIndexLabels());
+
   function detailApplyView() {
     if (!detailView) return;
     detailApplying = true;
@@ -5388,7 +5424,7 @@
     const slots = paneWidth / detailView.barSpacing;
     const from = -0.2 * slots;
     chart.timeScale().setVisibleLogicalRange({ from, to: from + slots });
-    setTimeout(() => { detailApplying = false; }, 0);
+    setTimeout(() => { detailApplying = false; detailRenderIndexLabels(); }, 0);
   }
 
   // Replaces the candles; the view is only (re)applied for a new target or while the user has not touched it.
@@ -5397,6 +5433,7 @@
     renderCandles();
     if (resetView && detailView) detailView.userMoved = false;
     if (detailView && !detailView.userMoved) detailApplyView();
+    detailRenderIndexLabels();
   }
 
   // "Restablecer vista" button: back to the initial layout and the automatic (main-chart) price range.

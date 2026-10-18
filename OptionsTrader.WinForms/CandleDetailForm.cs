@@ -81,7 +81,7 @@ internal sealed class CandleDetailForm : Form
         // this window's size.
         var plotWidth = Math.Max(200, _web.Width - PriceAxisWidthPx);
         var barSpacing = parentBarSpacing is > 0 ? parentBarSpacing.Value : plotWidth * CandlesShareOfWidth / 15.0;
-        var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax });
+        var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax, bucketStart = ChartPanel.FakeUtcEpochSeconds(bucketStartUtc) });
         await _web.CoreWebView2.ExecuteScriptAsync($"configureDetailView({viewJson});");
         _pendingViewReset = true;
 
