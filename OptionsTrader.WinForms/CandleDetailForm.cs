@@ -28,6 +28,7 @@ internal sealed class CandleDetailForm : Form
     private Func<DateTime>? _getClockUtc;       // "now" of the data (last tick / replay clock), for the seconds of the forming minute
     private MinuteBucketState _lastState = MinuteBucketState.Closed;
     private int _lastMinuteCount;
+    private string _lastOverlay = string.Empty; // last header text sent into the chart
     private const double CandlesShareOfWidth = 0.8; // fallback only: 15 candles take this share of the plot width
     private const double PriceAxisWidthPx = 60;
     // The window is half as wide as it used to be (760 px), but the first candle stays where it was: 20 % of
@@ -158,6 +159,21 @@ internal sealed class CandleDetailForm : Form
             title += $" · vela {minuteIndex} · {clock.Second:00} s";
         }
         if (Text != title) Text = title;
+
+        // The same data inside the chart (bottom left, yellow), over two lines so it fits the narrow window.
+        var overlay = $"{_symbol} — {startEt:HH:mm}–{startEt.AddMinutes(15):HH:mm} · velas de 1 min · {_lastMinuteCount}/15
+{statusText}";
+        if (_lastState == MinuteBucketState.Forming)
+        {
+            var clock = _getClockUtc();
+            var minuteIndex = Math.Clamp((int)(clock - _bucketStartUtc).TotalMinutes + 1, 1, 15);
+            overlay += $" · vela {minuteIndex} · {clock.Second:00} s";
+        }
+        if (overlay != _lastOverlay && _web.CoreWebView2 != null && _pageReady is { IsCompletedSuccessfully: true })
+        {
+            _lastOverlay = overlay;
+            _ = _web.CoreWebView2.ExecuteScriptAsync($"detailSetHeaderText({JsonSerializer.Serialize(overlay)});");
+        }
     }
 
     private async Task RedrawAsync()

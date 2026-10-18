@@ -5582,6 +5582,20 @@
     forceRepaint();
   }
 
+  // The window's header data (time range, candle count, state, minute and seconds) written INSIDE the chart,
+  // bottom left, in yellow — the title bar text is easy to miss. Two lines; set from C# (CandleDetailForm).
+  function detailSetHeaderText(text) {
+    let el = document.getElementById('detailHeaderText');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'detailHeaderText';
+      el.style.cssText = 'position:absolute; left:6px; bottom:34px; max-width:calc(100% - 80px); pointer-events:none; z-index:6; ' +
+                         'font:bold 11px sans-serif; color:#ffeb3b; white-space:pre-line; line-height:14px;';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+  }
+
   function detailApplyView() {
     if (!detailView) return;
     detailApplying = true;
