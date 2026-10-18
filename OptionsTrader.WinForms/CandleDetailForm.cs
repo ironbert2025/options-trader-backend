@@ -161,15 +161,14 @@ internal sealed class CandleDetailForm : Form
         if (Text != title) Text = title;
 
         // The same data inside the chart (bottom left, yellow), over two lines so it fits the narrow window.
-        var overlay = $"{_symbol} — {startEt:HH:mm}–{startEt.AddMinutes(15):HH:mm} · velas de 1 min · {_lastMinuteCount}/15
-{statusText}";
+        var overlay = $"{_symbol} — {startEt:HH:mm}–{startEt.AddMinutes(15):HH:mm} · velas de 1 min · {_lastMinuteCount}/15\n{statusText}";
         if (_lastState == MinuteBucketState.Forming)
         {
             var clock = _getClockUtc();
             var minuteIndex = Math.Clamp((int)(clock - _bucketStartUtc).TotalMinutes + 1, 1, 15);
             overlay += $" · vela {minuteIndex} · {clock.Second:00} s";
         }
-        if (overlay != _lastOverlay && _web.CoreWebView2 != null && _pageReady is { IsCompletedSuccessfully: true })
+        if (overlay != _lastOverlay && _web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
         {
             _lastOverlay = overlay;
             _ = _web.CoreWebView2.ExecuteScriptAsync($"detailSetHeaderText({JsonSerializer.Serialize(overlay)});");
