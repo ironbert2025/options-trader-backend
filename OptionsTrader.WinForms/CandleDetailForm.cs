@@ -30,13 +30,18 @@ internal sealed class CandleDetailForm : Form
     private int _lastMinuteCount;
     private const double CandlesShareOfWidth = 0.8; // fallback only: 15 candles take this share of the plot width
     private const double PriceAxisWidthPx = 60;
+    // The window is half as wide as it used to be (760 px), but the first candle stays where it was: 20 % of
+    // the OLD plot width from the left edge, in pixels — now about 44 % of the narrower plot.
+    private const int OldClientWidth = 760;
+    private const int ClientWidth = 380;
+    private const double FirstCandleXPx = 0.2 * (OldClientWidth - PriceAxisWidthPx);
 
     // panelHeight: the height of the 15m panel it came from, so both charts have the same vertical size.
     public CandleDetailForm(string symbol, int panelHeight)
     {
         _symbol = symbol;
         Text = $"{symbol} — velas de 1 min";
-        ClientSize = new Size(760, Math.Max(280, panelHeight + 30));
+        ClientSize = new Size(ClientWidth, Math.Max(280, panelHeight + 30));
         StartPosition = FormStartPosition.Manual;
         BackColor = Color.FromArgb(19, 23, 34);
 
@@ -86,7 +91,7 @@ internal sealed class CandleDetailForm : Form
         // this window's size.
         var plotWidth = Math.Max(200, _web.Width - PriceAxisWidthPx);
         var barSpacing = parentBarSpacing is > 0 ? parentBarSpacing.Value : plotWidth * CandlesShareOfWidth / 15.0;
-        var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax, bucketStart = ChartPanel.FakeUtcEpochSeconds(bucketStartUtc) });
+        var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax, bucketStart = ChartPanel.FakeUtcEpochSeconds(bucketStartUtc), firstCandlePx = FirstCandleXPx });
         await _web.CoreWebView2.ExecuteScriptAsync($"configureDetailView({viewJson});");
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetLines({(string.IsNullOrWhiteSpace(linesJson) ? "[]" : linesJson)});");
         _pendingViewReset = true;

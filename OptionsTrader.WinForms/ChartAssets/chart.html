@@ -5372,7 +5372,7 @@
   let detailApplying = false;
 
   function configureDetailView(opts) {
-    detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, bucketStart: opts.bucketStart, userMoved: false };
+    detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, bucketStart: opts.bucketStart, firstCandlePx: opts.firstCandlePx, userMoved: false };
     detailMarkersPrimitive._bucketStart = opts.bucketStart;
     if (!detailMarkersAttached) { candleSeries.attachPrimitive(detailMarkersPrimitive); detailMarkersAttached = true; }
     if (!detailTradesAttached) { candleSeries.attachPrimitive(detailTradesPrimitive); detailTradesAttached = true; }
@@ -5588,7 +5588,8 @@
     const paneWidth = chart.paneSize().width;
     // The first candle (logical index 0) sits at 20 % of the plot width; the rest of the candles go to its right.
     const slots = paneWidth / detailView.barSpacing;
-    const from = -0.2 * slots;
+    // the first candle sits at a fixed pixel offset from the left edge (or 20 % of the plot if none was given)
+    const from = detailView.firstCandlePx != null ? -detailView.firstCandlePx / detailView.barSpacing : -0.2 * slots;
     chart.timeScale().setVisibleLogicalRange({ from, to: from + slots });
     setTimeout(() => { detailApplying = false; detailRenderIndexLabels(); }, 0);
   }
