@@ -195,10 +195,14 @@ public class ChartPanel : Panel
     private readonly MinuteCandleStore _minuteStore = new();
 
     // Fired with the 15-minute bucket's start (UTC) when the user double-clicks one of this panel's candles.
-    internal event Action<DateTime, double?, double?, double?>? OnCandleDetailRequested; // bucket start, price min, price max and bar width (px) of this chart's view
+    internal event Action<DateTime, double?, double?, double?, string?>? OnCandleDetailRequested; // bucket start, price min, price max and bar width (px) of this chart's view
 
     // Fired (on the UI thread) when the 1-minute candles changed — a tick or a bar; the window redraws.
     internal event Action? OnMinuteCandlesChanged;
+
+    // Trade time of the newest Level 1 tick this panel applied (now, before the first one) — the
+    // "clock" of the live candle-detail window.
+    internal DateTime LastTickUtc => _lastTickUtc == DateTime.MinValue ? DateTime.UtcNow : _lastTickUtc;
 
     internal List<CandleData> GetMinuteCandles(DateTime startUtc, DateTime endUtc) =>
         _minuteStore.GetRange(startUtc, endUtc, _rawHistory);
@@ -1199,8 +1203,17 @@ public class ChartPanel : Panel
             : "undefined";
         var isCloseStr = isClose ? "true" : "false";
         var isCallStr = isCall ? "true" : "false";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg});");
+        // The exact moment of the trade event (chart seconds): the given entry time, otherwise the newest tick.
+        var eventSeconds = entryTime.HasValue
+            ? new DateTimeOffset(DateTime.SpecifyKind(entryTime.Value, DateTimeKind.Utc)).ToUnixTimeSeconds()
+            : FakeUtcEpochSeconds(_lastTickUtc == DateTime.MinValue ? DateTime.UtcNow : _lastTickUtc);
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, {timeArg}, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg}, {eventSeconds});");
+        OnEntrySpotMarked?.Invoke(price, eventSeconds, isClose);
     }
+
+    // Fired when a trade open/close rayita is marked on this chart (price, chart seconds, isClose) — the
+    // candle-detail window listens to put the same rayita on its 1-minute candle.
+    internal event Action<decimal, long, bool>? OnEntrySpotMarked;
 
     // Redraws the white entry-spot line for every trade still open on THIS symbol (per
     // OpenTradesStore, which already survives across day boundaries and app restarts — see
@@ -1585,7 +1598,8 @@ public class ChartPanel : Panel
                 {
                     if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))
                         OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(UtcFromFakeEpochSeconds(cdSeconds)),
-                            ReadNullableDouble(root, "priceMin"), ReadNullableDouble(root, "priceMax"), ReadNullableDouble(root, "barSpacing"));
+                            ReadNullableDouble(root, "priceMin"), ReadNullableDouble(root, "priceMax"), ReadNullableDouble(root, "barSpacing"),
+                            root.TryGetProperty("lines", out var cdLines) && cdLines.ValueKind == JsonValueKind.Array ? cdLines.GetRawText() : null);
                     break;
                 }
                 case "trend_state":

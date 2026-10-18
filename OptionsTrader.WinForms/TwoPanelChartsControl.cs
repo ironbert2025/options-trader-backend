@@ -1294,7 +1294,7 @@ public class TwoPanelChartsControl : UserControl
             // only while it is open.
             CandleDetailForm? candleDetail = null;
             Action? minutesChanged = null;
-            rthPanel.OnCandleDetailRequested += async (bucketStartUtc, priceMin, priceMax, barSpacing) =>
+            rthPanel.OnCandleDetailRequested += async (bucketStartUtc, priceMin, priceMax, barSpacing, linesJson) =>
             {
                 if (IsDisposed) return;
                 if (candleDetail == null || candleDetail.IsDisposed)
@@ -1303,12 +1303,14 @@ public class TwoPanelChartsControl : UserControl
                     candleDetail = window;
                     minutesChanged = () => window.MarkDirty();
                     rthPanel.OnMinuteCandlesChanged += minutesChanged;
-                    window.FormClosed += (s2, e2) => { rthPanel.OnMinuteCandlesChanged -= minutesChanged; };
+                    Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);
+                    rthPanel.OnEntrySpotMarked += onMark; // a trade opened/closed while the window is open gets its rayita too
+                    window.FormClosed += (s2, e2) => { rthPanel.OnMinuteCandlesChanged -= minutesChanged; rthPanel.OnEntrySpotMarked -= onMark; };
                     window.Show(FindForm());
                 }
                 try
                 {
-                    await candleDetail.ShowBucketAsync(bucketStartUtc, rthPanel.GetMinuteCandles, rthPanel.GetMinuteBucketState, freezeWhenClosed: true, priceMin, priceMax, barSpacing);
+                    await candleDetail.ShowBucketAsync(bucketStartUtc, rthPanel.GetMinuteCandles, rthPanel.GetMinuteBucketState, freezeWhenClosed: true, priceMin, priceMax, barSpacing, () => rthPanel.LastTickUtc, linesJson);
                 }
                 catch { /* diagnostics window — never disturb the charts */ }
             };

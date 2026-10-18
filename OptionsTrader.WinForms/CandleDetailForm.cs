@@ -25,6 +25,9 @@ internal sealed class CandleDetailForm : Form
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
     private bool _pendingViewReset = true;
+    private Func<DateTime>? _getClockUtc;       // "now" of the data (last tick / replay clock), for the seconds of the forming minute
+    private MinuteBucketState _lastState = MinuteBucketState.Closed;
+    private int _lastMinuteCount;
     private const double CandlesShareOfWidth = 0.8; // fallback only: 15 candles take this share of the plot width
     private const double PriceAxisWidthPx = 60;
 
@@ -55,6 +58,7 @@ internal sealed class CandleDetailForm : Form
         _redrawTimer.Tick += async (s, e) =>
         {
             if (_dirty && _following) await RedrawAsync();
+            else UpdateTitle(); // the seconds of the forming minute move even when no data changed
         };
         FormClosed += (s, e) => { _redrawTimer.Stop(); _redrawTimer.Dispose(); };
     }
@@ -63,8 +67,9 @@ internal sealed class CandleDetailForm : Form
     // getState says whether the bucket is still forming. freezeWhenClosed: stop following once it is over
     // (the live case); the Simulator keeps following because its clock can be rewound.
     public async Task ShowBucketAsync(DateTime bucketStartUtc, Func<DateTime, DateTime, List<CandleData>> getMinutes,
-        Func<DateTime, MinuteBucketState> getState, bool freezeWhenClosed, double? priceMin, double? priceMax, double? parentBarSpacing)
+        Func<DateTime, MinuteBucketState> getState, bool freezeWhenClosed, double? priceMin, double? priceMax, double? parentBarSpacing, Func<DateTime> getClockUtc, string? linesJson)
     {
+        _getClockUtc = getClockUtc;
         _bucketStartUtc = bucketStartUtc;
         _getMinutes = getMinutes;
         _getState = getState;
@@ -83,12 +88,26 @@ internal sealed class CandleDetailForm : Form
         var barSpacing = parentBarSpacing is > 0 ? parentBarSpacing.Value : plotWidth * CandlesShareOfWidth / 15.0;
         var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax, bucketStart = ChartPanel.FakeUtcEpochSeconds(bucketStartUtc) });
         await _web.CoreWebView2.ExecuteScriptAsync($"configureDetailView({viewJson});");
+        await _web.CoreWebView2.ExecuteScriptAsync($"detailSetLines({(string.IsNullOrWhiteSpace(linesJson) ? "[]" : linesJson)});");
         _pendingViewReset = true;
 
         await RedrawAsync();
         _redrawTimer.Start();
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Activate();
+    }
+
+    // A trade opened or closed: its white rayita goes on the 1-minute candle of that moment (only drawn if
+    // the moment falls inside the 15-minute candle this window shows).
+    public async void AddTrade(decimal price, long eventSeconds, bool isClose)
+    {
+        if (IsDisposed || _web.CoreWebView2 == null || _pageReady == null || !_pageReady.Task.IsCompletedSuccessfully) return;
+        try
+        {
+            var priceArg = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            await _web.CoreWebView2.ExecuteScriptAsync($"detailAddTrade({priceArg}, {eventSeconds}, {(isClose ? "true" : "false")});");
+        }
+        catch { /* diagnostics window */ }
     }
 
     // The data behind the target changed (a tick, a bar, the Simulator clock) — redrawn on the next timer tick.
@@ -113,6 +132,29 @@ internal sealed class CandleDetailForm : Form
         }
     }
 
+    // Title: window, symbol, status — and, while the 15-minute candle is forming, which minute of the 15 is
+    // being drawn and how many seconds of it have gone by (from the data's own clock, so in the Simulator it
+    // follows the replay).
+    private void UpdateTitle()
+    {
+        if (_getClockUtc == null || IsDisposed) return;
+        var startEt = TimeZoneInfo.ConvertTimeFromUtc(_bucketStartUtc, EasternZone);
+        var statusText = _lastState switch
+        {
+            MinuteBucketState.Forming => "en formación",
+            MinuteBucketState.Settling => "cerrando…",
+            _ => "cerrada"
+        };
+        var title = $"{_symbol} — {startEt:HH:mm}–{startEt.AddMinutes(15):HH:mm} · velas de 1 min · {_lastMinuteCount}/15 · {statusText}";
+        if (_lastState == MinuteBucketState.Forming)
+        {
+            var clock = _getClockUtc();
+            var minuteIndex = Math.Clamp((int)(clock - _bucketStartUtc).TotalMinutes + 1, 1, 15);
+            title += $" · vela {minuteIndex} · {clock.Second:00} s";
+        }
+        if (Text != title) Text = title;
+    }
+
     private async Task RedrawAsync()
     {
         if (_getMinutes == null || _getState == null || _web.CoreWebView2 == null || IsDisposed) return;
@@ -130,14 +172,9 @@ internal sealed class CandleDetailForm : Form
             _pendingViewReset = false;
         }
 
-        var startEt = TimeZoneInfo.ConvertTimeFromUtc(_bucketStartUtc, EasternZone);
-        var statusText = state switch
-        {
-            MinuteBucketState.Forming => "en formación",
-            MinuteBucketState.Settling => "cerrando…",
-            _ => "cerrada"
-        };
-        Text = $"{_symbol} — {startEt:HH:mm}–{startEt.AddMinutes(15):HH:mm} · velas de 1 min · {minutes.Count}/15 · {statusText}";
+        _lastState = state;
+        _lastMinuteCount = minutes.Count;
+        UpdateTitle();
 
         // Over: one last draw above included the final data; stop following (the live case).
         if (_freezeWhenClosed && state == MinuteBucketState.Closed) _following = false;

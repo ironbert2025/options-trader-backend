@@ -241,9 +241,9 @@ public class SimulatorForm : Form
         _btnTickAtras.Click    += (s, e) => StepTick(-1);
         _btnTickAdelante.Click += (s, e) => StepTick(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
-        _rthChart.OnCandleDetailRequested += (bucketStartUtc, priceMin, priceMax, barSpacing) =>
+        _rthChart.OnCandleDetailRequested += (bucketStartUtc, priceMin, priceMax, barSpacing, linesJson) =>
         {
-            if (!IsDisposed) BeginInvoke(() => _ = OpenCandleDetailAsync(bucketStartUtc, priceMin, priceMax, barSpacing));
+            if (!IsDisposed) BeginInvoke(() => _ = OpenCandleDetailAsync(bucketStartUtc, priceMin, priceMax, barSpacing, linesJson));
         };
         Form1.StyleFirstItmToggle(_btnFirstItmCall, isCall: true, armed: false);
         Form1.StyleFirstItmToggle(_btnFirstItmPut, isCall: false, armed: false);
@@ -2050,11 +2050,16 @@ public class SimulatorForm : Form
     // Double click on a panel-2 candle: the window shows that candle's 1-minute candles up to the replay
     // clock (_lastChartClockUtc). It follows the clock — redrawn from RenderChartsUpToTime — so a candle in
     // formation fills in minute by minute and stops changing once the clock passes its end.
-    private async Task OpenCandleDetailAsync(DateTime bucketStartUtc, double? priceMin, double? priceMax, double? barSpacing)
+    private async Task OpenCandleDetailAsync(DateTime bucketStartUtc, double? priceMin, double? priceMax, double? barSpacing, string? linesJson)
     {
         if (_candleDetail == null || _candleDetail.IsDisposed)
         {
-            _candleDetail = new CandleDetailForm(_symbol, _rthChart.Height);
+            var window = new CandleDetailForm(_symbol, _rthChart.Height);
+            _candleDetail = window;
+            // a trade opened/closed while the window is open gets its rayita too
+            Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);
+            _rthChart.OnEntrySpotMarked += onMark;
+            window.FormClosed += (s2, e2) => _rthChart.OnEntrySpotMarked -= onMark;
             _candleDetail.Show(this);
         }
         try
@@ -2062,7 +2067,7 @@ public class SimulatorForm : Form
             await _candleDetail.ShowBucketAsync(bucketStartUtc,
                 (start, end) => MinuteCandleStore.FromTicks(_intradayCandles, start, end, _lastChartClockUtc),
                 start => _lastChartClockUtc < start.AddMinutes(15) ? MinuteBucketState.Forming : MinuteBucketState.Closed,
-                freezeWhenClosed: false, priceMin, priceMax, barSpacing);
+                freezeWhenClosed: false, priceMin, priceMax, barSpacing, () => _lastChartClockUtc, linesJson);
         }
         catch { /* diagnostics window — never disturb the playback */ }
     }
@@ -2369,8 +2374,8 @@ public class SimulatorForm : Form
         // (MultiChartForm.MarkEntrySpotOnOvernightChartAsync — originally panel 3 only, panel 2
         // added later; the simulator hadn't been kept in sync).
         var entrySpot = CurrentTickSpot(step);
-        _ = _rthChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
-        _ = _fullChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
+        _ = _rthChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike, eventTimeUtc: _lastChartClockUtc);
+        _ = _fullChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike, eventTimeUtc: _lastChartClockUtc);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
         var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
@@ -2451,8 +2456,8 @@ public class SimulatorForm : Form
         // for a Call, below for a Put), per explicit request.
         var closeIsCall = trade.OptionType.Equals("CALL", StringComparison.OrdinalIgnoreCase);
         var closeSpot = CurrentTickSpot(step);
-        _ = _rthChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
-        _ = _fullChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
+        _ = _rthChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice, eventTimeUtc: _lastChartClockUtc);
+        _ = _fullChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice, eventTimeUtc: _lastChartClockUtc);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");

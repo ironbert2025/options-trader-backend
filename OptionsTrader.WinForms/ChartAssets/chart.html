@@ -2707,7 +2707,7 @@
   // pairId: identifies the trade this line belongs to, shared by its open and close lines, so
   // selecting + deleting one removes the whole pair (null for anything without one).
   // strike: the trade's strike, so deleting the pair can also take its green Stk line + ΔS label.
-  function markEntrySpot(price, time, color, isClose, isCall, pairId, strike) {
+  function markEntrySpot(price, time, color, isClose, isCall, pairId, strike, eventTime) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
     let anchorTime = allCandles[allCandles.length - 1].time;
@@ -2724,7 +2724,7 @@
     // part of the key so an open and a close landing on the same candle/price (rare, but possible)
     // don't get treated as the same line and silently drop the close's "C" label.
     const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price && !!l.isClose === !!isClose);
-    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall, pairId: pairId ?? null, strike: strike ?? null });
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall, pairId: pairId ?? null, strike: strike ?? null, eventTime: eventTime ?? null });
     forceRepaint();
   }
 
@@ -5345,8 +5345,22 @@
       priceMax = candleSeries.coordinateToPrice(0);
       priceMin = candleSeries.coordinateToPrice(paneH);
     } catch (e) { /* range unknown — the window falls back to its own autoscale */ }
+    // The reference lines this chart shows (blue premarket price, yellow previous-day close, Piso/Techo
+    // levels in their SMA colors) as they are right now — the detail window repeats them as price lines.
+    const lines = [];
+    try {
+      if (preMarketLinePrimitive._armed && preMarketLinePrimitive._price != null)
+        lines.push({ price: preMarketLinePrimitive._price, color: '#2196f3', width: 2, title: '' });
+      if (prevDayCloseLinePrimitive._price != null)
+        lines.push({ price: prevDayCloseLinePrimitive._price, color: '#ffeb3b', width: 1, title: 'C' });
+      pisoTechoRefLinePrimitive._lines.forEach(l => lines.push({ price: l.price, color: l.color, width: 2, title: '' }));
+      // trade open/close rayitas (exact event time, so the detail window can put each on its 1-minute candle)
+      entrySpotLinePrimitive._lines.forEach(l => {
+        if (l.eventTime != null) lines.push({ kind: 'trade', price: l.price, eventTime: l.eventTime, isClose: !!l.isClose });
+      });
+    } catch (e) { /* a primitive not available on this chart — send what we have */ }
     if (window.chrome && window.chrome.webview) {
-      window.chrome.webview.postMessage({ type: 'candle_detail', time: hit.time, priceMin, priceMax, barSpacing });
+      window.chrome.webview.postMessage({ type: 'candle_detail', time: hit.time, priceMin, priceMax, barSpacing, lines });
     }
   });
 
@@ -5359,6 +5373,9 @@
 
   function configureDetailView(opts) {
     detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, bucketStart: opts.bucketStart, userMoved: false };
+    detailMarkersPrimitive._bucketStart = opts.bucketStart;
+    if (!detailMarkersAttached) { candleSeries.attachPrimitive(detailMarkersPrimitive); detailMarkersAttached = true; }
+    if (!detailTradesAttached) { candleSeries.attachPrimitive(detailTradesPrimitive); detailTradesAttached = true; }
     // The X axis shows the minute's position inside the 15-minute candle (1..15), not the clock time.
     const minuteIndex = t => {
       const i = Math.round((t - detailView.bucketStart) / 60) + 1;
@@ -5415,6 +5432,115 @@
   }
   chart.timeScale().subscribeVisibleLogicalRangeChange(() => detailRenderIndexLabels());
   window.addEventListener('resize', () => detailRenderIndexLabels());
+
+  // Vertical dashed gray lines through minutes 5 and 10 of the 15-minute candle (the 5th and 10th candle
+  // of the window), so it is easy to tell which candle sits at those marks. Positioned from the minute's
+  // time, not from the candle itself, so they are also there while that minute has not formed yet.
+  // Logical (bar-index) position of a time inside the detail window: the index of the last candle at or
+  // before it plus the minutes between them — valid also for a minute that has not formed yet.
+  function detailLogicalOf(t) {
+    let anchor = 0;
+    for (let i = 0; i < allCandles.length; i++) { if (allCandles[i].time <= t) anchor = i; else break; }
+    return anchor + (t - allCandles[anchor].time) / 60;
+  }
+
+  class DetailMarkersPrimitive {
+    constructor() { this._bucketStart = null; this._minutes = [5, 10]; }
+    attached() {}
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        zOrder() { return 'bottom'; }, // behind the candles
+        renderer() {
+          return {
+            draw(target) {
+              if (self._bucketStart == null || allCandles.length === 0) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                ctx.strokeStyle = '#9aa0aa';
+                ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                self._minutes.forEach(m => {
+                  const t = self._bucketStart + (m - 1) * 60;
+                  const x = chart.timeScale().logicalToCoordinate(detailLogicalOf(t));
+                  if (x == null) return;
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, 0);
+                  ctx.lineTo(x * scope.horizontalPixelRatio, scope.bitmapSize.height);
+                  ctx.stroke();
+                });
+                ctx.setLineDash([]);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const detailMarkersPrimitive = new DetailMarkersPrimitive();
+  let detailMarkersAttached = false;
+
+  // White rayitas: where a trade was opened / closed, drawn inside the 1-minute candle of that moment
+  // (one candle wide) at the spot price of the event. Nothing else — no label, no colors.
+  let detailTrades = []; // [{ price, eventTime (chart seconds), isClose }]
+  class DetailTradesPrimitive {
+    attached() {}
+    updateAllViews() {}
+    paneViews() {
+      return [{
+        zOrder() { return 'top'; },
+        renderer() {
+          return {
+            draw(target) {
+              if (!detailView || allCandles.length === 0) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const spacing = chart.timeScale().options().barSpacing;
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                detailTrades.forEach(t => {
+                  if (t.eventTime < detailView.bucketStart || t.eventTime >= detailView.bucketStart + 900) return; // another 15m candle
+                  const minuteStart = detailView.bucketStart + Math.floor((t.eventTime - detailView.bucketStart) / 60) * 60;
+                  const x = chart.timeScale().logicalToCoordinate(detailLogicalOf(minuteStart));
+                  const y = candleSeries.priceToCoordinate(t.price);
+                  if (x == null || y == null) return;
+                  ctx.beginPath();
+                  ctx.moveTo((x - spacing * 0.45) * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo((x + spacing * 0.45) * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const detailTradesPrimitive = new DetailTradesPrimitive();
+  let detailTradesAttached = false;
+
+  // A trade opened or closed while the window is open (live or replay): added to the rayitas.
+  function detailAddTrade(price, eventTime, isClose) {
+    if (detailTrades.some(t => t.price === price && t.eventTime === eventTime && !!t.isClose === !!isClose)) return;
+    detailTrades.push({ price, eventTime, isClose: !!isClose });
+    forceRepaint();
+  }
+
+  // Reference lines copied from the main chart at the moment of the double click (see dblclick above):
+  // native dashed price lines across the whole window, no axis labels. Replaced for each new target.
+  let detailPriceLines = [];
+  function detailSetLines(lines) {
+    detailPriceLines.forEach(pl => candleSeries.removePriceLine(pl));
+    detailPriceLines = [];
+    detailTrades = (lines || []).filter(l => l.kind === 'trade').map(l => ({ price: l.price, eventTime: l.eventTime, isClose: !!l.isClose }));
+    (lines || []).filter(l => l.kind !== 'trade').forEach(l => {
+      detailPriceLines.push(candleSeries.createPriceLine({
+        price: l.price, color: l.color, lineWidth: l.width || 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false, title: l.title || ''
+      }));
+    });
+  }
 
   function detailApplyView() {
     if (!detailView) return;

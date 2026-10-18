@@ -278,15 +278,21 @@ public class SimulatedChartPanel : Panel
     // Accumulates, one segment per trade, never auto-removed.
     // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
     // Call, below for a Put) — omitted for the open call.
-    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
+    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null, DateTime? eventTimeUtc = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var strikeArg = strike.HasValue ? strike.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
         var isCloseStr = isClose ? "true" : "false";
         var isCallStr = isCall ? "true" : "false";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg});");
+        var eventSeconds = eventTimeUtc.HasValue ? ToFakeUtcEpochSeconds(eventTimeUtc.Value) : (long?)null;
+        var eventArg = eventSeconds.HasValue ? eventSeconds.Value.ToString() : "null";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg}, {eventArg});");
+        if (eventSeconds.HasValue) OnEntrySpotMarked?.Invoke(price, eventSeconds.Value, isClose);
     }
+
+    // Fired when a trade open/close rayita is marked (price, chart seconds, isClose) — see the candle-detail window.
+    public event Action<decimal, long, bool>? OnEntrySpotMarked;
 
     // Fires (pairId, strike) when a trade's open/close rayitas are deleted on this chart — SimulatorForm
     // relays it to the other chart's RemoveTradeMarksAsync (same idea as ChartPanel's own event).
@@ -906,7 +912,7 @@ public class SimulatedChartPanel : Panel
     public event Action<string?, string?>? OnTrendStateChanged;
 
     // Double click on a candle of the 15m RTH chart -> the 15-minute bucket's start (UTC); see SimulatorForm.OpenCandleDetail.
-    public event Action<DateTime, double?, double?, double?>? OnCandleDetailRequested;
+    public event Action<DateTime, double?, double?, double?, string?>? OnCandleDetailRequested;
 
     // Last trend state seen from the page + the header title, for the combined images' header strip
     // (CombinedChartHeader) — this panel's own header shows only the title, the trend words reach the log.
@@ -1127,7 +1133,8 @@ public class SimulatedChartPanel : Panel
             {
                 if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))
                     OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(ChartPanel.UtcFromFakeEpochSeconds(cdSeconds)),
-                        ChartPanel.ReadNullableDouble(root, "priceMin"), ChartPanel.ReadNullableDouble(root, "priceMax"), ChartPanel.ReadNullableDouble(root, "barSpacing"));
+                        ChartPanel.ReadNullableDouble(root, "priceMin"), ChartPanel.ReadNullableDouble(root, "priceMax"), ChartPanel.ReadNullableDouble(root, "barSpacing"),
+                        root.TryGetProperty("lines", out var cdLines) && cdLines.ValueKind == JsonValueKind.Array ? cdLines.GetRawText() : null);
                 return;
             }
 
