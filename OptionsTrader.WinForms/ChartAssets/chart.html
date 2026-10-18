@@ -5528,18 +5528,58 @@
   }
 
   // Reference lines copied from the main chart at the moment of the double click (see dblclick above):
-  // native dashed price lines across the whole window, no axis labels. Replaced for each new target.
-  let detailPriceLines = [];
+  // dashed horizontal lines that start at the FIRST 1-minute candle (minute 1) and run to the right edge —
+  // not across the empty space before it. No axis labels; the previous-day close keeps its "C".
+  let detailRefLines = []; // [{ price, color, width, title }]
+  class DetailRefLinesPrimitive {
+    attached() {}
+    updateAllViews() {}
+    paneViews() {
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!detailView || allCandles.length === 0) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const xStart = chart.timeScale().logicalToCoordinate(detailLogicalOf(detailView.bucketStart));
+                if (xStart == null) return;
+                const x1 = Math.max(0, xStart * scope.horizontalPixelRatio);
+                const x2 = scope.bitmapSize.width;
+                detailRefLines.forEach(l => {
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (y == null) return;
+                  ctx.strokeStyle = l.color;
+                  ctx.lineWidth = (l.width || 1) * scope.horizontalPixelRatio;
+                  ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                  ctx.beginPath();
+                  ctx.moveTo(x1, y * scope.verticalPixelRatio);
+                  ctx.lineTo(x2, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                  ctx.setLineDash([]);
+                  if (l.title) {
+                    ctx.fillStyle = l.color;
+                    ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
+                    ctx.textAlign = 'right';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(l.title, x2 - 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                  }
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const detailRefLinesPrimitive = new DetailRefLinesPrimitive();
+  let detailRefLinesAttached = false;
+
   function detailSetLines(lines) {
-    detailPriceLines.forEach(pl => candleSeries.removePriceLine(pl));
-    detailPriceLines = [];
+    if (!detailRefLinesAttached) { candleSeries.attachPrimitive(detailRefLinesPrimitive); detailRefLinesAttached = true; }
     detailTrades = (lines || []).filter(l => l.kind === 'trade').map(l => ({ price: l.price, eventTime: l.eventTime, isClose: !!l.isClose }));
-    (lines || []).filter(l => l.kind !== 'trade').forEach(l => {
-      detailPriceLines.push(candleSeries.createPriceLine({
-        price: l.price, color: l.color, lineWidth: l.width || 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false, title: l.title || ''
-      }));
-    });
+    detailRefLines = (lines || []).filter(l => l.kind !== 'trade').map(l => ({ price: l.price, color: l.color, width: l.width || 1, title: l.title || '' }));
+    forceRepaint();
   }
 
   function detailApplyView() {
