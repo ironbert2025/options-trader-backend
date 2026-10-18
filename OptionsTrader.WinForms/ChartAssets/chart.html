@@ -5351,7 +5351,7 @@
   });
 
   // ---- Detail window view (used only by CandleDetailForm's own page) ----
-  // The view is laid out ONCE per target candle — a fixed bar width, the first candle at the left with room
+  // The view is laid out ONCE per target candle — a fixed bar width, the first candle at 20 % of the width with room
   // to grow to the right, the price axis spanning the main chart's range — and left alone after that, so
   // new candles just add to the right and the user's own zoom / pan / axis scaling is not undone.
   let detailView = null; // { barSpacing, priceMin, priceMax, userMoved }
@@ -5384,7 +5384,10 @@
     if (!detailView) return;
     detailApplying = true;
     const paneWidth = chart.paneSize().width;
-    chart.timeScale().setVisibleLogicalRange({ from: -1, to: -1 + paneWidth / detailView.barSpacing });
+    // The first candle (logical index 0) sits at 20 % of the plot width; the rest of the candles go to its right.
+    const slots = paneWidth / detailView.barSpacing;
+    const from = -0.2 * slots;
+    chart.timeScale().setVisibleLogicalRange({ from, to: from + slots });
     setTimeout(() => { detailApplying = false; }, 0);
   }
 
