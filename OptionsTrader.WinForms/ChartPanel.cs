@@ -188,6 +188,45 @@ public class ChartPanel : Panel
     private bool _wickTriggerFiredToday;
     private DateOnly _wickStateDate;
 
+    // ---- Candle detail (15m RTH panel): double click on a candle -> window with its 1-minute candles ----
+    // The 1-minute candles of the live session — ticks decide the minute, the official bar settles it —
+    // for the window. History (_rawHistory, the 1-minute candles loaded at startup) covers what happened
+    // before this app started.
+    private readonly MinuteCandleStore _minuteStore = new();
+
+    // Fired with the 15-minute bucket's start (UTC) when the user double-clicks one of this panel's candles.
+    internal event Action<DateTime>? OnCandleDetailRequested;
+
+    // Fired (on the UI thread) when the 1-minute candles changed — a tick or a bar; the window redraws.
+    internal event Action? OnMinuteCandlesChanged;
+
+    internal List<CandleData> GetMinuteCandles(DateTime startUtc, DateTime endUtc) =>
+        _minuteStore.GetRange(startUtc, endUtc, _rawHistory);
+
+    internal MinuteBucketState GetMinuteBucketState(DateTime bucketStartUtc)
+    {
+        if (_liveBucket != null && _liveBucket.Time == bucketStartUtc) return MinuteBucketState.Forming;
+        var end = bucketStartUtc.AddMinutes(15);
+        // The bucket closed, but the bar of its last minute is delivered after the boundary.
+        if (_liveBucket != null && _liveBucket.Time > bucketStartUtc && DateTime.UtcNow < end.AddSeconds(90)
+            && !_minuteStore.IsOfficial(end.AddMinutes(-1)))
+            return MinuteBucketState.Settling;
+        return MinuteBucketState.Closed;
+    }
+
+    private void RaiseMinuteCandlesChanged()
+    {
+        if (OnMinuteCandlesChanged == null || _closing || !IsHandleCreated) return;
+        BeginInvoke(() => OnMinuteCandlesChanged?.Invoke());
+    }
+
+    // Inverse of FakeUtcEpochSeconds: the chart's "ET wall-clock digits disguised as UTC" back to a real UTC instant.
+    public static DateTime UtcFromFakeEpochSeconds(long seconds)
+    {
+        var wall = DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime;
+        return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(wall, DateTimeKind.Unspecified), EasternZone);
+    }
+
     // Fires "Trigger Call" or "Trigger Put" when the wick-recovery pattern completes — relayed by
     // TwoPanelChartsControl into Form1.LogLine.
     public event Action<string>? OnWickTriggerEvent;
@@ -1537,6 +1576,12 @@ public class ChartPanel : Panel
                 case "salto_setup":
                 {
                     OnSaltoSetupChanged?.Invoke(ParseSaltoCrossUp(root), ParseSaltoDays(root));
+                    break;
+                }
+                case "candle_detail":
+                {
+                    if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))
+                        OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(UtcFromFakeEpochSeconds(cdSeconds)));
                     break;
                 }
                 case "trend_state":
@@ -3258,6 +3303,7 @@ public class ChartPanel : Panel
 
                 // Light gray fill between the bands — per explicit request, panel 2 (15m RTH) only.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureCandleDetail(true);"); // double click on a candle -> its 1-minute candles
 
                 if (!_webMessageHandlerAttached)
                 {
@@ -3704,6 +3750,12 @@ public class ChartPanel : Panel
             return; // outside this panel's session — ignore the tick entirely
         }
 
+        if (_mode == ChartPanelMode.Fifteen_RTH)
+        {
+            _minuteStore.OnBar(candle); // official 1-minute bar -> candle-detail window
+            RaiseMinuteCandlesChanged();
+        }
+
         // Fallback for the deferred draw above: if this panel was opened before 9:30 but the first
         // live tick it actually received already landed at/after 9:30 (connection/subscription race
         // — premarket window missed entirely), DrawPrevDayHiLoAsync above never fired. Catch it here
@@ -3933,6 +3985,11 @@ public class ChartPanel : Panel
                 return; // late tick of a candle that is already closed — its bar reconciles it
         }
         if (utcTime > _lastTickUtc) _lastTickUtc = utcTime;
+        if (decidesBucket && _mode == ChartPanelMode.Fifteen_RTH)
+        {
+            _minuteStore.OnTick(utcTime, price); // Level 1 tick -> 1-minute candle for the candle-detail window
+            RaiseMinuteCandlesChanged();
+        }
 
         _liveBucket.High  = Math.Max(_liveBucket.High, price);
         _liveBucket.Low   = Math.Min(_liveBucket.Low, price);

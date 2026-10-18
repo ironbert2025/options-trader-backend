@@ -1289,6 +1289,30 @@ public class TwoPanelChartsControl : UserControl
             // the user typed) so the [Estimación] is computed from the very first Trigger.
             // Bollinger momentum (Validación / Toque / perdida), fed by panel 2's Level 1 ticks — see
             // ChartPanel.FeedBbMomentum. Goes to the history zone of log 2, below the Trigger set.
+            // Double click on a candle of the 15m RTH chart -> window with that candle's 1-minute candles.
+            // One window per symbol, re-targeted by each double click; it hooks the panel's minute updates
+            // only while it is open.
+            CandleDetailForm? candleDetail = null;
+            Action? minutesChanged = null;
+            rthPanel.OnCandleDetailRequested += async bucketStartUtc =>
+            {
+                if (IsDisposed) return;
+                if (candleDetail == null || candleDetail.IsDisposed)
+                {
+                    var window = new CandleDetailForm(_symbol);
+                    candleDetail = window;
+                    minutesChanged = () => window.MarkDirty();
+                    rthPanel.OnMinuteCandlesChanged += minutesChanged;
+                    window.FormClosed += (s2, e2) => { rthPanel.OnMinuteCandlesChanged -= minutesChanged; };
+                    window.Show(FindForm());
+                }
+                try
+                {
+                    await candleDetail.ShowBucketAsync(bucketStartUtc, rthPanel.GetMinuteCandles, rthPanel.GetMinuteBucketState, freezeWhenClosed: true);
+                }
+                catch { /* diagnostics window — never disturb the charts */ }
+            };
+
             rthPanel.OnBbMomentumEvent += ev =>
             {
                 if (IsDisposed) return;

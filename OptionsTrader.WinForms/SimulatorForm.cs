@@ -31,6 +31,8 @@ public class SimulatorForm : Form
     private bool _showFirstItmCall, _showFirstItmPut;
     private readonly Button _btnFirstItmCall = new() { Text = "+1C", Location = new Point(590, 74), Size = new Size(60, 24) };
     private readonly Button _btnFirstItmPut  = new() { Text = "+1P", Location = new Point(656, 74), Size = new Size(60, 24) };
+    // Window with the 1-minute candles of a 15-minute candle (double click on panel 2) — see OpenCandleDetail.
+    private CandleDetailForm? _candleDetail;
     private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
 
@@ -239,6 +241,10 @@ public class SimulatorForm : Form
         _btnTickAtras.Click    += (s, e) => StepTick(-1);
         _btnTickAdelante.Click += (s, e) => StepTick(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
+        _rthChart.OnCandleDetailRequested += bucketStartUtc =>
+        {
+            if (!IsDisposed) BeginInvoke(() => _ = OpenCandleDetailAsync(bucketStartUtc));
+        };
         Form1.StyleFirstItmToggle(_btnFirstItmCall, isCall: true, armed: false);
         Form1.StyleFirstItmToggle(_btnFirstItmPut, isCall: false, armed: false);
         _btnFirstItmCall.Click += (s, e) =>
@@ -2041,11 +2047,32 @@ public class SimulatorForm : Form
         RenderGridForStep();
     }
 
+    // Double click on a panel-2 candle: the window shows that candle's 1-minute candles up to the replay
+    // clock (_lastChartClockUtc). It follows the clock — redrawn from RenderChartsUpToTime — so a candle in
+    // formation fills in minute by minute and stops changing once the clock passes its end.
+    private async Task OpenCandleDetailAsync(DateTime bucketStartUtc)
+    {
+        if (_candleDetail == null || _candleDetail.IsDisposed)
+        {
+            _candleDetail = new CandleDetailForm(_symbol);
+            _candleDetail.Show(this);
+        }
+        try
+        {
+            await _candleDetail.ShowBucketAsync(bucketStartUtc,
+                (start, end) => MinuteCandleStore.FromTicks(_intradayCandles, start, end, _lastChartClockUtc),
+                start => _lastChartClockUtc < start.AddMinutes(15) ? MinuteBucketState.Forming : MinuteBucketState.Closed,
+                freezeWhenClosed: false);
+        }
+        catch { /* diagnostics window — never disturb the playback */ }
+    }
+
     // Extracted from RenderCurrentStep so the independent tick-driven Real Time chart clock
     // (_tickPlayTimer) can push chart updates without touching the options grid/PnL at all.
     private void RenderChartsUpToTime(DateTime uptoUtc)
     {
         _lastChartClockUtc = uptoUtc;
+        _candleDetail?.MarkDirty(); // the candle-detail window follows the replay clock
         var targetIdx = LastIntradayIndexAtOrBefore(uptoUtc);
 
         // Time of the tick clock and the price of the last tick, bottom-right of panel 2 — same overlay

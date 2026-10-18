@@ -98,6 +98,7 @@ public class SimulatedChartPanel : Panel
 
                 // Light gray fill between the bands — per explicit request, panel 2 (15m RTH) only.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureCandleDetail(true);"); // double click on a candle -> its 1-minute candles
 
                 // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
                 // arms DZ/SZ itself), but the mirrored copy is still independently selectable/
@@ -904,6 +905,9 @@ public class SimulatedChartPanel : Panel
     // SMA20/40 + SMA100/200 trend ("up"/"down"/null each) — see ChartPanel.OnTrendStateChanged.
     public event Action<string?, string?>? OnTrendStateChanged;
 
+    // Double click on a candle of the 15m RTH chart -> the 15-minute bucket's start (UTC); see SimulatorForm.OpenCandleDetail.
+    public event Action<DateTime>? OnCandleDetailRequested;
+
     // Last trend state seen from the page + the header title, for the combined images' header strip
     // (CombinedChartHeader) — this panel's own header shows only the title, the trend words reach the log.
     private string? _trendShortDir, _trendLongDir;
@@ -1116,6 +1120,13 @@ public class SimulatedChartPanel : Panel
             if (type == "salto_setup")
             {
                 OnSaltoSetupChanged?.Invoke(ChartPanel.ParseSaltoCrossUp(root), ChartPanel.ParseSaltoDays(root));
+                return;
+            }
+
+            if (type == "candle_detail")
+            {
+                if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))
+                    OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(ChartPanel.UtcFromFakeEpochSeconds(cdSeconds)));
                 return;
             }
 

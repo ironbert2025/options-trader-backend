@@ -5316,6 +5316,33 @@
     recalculateDayDividers();
     reapplyVisibleRangeIfLive();
   }
+  // ---- Candle detail: double click on a candle asks C# for the 1-minute candles inside it ----
+  // Enabled only on the 15m RTH charts (C# calls configureCandleDetail(true)). Ignored while any drawing
+  // tool is armed — every tool uses single clicks, a double click would otherwise open the window by
+  // accident in the middle of drawing.
+  let candleDetailEnabled = false;
+  function configureCandleDetail(on) { candleDetailEnabled = !!on; }
+
+  container.addEventListener('dblclick', ev => {
+    if (!candleDetailEnabled) return;
+    if (dzSzArmed || rectArmed || circleArmed || colorRectArmed || grayRectArmed || tLineArmed || pLineArmed ||
+        hLineArmed || arrowArmed || greenArrowArmed || redArrowArmed || textArmed) return;
+    const rect = container.getBoundingClientRect();
+    const time = chart.timeScale().coordinateToTime(ev.clientX - rect.left);
+    if (time == null) return; // not over a candle
+    // the candle whose slot the pointer is in (allCandles is sorted by time)
+    let hit = null;
+    for (let i = allCandles.length - 1; i >= 0; i--) {
+      if (allCandles[i].time <= time) { hit = allCandles[i]; break; }
+    }
+    if (!hit) return;
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage({ type: 'candle_detail', time: hit.time });
+    }
+  });
+
+  // For the detail window: show every candle that was just loaded.
+  function fitAllCandles() { chart.timeScale().fitContent(); }
 </script>
 </body>
 </html>
