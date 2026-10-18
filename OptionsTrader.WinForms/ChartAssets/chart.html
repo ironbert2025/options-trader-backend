@@ -5336,13 +5336,76 @@
       if (allCandles[i].time <= time) { hit = allCandles[i]; break; }
     }
     if (!hit) return;
+    // The price range this chart shows right now (top and bottom of the plot area), so the detail window can
+    // draw its 1-minute candles over the SAME price span and the two charts line up.
+    let priceMax = null, priceMin = null;
+    try {
+      const paneH = chart.paneSize().height;
+      priceMax = candleSeries.coordinateToPrice(0);
+      priceMin = candleSeries.coordinateToPrice(paneH);
+    } catch (e) { /* range unknown — the window falls back to its own autoscale */ }
     if (window.chrome && window.chrome.webview) {
-      window.chrome.webview.postMessage({ type: 'candle_detail', time: hit.time });
+      window.chrome.webview.postMessage({ type: 'candle_detail', time: hit.time, priceMin, priceMax });
     }
   });
 
-  // For the detail window: show every candle that was just loaded.
-  function fitAllCandles() { chart.timeScale().fitContent(); }
+  // ---- Detail window view (used only by CandleDetailForm's own page) ----
+  // The view is laid out ONCE per target candle — a fixed bar width, the first candle at the left with room
+  // to grow to the right, the price axis spanning the main chart's range — and left alone after that, so
+  // new candles just add to the right and the user's own zoom / pan / axis scaling is not undone.
+  let detailView = null; // { barSpacing, priceMin, priceMax, userMoved }
+  let detailApplying = false;
+
+  function configureDetailView(opts) {
+    detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, userMoved: false };
+    chart.timeScale().applyOptions({ barSpacing: opts.barSpacing, rightOffset: 0, fixLeftEdge: false });
+    // Same price span as the 15m chart, widened if the data ever leaves it (never clips a candle).
+    candleSeries.applyOptions({
+      autoscaleInfoProvider: original => {
+        const res = original();
+        if (detailView.priceMin == null || detailView.priceMax == null) return res;
+        if (!res || !res.priceRange) return { priceRange: { minValue: detailView.priceMin, maxValue: detailView.priceMax } };
+        return {
+          ...res,
+          priceRange: {
+            minValue: Math.min(res.priceRange.minValue, detailView.priceMin),
+            maxValue: Math.max(res.priceRange.maxValue, detailView.priceMax)
+          }
+        };
+      }
+    });
+    // No extra margins: the span handed over IS what the main chart shows (margins included), so adding
+    // the autoscale margins again would draw this axis wider than the main chart's.
+    candleSeries.priceScale().applyOptions({ autoScale: true, scaleMargins: { top: 0, bottom: 0 } });
+  }
+
+  function detailApplyView() {
+    if (!detailView) return;
+    detailApplying = true;
+    const paneWidth = chart.paneSize().width;
+    chart.timeScale().setVisibleLogicalRange({ from: -1, to: -1 + paneWidth / detailView.barSpacing });
+    setTimeout(() => { detailApplying = false; }, 0);
+  }
+
+  // Replaces the candles; the view is only (re)applied for a new target or while the user has not touched it.
+  function detailSetCandles(candles, resetView) {
+    allCandles = candles.slice().sort((a, b) => a.time - b.time);
+    renderCandles();
+    if (resetView && detailView) detailView.userMoved = false;
+    if (detailView && !detailView.userMoved) detailApplyView();
+  }
+
+  // "Restablecer vista" button: back to the initial layout and the automatic (main-chart) price range.
+  function detailResetView() {
+    if (!detailView) return;
+    detailView.userMoved = false;
+    candleSeries.priceScale().applyOptions({ autoScale: true });
+    detailApplyView();
+  }
+
+  // The user took over the view: wheel zoom, dragging the chart, or dragging the price axis.
+  container.addEventListener('wheel', () => { if (detailView) detailView.userMoved = true; }, { passive: true });
+  container.addEventListener('mousemove', ev => { if (detailView && (ev.buttons & 1)) detailView.userMoved = true; });
 </script>
 </body>
 </html>

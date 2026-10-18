@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Web.WebView2.WinForms;
 using OptionsTrader.Application.DTOs.Streaming;
 
@@ -23,14 +24,33 @@ internal sealed class CandleDetailForm : Form
     private string _lastJson = string.Empty;
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
-    public CandleDetailForm(string symbol)
+    private bool _pendingViewReset = true;
+    private const double CandlesShareOfWidth = 0.8; // 15 candles take this share of the plot width at the initial zoom
+    private const double PriceAxisWidthPx = 60;
+
+    // panelHeight: the height of the 15m panel it came from, so both charts have the same vertical size.
+    public CandleDetailForm(string symbol, int panelHeight)
     {
         _symbol = symbol;
         Text = $"{symbol} — velas de 1 min";
-        Size = new Size(760, 460);
+        ClientSize = new Size(760, Math.Max(280, panelHeight + 30));
         StartPosition = FormStartPosition.Manual;
         BackColor = Color.FromArgb(19, 23, 34);
+
+        var resetButton = new Button
+        {
+            Text = "Restablecer vista", Dock = DockStyle.Left, Width = 130, FlatStyle = FlatStyle.Flat,
+            ForeColor = Color.White, BackColor = Color.FromArgb(40, 46, 62), UseVisualStyleBackColor = false
+        };
+        resetButton.FlatAppearance.BorderColor = Color.DimGray;
+        resetButton.Click += async (s, e) =>
+        {
+            if (_web.CoreWebView2 != null) await _web.CoreWebView2.ExecuteScriptAsync("detailResetView();");
+        };
+        var topBar = new Panel { Dock = DockStyle.Top, Height = 26, BackColor = Color.FromArgb(19, 23, 34) };
+        topBar.Controls.Add(resetButton);
         Controls.Add(_web);
+        Controls.Add(topBar);
 
         _redrawTimer.Tick += async (s, e) =>
         {
@@ -43,7 +63,7 @@ internal sealed class CandleDetailForm : Form
     // getState says whether the bucket is still forming. freezeWhenClosed: stop following once it is over
     // (the live case); the Simulator keeps following because its clock can be rewound.
     public async Task ShowBucketAsync(DateTime bucketStartUtc, Func<DateTime, DateTime, List<CandleData>> getMinutes,
-        Func<DateTime, MinuteBucketState> getState, bool freezeWhenClosed)
+        Func<DateTime, MinuteBucketState> getState, bool freezeWhenClosed, double? priceMin, double? priceMax)
     {
         _bucketStartUtc = bucketStartUtc;
         _getMinutes = getMinutes;
@@ -53,6 +73,15 @@ internal sealed class CandleDetailForm : Form
         _lastJson = string.Empty;
 
         await EnsurePageAsync();
+
+        // New target: lay the view out once — a fixed bar width (15 candles take ~80 % of the plot), the
+        // price axis over the same span the 15m chart shows. Redraws then leave the view alone.
+        var plotWidth = Math.Max(200, _web.Width - PriceAxisWidthPx);
+        var barSpacing = plotWidth * CandlesShareOfWidth / 15.0;
+        var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax });
+        await _web.CoreWebView2.ExecuteScriptAsync($"configureDetailView({viewJson});");
+        _pendingViewReset = true;
+
         await RedrawAsync();
         _redrawTimer.Start();
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
@@ -94,8 +123,8 @@ internal sealed class CandleDetailForm : Form
         if (json != _lastJson)
         {
             _lastJson = json;
-            await _web.CoreWebView2.ExecuteScriptAsync($"loadHistory({json});");
-            await _web.CoreWebView2.ExecuteScriptAsync("fitAllCandles();");
+            await _web.CoreWebView2.ExecuteScriptAsync($"detailSetCandles({json}, {(_pendingViewReset ? "true" : "false")});");
+            _pendingViewReset = false;
         }
 
         var startEt = TimeZoneInfo.ConvertTimeFromUtc(_bucketStartUtc, EasternZone);

@@ -195,7 +195,7 @@ public class ChartPanel : Panel
     private readonly MinuteCandleStore _minuteStore = new();
 
     // Fired with the 15-minute bucket's start (UTC) when the user double-clicks one of this panel's candles.
-    internal event Action<DateTime>? OnCandleDetailRequested;
+    internal event Action<DateTime, double?, double?>? OnCandleDetailRequested; // bucket start, price min, price max of this chart's view
 
     // Fired (on the UI thread) when the 1-minute candles changed — a tick or a bar; the window redraws.
     internal event Action? OnMinuteCandlesChanged;
@@ -219,6 +219,9 @@ public class ChartPanel : Panel
         if (OnMinuteCandlesChanged == null || _closing || !IsHandleCreated) return;
         BeginInvoke(() => OnMinuteCandlesChanged?.Invoke());
     }
+
+    internal static double? ReadNullableDouble(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Number ? el.GetDouble() : null;
 
     // Inverse of FakeUtcEpochSeconds: the chart's "ET wall-clock digits disguised as UTC" back to a real UTC instant.
     public static DateTime UtcFromFakeEpochSeconds(long seconds)
@@ -1581,7 +1584,8 @@ public class ChartPanel : Panel
                 case "candle_detail":
                 {
                     if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))
-                        OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(UtcFromFakeEpochSeconds(cdSeconds)));
+                        OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(UtcFromFakeEpochSeconds(cdSeconds)),
+                            ReadNullableDouble(root, "priceMin"), ReadNullableDouble(root, "priceMax"));
                     break;
                 }
                 case "trend_state":

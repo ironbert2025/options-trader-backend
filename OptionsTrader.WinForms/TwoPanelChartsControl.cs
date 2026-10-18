@@ -1294,12 +1294,12 @@ public class TwoPanelChartsControl : UserControl
             // only while it is open.
             CandleDetailForm? candleDetail = null;
             Action? minutesChanged = null;
-            rthPanel.OnCandleDetailRequested += async bucketStartUtc =>
+            rthPanel.OnCandleDetailRequested += async (bucketStartUtc, priceMin, priceMax) =>
             {
                 if (IsDisposed) return;
                 if (candleDetail == null || candleDetail.IsDisposed)
                 {
-                    var window = new CandleDetailForm(_symbol);
+                    var window = new CandleDetailForm(_symbol, rthPanel.Height);
                     candleDetail = window;
                     minutesChanged = () => window.MarkDirty();
                     rthPanel.OnMinuteCandlesChanged += minutesChanged;
@@ -1308,7 +1308,7 @@ public class TwoPanelChartsControl : UserControl
                 }
                 try
                 {
-                    await candleDetail.ShowBucketAsync(bucketStartUtc, rthPanel.GetMinuteCandles, rthPanel.GetMinuteBucketState, freezeWhenClosed: true);
+                    await candleDetail.ShowBucketAsync(bucketStartUtc, rthPanel.GetMinuteCandles, rthPanel.GetMinuteBucketState, freezeWhenClosed: true, priceMin, priceMax);
                 }
                 catch { /* diagnostics window — never disturb the charts */ }
             };
