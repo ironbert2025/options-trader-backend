@@ -1743,6 +1743,7 @@ public partial class Form1 : Form
             var strikeCount = GetStrikeCountFor(_selectedTicker.Symbol);
             var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate, strikeCount)).ToList();
             _hubTokenWaitCycles = 0; // got data — any earlier wait for the hub's token is over
+            ObserveChainFreshness(fullChain);
 
             var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();
             var allQuotesNext = fullChain.Where(q => q.ExpirationDate == nextExpDate).ToList();
@@ -1858,6 +1859,129 @@ public partial class Form1 : Form
     // GetAccessTokenAsync + the 5 s pause above); 60 of them is ~15 minutes.
     private int _hubTokenWaitCycles;
     private const int MaxHubTokenWaitCycles = 60;
+
+    // ---- Frozen option chain (Schwab keeps serving stale quotes while the underlying moves) ----
+    // See OptionChainFreshnessMonitor for how it is detected. While the alarm is on: red marker in the polling-time
+    // labels, no new trades (IsRowTradeBlocked), no target auto-close, the raw response saved as evidence, a
+    // Telegram note (first alarm of the day per ticker) and — from the token authority — a forced access-token
+    // renewal every 5 minutes, to find out whether a fresh token brings live quotes back.
+    internal static bool ChainStale { get; private set; }
+    private readonly OptionChainFreshnessMonitor _chainFreshness = new();
+    private DateTime _lastStaleRawSaveUtc = DateTime.MinValue;
+    private DateTime _lastForcedRenewUtc = DateTime.MinValue;
+    private (DateOnly Day, int Files) _staleRawFiles;
+    private DateOnly _staleTelegramDay;
+    private Color? _lastUpdateNormalColor;
+
+    private void ObserveChainFreshness(List<OptionQuoteDto> chain)
+    {
+        var change = _chainFreshness.Observe(chain, MarketHours.NowEst);
+        ChainStale = _chainFreshness.IsStale;
+        var symbol = _selectedTicker?.Symbol ?? "UNK";
+
+        if (change == OptionChainFreshnessMonitor.Change.Raised)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Stale] CADENA DE OPCIONES CONGELADA ({symbol}): {_chainFreshness.Reason}. Trades nuevos y cierre por target en pausa.", Color.Red);
+            NotifyStaleChainOnTelegram(symbol);
+        }
+        else if (change == OptionChainFreshnessMonitor.Change.Cleared)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Stale] La cadena de opciones volvió a actualizarse ({symbol}). Trades y cierre por target reanudados.", Color.LimeGreen);
+        }
+
+        if (ChainStale)
+        {
+            SaveStaleChainEvidence(symbol);
+            _ = ForceTokenRenewalAsync();
+        }
+        ApplyChainStaleVisual();
+    }
+
+    private void ApplyChainStaleVisual()
+    {
+        _lastUpdateNormalColor ??= lblLastUpdate.ForeColor;
+        if (ChainStale)
+        {
+            lblLastUpdate.ForeColor = Color.Red;
+            lblLastUpdate.Text += "  ⚠ CADENA CONGELADA";
+        }
+        else
+        {
+            lblLastUpdate.ForeColor = _lastUpdateNormalColor.Value;
+        }
+        if (_lblChartsPollingTime != null)
+        {
+            _lblChartsPollingTime.ForeColor = ChainStale ? Color.Red : Color.DarkGoldenrod;
+            _lblChartsPollingTime.Text = lblLastUpdate.Text;
+        }
+    }
+
+    // The raw JSON of the frozen response, at most one a minute and 30 per ticker per day.
+    private void SaveStaleChainEvidence(string symbol)
+    {
+        try
+        {
+            if ((DateTime.UtcNow - _lastStaleRawSaveUtc) < TimeSpan.FromMinutes(1)) return;
+            var day = DateOnly.FromDateTime(DateTime.Now);
+            if (_staleRawFiles.Day != day) _staleRawFiles = (day, 0);
+            if (_staleRawFiles.Files >= 30) return;
+
+            var json = SchwabMarketDataService.GetLastRawResponse(symbol);
+            if (string.IsNullOrEmpty(json)) return;
+
+            var folder = @"C:\OptionsData\EventLog\stale_chain";
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, $"{symbol}_{DateTime.Now:yyyyMMdd_HHmmss}.json"), json);
+            _lastStaleRawSaveUtc = DateTime.UtcNow;
+            _staleRawFiles = (day, _staleRawFiles.Files + 1);
+        }
+        catch { /* evidence is best-effort */ }
+    }
+
+    private void NotifyStaleChainOnTelegram(string symbol)
+    {
+        try
+        {
+            var day = DateOnly.FromDateTime(DateTime.Now);
+            if (_staleTelegramDay == day || !IsTelegramEnabledFor(symbol)) return;
+            _staleTelegramDay = day;
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+            var text = $"{symbol}: la cadena de opciones de Schwab está congelada ({_chainFreshness.Reason}). " +
+                       $"Los trades nuevos y el cierre por target están en pausa hasta que se recupere.";
+            _ = Task.Run(async () =>
+            {
+                var (ok, _, messageId) = await TelegramNotifier.SendAsync(botToken, chatId, text, symbol);
+                if (ok && messageId.HasValue)
+                    TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "ChainStale", DateTime.Now));
+            });
+        }
+        catch { /* a failed note must not matter */ }
+    }
+
+    // Experiment: does a brand-new access token make Schwab serve live quotes again? Only the token authority
+    // (the hub) may renew; at most once every 5 minutes while the alarm lasts.
+    private async Task ForceTokenRenewalAsync()
+    {
+        if (!IsTokenAuthority() || (DateTime.UtcNow - _lastForcedRenewUtc) < TimeSpan.FromMinutes(5)) return;
+        _lastForcedRenewUtc = DateTime.UtcNow;
+        try
+        {
+            var creds = SchwabCredentialsStore.Load();
+            var tokens = SchwabTokenStore.Load();
+            if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return;
+            await _schwabAuth.GetAccessTokenAsync(
+                creds.ApiKey, creds.ApiSecret,
+                tokens?.AccessToken ?? string.Empty, DateTime.MinValue, // MinValue = "expired": forces the refresh
+                tokens?.RefreshToken ?? string.Empty,
+                OnSchwabTokenRenewed, allowRefresh: true, ReloadTokenFromDisk);
+            LogLine($"{DateTime.Now:HH:mm:ss} [Stale] Access token renovado a la fuerza (cadena congelada). Si la cadena se recupera ahora, el token era el motivo.", Color.Orange);
+        }
+        catch (Exception ex)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Stale] No se pudo renovar el token a la fuerza: {ex.Message}", Color.Orange);
+        }
+    }
 
     private static readonly string PollingExceptionLogPath = @"C:\OptionsData\EventLog\polling_exceptions.log";
     private static readonly object PollingExceptionLogLock = new();
@@ -2583,6 +2707,9 @@ public partial class Form1 : Form
     // spread-too-wide (Sprd >= 6) check was removed per explicit request.
     private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName)
     {
+        // A frozen chain would price the trade with a stale ask — no new trades until it recovers.
+        if (ChainStale) return true;
+
         if (IsRowBidZero(row, callBidColName, putBidColName)) return true;
 
         if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
@@ -2640,6 +2767,7 @@ public partial class Form1 : Form
         _lastTradeOpenFromChartsTab = chartsIsSimulation || chartsOverride.HasValue;
 
         // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
+        if (ChainStale) LogLine($"{DateTime.Now:HH:mm:ss} [Stale] Trade bloqueado: la cadena de opciones está congelada.", Color.Red);
         if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
 
         // A click coming from the Charts tab's own Simulation/Demo+Target/Real+Target radios always
@@ -4670,6 +4798,7 @@ public partial class Form1 : Form
             // auto-close here to mirror the real LIMIT order closing on the server.
             var suppressAutoClose = row.Tag is TradeRowTag { SuppressAutoClose: true };
             if (!suppressAutoClose
+                && !ChainStale // a frozen chain must not close trades at the first fresh poll (seen 19-oct 10:18:19)
                 && decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
                 && targetBid > 0 && currentBid >= targetBid)
             {

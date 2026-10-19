@@ -1794,7 +1794,8 @@ public class TwoPanelChartsControl : UserControl
 
                 var disabled =
                     !decimal.TryParse(row.Cells["colBidLive"].Value?.ToString(), out var bid) || bid == 0m
-                    || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0;
+                    || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0
+                    || Form1.ChainStale; // frozen chain (see Form1.ObserveChainFreshness)
 
                 var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
                 var textColor = disabled ? Color.Gray : Color.White;
