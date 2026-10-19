@@ -922,7 +922,7 @@ public class SimulatorForm : Form
 
         // Shows/hides the white Bollinger-band edge markers on the 15m RTH panel — checked by
         // default (matches the always-on behavior before this toggle existed).
-        var chkBollingerEdges = new CheckBox { Text = "BB edges", Location = new Point(320, 4), AutoSize = true, Checked = true };
+        var chkBollingerEdges = new CheckBox { Text = "BB edges", Location = new Point(320, 4), AutoSize = true, Checked = false };
         chkBollingerEdges.CheckedChanged += async (s, e) =>
             await _rthChart.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
         _pnlSmaEvents.Controls.Add(chkBollingerEdges);

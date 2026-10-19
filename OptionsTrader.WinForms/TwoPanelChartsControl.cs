@@ -1431,7 +1431,7 @@ public class TwoPanelChartsControl : UserControl
 
         // Shows/hides the white Bollinger-band edge markers on this panel — checked by default
         // (matches the always-on behavior before this toggle existed).
-        var chkBollingerEdges = new CheckBox { Text = "BB edges", AutoSize = true, Checked = true, Margin = new Padding(3, 4, 3, 3) };
+        var chkBollingerEdges = new CheckBox { Text = "BB edges", AutoSize = true, Checked = false, Margin = new Padding(3, 4, 3, 3) };
         chkBollingerEdges.CheckedChanged += async (s, e) =>
         {
             if (rthPanel == null) return;

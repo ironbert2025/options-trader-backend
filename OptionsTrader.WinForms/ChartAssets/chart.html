@@ -4592,7 +4592,7 @@
   // computed at all (set once, per panel, at load); this one is the user-facing show/hide toggle
   // (a checkbox in the toolbar), checked only in draw() so calculation keeps running underneath
   // even while hidden (cheap, and means it's already up to date the moment it's shown again).
-  let bollingerEdgeMarkersVisible = true;
+  let bollingerEdgeMarkersVisible = false; // matches the unchecked "BB edges" box
   function setBollingerEdgeMarkersVisible(show) { bollingerEdgeMarkersVisible = show; forceRepaint(); }
 
   // Panel 2 (15m RTH) only, both Simulator and Live Chart, per explicit request: a light gray fill
