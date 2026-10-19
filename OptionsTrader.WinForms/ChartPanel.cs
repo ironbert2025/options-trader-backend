@@ -293,6 +293,49 @@ public class ChartPanel : Panel
         }
     }
 
+    // ---- Open revisit (first 15m candle): see OpenRevisitDetector. Panel 2 only, fed by the Level 1 ticks. ----
+    internal event Action<OpenRevisitEvent>? OnOpenRevisitEvent;
+    private OpenRevisitDetector? _openRevisit;
+    private DateOnly _openRevisitDay;
+
+    private void FeedOpenRevisit(decimal price, DateTime utcTime)
+    {
+        if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
+        if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay >= new TimeSpan(9, 45, 0)) return;
+
+        var day = DateOnly.FromDateTime(eastern);
+        if (_openRevisit == null || _openRevisitDay != day)
+        {
+            // The wick floor comes from the first 15m candle of the previous days (history of this panel).
+            List<CandleData> snapshot;
+            try { snapshot = _closedCandles.ToList(); }
+            catch { return; } // history load mutating the list right now — next tick
+            var ranges = snapshot
+                .Select(c => (Eastern: TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone), Candle: c))
+                .Where(x => x.Eastern.TimeOfDay == new TimeSpan(9, 30, 0) && DateOnly.FromDateTime(x.Eastern) < day)
+                .GroupBy(x => DateOnly.FromDateTime(x.Eastern))
+                .OrderBy(g => g.Key).TakeLast(20)
+                .Select(g => g.Last().Candle.High - g.Last().Candle.Low)
+                .ToList();
+            var median = OpenRevisitDetector.MedianRange(ranges);
+            if (median == null) return; // not enough history yet — try again on the next tick
+            _openRevisit = new OpenRevisitDetector(median.Value);
+            _openRevisitDay = day;
+        }
+
+        var ev = _openRevisit.OnTick(utcTime, price);
+        if (ev == null || _closing || !IsHandleCreated) return;
+        BeginInvoke(async () =>
+        {
+            OnOpenRevisitEvent?.Invoke(ev);
+            if (_webView.CoreWebView2 == null) return;
+            var open = ev.Open.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var title = $"OPEN {(ev.BodyUp ? "▲" : "▼")} {TimeZoneInfo.ConvertTimeFromUtc(ev.TimeUtc, EasternZone):HH:mm:ss}";
+            await _webView.CoreWebView2.ExecuteScriptAsync($"markOpenRevisit({open}, {JsonSerializer.Serialize(title)});");
+        });
+    }
+
     private void FeedBbMomentum(decimal price, DateTime utcTime)
     {
         if (_mode != ChartPanelMode.Fifteen_RTH) return;
@@ -3914,6 +3957,7 @@ public class ChartPanel : Panel
             }
         }
         FeedBbMomentum(price, utcTime); // panel 2 only, ticks only
+        FeedOpenRevisit(price, utcTime); // panel 2 only, ticks only
         UpdateLivePriceFromExternalSource(price, utcTime, decidesBucket: true);
     }
 

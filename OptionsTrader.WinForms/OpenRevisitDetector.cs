@@ -1,0 +1,78 @@
+namespace OptionsTrader.WinForms;
+
+// What the detector reports: the first 15m candle of the session moved away from its open (the wick), came back
+// through it, and the body (open -> price) is now at least BodyRatio of that wick, on the OTHER side of the open.
+// BodyUp: the body is above the open (the wick hangs below it); false: body below, the wick is above.
+internal sealed record OpenRevisitEvent(DateTime TimeUtc, bool BodyUp, decimal Open, decimal Wick, decimal Body, decimal Price);
+
+// "Open revisit" in the first 15-minute candle (09:30–09:45 ET): the price leaves the open, comes back through it
+// and keeps going the other way. Tick fed (Level 1 ticks, or the Simulator's replay ticks), pure logic, no UI.
+//
+// Rule (calibrated over 50–53 days of saved ticks per symbol, see scripts/calibrate_open_revisit.py):
+//   wick = largest distance from the open on the side opposite to where the price is now
+//   body = distance from the open to the current price (on the other side)
+//   fires when wick >= WickFloor and body >= BodyRatio * wick — once per session.
+// WickFloor is per symbol: FloorFraction (0.25) x the median range of the first 15m candle of the previous days,
+// so it follows each symbol's own volatility without a percentage of the price.
+internal sealed class OpenRevisitDetector
+{
+    public const decimal BodyRatio = 0.4m;
+    public const decimal FloorFraction = 0.25m;
+    private static readonly TimeSpan SessionStart = new(9, 30, 0);
+    private static readonly TimeSpan SessionEnd = new(9, 45, 0);
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
+    private readonly decimal _wickFloor;
+    private DateOnly _day;
+    private bool _haveOpen;
+    private decimal _open, _high, _low;
+    private bool _fired;
+
+    public decimal WickFloor => _wickFloor;
+    public bool HasOpen => _haveOpen;
+    public decimal Open => _open;
+
+    // medianFirstCandleRange: median High-Low of the first 15m RTH candle of up to the last 20 previous days.
+    public OpenRevisitDetector(decimal medianFirstCandleRange) => _wickFloor = FloorFraction * medianFirstCandleRange;
+
+    // Median of the first-candle ranges (null when there are too few days to trust it).
+    public static decimal? MedianRange(IReadOnlyList<decimal> ranges, int minDays = 5)
+    {
+        if (ranges.Count < minDays) return null;
+        var sorted = ranges.OrderBy(r => r).ToList();
+        var mid = sorted.Count / 2;
+        return sorted.Count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2m;
+    }
+
+    public OpenRevisitEvent? OnTick(DateTime utc, decimal price)
+    {
+        if (price <= 0) return null;
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utc, EasternZone);
+        var day = DateOnly.FromDateTime(eastern);
+        if (day != _day) { _day = day; _haveOpen = false; _fired = false; }
+
+        var tod = eastern.TimeOfDay;
+        if (tod < SessionStart || tod >= SessionEnd) return null;
+
+        if (!_haveOpen)
+        {
+            _haveOpen = true;
+            _open = _high = _low = price;
+            return null;
+        }
+        _high = Math.Max(_high, price);
+        _low = Math.Min(_low, price);
+        if (_fired || _wickFloor <= 0) return null;
+
+        // Body above the open -> the wick is the excursion below it; body below -> the excursion above.
+        var bodyUp = price > _open;
+        var body = Math.Abs(price - _open);
+        var wick = bodyUp ? _open - _low : _high - _open;
+        if (body > 0 && wick >= _wickFloor && body >= BodyRatio * wick)
+        {
+            _fired = true;
+            return new OpenRevisitEvent(utc, bodyUp, _open, wick, body, price);
+        }
+        return null;
+    }
+}

@@ -5307,7 +5307,18 @@
   // such a large gap, visually "stretching" it. A full candleSeries.setData() (via renderCandles)
   // forces Lightweight Charts to rebuild layout from scratch instead, which doesn't have that
   // issue — more expensive than update(), but this only runs once per day, not per tick.
+  // "Open revisit" (first 15m candle): thin dotted line at the open price, titled with the direction of the body
+  // and the moment it fired. One per day — the next one replaces it.
+  let openRevisitLine = null;
+  function markOpenRevisit(price, title) {
+    if (openRevisitLine) candleSeries.removePriceLine(openRevisitLine);
+    openRevisitLine = candleSeries.createPriceLine({
+      price, color: '#ffd400', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted,
+      axisLabelVisible: true, lineVisible: true, title
+    });
+  }
   function resetToNewDayCandle(candle) {
+    if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; } // yesterday's open
     upsertCandle(candle);
     renderCandles();
     recalculateSmas();
