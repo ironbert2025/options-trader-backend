@@ -872,7 +872,7 @@ public class SimulatorForm : Form
         if (_selectedContracts != "PositionSize" && int.TryParse(_selectedContracts, out var fixedCount))
             return fixedCount.ToString();
 
-        var balance = BalanceStore.Load();
+        var balance = BalanceStore.Load(BalanceMode.Demo); // the replay practices with the demo balance and never changes it
         decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct);
         return CalcSimContracts(balance * pct / 100m, ask);
     }

@@ -151,6 +151,7 @@ public partial class Form1 : Form
         {
             _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose();
             _tokenKeepAliveTimer?.Dispose();
+            _balanceWatcher?.Dispose(); _balanceReloadTimer?.Dispose();
             if (_historyClient != null) await _historyClient.DisposeAsync();
             if (_candleHubClient != null) await _candleHubClient.DisposeAsync();
             _candleHubServer?.Dispose();
@@ -174,6 +175,7 @@ public partial class Form1 : Form
             LoadSchwabCredentials();
         LoadAwsSettings();
         LoadBalance();
+        StartBalanceWatcher();
         LoadTickerButtons();
         LoadCachedAccounts();
         Load += Form1_Load;
@@ -1208,18 +1210,72 @@ public partial class Form1 : Form
         rbNoTradeTarget.Font = new Font(rbNoTradeTarget.Font, rbNoTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
     }
 
+    // Which balance this instance works with: Demo or Real, set by the Charts tab's trade radios (Demo-Target
+    // and Simulation = Demo, Real-Target = Real). Per process, so static. Demo until a radio says otherwise.
+    internal static BalanceMode CurrentBalanceMode { get; private set; } = BalanceMode.Demo;
+
+    // True while the box is being filled from the file — the TextChanged that follows must not write it back.
+    private bool _loadingBalance;
+    private FileSystemWatcher? _balanceWatcher;
+    private System.Windows.Forms.Timer? _balanceReloadTimer;
+
     private void LoadBalance()
     {
-        var balance = BalanceStore.Load();
-        txtBalance.Text = balance > 0 ? balance.ToString("F0") : string.Empty;
+        var balance = BalanceStore.Load(CurrentBalanceMode);
+        _loadingBalance = true;
+        try { txtBalance.Text = balance > 0 ? balance.ToString("F0") : string.Empty; }
+        finally { _loadingBalance = false; }
         UpdatePositionAmount();
+    }
+
+    // The trade radios picked Demo or Real: the balance box shows that mode's balance from now on.
+    internal void SetBalanceMode(BalanceMode mode)
+    {
+        if (CurrentBalanceMode == mode) return;
+        CurrentBalanceMode = mode;
+        LoadBalance();
+    }
+
+    // Other instances (and this one, when a demo trade closes) rewrite balance_demo.json: an instance that
+    // works in Demo mode picks the new value up; one in Real mode ignores it.
+    private void StartBalanceWatcher()
+    {
+        try
+        {
+            Directory.CreateDirectory(BalanceStore.DirectoryPath);
+            _balanceReloadTimer = new System.Windows.Forms.Timer { Interval = 250 };
+            _balanceReloadTimer.Tick += (s, e) =>
+            {
+                _balanceReloadTimer!.Stop();
+                if (CurrentBalanceMode == BalanceMode.Demo) LoadBalance();
+            };
+
+            _balanceWatcher = new FileSystemWatcher(BalanceStore.DirectoryPath, BalanceStore.DemoFileName)
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+                EnableRaisingEvents = true
+            };
+            FileSystemEventHandler onChange = (s, e) =>
+            {
+                // Several events per write — debounce on the UI thread.
+                if (IsHandleCreated && !IsDisposed) BeginInvoke(() => { _balanceReloadTimer?.Stop(); _balanceReloadTimer?.Start(); });
+            };
+            _balanceWatcher.Changed += onChange;
+            _balanceWatcher.Created += onChange;
+            _balanceWatcher.Renamed += (s, e) => onChange(s, e);
+        }
+        catch
+        {
+            // No live sync if the watcher cannot start — the balance still loads at startup and on mode change.
+        }
     }
 
     private void TxtBalance_TextChanged(object? sender, EventArgs e)
     {
         UpdatePositionAmount();
+        if (_loadingBalance) return; // filled from the file, not typed
         if (decimal.TryParse(txtBalance.Text, out var balance))
-            BalanceStore.Save(balance);
+            BalanceStore.Save(CurrentBalanceMode, balance);
     }
 
     private void UpdatePositionAmount()
@@ -4000,6 +4056,15 @@ public partial class Form1 : Form
         // Closing PnL% (real fill price, or target price for TARGET closes) can be a new
         // low/high the live ticks never saw.
         UpdatePnLMinMax(row, pnlPctVal, nowStr);
+
+        // A DEMO (or Simulation) trade closing moves the demo balance by its PnL — every instance working in
+        // Demo mode picks the new value up through the file watcher. Real trades leave the balances alone.
+        var tradeKind = row.Cells["colTradeDemoReal"].Value?.ToString();
+        if (!string.Equals(tradeKind, "Real", StringComparison.OrdinalIgnoreCase))
+        {
+            try { BalanceStore.AddToDemo(pnlVal); }
+            catch { /* balance bookkeeping must never get in the way of closing a trade */ }
+        }
         row.Cells["colTradeExitTime"].Value   = nowStr;
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
@@ -4680,7 +4745,7 @@ public partial class Form1 : Form
 
     private static decimal GetPositionSize()
     {
-        var balance = BalanceStore.Load();
+        var balance = BalanceStore.Load(CurrentBalanceMode);
         if (!decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct)) return 0;
         return balance * pct / 100m;
     }

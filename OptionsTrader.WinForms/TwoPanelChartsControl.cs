@@ -2069,17 +2069,17 @@ public class TwoPanelChartsControl : UserControl
         _rbChartsSimulation.CheckedChanged += (s, e) =>
         {
             _rbChartsSimulation.Font = new Font(_rbChartsSimulation.Font, _rbChartsSimulation.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsSimulation.Checked) _useSimulation = true;
+            if (_rbChartsSimulation.Checked) { _useSimulation = true; _form1.SetBalanceMode(BalanceMode.Demo); }
         };
         _rbChartsDemoTarget.CheckedChanged += (s, e) =>
         {
             _rbChartsDemoTarget.Font = new Font(_rbChartsDemoTarget.Font, _rbChartsDemoTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsDemoTarget.Checked) { _useRealTrade = false; _useSimulation = false; }
+            if (_rbChartsDemoTarget.Checked) { _useRealTrade = false; _useSimulation = false; _form1.SetBalanceMode(BalanceMode.Demo); }
         };
         _rbChartsRealTarget.CheckedChanged += (s, e) =>
         {
             _rbChartsRealTarget.Font = new Font(_rbChartsRealTarget.Font, _rbChartsRealTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsRealTarget.Checked) { _useRealTrade = true; _useSimulation = false; }
+            if (_rbChartsRealTarget.Checked) { _useRealTrade = true; _useSimulation = false; _form1.SetBalanceMode(BalanceMode.Real); }
         };
         ResizeTradesGrid();
 
