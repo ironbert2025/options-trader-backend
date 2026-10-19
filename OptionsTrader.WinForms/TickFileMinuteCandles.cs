@@ -34,6 +34,24 @@ internal static class TickFileMinuteCandles
         return MinuteCandleStore.FromTicks(ticks, startUtc, endUtc, DateTime.MaxValue);
     }
 
+    // Median High-Low range of the first 15m candle (09:30-09:45 ET) over up to maxDays of the days BEFORE beforeDay that
+    // have a tick file — the wick floor of OpenRevisitDetector. Null when fewer than 5 days are available. Reads whole
+    // tick files (cached once past), so call it off the UI/feed thread.
+    public static decimal? MedianFirstCandleRange(string symbol, DateOnly beforeDay, int maxDays = 20)
+    {
+        var ranges = new List<decimal>();
+        for (var back = 1; back <= 45 && ranges.Count < maxDays; back++)
+        {
+            var day = beforeDay.AddDays(-back);
+            if (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) continue;
+            var startUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(day.ToDateTime(new TimeOnly(9, 30)), DateTimeKind.Unspecified), EasternZone);
+            var minutes = Get(symbol, startUtc, startUtc.AddMinutes(15));
+            if (minutes.Count < 5) continue; // no file (holiday) or an almost empty one
+            ranges.Add(minutes.Max(c => c.High) - minutes.Min(c => c.Low));
+        }
+        return OpenRevisitDetector.MedianRange(ranges);
+    }
+
     private static List<CandleData> LoadTicks(string symbol, DateOnly day)
     {
         var dateStr = day.ToString("yyyyMMdd");

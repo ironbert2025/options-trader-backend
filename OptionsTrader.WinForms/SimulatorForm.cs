@@ -1127,11 +1127,8 @@ public class SimulatorForm : Form
     private void ResetOpenRevisit()
     {
         _rthChart.ClearOpenRevisit();
-        var prior = _intradayCandles.Where(c => DateOnly.FromDateTime(EasternTime(c.Time)) < _simDate).ToList();
-        var rth = CandleAggregation.AggregateToInterval(CandleAggregation.FilterSession(prior, rthOnly: true), 15, rthOnly: true);
-        var ranges = rth.Where(c => EasternTime(c.Time).TimeOfDay == new TimeSpan(9, 30, 0))
-            .OrderBy(c => c.Time).TakeLast(20).Select(c => c.High - c.Low).ToList();
-        var median = OpenRevisitDetector.MedianRange(ranges);
+        // the Simulator only loads 3 context days, so the floor comes from the saved tick files (up to 20 days)
+        var median = TickFileMinuteCandles.MedianFirstCandleRange(_symbol, _simDate);
         _openRevisit = median == null ? null : new OpenRevisitDetector(median.Value);
     }
 

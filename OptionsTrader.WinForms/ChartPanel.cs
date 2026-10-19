@@ -297,34 +297,41 @@ public class ChartPanel : Panel
     internal event Action<OpenRevisitEvent>? OnOpenRevisitEvent;
     private OpenRevisitDetector? _openRevisit;
     private DateOnly _openRevisitDay;
+    private volatile bool _openRevisitLoading;
+    private DateOnly _openRevisitLoadingDay;
 
     // Reads the candle as it is DRAWN (the live 15m bucket the ticks just updated), not its own copy of the ticks.
     private void FeedOpenRevisit(DateTime utcTime, CandleData bucket)
     {
         if (_mode != ChartPanelMode.Fifteen_RTH) return;
-        if (TimeZoneInfo.ConvertTimeFromUtc(bucket.Time, EasternZone).TimeOfDay != new TimeSpan(9, 30, 0)) return; // first candle only
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
-        if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay >= new TimeSpan(9, 45, 0)) return;
-
         var day = DateOnly.FromDateTime(eastern);
+
+        // The wick floor (a fraction of the median first-candle range of the previous days, from the saved tick files)
+        // is prepared in the background — premarket included, so it is ready at 9:30. Until then ticks pass by.
         if (_openRevisit == null || _openRevisitDay != day)
         {
-            // The wick floor comes from the first 15m candle of the previous days (history of this panel).
-            List<CandleData> snapshot;
-            try { snapshot = _closedCandles.ToList(); }
-            catch { return; } // history load mutating the list right now — next tick
-            var ranges = snapshot
-                .Select(c => (Eastern: TimeZoneInfo.ConvertTimeFromUtc(c.Time, EasternZone), Candle: c))
-                .Where(x => x.Eastern.TimeOfDay == new TimeSpan(9, 30, 0) && DateOnly.FromDateTime(x.Eastern) < day)
-                .GroupBy(x => DateOnly.FromDateTime(x.Eastern))
-                .OrderBy(g => g.Key).TakeLast(20)
-                .Select(g => g.Last().Candle.High - g.Last().Candle.Low)
-                .ToList();
-            var median = OpenRevisitDetector.MedianRange(ranges);
-            if (median == null) return; // not enough history yet — try again on the next tick
-            _openRevisit = new OpenRevisitDetector(median.Value);
-            _openRevisitDay = day;
+            if (!_openRevisitLoading || _openRevisitLoadingDay != day)
+            {
+                _openRevisitLoading = true;
+                _openRevisitLoadingDay = day;
+                var symbol = _symbol;
+                _ = Task.Run(() =>
+                {
+                    var median = TickFileMinuteCandles.MedianFirstCandleRange(symbol, day);
+                    if (median != null)
+                    {
+                        _openRevisit = new OpenRevisitDetector(median.Value);
+                        _openRevisitDay = day;
+                    }
+                    // fewer than 5 days of tick files: nothing to detect against today (not retried until tomorrow)
+                });
+            }
+            return;
         }
+
+        if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay >= new TimeSpan(9, 45, 0)) return;
+        if (TimeZoneInfo.ConvertTimeFromUtc(bucket.Time, EasternZone).TimeOfDay != new TimeSpan(9, 30, 0)) return; // first candle only
 
         var ev = _openRevisit.OnCandle(utcTime, bucket.Open, bucket.High, bucket.Low, bucket.Close);
         if (ev == null || _closing || !IsHandleCreated) return;
