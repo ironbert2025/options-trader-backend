@@ -5520,8 +5520,9 @@
                 ctx.strokeStyle = '#1f2530'; // same color and thickness (1 px) as the chart's horizontal gray grid lines
                 ctx.lineWidth = 1 * scope.horizontalPixelRatio;
                 ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
-                const vline = x => {
+                const vline = (x, color) => {
                   if (x == null) return;
+                  ctx.strokeStyle = color || '#1f2530';
                   ctx.beginPath();
                   ctx.moveTo(x * scope.horizontalPixelRatio, 0);
                   ctx.lineTo(x * scope.horizontalPixelRatio, scope.bitmapSize.height);
@@ -5533,7 +5534,7 @@
                   if (i > 0) {
                     // midway between the two candles around it (logicalToCoordinate does not take fractions)
                     const l = detailLogicalOf(s), xa = chart.timeScale().logicalToCoordinate(l - 1), xb = chart.timeScale().logicalToCoordinate(l);
-                    if (xa != null && xb != null) vline((xa + xb) / 2);
+                    if (xa != null && xb != null) vline((xa + xb) / 2, '#7a8394'); // lighter than the minute 5/10 lines: it must be easy to see
                   }
                 });
                 ctx.setLineDash([]);
