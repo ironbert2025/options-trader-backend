@@ -1872,14 +1872,17 @@ public class TwoPanelChartsControl : UserControl
         var btnFirstItmPut  = new Button { Text = "+1P", Dock = DockStyle.Right, Width = 40, Margin = Padding.Empty };
         Form1.StyleFirstItmToggle(btnFirstItmCall, isCall: true, armed: false);
         Form1.StyleFirstItmToggle(btnFirstItmPut, isCall: false, armed: false);
-        var nextRow = new Panel { Dock = DockStyle.Top, Height = 22 };
-        lblExpDateNext.Dock = DockStyle.Fill;
-        nextRow.Controls.Add(lblExpDateNext);
-        nextRow.Controls.Add(btnFirstItmCall);
-        nextRow.Controls.Add(btnFirstItmPut);
+        // Own row under "Next: ...", with 8 px of top padding: the Connect/Disconnect button and the polling time
+        // label float over this column's top-right corner (see Form1.SetupChartsTab) and reach ~50 px down, so
+        // buttons on the Next row itself sat under that label.
+        var buttonsRow = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(0, 8, 0, 2) };
+        buttonsRow.Controls.Add(btnFirstItmCall);
+        buttonsRow.Controls.Add(btnFirstItmPut);
+        lblExpDateNext.Dock = DockStyle.Top;
 
         optionsGridHost.Controls.Add(tabOptions);
-        optionsGridHost.Controls.Add(nextRow);
+        optionsGridHost.Controls.Add(buttonsRow);
+        optionsGridHost.Controls.Add(lblExpDateNext);
         optionsGridHost.Controls.Add(lblExpDate);
 
         void RefreshOptionsGrid()
