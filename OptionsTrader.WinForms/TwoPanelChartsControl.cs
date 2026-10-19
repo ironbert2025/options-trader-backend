@@ -1876,7 +1876,9 @@ public class TwoPanelChartsControl : UserControl
         // label float over this column's top-right corner (see Form1.SetupChartsTab) and reach ~50 px down, so
         // buttons on the Next row itself sat under that label.
         var buttonsRow = new Panel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(0, 8, 0, 4) }; // buttons come out 28 px tall
+        // Right-docked controls stack from the last one added: Put is the rightmost, then the gap, then Call.
         buttonsRow.Controls.Add(btnFirstItmCall);
+        buttonsRow.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 14 }); // gap between the two buttons
         buttonsRow.Controls.Add(btnFirstItmPut);
         lblExpDateNext.Dock = DockStyle.Top;
 
