@@ -5312,6 +5312,7 @@
   let openRevisitLine = null;
   function markOpenRevisit(price, title) {
     if (openRevisitLine) candleSeries.removePriceLine(openRevisitLine);
+    openRevisitSelected = false;
     openRevisitLine = candleSeries.createPriceLine({
       price, color: '#ffd400', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted,
       axisLabelVisible: true, lineVisible: true, title
@@ -5319,7 +5320,26 @@
   }
   function clearOpenRevisit() {
     if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; }
+    openRevisitSelected = false;
   }
+  // Click on the line selects it (thicker, white), Delete removes it — same gesture as the drawn lines. A click
+  // anywhere else deselects. Ignored while a drawing tool is armed (those clicks place things).
+  let openRevisitSelected = false;
+  function setOpenRevisitSelected(on) {
+    openRevisitSelected = on;
+    if (openRevisitLine) openRevisitLine.applyOptions({ lineWidth: on ? 2 : 1, color: on ? '#ffffff' : '#ffd400' });
+  }
+  container.addEventListener('click', ev => {
+    if (!openRevisitLine) return;
+    if (dzSzArmed || rectArmed || circleArmed || colorRectArmed || grayRectArmed || tLineArmed || pLineArmed ||
+        hLineArmed || arrowArmed || greenArrowArmed || redArrowArmed || textArmed) return;
+    const y = candleSeries.priceToCoordinate(openRevisitLine.options().price);
+    const py = ev.clientY - container.getBoundingClientRect().top;
+    setOpenRevisitSelected(y != null && Math.abs(y - py) <= 6);
+  });
+  window.addEventListener('keydown', ev => {
+    if (ev.key === 'Delete' && openRevisitSelected) clearOpenRevisit();
+  });
   function resetToNewDayCandle(candle) {
     if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; } // yesterday's open
     upsertCandle(candle);
