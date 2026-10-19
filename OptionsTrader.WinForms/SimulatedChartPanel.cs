@@ -911,6 +911,14 @@ public class SimulatedChartPanel : Panel
     // SMA20/40 + SMA100/200 trend ("up"/"down"/null each) — see ChartPanel.OnTrendStateChanged.
     public event Action<string?, string?>? OnTrendStateChanged;
 
+    // The "1 Min Chart" button: same as a double click on the newest candle shown — the one forming at the
+    // replay clock — through the same OnCandleDetailRequested path.
+    public async Task RequestLastCandleDetailAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("openCandleDetailForLast();");
+    }
+
     // Double click on a candle of the 15m RTH chart -> the 15-minute bucket's start (UTC); see SimulatorForm.OpenCandleDetail.
     public event Action<DateTime, double?, double?, double?, string?>? OnCandleDetailRequested;
 

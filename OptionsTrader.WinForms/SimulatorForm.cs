@@ -296,6 +296,12 @@ public class SimulatorForm : Form
         };
 
         _pnlDzSz.Controls.Add(btnDzSz);
+
+        // "1 Min Chart": the 1-minute candles window of the candle forming at the replay clock (a double click
+        // on any candle of panel 2 opens it too).
+        var btnOneMinChart = new Button { Text = "1 Min Chart", Location = new Point(88, 0), Size = new Size(100, 26) };
+        btnOneMinChart.Click += (s, e) => { _ = _rthChart.RequestLastCandleDetailAsync(); };
+        _pnlDzSz.Controls.Add(btnOneMinChart);
     }
 
     // "Arrow" (diagonal, RTH chart only) + "Stk Call"/"Stk Put" — ported from the live app's
