@@ -62,16 +62,32 @@ internal sealed class OpenRevisitDetector
         }
         _high = Math.Max(_high, price);
         _low = Math.Min(_low, price);
-        if (_fired || _wickFloor <= 0) return null;
 
+        return Evaluate(utc, _open, _high, _low, price);
+    }
+
+    // Same rule, read straight from the candle as drawn (open/high/low and the current price as its close) — what the
+    // live chart uses, so the alert always agrees with what is on screen. Only the first 15m candle counts.
+    public OpenRevisitEvent? OnCandle(DateTime utc, decimal open, decimal high, decimal low, decimal close)
+    {
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(utc, EasternZone);
+        var day = DateOnly.FromDateTime(eastern);
+        if (day != _day) { _day = day; _haveOpen = false; _fired = false; }
+        var tod = eastern.TimeOfDay;
+        if (tod < SessionStart || tod >= SessionEnd || open <= 0) return null;
+        return Evaluate(utc, open, high, low, close);
+    }
+
+    private OpenRevisitEvent? Evaluate(DateTime utc, decimal open, decimal high, decimal low, decimal price)
+    {
         // Body above the open -> the wick is the excursion below it; body below -> the excursion above.
-        var bodyUp = price > _open;
-        var body = Math.Abs(price - _open);
-        var wick = bodyUp ? _open - _low : _high - _open;
-        if (body > 0 && wick >= _wickFloor && body >= BodyRatio * wick)
+        var bodyUp = price > open;
+        var body = Math.Abs(price - open);
+        var wick = bodyUp ? open - low : high - open;
+        if (!_fired && _wickFloor > 0 && body > 0 && wick >= _wickFloor && body >= BodyRatio * wick)
         {
             _fired = true;
-            return new OpenRevisitEvent(utc, bodyUp, _open, wick, body, price);
+            return new OpenRevisitEvent(utc, bodyUp, open, wick, body, price);
         }
         return null;
     }

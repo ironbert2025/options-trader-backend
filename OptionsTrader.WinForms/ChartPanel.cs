@@ -298,9 +298,11 @@ public class ChartPanel : Panel
     private OpenRevisitDetector? _openRevisit;
     private DateOnly _openRevisitDay;
 
-    private void FeedOpenRevisit(decimal price, DateTime utcTime)
+    // Reads the candle as it is DRAWN (the live 15m bucket the ticks just updated), not its own copy of the ticks.
+    private void FeedOpenRevisit(DateTime utcTime, CandleData bucket)
     {
         if (_mode != ChartPanelMode.Fifteen_RTH) return;
+        if (TimeZoneInfo.ConvertTimeFromUtc(bucket.Time, EasternZone).TimeOfDay != new TimeSpan(9, 30, 0)) return; // first candle only
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utcTime, EasternZone);
         if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay >= new TimeSpan(9, 45, 0)) return;
 
@@ -324,7 +326,7 @@ public class ChartPanel : Panel
             _openRevisitDay = day;
         }
 
-        var ev = _openRevisit.OnTick(utcTime, price);
+        var ev = _openRevisit.OnCandle(utcTime, bucket.Open, bucket.High, bucket.Low, bucket.Close);
         if (ev == null || _closing || !IsHandleCreated) return;
         BeginInvoke(async () =>
         {
@@ -3957,7 +3959,6 @@ public class ChartPanel : Panel
             }
         }
         FeedBbMomentum(price, utcTime); // panel 2 only, ticks only
-        FeedOpenRevisit(price, utcTime); // panel 2 only, ticks only
         UpdateLivePriceFromExternalSource(price, utcTime, decidesBucket: true);
     }
 
@@ -4064,6 +4065,9 @@ public class ChartPanel : Panel
         _liveBucket.High  = Math.Max(_liveBucket.High, price);
         _liveBucket.Low   = Math.Min(_liveBucket.Low, price);
         _liveBucket.Close = price;
+
+        if (decidesBucket && _mode == ChartPanelMode.Fifteen_RTH)
+            FeedOpenRevisit(utcTime, _liveBucket); // after the candle took this tick: the alert reads the drawn candle
 
         var toSend = _liveBucket;
         var liveJs = hourlyNewDayFirstBucket ? "resetToNewDayCandle" : "updateLastCandle";
