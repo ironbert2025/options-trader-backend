@@ -257,7 +257,7 @@ internal sealed class CandleDetailForm : Form
         UpdateTitle();
 
         if (state == MinuteBucketState.Forming) _sawForming = true;
-        else if (state == MinuteBucketState.Closed && _sawForming && _freezeWhenClosed)
+        else if (state == MinuteBucketState.Closed && _sawForming)
         {
             if (await AdvanceToNextBucketAsync()) { await RedrawAsync(); return; }
         }
