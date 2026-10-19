@@ -513,6 +513,7 @@ public class DailyChartForm : Form
         await InitChartTabAsync(_fifteenWebView, fifteenCandles, 8, showSmas: false, bollingerMiddleSolid: true);
         _lastFifteenCandle = fifteenCandles.Count > 0 ? fifteenCandles[^1] : null;
         await LoadAndWireTLinesAsync(_fifteenWebView, "Daily15Min");
+        await WireCandleDetailAsync();
 
         // Blue "current price" line, per explicit request — same session-open anchor as the Hora
         // tab's own line (ChartPanel.GetTodaySessionOpenFakeEpoch convention), since this tab also
@@ -528,6 +529,59 @@ public class DailyChartForm : Form
         await LoadAndWireDzSzAsync(_webView, "Daily");
         await LoadAndWireDzSzAsync(_hourlyWebView, "DailyHora");
         await LoadAndWireDzSzAsync(_fifteenWebView, "Daily15Min");
+    }
+
+    // ---- Double click on a 15 Min candle -> its 1-minute candles, rebuilt from the saved Level 1 tick files
+    // (no REST), in a window docked to the right of this form. ----
+    private CandleDetailForm? _candleDetail;
+    private System.Windows.Forms.Timer? _candleDetailTimer;
+
+    private async Task WireCandleDetailAsync()
+    {
+        if (_fifteenWebView.CoreWebView2 == null) return;
+        await _fifteenWebView.CoreWebView2.ExecuteScriptAsync("configureCandleDetail(true);");
+        _fifteenWebView.CoreWebView2.WebMessageReceived += async (s, e) =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var type) || type.GetString() != "candle_detail") return;
+                if (!root.TryGetProperty("time", out var t) || !t.TryGetInt64(out var seconds)) return;
+                var bucketStart = CandleAggregation.FifteenMinRthBucketStartUtc(ChartPanel.UtcFromFakeEpochSeconds(seconds));
+                await OpenCandleDetailAsync(bucketStart, ChartPanel.ReadNullableDouble(root, "priceMin"),
+                    ChartPanel.ReadNullableDouble(root, "priceMax"), ChartPanel.ReadNullableDouble(root, "barSpacing"));
+            }
+            catch { /* diagnostics window — never disturb the chart */ }
+        };
+    }
+
+    private async Task OpenCandleDetailAsync(DateTime bucketStartUtc, double? priceMin, double? priceMax, double? barSpacing)
+    {
+        if (IsDisposed) return;
+        if (_candleDetail == null || _candleDetail.IsDisposed)
+        {
+            var window = new CandleDetailForm(_symbol, _fifteenWebView.Height);
+            _candleDetail = window;
+            window.DockToRightOf(this, () => _fifteenWebView.PointToScreen(Point.Empty).Y);
+            // A forming candle (today) grows in the file: ask for a redraw once a second while the window lives.
+            _candleDetailTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _candleDetailTimer.Tick += (s, e) => window.MarkDirty();
+            _candleDetailTimer.Start();
+            window.FormClosed += (s, e) => { _candleDetailTimer?.Stop(); _candleDetailTimer?.Dispose(); _candleDetailTimer = null; };
+            window.Show(this);
+        }
+        _candleDetail.DockIfStillDocked();
+
+        var symbol = _symbol;
+        MinuteBucketState StateOf(DateTime start)
+        {
+            var now = DateTime.UtcNow;
+            return now < start.AddMinutes(15) ? MinuteBucketState.Forming : MinuteBucketState.Closed;
+        }
+        await _candleDetail.ShowBucketAsync(bucketStartUtc,
+            (start, end) => TickFileMinuteCandles.Get(symbol, start, end),
+            StateOf, freezeWhenClosed: true, priceMin, priceMax, barSpacing, () => DateTime.UtcNow, linesJson: null);
     }
 
     // "DZ/SZ" tool persistence (ZoneStore) for one tab — replay whatever was drawn in a previous
