@@ -5317,6 +5317,9 @@
       axisLabelVisible: true, lineVisible: true, title
     });
   }
+  function clearOpenRevisit() {
+    if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; }
+  }
   function resetToNewDayCandle(candle) {
     if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; } // yesterday's open
     upsertCandle(candle);

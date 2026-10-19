@@ -1115,12 +1115,43 @@ public class SimulatorForm : Form
     {
         _bbDetector = new BollingerMomentumDetector(BuildBbContextCloses(), _bbRearm, BbMovingWindow);
         _bbCursor = _bbFirstIdx - 1;
+        ResetOpenRevisit();
+    }
+
+    // ===== Open revisit (first 15m candle) — same detector as the live panel 2, fed by the same tick walk =====
+    // Floor from the first 15m candle of the previous days; the line on the chart is redrawn whenever the replay
+    // re-reaches the event (a rewind clears it), the log line only once (its own high-water mark).
+    private OpenRevisitDetector? _openRevisit;
+    private int _openRevisitLoggedHighWater = -1;
+
+    private void ResetOpenRevisit()
+    {
+        _rthChart.ClearOpenRevisit();
+        var prior = _intradayCandles.Where(c => DateOnly.FromDateTime(EasternTime(c.Time)) < _simDate).ToList();
+        var rth = CandleAggregation.AggregateToInterval(CandleAggregation.FilterSession(prior, rthOnly: true), 15, rthOnly: true);
+        var ranges = rth.Where(c => EasternTime(c.Time).TimeOfDay == new TimeSpan(9, 30, 0))
+            .OrderBy(c => c.Time).TakeLast(20).Select(c => c.High - c.Low).ToList();
+        var median = OpenRevisitDetector.MedianRange(ranges);
+        _openRevisit = median == null ? null : new OpenRevisitDetector(median.Value);
+    }
+
+    private void FeedOpenRevisit(int tickIndex, CandleData tick)
+    {
+        var ev = _openRevisit?.OnTick(tick.Time, tick.Close);
+        if (ev == null) return;
+        var arrow = ev.BodyUp ? "▲" : "▼";
+        _rthChart.MarkOpenRevisit(ev.Open, $"OPEN {arrow} {EasternTime(ev.TimeUtc):HH:mm:ss}");
+        if (tickIndex <= _openRevisitLoggedHighWater) return;
+        _openRevisitLoggedHighWater = tickIndex;
+        var message = $"[Open] Open revisitado {arrow} — wick {ev.Wick:F2}, body {ev.Body:F2} ({ev.Body / ev.Wick:P0}), precio {ev.Price:F2}, open {ev.Open:F2}";
+        LogSimEvent(message, null, ev.TimeUtc);
     }
 
     // Called from LoadSelectedDay once _intradayCandles for the new day is in memory.
     private void InitBbForLoadedDay()
     {
         _bbLoggedHighWater = -1;
+        _openRevisitLoggedHighWater = -1;
         _bbFirstIdx = _intradayCandles.FindIndex(c =>
         {
             var e = EasternTime(c.Time);
@@ -1170,6 +1201,7 @@ public class SimulatorForm : Form
         for (var i = Math.Max(_bbCursor + 1, _bbFirstIdx); i <= last; i++)
         {
             var tick = _intradayCandles[i];
+            FeedOpenRevisit(i, tick);
             var events = _bbDetector.OnTick(tick.Time, tick.Close);
             if (i > _bbLoggedHighWater)
             {

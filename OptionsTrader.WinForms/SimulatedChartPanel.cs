@@ -263,6 +263,21 @@ public class SimulatedChartPanel : Panel
         _ = _webView.CoreWebView2.ExecuteScriptAsync($"setLastTickTime('{text}');");
     }
 
+    // Open revisit (first 15m candle): dotted line at the open, titled with the direction and moment; cleared when the
+    // replay is rewound or another day is loaded.
+    public void MarkOpenRevisit(decimal open, string title)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var openStr = open.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _ = _webView.CoreWebView2.ExecuteScriptAsync($"markOpenRevisit({openStr}, {System.Text.Json.JsonSerializer.Serialize(title)});");
+    }
+
+    public void ClearOpenRevisit()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync("clearOpenRevisit();");
+    }
+
     public async Task MarkStrikeAsync(decimal strike)
     {
         if (_webView.CoreWebView2 == null) return;
