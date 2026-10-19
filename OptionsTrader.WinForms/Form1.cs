@@ -1714,7 +1714,32 @@ public partial class Form1 : Form
         return result;
     }
 
+    // One chain request at a time: a polling tick that finds a request in flight (or a manual fetch under way)
+    // is skipped, so two responses never write the CSV / grids at the same instant.
+    private readonly SemaphoreSlim _fetchGate = new(1, 1);
+
     private async Task FetchAndUpdateQuotesAsync()
+    {
+        if (!await _fetchGate.WaitAsync(0)) return;
+        try { await FetchAndUpdateQuotesCoreAsync(); }
+        finally { _fetchGate.Release(); }
+    }
+
+    // "Fetch Quotes" button of the Charts tab: one extra chain request right now (outside the polling cadence),
+    // so a trade is entered with a fresher ask. Same path as a polling cycle — CSV row (own timestamp), grids,
+    // PnL, Charts grid, polling-time label — but the polling timer is left alone and the grids are not cleared.
+    // Returns false when it did nothing (no ticker/credentials, or a request was already in flight).
+    internal async Task<bool> FetchQuotesNowAsync()
+    {
+        if (_selectedTicker == null) return false;
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return false;
+        if (!await _fetchGate.WaitAsync(0)) return false;
+        try { await FetchAndUpdateQuotesCoreAsync(); return true; }
+        finally { _fetchGate.Release(); }
+    }
+
+    private async Task FetchAndUpdateQuotesCoreAsync()
     {
         if (_selectedTicker == null) return;
 
@@ -1743,6 +1768,8 @@ public partial class Form1 : Form
             var strikeCount = GetStrikeCountFor(_selectedTicker.Symbol);
             var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate, strikeCount)).ToList();
             _hubTokenWaitCycles = 0; // got data — any earlier wait for the hub's token is over
+            // The time shown is the one of this response (the label was first set when the request left).
+            lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
             ObserveChainFreshness(fullChain);
 
             var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();

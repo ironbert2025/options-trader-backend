@@ -1889,7 +1889,19 @@ public class TwoPanelChartsControl : UserControl
         // double click on a candle, which also works for candles already formed). Left side of the same row.
         var btnOneMinChart = new Button { Text = "1 Min Chart", Dock = DockStyle.Left, Width = 100 };
         btnOneMinChart.Click += (s, e) => { _ = _rthPanel?.RequestLastCandleDetailAsync(); };
-        buttonsRow.Controls.Add(btnOneMinChart);
+        // "Fetch Quotes": a fresh chain request right now, next to "1 Min Chart" (the polling cadence can leave the
+        // grid a few seconds old when entering a trade). Fills the grid, the CSV and the polling-time label.
+        var btnFetchNow = new Button { Text = "Fetch Quotes", Dock = DockStyle.Left, Width = 100 };
+        btnFetchNow.Click += async (s, e) =>
+        {
+            btnFetchNow.Enabled = false;
+            try { await _form1.FetchQuotesNowAsync(); }
+            catch { /* the cycle reports its own errors */ }
+            finally { if (!btnFetchNow.IsDisposed) btnFetchNow.Enabled = true; }
+        };
+        buttonsRow.Controls.Add(btnFetchNow);
+        buttonsRow.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); // gap after "1 Min Chart"
+        buttonsRow.Controls.Add(btnOneMinChart); // left-docked controls stack from the last one added: "1 Min Chart" is the leftmost
         lblExpDateNext.Dock = DockStyle.Top;
 
         optionsGridHost.Controls.Add(tabOptions);
