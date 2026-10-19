@@ -1306,8 +1306,11 @@ public class TwoPanelChartsControl : UserControl
                     Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);
                     rthPanel.OnEntrySpotMarked += onMark; // a trade opened/closed while the window is open gets its rayita too
                     window.FormClosed += (s2, e2) => { rthPanel.OnMinuteCandlesChanged -= minutesChanged; rthPanel.OnEntrySpotMarked -= onMark; };
+                    if (FindForm() is { } owner)
+                        window.DockToRightOf(owner, () => rthPanel.PointToScreen(Point.Empty).Y); // to the right of the main window, level with panel 2
                     window.Show(FindForm());
                 }
+                candleDetail.DockIfStillDocked();
                 try
                 {
                     await candleDetail.ShowBucketAsync(bucketStartUtc, rthPanel.GetMinuteCandles, rthPanel.GetMinuteBucketState, freezeWhenClosed: true, priceMin, priceMax, barSpacing, () => rthPanel.LastTickUtc, linesJson);

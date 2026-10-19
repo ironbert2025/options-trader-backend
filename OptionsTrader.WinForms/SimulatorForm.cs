@@ -2060,8 +2060,10 @@ public class SimulatorForm : Form
             Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);
             _rthChart.OnEntrySpotMarked += onMark;
             window.FormClosed += (s2, e2) => _rthChart.OnEntrySpotMarked -= onMark;
+            window.DockToRightOf(this, () => _rthChart.PointToScreen(Point.Empty).Y); // to the right of this window, level with panel 2
             _candleDetail.Show(this);
         }
+        _candleDetail.DockIfStillDocked();
         try
         {
             await _candleDetail.ShowBucketAsync(bucketStartUtc,

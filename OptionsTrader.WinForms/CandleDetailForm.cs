@@ -72,6 +72,41 @@ internal sealed class CandleDetailForm : Form
     // Targets a 15-minute bucket. getMinutes(startUtc, endUtc) returns the 1-minute candles of the range;
     // getState says whether the bucket is still forming. freezeWhenClosed: stop following once it is over
     // (the live case); the Simulator keeps following because its clock can be rewound.
+    // ---- Docking: the window sits against the right edge of its parent (see WindowDocking) ----
+    private Form? _dockParent;
+    private Func<int>? _dockTopAlign;
+    private Point? _lastDocked;
+
+    // First docking, before the window is shown: top aligned with topAlignScreenY() (the chart panel on screen),
+    // and from then on it follows the parent while it stays where it was put.
+    public void DockToRightOf(Form parent, Func<int> topAlignScreenY)
+    {
+        _dockParent = parent;
+        _dockTopAlign = topAlignScreenY;
+        parent.LocationChanged += OnParentMoved;
+        parent.SizeChanged += OnParentMoved;
+        FormClosed += (s, e) => { parent.LocationChanged -= OnParentMoved; parent.SizeChanged -= OnParentMoved; };
+        Redock();
+    }
+
+    // Another double click: re-dock only if the user has not dragged the window somewhere else.
+    public void DockIfStillDocked()
+    {
+        if (_dockParent != null && (_lastDocked == null || Location == _lastDocked)) Redock();
+    }
+
+    private void OnParentMoved(object? sender, EventArgs e) => DockIfStillDocked();
+
+    private void Redock()
+    {
+        if (_dockParent == null || _dockParent.IsDisposed || _dockParent.WindowState == FormWindowState.Minimized) return;
+        var area = Screen.FromControl(_dockParent).WorkingArea;
+        var topY = _dockTopAlign?.Invoke() ?? _dockParent.Top;
+        var target = WindowDocking.ComputeDockedLocation(_dockParent.Bounds, Size, area, topY);
+        Location = target;
+        _lastDocked = target;
+    }
+
     public async Task ShowBucketAsync(DateTime bucketStartUtc, Func<DateTime, DateTime, List<CandleData>> getMinutes,
         Func<DateTime, MinuteBucketState> getState, bool freezeWhenClosed, double? priceMin, double? priceMax, double? parentBarSpacing, Func<DateTime> getClockUtc, string? linesJson)
     {
