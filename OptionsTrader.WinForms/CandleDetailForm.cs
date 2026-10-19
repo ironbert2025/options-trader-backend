@@ -15,7 +15,8 @@ internal sealed class CandleDetailForm : Form
     private readonly System.Windows.Forms.Timer _redrawTimer = new() { Interval = 300 };
     private TaskCompletionSource? _pageReady;
 
-    private DateTime _bucketStartUtc;
+    private DateTime _bucketStartUtc;           // the 15-minute candle now being followed (the latest)
+    private DateTime _firstBucketStartUtc;      // the first one this window was opened on — formed candles stay from here
     private Func<DateTime, DateTime, List<CandleData>>? _getMinutes;
     private Func<DateTime, MinuteBucketState>? _getState;
     private bool _freezeWhenClosed;
@@ -114,6 +115,7 @@ internal sealed class CandleDetailForm : Form
     {
         _getClockUtc = getClockUtc;
         _bucketStartUtc = bucketStartUtc;
+        _firstBucketStartUtc = bucketStartUtc;
         _getMinutes = getMinutes;
         _getState = getState;
         _freezeWhenClosed = freezeWhenClosed;
@@ -158,8 +160,9 @@ internal sealed class CandleDetailForm : Form
         _lastJson = string.Empty;
         _lastOverlay = string.Empty;
         _following = true;
-        await ConfigureViewAsync(null, null); // the parent's price range belonged to the old candle: autoscale
-        _pendingViewReset = true;
+        // The candles already drawn stay (formed, to the left, a gray line marks the boundary); the view scrolls to the new one.
+        await _web.CoreWebView2.ExecuteScriptAsync($"detailAdvanceBucket({ChartPanel.FakeUtcEpochSeconds(next)});");
+        _pendingViewReset = false;
         return true;
     }
 
@@ -242,7 +245,7 @@ internal sealed class CandleDetailForm : Form
 
         var endUtc = _bucketStartUtc.AddMinutes(15);
         var state = _getState(_bucketStartUtc);
-        var minutes = _getMinutes(_bucketStartUtc, endUtc);
+        var minutes = _getMinutes(_firstBucketStartUtc, endUtc); // every candle followed so far, formed ones included
 
         var json = ChartPanel.ToChartJsonPublic(minutes);
         if (json != _lastJson)
@@ -253,7 +256,7 @@ internal sealed class CandleDetailForm : Form
         }
 
         _lastState = state;
-        _lastMinuteCount = minutes.Count;
+        _lastMinuteCount = minutes.Count(m => m.Time >= _bucketStartUtc); // minutes of the candle being followed
         UpdateTitle();
 
         if (state == MinuteBucketState.Forming) _sawForming = true;

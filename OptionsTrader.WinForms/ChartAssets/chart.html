@@ -5421,15 +5421,14 @@
   let detailApplying = false;
 
   function configureDetailView(opts) {
-    detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, bucketStart: opts.bucketStart, firstCandlePx: opts.firstCandlePx, userMoved: false };
-    detailMarkersPrimitive._bucketStart = opts.bucketStart;
+    // starts: every 15-minute candle the window has followed (the first one, then each next one it moved on to);
+    // bucketStart is the latest — the one now forming — and the one the view is laid out for.
+    detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, bucketStart: opts.bucketStart, starts: [opts.bucketStart], firstCandlePx: opts.firstCandlePx, userMoved: false };
+    detailMarkersPrimitive._starts = detailView.starts;
     if (!detailMarkersAttached) { candleSeries.attachPrimitive(detailMarkersPrimitive); detailMarkersAttached = true; }
     if (!detailTradesAttached) { candleSeries.attachPrimitive(detailTradesPrimitive); detailTradesAttached = true; }
     // The X axis shows the minute's position inside the 15-minute candle (1..15), not the clock time.
-    const minuteIndex = t => {
-      const i = Math.round((t - detailView.bucketStart) / 60) + 1;
-      return i >= 1 && i <= 15 ? String(i) : '';
-    };
+    const minuteIndex = t => { const i = detailMinuteIndex(t); return i > 0 ? String(i) : ''; };
     chart.applyOptions({
       timeScale: { tickMarkFormatter: () => '' }, // the native ticks are replaced by detailRenderIndexLabels (one label per candle)
       localization: { timeFormatter: time => (typeof time === 'number' ? minuteIndex(time) : '') }
@@ -5455,6 +5454,17 @@
     candleSeries.priceScale().applyOptions({ autoScale: true, scaleMargins: { top: 0, bottom: 0 } });
   }
 
+  // Position (1..15) of a minute inside the 15-minute candle it belongs to (the latest followed candle that starts
+  // at or before it), or 0 when it is outside any.
+  function detailMinuteIndex(t) {
+    if (!detailView) return 0;
+    let s = null;
+    for (const st of detailView.starts) { if (st <= t) s = st; }
+    if (s == null) return 0;
+    const i = Math.round((t - s) / 60) + 1;
+    return i >= 1 && i <= 15 ? i : 0;
+  }
+
   // 1..15 under each candle of the detail window, positioned from the time scale (the native axis only
   // labels some ticks and picks them by time). Thinned out only when candles are too narrow for two digits.
   function detailRenderIndexLabels() {
@@ -5470,8 +5480,8 @@
     const step = spacing >= 16 ? 1 : (spacing >= 8 ? 2 : 5);
     let html = '';
     for (const c of allCandles) {
-      const idx = Math.round((c.time - detailView.bucketStart) / 60) + 1;
-      if (idx < 1 || idx > 15) continue;
+      const idx = detailMinuteIndex(c.time);
+      if (idx < 1) continue;
       if (idx !== 1 && idx % step !== 0) continue;
       const x = chart.timeScale().timeToCoordinate(c.time);
       if (x == null) continue;
@@ -5494,7 +5504,7 @@
   }
 
   class DetailMarkersPrimitive {
-    constructor() { this._bucketStart = null; this._minutes = [5, 10]; }
+    constructor() { this._starts = null; this._minutes = [5, 10]; }
     attached() {}
     updateAllViews() {}
     paneViews() {
@@ -5504,20 +5514,27 @@
         renderer() {
           return {
             draw(target) {
-              if (self._bucketStart == null || allCandles.length === 0) return;
+              if (self._starts == null || allCandles.length === 0) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 ctx.strokeStyle = '#1f2530'; // same color and thickness (1 px) as the chart's horizontal gray grid lines
                 ctx.lineWidth = 1 * scope.horizontalPixelRatio;
                 ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
-                self._minutes.forEach(m => {
-                  const t = self._bucketStart + (m - 1) * 60;
-                  const x = chart.timeScale().logicalToCoordinate(detailLogicalOf(t));
+                const vline = x => {
                   if (x == null) return;
                   ctx.beginPath();
                   ctx.moveTo(x * scope.horizontalPixelRatio, 0);
                   ctx.lineTo(x * scope.horizontalPixelRatio, scope.bitmapSize.height);
                   ctx.stroke();
+                };
+                self._starts.forEach((s, i) => {
+                  self._minutes.forEach(m => vline(chart.timeScale().logicalToCoordinate(detailLogicalOf(s + (m - 1) * 60))));
+                  // the boundary where the window moved on to the next 15-minute candle: between its last and first minute
+                  if (i > 0) {
+                    // midway between the two candles around it (logicalToCoordinate does not take fractions)
+                    const l = detailLogicalOf(s), xa = chart.timeScale().logicalToCoordinate(l - 1), xb = chart.timeScale().logicalToCoordinate(l);
+                    if (xa != null && xb != null) vline((xa + xb) / 2);
+                  }
                 });
                 ctx.setLineDash([]);
               });
@@ -5549,8 +5566,9 @@
                 ctx.strokeStyle = '#ffffff';
                 ctx.lineWidth = 2 * scope.horizontalPixelRatio;
                 detailTrades.forEach(t => {
-                  if (t.eventTime < detailView.bucketStart || t.eventTime >= detailView.bucketStart + 900) return; // another 15m candle
-                  const minuteStart = detailView.bucketStart + Math.floor((t.eventTime - detailView.bucketStart) / 60) * 60;
+                  const first = detailView.starts[0], last = detailView.starts[detailView.starts.length - 1];
+                  if (t.eventTime < first || t.eventTime >= last + 900) return; // outside the candles this window followed
+                  const minuteStart = first + Math.floor((t.eventTime - first) / 60) * 60;
                   const x = chart.timeScale().logicalToCoordinate(detailLogicalOf(minuteStart));
                   const y = candleSeries.priceToCoordinate(t.price);
                   if (x == null || y == null) return;
@@ -5591,7 +5609,7 @@
               if (!detailView || allCandles.length === 0) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
-                const xStart = chart.timeScale().logicalToCoordinate(detailLogicalOf(detailView.bucketStart));
+                const xStart = chart.timeScale().logicalToCoordinate(detailLogicalOf(detailView.starts[0]));
                 if (xStart == null) return;
                 const x1 = Math.max(0, xStart * scope.horizontalPixelRatio);
                 const x2 = scope.bitmapSize.width;
@@ -5649,10 +5667,12 @@
     if (!detailView) return;
     detailApplying = true;
     const paneWidth = chart.paneSize().width;
-    // The first candle (logical index 0) sits at 20 % of the plot width; the rest of the candles go to its right.
+    // The first candle of the LATEST 15-minute candle sits at a fixed pixel offset from the left edge (or 20 % of the
+    // plot if none was given); the rest go to its right. With a single candle that is logical index 0; after the window
+    // moved on, the formed candle(s) sit to the left of it.
     const slots = paneWidth / detailView.barSpacing;
-    // the first candle sits at a fixed pixel offset from the left edge (or 20 % of the plot if none was given)
-    const from = detailView.firstCandlePx != null ? -detailView.firstCandlePx / detailView.barSpacing : -0.2 * slots;
+    const latestFirst = allCandles.length > 0 ? detailLogicalOf(detailView.bucketStart) : 0;
+    const from = latestFirst + (detailView.firstCandlePx != null ? -detailView.firstCandlePx / detailView.barSpacing : -0.2 * slots);
     chart.timeScale().setVisibleLogicalRange({ from, to: from + slots });
     setTimeout(() => { detailApplying = false; detailRenderIndexLabels(); }, 0);
   }
@@ -5664,6 +5684,18 @@
     if (resetView && detailView) detailView.userMoved = false;
     if (detailView && !detailView.userMoved) detailApplyView();
     detailRenderIndexLabels();
+  }
+
+  // The 15-minute candle being followed ended: the window moves on to the next one. The candles already drawn stay
+  // (now formed, to the left); the view scrolls so the new candle starts at the usual place.
+  function detailAdvanceBucket(newStart) {
+    if (!detailView) return;
+    detailView.starts.push(newStart);
+    detailView.bucketStart = newStart;
+    detailView.userMoved = false;
+    detailApplyView();
+    detailRenderIndexLabels();
+    forceRepaint();
   }
 
   // "Restablecer vista" button: back to the initial layout and the automatic (main-chart) price range.
