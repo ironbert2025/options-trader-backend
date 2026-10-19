@@ -25,6 +25,8 @@ internal sealed class CandleDetailForm : Form
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
     private bool _pendingViewReset = true;
+    private bool _sawForming;                   // the candle on screen was seen forming: when it ends, follow the next one
+    private double? _parentBarSpacing;
     private Func<DateTime>? _getClockUtc;       // "now" of the data (last tick / replay clock), for the seconds of the forming minute
     private MinuteBucketState _lastState = MinuteBucketState.Closed;
     private int _lastMinuteCount;
@@ -116,6 +118,8 @@ internal sealed class CandleDetailForm : Form
         _getState = getState;
         _freezeWhenClosed = freezeWhenClosed;
         _following = true;
+        _sawForming = false;
+        _parentBarSpacing = parentBarSpacing;
         _lastJson = string.Empty;
 
         await EnsurePageAsync();
@@ -125,10 +129,7 @@ internal sealed class CandleDetailForm : Form
         // Each 1-minute candle gets the SAME width in pixels as the 15-minute candle it belongs to (the
         // parent chart's bar width at its current zoom). Only without it (unknown) is a width derived from
         // this window's size.
-        var plotWidth = Math.Max(200, _web.Width - PriceAxisWidthPx);
-        var barSpacing = parentBarSpacing is > 0 ? parentBarSpacing.Value : plotWidth * CandlesShareOfWidth / 15.0;
-        var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax, bucketStart = ChartPanel.FakeUtcEpochSeconds(bucketStartUtc), firstCandlePx = FirstCandleXPx });
-        await _web.CoreWebView2.ExecuteScriptAsync($"configureDetailView({viewJson});");
+        await ConfigureViewAsync(priceMin, priceMax);
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetLines({(string.IsNullOrWhiteSpace(linesJson) ? "[]" : linesJson)});");
         _pendingViewReset = true;
 
@@ -136,6 +137,30 @@ internal sealed class CandleDetailForm : Form
         _redrawTimer.Start();
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Activate();
+    }
+
+    private async Task ConfigureViewAsync(double? priceMin, double? priceMax)
+    {
+        var plotWidth = Math.Max(200, _web.Width - PriceAxisWidthPx);
+        var barSpacing = _parentBarSpacing is > 0 ? _parentBarSpacing.Value : plotWidth * CandlesShareOfWidth / 15.0;
+        var viewJson = JsonSerializer.Serialize(new { barSpacing, priceMin, priceMax, bucketStart = ChartPanel.FakeUtcEpochSeconds(_bucketStartUtc), firstCandlePx = FirstCandleXPx });
+        await _web.CoreWebView2.ExecuteScriptAsync($"configureDetailView({viewJson});");
+    }
+
+    // The candle being followed has just ended: the window moves on to the next 15-minute candle (now forming);
+    // the one it showed stays behind as a formed candle. Only inside the regular session (last candle 15:45).
+    private async Task<bool> AdvanceToNextBucketAsync()
+    {
+        var next = _bucketStartUtc.AddMinutes(15);
+        if (TimeZoneInfo.ConvertTimeFromUtc(next, EasternZone).TimeOfDay >= new TimeSpan(16, 0, 0)) return false;
+        _bucketStartUtc = next;
+        _sawForming = false;
+        _lastJson = string.Empty;
+        _lastOverlay = string.Empty;
+        _following = true;
+        await ConfigureViewAsync(null, null); // the parent's price range belonged to the old candle: autoscale
+        _pendingViewReset = true;
+        return true;
     }
 
     // A trade opened or closed: its white rayita goes on the 1-minute candle of that moment (only drawn if
@@ -230,6 +255,12 @@ internal sealed class CandleDetailForm : Form
         _lastState = state;
         _lastMinuteCount = minutes.Count;
         UpdateTitle();
+
+        if (state == MinuteBucketState.Forming) _sawForming = true;
+        else if (state == MinuteBucketState.Closed && _sawForming && _freezeWhenClosed)
+        {
+            if (await AdvanceToNextBucketAsync()) { await RedrawAsync(); return; }
+        }
 
         // Over: one last draw above included the final data; stop following (the live case).
         if (_freezeWhenClosed && state == MinuteBucketState.Closed) _following = false;
