@@ -1875,7 +1875,7 @@ public class TwoPanelChartsControl : UserControl
         // Own row under "Next: ...", with 8 px of top padding: the Connect/Disconnect button and the polling time
         // label float over this column's top-right corner (see Form1.SetupChartsTab) and reach ~50 px down, so
         // buttons on the Next row itself sat under that label.
-        var buttonsRow = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(0, 8, 0, 2) };
+        var buttonsRow = new Panel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(0, 8, 0, 4) }; // buttons come out 28 px tall
         buttonsRow.Controls.Add(btnFirstItmCall);
         buttonsRow.Controls.Add(btnFirstItmPut);
         lblExpDateNext.Dock = DockStyle.Top;
