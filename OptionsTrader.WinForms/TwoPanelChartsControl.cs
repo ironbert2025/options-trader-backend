@@ -1319,7 +1319,7 @@ public class TwoPanelChartsControl : UserControl
             };
 
             // Open revisit (first 15m candle): the price left the open, came back through it and the body is now >= 40 %
-            // of the wick. Log line, taskbar flash, Telegram with the combined snapshot. The chart line is drawn by the
+            // of the wick. Log line and taskbar flash (no Telegram). The chart line is drawn by the
             // panel itself (ChartPanel.FeedOpenRevisit -> markOpenRevisit).
             rthPanel.OnOpenRevisitEvent += ev =>
             {
@@ -1328,8 +1328,7 @@ public class TwoPanelChartsControl : UserControl
                 var message = $"{_symbol}: Open revisitado {arrow} — wick {ev.Wick:F2}, body {ev.Body:F2} ({ev.Body / ev.Wick:P0}), precio {ev.Price:F2}, open {ev.Open:F2}";
                 AppendLog($"{DateTime.Now:HH:mm:ss}  [Open] {message}{Environment.NewLine}");
                 WindowFlasher.FlashUntilForeground(FindForm());
-                if (!SuppressOwnTelegramPushes)
-                    _ = SendPLineCrossedTelegramPushAsync(message, "OpenRevisit");
+                // No Telegram for this alert (per explicit request): line on the chart, log and taskbar flash only.
             };
 
             rthPanel.OnBbMomentumEvent += ev =>
