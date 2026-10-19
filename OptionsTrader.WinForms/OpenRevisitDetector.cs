@@ -12,12 +12,12 @@ internal sealed record OpenRevisitEvent(DateTime TimeUtc, bool BodyUp, decimal O
 //   wick = largest distance from the open on the side opposite to where the price is now
 //   body = distance from the open to the current price (on the other side)
 //   fires when wick >= WickFloor and body >= BodyRatio * wick — once per session.
-// WickFloor is per symbol: FloorFraction (0.25) x the median range of the first 15m candle of the previous days,
+// WickFloor is per symbol: FloorFraction (0.15) x the median range of the first 15m candle of the previous days,
 // so it follows each symbol's own volatility without a percentage of the price.
 internal sealed class OpenRevisitDetector
 {
     public const decimal BodyRatio = 0.4m;
-    public const decimal FloorFraction = 0.25m;
+    public const decimal FloorFraction = 0.15m;
     private static readonly TimeSpan SessionStart = new(9, 30, 0);
     private static readonly TimeSpan SessionEnd = new(9, 45, 0);
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
