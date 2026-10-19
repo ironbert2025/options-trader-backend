@@ -27,6 +27,15 @@ internal sealed class OpenRevisitDetector
     private bool _haveOpen;
     private decimal _open, _high, _low;
     private bool _fired;
+    private bool _lastBodyUp;         // direction of the last alert
+    private bool _oppositeAllowed;    // the user deleted that alert: the opposite cross may be reported once
+
+    // The user deleted the alert's line from the chart: a cross the OTHER way (once) is reported again. Without that
+    // deletion nothing more is reported for the session.
+    public void AllowOppositeAfterDelete()
+    {
+        if (_fired) _oppositeAllowed = true;
+    }
 
     public decimal WickFloor => _wickFloor;
     public bool HasOpen => _haveOpen;
@@ -49,7 +58,7 @@ internal sealed class OpenRevisitDetector
         if (price <= 0) return null;
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utc, EasternZone);
         var day = DateOnly.FromDateTime(eastern);
-        if (day != _day) { _day = day; _haveOpen = false; _fired = false; }
+        if (day != _day) { _day = day; _haveOpen = false; _fired = false; _oppositeAllowed = false; }
 
         var tod = eastern.TimeOfDay;
         if (tod < SessionStart || tod >= SessionEnd) return null;
@@ -72,7 +81,7 @@ internal sealed class OpenRevisitDetector
     {
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(utc, EasternZone);
         var day = DateOnly.FromDateTime(eastern);
-        if (day != _day) { _day = day; _haveOpen = false; _fired = false; }
+        if (day != _day) { _day = day; _haveOpen = false; _fired = false; _oppositeAllowed = false; }
         var tod = eastern.TimeOfDay;
         if (tod < SessionStart || tod >= SessionEnd || open <= 0) return null;
         return Evaluate(utc, open, high, low, close);
@@ -84,11 +93,11 @@ internal sealed class OpenRevisitDetector
         var bodyUp = price > open;
         var body = Math.Abs(price - open);
         var wick = bodyUp ? open - low : high - open;
-        if (!_fired && _wickFloor > 0 && body > 0 && wick >= _wickFloor && body >= BodyRatio * wick)
-        {
-            _fired = true;
-            return new OpenRevisitEvent(utc, bodyUp, open, wick, body, price);
-        }
-        return null;
+        if (_wickFloor <= 0 || body <= 0 || wick < _wickFloor || body < BodyRatio * wick) return null;
+        if (_fired && !(_oppositeAllowed && bodyUp != _lastBodyUp)) return null; // already reported, unless deleted and now the other way
+        _fired = true;
+        _lastBodyUp = bodyUp;
+        _oppositeAllowed = false;
+        return new OpenRevisitEvent(utc, bodyUp, open, wick, body, price);
     }
 }

@@ -937,6 +937,9 @@ public class SimulatedChartPanel : Panel
     // Double click on a candle of the 15m RTH chart -> the 15-minute bucket's start (UTC); see SimulatorForm.OpenCandleDetail.
     public event Action<DateTime, double?, double?, double?, string?>? OnCandleDetailRequested;
 
+    // The user deleted the "open revisit" line (click + Delete) — the Simulator re-arms the opposite direction.
+    public event Action? OnOpenRevisitDeleted;
+
     // Last trend state seen from the page + the header title, for the combined images' header strip
     // (CombinedChartHeader) — this panel's own header shows only the title, the trend words reach the log.
     private string? _trendShortDir, _trendLongDir;
@@ -1149,6 +1152,12 @@ public class SimulatedChartPanel : Panel
             if (type == "salto_setup")
             {
                 OnSaltoSetupChanged?.Invoke(ChartPanel.ParseSaltoCrossUp(root), ChartPanel.ParseSaltoDays(root));
+                return;
+            }
+
+            if (type == "open_revisit_deleted")
+            {
+                OnOpenRevisitDeleted?.Invoke();
                 return;
             }
 

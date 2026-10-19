@@ -241,6 +241,7 @@ public class SimulatorForm : Form
         _btnTickAtras.Click    += (s, e) => StepTick(-1);
         _btnTickAdelante.Click += (s, e) => StepTick(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
+        _rthChart.OnOpenRevisitDeleted += () => _openRevisit?.AllowOppositeAfterDelete();
         _rthChart.OnCandleDetailRequested += (bucketStartUtc, priceMin, priceMax, barSpacing, linesJson) =>
         {
             if (!IsDisposed) BeginInvoke(() => _ = OpenCandleDetailAsync(bucketStartUtc, priceMin, priceMax, barSpacing, linesJson));

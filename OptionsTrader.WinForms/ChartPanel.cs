@@ -1654,6 +1654,9 @@ public class ChartPanel : Panel
                     OnSaltoSetupChanged?.Invoke(ParseSaltoCrossUp(root), ParseSaltoDays(root));
                     break;
                 }
+                case "open_revisit_deleted":
+                    _openRevisit?.AllowOppositeAfterDelete(); // the user removed the line: report a cross the other way
+                    break;
                 case "candle_detail":
                 {
                     if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))

@@ -5338,7 +5338,10 @@
     setOpenRevisitSelected(y != null && Math.abs(y - py) <= 6);
   });
   window.addEventListener('keydown', ev => {
-    if (ev.key === 'Delete' && openRevisitSelected) clearOpenRevisit();
+    if (ev.key !== 'Delete' || !openRevisitSelected) return;
+    clearOpenRevisit();
+    // tell C#: the next cross the other way is reported again
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'open_revisit_deleted' });
   });
   function resetToNewDayCandle(candle) {
     if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; } // yesterday's open
