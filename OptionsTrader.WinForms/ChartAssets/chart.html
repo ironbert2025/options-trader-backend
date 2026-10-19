@@ -5336,6 +5336,13 @@
       if (allCandles[i].time <= time) { hit = allCandles[i]; break; }
     }
     if (!hit) return;
+    postCandleDetail(hit.time);
+  });
+
+  // Asks C# to open the 1-minute window for the candle starting at candleTime: this chart's visible price
+  // range, bar width and reference lines go along. Used by the double click above and by the "1 Min Chart"
+  // button (which targets the newest candle — the one still forming during the session).
+  function postCandleDetail(candleTime) {
     // The price range this chart shows right now (top and bottom of the plot area), so the detail window can
     // draw its 1-minute candles over the SAME price span and the two charts line up.
     let priceMax = null, priceMin = null, barSpacing = null;
@@ -5360,9 +5367,14 @@
       });
     } catch (e) { /* a primitive not available on this chart — send what we have */ }
     if (window.chrome && window.chrome.webview) {
-      window.chrome.webview.postMessage({ type: 'candle_detail', time: hit.time, priceMin, priceMax, barSpacing, lines });
+      window.chrome.webview.postMessage({ type: 'candle_detail', time: candleTime, priceMin, priceMax, barSpacing, lines });
     }
-  });
+  }
+
+  function openCandleDetailForLast() {
+    if (!candleDetailEnabled || allCandles.length === 0) return;
+    postCandleDetail(allCandles[allCandles.length - 1].time);
+  }
 
   // ---- Detail window view (used only by CandleDetailForm's own page) ----
   // The view is laid out ONCE per target candle — a fixed bar width, the first candle at 20 % of the width with room

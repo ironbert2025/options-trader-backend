@@ -204,6 +204,14 @@ public class ChartPanel : Panel
     // "clock" of the live candle-detail window.
     internal DateTime LastTickUtc => _lastTickUtc == DateTime.MinValue ? DateTime.UtcNow : _lastTickUtc;
 
+    // The "1 Min Chart" button: same as a double click on the newest candle of this chart — the one still forming
+    // during the session — so it opens the 1-minute window through the same OnCandleDetailRequested path.
+    public async Task RequestLastCandleDetailAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("openCandleDetailForLast();");
+    }
+
     internal List<CandleData> GetMinuteCandles(DateTime startUtc, DateTime endUtc) =>
         _minuteStore.GetRange(startUtc, endUtc, _rawHistory);
 

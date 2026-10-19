@@ -1884,6 +1884,12 @@ public class TwoPanelChartsControl : UserControl
         buttonsRow.Controls.Add(btnFirstItmCall);
         buttonsRow.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 14 }); // gap between the two buttons
         buttonsRow.Controls.Add(btnFirstItmPut);
+
+        // "1 Min Chart": opens the 1-minute candles window of the candle now forming (another way in besides the
+        // double click on a candle, which also works for candles already formed). Left side of the same row.
+        var btnOneMinChart = new Button { Text = "1 Min Chart", Dock = DockStyle.Left, Width = 100 };
+        btnOneMinChart.Click += (s, e) => { _ = _rthPanel?.RequestLastCandleDetailAsync(); };
+        buttonsRow.Controls.Add(btnOneMinChart);
         lblExpDateNext.Dock = DockStyle.Top;
 
         optionsGridHost.Controls.Add(tabOptions);
