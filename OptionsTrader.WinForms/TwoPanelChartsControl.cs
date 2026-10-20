@@ -586,6 +586,16 @@ public class TwoPanelChartsControl : UserControl
         RenderLog2(scrollToEnd: true);
     }
 
+    // A line already formatted by its source (no event-time prefix), kept in the same day history as the Bollinger events.
+    private void AddLog2Raw(string text, Color color)
+    {
+        var day = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        if (day != _log2BbDay) { _log2Bb.Clear(); _log2BbDay = day; }
+        _log2Bb.Add((text, color));
+        if (_log2Bb.Count > Log2BbMaxLines) _log2Bb.RemoveAt(0);
+        RenderLog2(scrollToEnd: true);
+    }
+
     private void RenderLog2(bool scrollToEnd)
     {
         _crossLog2.Clear();
@@ -2179,6 +2189,16 @@ public class TwoPanelChartsControl : UserControl
                 _dgvTrades.CurrentCell = null;
             });
         }
+
+        // The two closing lines of a trade (PnL / Duration) go to the history zone of log 2, in the log's own colors.
+        _form1.OnTradeCloseLogged += OnForm1TradeCloseLogged;
+        void OnForm1TradeCloseLogged(string closedSymbol, string pnlLine, Color pnlColor, string durationLine)
+        {
+            if (closedSymbol != _symbol || IsDisposed) return;
+            AddLog2Raw(pnlLine, pnlColor);
+            AddLog2Raw(durationLine, Color.White);
+        }
+        Disposed += (s, e) => _form1.OnTradeCloseLogged -= OnForm1TradeCloseLogged;
 
         _form1.OnTradesUpdatedEvent += OnForm1TradesUpdated;
         void OnForm1TradesUpdated(string updatedSymbol)

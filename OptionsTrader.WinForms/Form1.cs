@@ -2267,6 +2267,10 @@ public partial class Form1 : Form
     // on the regular poll cycle — so MultiChartForm's mirrored trades grid can stay in sync.
     public event Action<string>? OnTradesUpdatedEvent;
 
+    // Fires (symbol, PnL line, its color, Duration line) when a trade closes, with the two log lines exactly as
+    // written to this window's log — the Charts tab repeats them, same colors, in the log of panel 2.
+    public event Action<string, string, Color, string>? OnTradeCloseLogged;
+
     // Read-only access to dgvTrades for MultiChartForm's mirror grid to copy values/colors from.
     // Same one-instance-per-ticker restriction as the methods above.
     internal DataGridView? GetTradesGrid(string symbol) =>
@@ -4232,8 +4236,11 @@ public partial class Form1 : Form
             : string.Empty;
         LogLine(string.Empty, Color.White);
         LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}{realCloseLog}", Color.White);
-        LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
-        LogLine($"{nowStr} Duration: {duration:hh\\:mm\\:ss}", Color.White);
+        var pnlLine = $"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}";
+        var durationLine = $"{nowStr} Duration: {duration:hh\\:mm\\:ss}";
+        LogLine(pnlLine, pnlColor);
+        LogLine(durationLine, Color.White);
+        OnTradeCloseLogged?.Invoke(symbol, pnlLine, pnlColor, durationLine); // the Charts tab shows the same two lines, same colors
         System.Windows.Forms.Application.DoEvents();
 
         // Remove from local persistence
