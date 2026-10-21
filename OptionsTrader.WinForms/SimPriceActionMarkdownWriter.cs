@@ -68,11 +68,22 @@ internal static class SimPriceActionMarkdownWriter
 
     private static string ImageMarkdown(string imagePath) => $"![]({new Uri(imagePath).AbsoluteUri})";
 
+    // The external-screen screenshot, when there is one, goes to the RIGHT of the combined image: a two-column table, so
+    // the entry is as tall as the taller image and the next entry starts below it. Without the combined image
+    // (chart not visible) the external one stands alone under the note.
+    private static string ImagesBlock(string? imagePath, string? externalPath)
+    {
+        if (imagePath != null && externalPath != null)
+            return $"| | |\n|---|---|\n| {ImageMarkdown(imagePath)} | {ImageMarkdown(externalPath)} |\n\n";
+        if (imagePath != null) return $"{ImageMarkdown(imagePath)}\n\n";
+        return externalPath != null ? $"{ImageMarkdown(externalPath)}\n\n" : string.Empty;
+    }
+
     // Candle close: label (just the time) + image, left margin.
-    public static void AppendCandleClose(SimPriceActionRun run, string timeLabel, string? imagePath, string? noteWhenNoImage = null) =>
+    public static void AppendCandleClose(SimPriceActionRun run, string timeLabel, string? imagePath, string? noteWhenNoImage = null, string? externalImagePath = null) =>
         Append(run, imagePath != null
-            ? $"**{timeLabel}**\n\n{ImageMarkdown(imagePath)}\n\n"
-            : $"**{timeLabel}** _({noteWhenNoImage ?? "sin imagen: captura no disponible"})_\n\n");
+            ? $"**{timeLabel}**\n\n{ImagesBlock(imagePath, externalImagePath)}"
+            : $"**{timeLabel}** _({noteWhenNoImage ?? "sin imagen: captura no disponible"})_\n\n{ImagesBlock(null, externalImagePath)}");
 
     // Event: label (time + description) + image, indented. note replaces the image when there is none.
     public static void AppendEvent(SimPriceActionRun run, string label, string? imagePath, string? noteWhenNoImage) =>

@@ -569,10 +569,14 @@ public class TwoPanelChartsControl : UserControl
                 var run = GetPriceActionRun(req.Day);
                 string? imagePath = null;
                 string? note = null;
+                string? externalPath = null;
                 try
                 {
                     await Task.Delay(PriceActionPaintDelay); // let the charts paint the tick that triggered this
                     if (IsDisposed) break;
+                    // The symbol's external screen region (ThinkOrSwim charts), same instant — nothing without saved coordinates.
+                    externalPath = ExternalScreenCapture.CaptureToFile(_symbol,
+                        Path.Combine(run.ImageFolder, Path.GetFileNameWithoutExtension(req.FileName) + "_ext.png"));
                     if (!IsPriceActionVisible())
                     {
                         note = "sin imagen: chart no visible";
@@ -593,7 +597,7 @@ public class TwoPanelChartsControl : UserControl
                     imagePath = null; // a failed screenshot never disturbs the charts — noted in the md
                 }
                 if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(run, req.Label, imagePath, note ?? "sin imagen: captura no disponible");
-                else SimPriceActionMarkdownWriter.AppendCandleClose(run, req.Label, imagePath, note);
+                else SimPriceActionMarkdownWriter.AppendCandleClose(run, req.Label, imagePath, note, externalPath);
             }
         }
         finally { _prWorking = false; }

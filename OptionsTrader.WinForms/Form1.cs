@@ -25,7 +25,8 @@ file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose 
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
     DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m,
     int? ReinforcementGroupId = null, bool IsReinforcementResult = false,
-    string EntrySpotColor = "#ffffff", Guid? LocalId = null, string? EntryImagePath = null);
+    string EntrySpotColor = "#ffffff", Guid? LocalId = null, string? EntryImagePath = null,
+    string? EntryExtImagePath = null);
 
 public partial class Form1 : Form
 {
@@ -1153,7 +1154,7 @@ public partial class Form1 : Form
                     string.Empty, "Close");
 
                 var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, SuppressAutoClose: targetDeleted, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor);
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, SuppressAutoClose: targetDeleted, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor, EntryExtImagePath: t.EntryExtImagePath);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
                 restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
@@ -3165,9 +3166,11 @@ public partial class Form1 : Form
         // simulation trade, so it can't identify one in SimulationTradesStore) — see that store's
         // own comment.
         var simulationLocalId = isSimulation ? Guid.NewGuid() : (Guid?)null;
+        // Screenshot of the symbol's external screen region at the moment of the Open (null without saved coordinates).
+        var openExtPath = ExternalScreenCapture.CaptureForTrade(symbol, rowType, "OpenExt");
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
             ExpirationDate: expDate, EntrySpotPrice: entrySpot, EntrySpotColor: entrySpotColor,
-            LocalId: simulationLocalId);
+            LocalId: simulationLocalId, EntryExtImagePath: openExtPath);
         PadWithBlankRows(dgvTrades, 4);
 
         if (!isSimulation)
@@ -3184,7 +3187,8 @@ public partial class Form1 : Form
                 PnlTarget:      targetPct.ToString("F0"),
                 EntrySpotPrice: entrySpot,
                 IsDemo:         isDemo,
-                EntrySpotColor: entrySpotColor));
+                EntrySpotColor: entrySpotColor,
+                EntryExtImagePath: openExtPath));
         else
             // Per explicit request: unlike Real/Demo trades, "Trade Simulation" trades still
             // don't touch TradeHistoryStore/the API/screenshots — but DO persist locally now, so
@@ -4395,6 +4399,8 @@ public partial class Form1 : Form
         // get this far too (per explicit request, they now DO push to Telegram on close) even
         // though they skip everything after the isSimulation gate further down.
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
+        // Same moment, the symbol's external screen region (null without saved coordinates).
+        var closeExtPath = ExternalScreenCapture.CaptureForTrade(symbol, type, "CloseExt");
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
         // Was gated on tradeId > 0 ("this trade reached the API") — but SendTradeCloseTelegramPushAsync
@@ -4445,18 +4451,19 @@ public partial class Form1 : Form
         // stays real/demo-only — see RecordEntryAsync's matching isSimulation skip on the entry side.
         if (isSimulation)
         {
-            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath, tradeLogPath);
+            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath, tradeLogPath,
+                tag?.EntryExtImagePath, closeExtPath);
             return;
         }
 
         // Uploads Close + TradeLog (fire-and-forget, doesn't block the row from showing "Closed"),
         // then appends today's Obsidian daily-trade-log entry once both S3 URLs are actually known
         // — EntryImageUrl is already set from when the trade opened.
-        _ = UploadCloseTradeLogAndAppendDailyAsync(closeChartPath, tradeLogPath, symbol, type, tradeId, nowStr);
+        _ = UploadCloseTradeLogAndAppendDailyAsync(closeChartPath, tradeLogPath, symbol, type, tradeId, nowStr, tag?.EntryExtImagePath, closeExtPath);
     }
 
     private async Task UploadCloseTradeLogAndAppendDailyAsync(string? closeChartPath, string tradeLogPath,
-        string symbol, string type, int tradeId, string nowStr)
+        string symbol, string type, int tradeId, string nowStr, string? openExtPath = null, string? closeExtPath = null)
     {
         if (closeChartPath != null)
             await UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
@@ -4464,7 +4471,7 @@ public partial class Form1 : Form
 
         if (tradeId == 0) return;
         var trade = TradeHistoryStore.Load().FirstOrDefault(t => t.Id == tradeId);
-        if (trade != null) DailyTradeLogWriter.AppendTrade(trade);
+        if (trade != null) DailyTradeLogWriter.AppendTrade(trade, openExtPath, closeExtPath);
     }
 
     // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
