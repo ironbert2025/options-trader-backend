@@ -2276,7 +2276,7 @@ public partial class Form1 : Form
             var row = dgvQuotesNext.Rows[i];
             if (row.Tag?.ToString() != rowType) continue;
             if (row.Cells["colStrikePriceNext"].Value?.ToString() != strikeText) continue;
-            if (IsRowTradeBlocked(row, "colCallBidNext", "colPutBidNext")) return;
+            if (IsRowTradeBlocked(row, "colCallBidNext", "colPutBidNext", "colContractsNext")) return;
 
             var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
             if (isSimulation)
@@ -2797,14 +2797,14 @@ public partial class Form1 : Form
     // the option is illiquid (bid = 0), or there's no room for even 1 contract at the current
     // Position Size (Conts = 0) — either makes clicking Strike a guaranteed-bad trade. The
     // spread-too-wide (Sprd >= 6) check was removed per explicit request.
-    private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName)
+    private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName, string contractsColName = "colContracts")
     {
         // A frozen chain would price the trade with a stale ask — no new trades until it recovers.
         if (ChainStale) return true;
 
         if (IsRowBidZero(row, callBidColName, putBidColName)) return true;
 
-        if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
+        if (!decimal.TryParse(row.Cells[contractsColName].Value?.ToString(), out var contracts) || contracts == 0) return true;
 
         return false;
     }
