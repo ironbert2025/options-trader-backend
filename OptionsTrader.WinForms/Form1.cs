@@ -129,7 +129,9 @@ public partial class Form1 : Form
     // itself (which keeps its normal Call/Put color) — even after the trade closes. Separate from
     // _forcedStrikes above since that one only affects dgvQuotes (Options Quotes tab), and this
     // coloring must NOT appear there. Cleared on ticker switch, same lifecycle as _forcedStrikes.
-    private readonly HashSet<(string Type, decimal Strike)> _chartsTabHighlightedStrikes = new();
+    // Keyed by the trade's expiration too: the "Hoy" and "Próxima" grids are different products, so a strike
+    // opened on one expiration is highlighted only in the grid of THAT expiration.
+    private readonly HashSet<(string Type, decimal Strike, DateOnly Expiration)> _chartsTabHighlightedStrikes = new();
 
     // Read-and-reset by RecordEntryAsync (same pattern as _pendingTradeSendToApi/
     // _chartsTabTradeOverride) — set in DgvQuotes_CellClick right before calling into whichever
@@ -797,13 +799,14 @@ public partial class Form1 : Form
 
     // Used by TwoPanelChartsControl's _dgvOptions CellFormatting to know whether a row's strike
     // needs the gray/light-green highlight — see _chartsTabHighlightedStrikes' own comment.
-    internal bool IsChartsTabStrikeHighlighted(string rowType, decimal strike) =>
-        _chartsTabHighlightedStrikes.Contains((rowType.ToUpperInvariant(), strike));
+    internal bool IsChartsTabStrikeHighlighted(string rowType, decimal strike, DateOnly expiration) =>
+        _chartsTabHighlightedStrikes.Contains((rowType.ToUpperInvariant(), strike, expiration));
 
     // Used by TwoPanelChartsControl.RefreshOptionsGrid to force-include a highlighted strike's row
     // even once it's gone ITM (and would otherwise be filtered out of otmCalls/otmPuts) — see
     // PopulateSingleSideOptionsGrid's own comment.
-    internal HashSet<(string Type, decimal Strike)> GetChartsTabHighlightedStrikes() => _chartsTabHighlightedStrikes;
+    internal HashSet<(string Type, decimal Strike)> GetChartsTabHighlightedStrikes(DateOnly expiration) =>
+        _chartsTabHighlightedStrikes.Where(h => h.Expiration == expiration).Select(h => (h.Type, h.Strike)).ToHashSet();
 
     // Per-ticker polling cadence (seconds), default 6 — per explicit request, so certain symbols
     // can be polled more/less often than others instead of the one-size-fits-all fixed interval.
@@ -3111,7 +3114,10 @@ public partial class Form1 : Form
         // trade closes — see _chartsTabHighlightedStrikes' own comment. Read-and-reset, same
         // pattern as the other Charts-tab-origin flags above.
         if (_lastTradeOpenFromChartsTab && strikeForMoneyness > 0)
-            _chartsTabHighlightedStrikes.Add((rowType.ToUpperInvariant(), strikeForMoneyness));
+        {
+            var highlightExpiration = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
+            _chartsTabHighlightedStrikes.Add((rowType.ToUpperInvariant(), strikeForMoneyness, highlightExpiration));
+        }
         _lastTradeOpenFromChartsTab = false;
 
         // Premium = riesgo máximo de la posición = precio de entrada * 100 (por contrato) *

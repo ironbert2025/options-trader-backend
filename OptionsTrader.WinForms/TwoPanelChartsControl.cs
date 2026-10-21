@@ -299,6 +299,8 @@ public class TwoPanelChartsControl : UserControl
     private bool _showFirstItmCall, _showFirstItmPut;
     private HashSet<(string Type, decimal Strike)> _firstItmToday = new();
     private HashSet<(string Type, decimal Strike)> _firstItmNext = new();
+    // Expiration of each options grid (from its latest snapshot) — the strike highlight is per expiration.
+    private DateOnly? _todayExpiration, _nextExpiration;
 
     private HashSet<(string Type, decimal Strike)> FirstItmStrikes(IEnumerable<OptionQuoteDto> allQuotes)
     {
@@ -1764,7 +1766,8 @@ public class TwoPanelChartsControl : UserControl
                 // cell (not e.Value) since it isn't tied to whichever column is currently painting.
                 if (e.ColumnIndex != strikeCol && row.Tag is string rowType &&
                     decimal.TryParse(row.Cells["colStrikeLive"].Value?.ToString(), out var rowStrike) &&
-                    (_form1.IsChartsTabStrikeHighlighted(rowType, rowStrike)
+                    ((grid == _dgvOptions ? _todayExpiration : _nextExpiration) is { } gridExpiration
+                         && _form1.IsChartsTabStrikeHighlighted(rowType, rowStrike, gridExpiration)
                      || (grid == _dgvOptions ? _firstItmToday : _firstItmNext).Contains((rowType.ToUpperInvariant(), rowStrike))))
                 {
                     var inTheMoney = row.Cells["colStrikeLive"].Tag is true;
@@ -1968,7 +1971,10 @@ public class TwoPanelChartsControl : UserControl
             _dgvOptions.BeginInvoke(() =>
             {
                 _firstItmToday = FirstItmStrikes(snapshot.Value.AllQuotes);
-                var shownToday = new HashSet<(string Type, decimal Strike)>(_form1.GetChartsTabHighlightedStrikes());
+                _todayExpiration = snapshot.Value.AllQuotes.Count > 0 ? snapshot.Value.AllQuotes[0].ExpirationDate : null;
+                var shownToday = _todayExpiration is { } todayExp
+                    ? new HashSet<(string Type, decimal Strike)>(_form1.GetChartsTabHighlightedStrikes(todayExp))
+                    : new HashSet<(string Type, decimal Strike)>();
                 shownToday.UnionWith(_firstItmToday);
                 Form1.PopulateSingleSideOptionsGrid(
                     _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker,
@@ -1986,9 +1992,14 @@ public class TwoPanelChartsControl : UserControl
                 if (shouldShowNext && snapshotNext != null)
                 {
                     _firstItmNext = FirstItmStrikes(snapshotNext.Value.AllQuotes);
+                    _nextExpiration = snapshotNext.Value.AllQuotes.Count > 0 ? snapshotNext.Value.AllQuotes[0].ExpirationDate : null;
+                    var shownNext = _nextExpiration is { } nextExp
+                        ? new HashSet<(string Type, decimal Strike)>(_form1.GetChartsTabHighlightedStrikes(nextExp))
+                        : new HashSet<(string Type, decimal Strike)>();
+                    shownNext.UnionWith(_firstItmNext);
                     Form1.PopulateSingleSideOptionsGrid(
                         _dgvOptionsNext, snapshotNext.Value.AllQuotes, snapshotNext.Value.OtmCalls, snapshotNext.Value.OtmPuts, snapshotNext.Value.Ticker,
-                        _firstItmNext);
+                        shownNext);
                 }
             });
         }
