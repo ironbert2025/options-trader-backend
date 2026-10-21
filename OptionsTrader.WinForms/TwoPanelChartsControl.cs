@@ -880,9 +880,12 @@ public class TwoPanelChartsControl : UserControl
                 });
             };
 
-            hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
+            hourlyPanel.OnPisoTechoLevelRemovedEvent += (period, duringRth) =>
             {
                 if (IsDisposed) return;
+                // A level crossed by the regular session's price keeps its dashed line on panel 2 (it can be deleted by
+                // hand: click it, then Delete). A premarket cross or the open gap still removes it.
+                if (duringRth) return;
                 BeginInvoke(() => _ = rthPanel.RemovePisoTechoRefLineAsync(period));
             };
 
@@ -1656,7 +1659,7 @@ public class TwoPanelChartsControl : UserControl
             rthPanel.OnLiveTick += (eastern, price) =>
             {
                 if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)) return;
-                hourlyPanel.ValidatePisoTechoAgainstLivePrice(price);
+                hourlyPanel.ValidatePisoTechoAgainstLivePrice(price, rthPrice: true);
             };
         }
         if (rthPanel != null)

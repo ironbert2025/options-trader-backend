@@ -542,7 +542,9 @@ public class ChartPanel : Panel
     // gets invalidated by the market-open gap (ValidatePisoTechoAgainstOpen/
     // InvalidateIfBrokenByOpen below) — forwarded the same way to remove the matching reference line.
     public event Action<int, decimal>? OnPisoTechoLevelReadyEvent;
-    public event Action<int>? OnPisoTechoLevelRemovedEvent;
+    // (period, duringRth): duringRth is true when the live RTH price crossed the level after the open check had run
+    // (panel 2 of the Charts tab then keeps the reference line); false for a premarket cross or the open gap.
+    public event Action<int, bool>? OnPisoTechoLevelRemovedEvent;
 
     // Fires (detail) whenever SendChartToTelegramAsync fails — previously every call site was
     // fire-and-forget with the failure silently discarded (bad/missing credentials, network error,
@@ -2155,13 +2157,13 @@ public class ChartPanel : Panel
         if (s_pisoTechoOpenValidated) return;
         s_pisoTechoOpenValidated = true;
 
-        InvalidateIfBrokenByOpen(20, ref s_pisoTechoResult20, openPrice);
-        InvalidateIfBrokenByOpen(40, ref s_pisoTechoResult40, openPrice);
-        InvalidateIfBrokenByOpen(100, ref s_pisoTechoResult100, openPrice);
-        InvalidateIfBrokenByOpen(200, ref s_pisoTechoResult200, openPrice);
+        InvalidateIfBrokenByOpen(20, ref s_pisoTechoResult20, openPrice, duringRth: false);
+        InvalidateIfBrokenByOpen(40, ref s_pisoTechoResult40, openPrice, duringRth: false);
+        InvalidateIfBrokenByOpen(100, ref s_pisoTechoResult100, openPrice, duringRth: false);
+        InvalidateIfBrokenByOpen(200, ref s_pisoTechoResult200, openPrice, duringRth: false);
     }
 
-    private void InvalidateIfBrokenByOpen(int period, ref string? result, decimal openPrice)
+    private void InvalidateIfBrokenByOpen(int period, ref string? result, decimal openPrice, bool duringRth)
     {
         if (result == null) return;
 
@@ -2187,7 +2189,7 @@ public class ChartPanel : Panel
         if (IsHandleCreated)
             BeginInvoke(async () => await (_webView.CoreWebView2?.ExecuteScriptAsync($"removePisoTechoLabel({period});") ?? Task.CompletedTask));
         */
-        OnPisoTechoLevelRemovedEvent?.Invoke(period);
+        OnPisoTechoLevelRemovedEvent?.Invoke(period, duringRth);
         if (period == 20 || period == 40) EvaluateFirstReboundLabel();
     }
 
@@ -2233,12 +2235,16 @@ public class ChartPanel : Panel
     // price is being checked — calling this on panel 2's own instance instead would silently
     // compute a 15m SMA instead of the real 1h one, which is why MultiChartForm routes panel 2's
     // price THROUGH the hourly panel's own instance rather than calling this on rthPanel directly.
-    public void ValidatePisoTechoAgainstLivePrice(decimal livePrice)
+    //
+    // rthPrice: the price comes from the regular session (panel 2's RTH ticks) rather than the premarket. It only counts as
+    // a cross DURING the session once the 9:30 open check has run — before that, a level already broken is a gap.
+    public void ValidatePisoTechoAgainstLivePrice(decimal livePrice, bool rthPrice = false)
     {
-        InvalidateIfBrokenByOpen(20, ref s_pisoTechoResult20, livePrice);
-        InvalidateIfBrokenByOpen(40, ref s_pisoTechoResult40, livePrice);
-        InvalidateIfBrokenByOpen(100, ref s_pisoTechoResult100, livePrice);
-        InvalidateIfBrokenByOpen(200, ref s_pisoTechoResult200, livePrice);
+        var duringRth = rthPrice && s_pisoTechoOpenValidated;
+        InvalidateIfBrokenByOpen(20, ref s_pisoTechoResult20, livePrice, duringRth);
+        InvalidateIfBrokenByOpen(40, ref s_pisoTechoResult40, livePrice, duringRth);
+        InvalidateIfBrokenByOpen(100, ref s_pisoTechoResult100, livePrice, duringRth);
+        InvalidateIfBrokenByOpen(200, ref s_pisoTechoResult200, livePrice, duringRth);
     }
 
     // The LAST hourly RTH bucket (15:00-16:00) never gets the normal "next bucket started" trigger

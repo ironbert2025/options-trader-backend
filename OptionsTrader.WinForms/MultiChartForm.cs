@@ -479,7 +479,7 @@ public class MultiChartForm : Form
                 });
             };
 
-            hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
+            hourlyPanel.OnPisoTechoLevelRemovedEvent += (period, duringRth) =>
             {
                 if (IsDisposed) return;
                 BeginInvoke(() => _ = overnightPanel.RemovePisoTechoRefLineAsync(period));
