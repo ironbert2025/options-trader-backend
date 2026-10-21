@@ -4741,6 +4741,7 @@ public partial class Form1 : Form
         _coordsTarget1    = targets.T1;
         _coordsTarget2    = targets.T2;
         _coordsClickCount = 0;
+        _coordsLeftWasDown = IsPrimaryMouseButtonDown(); // a press already in progress is not a capture click
 
         // Change cursor to crosshair to indicate capture mode
         this.Cursor = Cursors.Cross;
@@ -4755,9 +4756,24 @@ public partial class Form1 : Form
         btn.Text = btn.Text + " ...";
     }
 
+    // One click = one press EDGE (up -> down), read from the global async key state, so a click anywhere on the screen
+    // counts (also on another program's window) and a press that is still held on the next 50 ms tick is not a second
+    // click. The old version waited for the release with DoEvents inside the tick, which let the timer fire again
+    // during the same press and filled BOTH textboxes with the first click.
+    private bool _coordsLeftWasDown;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    private static bool IsPrimaryMouseButtonDown() =>
+        (GetAsyncKeyState(SystemInformation.MouseButtonsSwapped ? 0x02 : 0x01) & 0x8000) != 0; // VK_RBUTTON when buttons are swapped
+
     private void CoordsCaptureTick(object? sender, EventArgs e)
     {
-        if ((Control.MouseButtons & MouseButtons.Left) == 0) return;
+        var down = IsPrimaryMouseButtonDown();
+        var pressedNow = down && !_coordsLeftWasDown;
+        _coordsLeftWasDown = down;
+        if (!pressedNow) return;
 
         var pos = Control.MousePosition;
 
@@ -4771,10 +4787,6 @@ public partial class Form1 : Form
             _coordsTarget2!.Text = $"{pos.X},{pos.Y}";
             StopCoordsCapture();
         }
-
-        // Wait for mouse release before detecting next click
-        while ((Control.MouseButtons & MouseButtons.Left) != 0)
-            System.Windows.Forms.Application.DoEvents();
     }
 
     private void StopCoordsCapture()
