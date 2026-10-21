@@ -3211,6 +3211,7 @@ public partial class Form1 : Form
         // marker into before (only the popup Live Chart window got one, above).
         if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
         {
+            await _chartsTabForm.ClearClosedTradeMarksOnRthChartAsync(); // before the new marks: panel 2 loses the closed trades' ones
             if (decimal.TryParse(strike, out var strikeValForChartsTab))
                 await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString(), strike: tradeStrike);

@@ -395,7 +395,33 @@ public class TwoPanelChartsControl : UserControl
     // persistence (OpenTradesStore) as the popup, just reached through this control directly.
     public async Task MarkEntrySpotOnRthChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
+        // A closing line: remember the trade, so the marks of closed trades can be cleared when the next one opens.
+        if (isClose && pairId != null) _closedTradeMarks.Add((pairId, strike));
         if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
+    }
+
+    // Trades closed since the last cleaning (their open/close rayitas, Stk line and ΔS label are still on panel 2).
+    private readonly List<(string PairId, decimal? Strike)> _closedTradeMarks = new();
+
+    // A trade is about to open: panel 2 drops what is left of the trades closed before it — rayitas, green Stk line and
+    // ΔS label (the "Expired!!!" marker stays). Only panel 2, nothing is echoed to other panels. A strike still used by
+    // an open trade keeps its Stk line.
+    public async Task ClearClosedTradeMarksOnRthChartAsync()
+    {
+        if (_rthPanel == null || _closedTradeMarks.Count == 0) return;
+        var openStrikes = new HashSet<decimal>();
+        if (_form1.GetTradesGrid(_symbol) is { } trades)
+        {
+            foreach (DataGridViewRow r in trades.Rows)
+            {
+                if (r.Tag == null || !string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString())) continue;
+                if (decimal.TryParse(r.Cells["colTradeStrike"].Value?.ToString(), out var s)) openStrikes.Add(s);
+            }
+        }
+        var closed = _closedTradeMarks.ToList();
+        _closedTradeMarks.Clear();
+        foreach (var (pairId, strike) in closed)
+            await _rthPanel.RemoveTradeMarksAsync(pairId, strike is { } sv && !openStrikes.Contains(sv) ? sv : null);
     }
 
     // "R" on the Stk line at a Refuerzo — panel 2 (15m RTH) only, mirrors MarkStrikeOnRthChartAsync.
