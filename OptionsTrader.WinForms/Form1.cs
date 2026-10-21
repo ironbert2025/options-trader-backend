@@ -3215,6 +3215,8 @@ public partial class Form1 : Form
             if (decimal.TryParse(strike, out var strikeValForChartsTab))
                 await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString(), strike: tradeStrike);
+            // RTH_PriceAction note: the Open of this trade (a Refuerzo's combined row is not a new open — its 2nd leg already was).
+            if (entryLabel != "Trade Refuerzo") _chartsTabForm.RecordTradeInPriceAction(isOpen: true, entryTime);
         }
 
         if (!isSimulation)
@@ -4371,6 +4373,12 @@ public partial class Form1 : Form
                 await _chartsTabForm.MarkDeltaSOnRthChartAsync(tag.EntrySpotPrice, closeSpot, strikeForDeltaChartsTab);
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString(), strike: closeTradeStrike);
         }
+
+        // RTH_PriceAction note: the Close of this trade, at the moment it closes. A Refuerzo group closes 3 rows together —
+        // only the combined result row writes the entry, not its 2 source legs.
+        if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol
+            && !(tag is { ReinforcementGroupId: not null, IsReinforcementResult: false }))
+            _chartsTabForm.RecordTradeInPriceAction(isOpen: false, DateTime.Now);
 
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
         // and the Telegram push below, instead of each capturing its own copy. Simulation trades

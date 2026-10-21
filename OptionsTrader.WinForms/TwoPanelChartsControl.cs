@@ -511,6 +511,18 @@ public class TwoPanelChartsControl : UserControl
     private bool IsPriceActionVisible() =>
         IsHandleCreated && Visible && FindForm() is { Visible: true, WindowState: not FormWindowState.Minimized };
 
+    // A trade opened or closed: one entry in the RTH_PriceAction note at that moment — the same combined panel 1 + 2
+    // image as the 15m candle closes, same left margin, labeled with the trade's own time and "Open" / "Close".
+    // (The 3 images of the _Trades note are saved separately, untouched.) Local clock time -> Eastern.
+    public void RecordTradeInPriceAction(bool isOpen, DateTime localTime)
+    {
+        if (IsDisposed || !EnsurePriceActionClaim()) return;
+        var eastern = TimeZoneInfo.ConvertTime(localTime, EasternZone);
+        var what = isOpen ? "Open" : "Close";
+        var fileName = $"{eastern:HHmmssfff}_{what.ToLowerInvariant()}.png";
+        EnqueuePriceAction(new PrLiveRequest(DateOnly.FromDateTime(eastern), $"{eastern:HH:mm:ss} — {what}", fileName, IsEvent: false));
+    }
+
     private void OnLiveCandleClosed(int bucket, DateTime tickUtc)
     {
         if (IsDisposed || !EnsurePriceActionClaim()) return;
