@@ -1102,17 +1102,19 @@ public partial class Form1 : Form
             {
                 // Still valid — restore as open trade
                 decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-                var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
+                // Empty PnlTarget = the user deleted this trade's target (RemoveTradeTarget): back without T_Bid / auto-close.
+                var targetDeleted = string.IsNullOrEmpty(t.PnlTarget);
+                var tBid = targetDeleted ? string.Empty : Math.Round(t.EntryPrice * (1 + targetPct / 100m) + TargetCommissionPerContract, 2).ToString("F2");
 
                 dgvTrades.Rows.Add(
                     t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
                     string.Empty, t.EntryPrice.ToString("F2"), t.Contracts,
-                    t.EntryPrice.ToString("F2"), t.EntryPrice.ToString("F2"), tBid.ToString("F2"),
+                    t.EntryPrice.ToString("F2"), t.EntryPrice.ToString("F2"), tBid,
                     "0.00", "0.00", t.PnlTarget,
                     string.Empty, "Close");
 
                 var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor);
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, SuppressAutoClose: targetDeleted, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
                 restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
@@ -2287,6 +2289,41 @@ public partial class Form1 : Form
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return;
         DgvTrades_CellClick(this, new DataGridViewCellEventArgs(dgvTrades.Columns["colTradeClose"].Index, rowIndex));
+    }
+
+    // Charts tab: Delete on the T_Bid or PnL_Target cell of an open Demo trade removes its target — both cells are
+    // emptied and the trade no longer closes by target (it runs until closed by hand, like a trade opened without
+    // target). Persisted, so the trade comes back the same after a restart. Real trades (their LIMIT order rests at
+    // the broker), Simulation trades, closed ones and ones without target are left alone. Returns true if it applied.
+    internal bool RemoveTradeTarget(string symbol, int rowIndex)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return false;
+        if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return false;
+        var row = dgvTrades.Rows[rowIndex];
+        if (row.Tag is not TradeRowTag tag || tag.SuppressAutoClose) return false;
+        if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return false;
+        if (!string.Equals(row.Cells["colTradeDemoReal"].Value?.ToString(), "Demo", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrEmpty(row.Cells["colTradeTBid"].Value?.ToString())) return false;
+
+        row.Tag = tag with { SuppressAutoClose = true };
+        row.Cells["colTradeTBid"].Value = string.Empty;
+        row.Cells["colTradePnLTarget"].Value = string.Empty;
+
+        if (tag.TradeId != 0)
+        {
+            try
+            {
+                var saved = OpenTradesStore.Load().FirstOrDefault(t => t.TradeId == tag.TradeId);
+                if (saved != null) OpenTradesStore.Add(saved with { PnlTarget = string.Empty });
+            }
+            catch { /* the in-memory change already applies; persistence is best-effort */ }
+        }
+
+        var type = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
+        var strike = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
+        LogLine($"{DateTime.Now:HH:mm:ss} [Target] Cierre por target eliminado: {type} {strike}", Color.Orange);
+        OnTradesUpdatedEvent?.Invoke(symbol);
+        return true;
     }
 
     // Same idea as TriggerTradeCloseClick — lets the Charts tab's own mirrored trades grid forward

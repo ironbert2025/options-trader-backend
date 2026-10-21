@@ -2137,6 +2137,54 @@ public class TwoPanelChartsControl : UserControl
         // dgvTrades) — simplest way to stay pixel-identical to whatever coloring Form1 applies
         // (lavender automatic-trade rows, gray-on-close, PnL colors, etc.) without re-deriving
         // those rules here. Source column order matches this grid's column order 1:1.
+        // ---- Delete on the T_Bid / PnL_Target cell of an open Demo trade removes its target (see Form1.RemoveTradeTarget).
+        // The mirror is rebuilt on every poll and never shows a selection, so the picked cell is remembered by the
+        // trade's own (time, type, strike) and drawn with a light fill after each rebuild.
+        (string Key, string Column)? targetCellPick = null;
+        string RowKey(DataGridViewRow r) =>
+            $"{r.Cells["colTradeTimeLive"].Value}|{r.Cells["colTradeTypeLive"].Value}|{r.Cells["colTradeStrikeLive"].Value}";
+        bool IsRemovableTarget(DataGridViewRow r) =>
+            string.IsNullOrEmpty(r.Cells["colTradeExitTimeLive"].Value?.ToString())
+            && string.Equals(r.Cells["colTradeDemoRealLive"].Value?.ToString(), "Demo", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(r.Cells["colTradeTBidLive"].Value?.ToString());
+        void ReapplyTargetCellSelection()
+        {
+            if (targetCellPick is not { } pick) return;
+            foreach (DataGridViewRow r in _dgvTrades.Rows)
+            {
+                if (RowKey(r) != pick.Key) continue;
+                if (!IsRemovableTarget(r)) break; // closed, or the target is already gone
+                r.Cells[pick.Column].Style.BackColor = Color.FromArgb(70, 90, 130);
+                return;
+            }
+            targetCellPick = null;
+        }
+        _dgvTrades.CellClick += (s, e) =>
+        {
+            targetCellPick = null;
+            if (e.RowIndex < 0) return;
+            var colName = _dgvTrades.Columns[e.ColumnIndex].Name;
+            if (colName != "colTradeTBidLive" && colName != "colTradePnLTargetLive") return;
+            var row = _dgvTrades.Rows[e.RowIndex];
+            if (!IsRemovableTarget(row)) return;
+            targetCellPick = (RowKey(row), colName);
+            RefreshTradesGrid(); // redraws the grid with the pick highlighted (and clears any older one)
+            _dgvTrades.Focus();
+        };
+        _dgvTrades.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode != Keys.Delete || targetCellPick is not { } pick) return;
+            foreach (DataGridViewRow r in _dgvTrades.Rows)
+            {
+                if (RowKey(r) != pick.Key) continue;
+                targetCellPick = null;
+                _form1.RemoveTradeTarget(_symbol, r.Index);
+                e.Handled = true;
+                return;
+            }
+            targetCellPick = null;
+        };
+
         void RefreshTradesGrid()
         {
             var sourceGrid = _form1.GetTradesGrid(_symbol);
@@ -2187,6 +2235,7 @@ public class TwoPanelChartsControl : UserControl
                 // copied above. This is a read-only mirror, nothing should ever look "selected".
                 _dgvTrades.ClearSelection();
                 _dgvTrades.CurrentCell = null;
+                ReapplyTargetCellSelection();
             });
         }
 
