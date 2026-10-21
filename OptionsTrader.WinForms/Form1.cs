@@ -50,7 +50,7 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _ivHistorialTimer;
     private bool _isPolling;
     private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
-    private bool _throttledAfter11;   // true once the 6s poll has downshifted to 1-minute after 11 AM
+    private bool _throttledAfter11;   // true while the poll sits at 1-minute: after 11 AM with no open trade (see UpdatePollingCadence)
 
     private TickerEntry? _selectedTicker;
 
@@ -919,8 +919,34 @@ public partial class Form1 : Form
     // takes effect on the next natural StartPollingTimer, e.g. tomorrow's session).
     internal void ApplyLivePollingInterval(string symbol, int seconds)
     {
-        if (_pollingTimer == null || _selectedTicker?.Symbol != symbol || _throttledAfter11) return;
-        _pollingTimer.Interval = Math.Max(1, seconds) * 1000;
+        if (_pollingTimer == null || _selectedTicker?.Symbol != symbol) return;
+        if (!_throttledAfter11) _pollingTimer.Interval = Math.Max(1, seconds) * 1000;
+        UpdatePollingCadence(); // at 1/min with a trade open (or the reverse) the textbox value is applied by this
+    }
+
+    // After 11 AM the poll used to drop to 1/min for good. Now it depends on the trades: with at least one open trade
+    // (any kind: Demo, Real, Simulation, with or without target) the poll runs at the textbox rhythm so its PnL
+    // keeps refreshing at that pace; with none it sits at 1/min. Before 11 AM, and in the 3:55 PM auto-capture
+    // session, nothing changes. Called on every tick and when a trade opens or closes.
+    private void UpdatePollingCadence()
+    {
+        if (_pollingTimer == null || _autoCaptureSession || !MarketHours.IsPastStopTime) return;
+        var hasOpenTrade = dgvTrades.Rows.Cast<DataGridViewRow>().Any(r =>
+            r.Tag is TradeRowTag && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()));
+        var seconds = Math.Max(1, _selectedTicker != null ? GetPollingIntervalFor(_selectedTicker.Symbol) : 6);
+
+        if (hasOpenTrade && _throttledAfter11)
+        {
+            _throttledAfter11 = false;
+            _pollingTimer.Interval = seconds * 1000;
+            LogLine($"{DateTime.Now:HH:mm:ss} [Polling] Trade abierto: polling a {seconds} s", Color.Gray);
+        }
+        else if (!hasOpenTrade && !_throttledAfter11)
+        {
+            _throttledAfter11 = true;
+            _pollingTimer.Interval = 60000;
+            LogLine($"{DateTime.Now:HH:mm:ss} [Polling] Sin trades abiertos: polling a 60 s", Color.Gray);
+        }
     }
 
     // True only for the VERY FIRST ticker selection of this run — the auto-select
@@ -1665,12 +1691,7 @@ public partial class Form1 : Form
             // After 11 AM, downshift from 6s to 1-minute polling (still saving to CSV) instead of
             // stopping — applies whether "Stop at 11:00 AM" is checked or not. The 3:55 PM
             // auto-capture session is exempt so it keeps running at full cadence to close.
-            if (!_autoCaptureSession && !_throttledAfter11 && MarketHours.IsPastStopTime)
-            {
-                _pollingTimer!.Interval = 60000;
-                _throttledAfter11 = true;
-                // LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 11:00 AM reached — polling throttled to 1/min", Color.Yellow);
-            }
+            UpdatePollingCadence();
 
             await FetchAndUpdateQuotesAsync();
         };
@@ -3203,6 +3224,7 @@ public partial class Form1 : Form
         }
 
         OnTradesUpdatedEvent?.Invoke(symbol);
+        UpdatePollingCadence(); // a trade opened after 11 AM: poll at the textbox rhythm again
         return (tradeId, newRow);
     }
 
@@ -4265,6 +4287,7 @@ public partial class Form1 : Form
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
         OnTradesUpdatedEvent?.Invoke(symbol);
+        UpdatePollingCadence(); // the last open trade closed after 11 AM: back to 1/min
 
         var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
 
