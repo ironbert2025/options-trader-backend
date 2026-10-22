@@ -4388,12 +4388,6 @@ public partial class Form1 : Form
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(closeSpot, closeSpotColor, isClose: true, isCall: closeIsCall, pairId: tag?.EntryTime.Ticks.ToString(), strike: closeTradeStrike);
         }
 
-        // RTH_PriceAction note: the Close of this trade, at the moment it closes. A Refuerzo group closes 3 rows together —
-        // only the combined result row writes the entry, not its 2 source legs.
-        if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol
-            && !(tag is { ReinforcementGroupId: not null, IsReinforcementResult: false }))
-            _chartsTabForm.RecordTradeInPriceAction(isOpen: false, DateTime.Now);
-
         // 3-chart snapshot at close ("_Close") — captured once and reused both for the S3 upload
         // and the Telegram push below, instead of each capturing its own copy. Simulation trades
         // get this far too (per explicit request, they now DO push to Telegram on close) even
@@ -4442,6 +4436,13 @@ public partial class Form1 : Form
         }
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
+
+        // RTH_PriceAction note: the Close of this trade, labeled with the moment it closed, with the TradeLog screenshot
+        // (taken just above) under the charts. A Refuerzo group closes 3 rows together — only the combined result row
+        // writes the entry, not its 2 source legs.
+        if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol
+            && !(tag is { ReinforcementGroupId: not null, IsReinforcementResult: false }))
+            _chartsTabForm.RecordTradeInPriceAction(isOpen: false, now, tradeLogPath);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
 
         // Simulation trades stop here for S3/TradeHistoryStore — the Telegram push above is one

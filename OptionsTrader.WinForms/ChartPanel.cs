@@ -267,6 +267,9 @@ public class ChartPanel : Panel
     // closes the 15:45 candle). Drives the live RTH Price Action screenshots. A tick far from the boundary
     // (a long gap with no ticks) still reports it; the host decides whether it is too late to image.
     internal event Action<int, DateTime>? OnRthCandleClosedEvent;
+    // Fires once a day with the tick's UTC time when the first RTH tick (first 15m candle, bucket 0) arrives — the 9:30
+    // open. The host decides whether it is late (app started well after 9:30) and writes the Open entry of the note.
+    internal event Action<DateTime>? OnRthOpenEvent;
     private int _lastRthBucket = -2;           // -2 = no tick yet; -1 premarket; 0..25 RTH; 26 from 16:00
     private DateOnly _lastRthBucketDay;
 
@@ -280,11 +283,18 @@ public class ChartPanel : Panel
                    : (int)Math.Floor((tod - new TimeSpan(9, 30, 0)).TotalMinutes / 15.0);
 
         var day = DateOnly.FromDateTime(eastern);
-        if (day != _lastRthBucketDay) { _lastRthBucketDay = day; _lastRthBucket = bucket; return; } // new session / first tick ever
+        if (day != _lastRthBucketDay)
+        {
+            _lastRthBucketDay = day; _lastRthBucket = bucket;
+            if (bucket == 0 && !_closing && IsHandleCreated) BeginInvoke(() => OnRthOpenEvent?.Invoke(utcTime)); // first tick ever, already in RTH
+            return;                                                                                         // new session / first tick ever
+        }
         if (bucket <= _lastRthBucket) return;                                                    // same bucket (or an out-of-order tick)
 
         var previous = _lastRthBucket;
         _lastRthBucket = bucket;
+        if (previous < 0 && bucket == 0 && !_closing && IsHandleCreated)
+            BeginInvoke(() => OnRthOpenEvent?.Invoke(utcTime));                                  // the first RTH tick after the premarket: the open
         if (previous < 0 || _closing || !IsHandleCreated) return;                               // premarket closes nothing
         for (var k = previous; k <= Math.Min(bucket - 1, 25); k++)
         {

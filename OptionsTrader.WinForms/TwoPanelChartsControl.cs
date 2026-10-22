@@ -475,7 +475,7 @@ public class TwoPanelChartsControl : UserControl
     private readonly Queue<PrLiveRequest> _prQueue = new();
     private bool _prWorking;
 
-    private sealed record PrLiveRequest(DateOnly Day, string Label, string FileName, bool IsEvent);
+    private sealed record PrLiveRequest(DateOnly Day, string Label, string FileName, bool IsEvent, string? TradeLogPath = null);
 
     private void ClaimPriceAction()
     {
@@ -514,13 +514,30 @@ public class TwoPanelChartsControl : UserControl
     // A trade opened or closed: one entry in the RTH_PriceAction note at that moment — the same combined panel 1 + 2
     // image as the 15m candle closes, same left margin, labeled with the trade's own time and "Open" / "Close".
     // (The 3 images of the _Trades note are saved separately, untouched.) Local clock time -> Eastern.
-    public void RecordTradeInPriceAction(bool isOpen, DateTime localTime)
+    // tradeLogImagePath: the TradeLog screenshot of a trade's Close (taken just after the close), written under the images.
+    public void RecordTradeInPriceAction(bool isOpen, DateTime localTime, string? tradeLogImagePath = null)
     {
         if (IsDisposed || !EnsurePriceActionClaim()) return;
         var eastern = TimeZoneInfo.ConvertTime(localTime, EasternZone);
         var what = isOpen ? "Open" : "Close";
         var fileName = $"{eastern:HHmmssfff}_{what.ToLowerInvariant()}.png";
-        EnqueuePriceAction(new PrLiveRequest(DateOnly.FromDateTime(eastern), $"{eastern:HH:mm:ss} — {what}", fileName, IsEvent: false));
+        EnqueuePriceAction(new PrLiveRequest(DateOnly.FromDateTime(eastern), $"{eastern:HH:mm:ss} — {what}", fileName, IsEvent: false, tradeLogImagePath));
+    }
+
+    // The 9:30 open of the session: first entry of the symbol's note (combined panel 1 + 2 image and the external one),
+    // once a day. Skipped when the app only started well after 9:30 (the chart no longer looks like the open).
+    private DateOnly _prOpenDay;
+
+    private void OnLiveSessionOpened(DateTime tickUtc)
+    {
+        if (IsDisposed || !EnsurePriceActionClaim()) return;
+        var tickEastern = TimeZoneInfo.ConvertTimeFromUtc(tickUtc, EasternZone);
+        var day = DateOnly.FromDateTime(tickEastern);
+        if (_prOpenDay == day) return;
+        _prOpenDay = day;
+        var openEastern = day.ToDateTime(new TimeOnly(9, 30));
+        if (tickEastern - openEastern > LateCandleTolerance) return;
+        EnqueuePriceAction(new PrLiveRequest(day, "09:30:00 — Open", "093000_open.png", IsEvent: false));
     }
 
     private void OnLiveCandleClosed(int bucket, DateTime tickUtc)
@@ -597,7 +614,7 @@ public class TwoPanelChartsControl : UserControl
                     imagePath = null; // a failed screenshot never disturbs the charts — noted in the md
                 }
                 if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(run, req.Label, imagePath, note ?? "sin imagen: captura no disponible");
-                else SimPriceActionMarkdownWriter.AppendCandleClose(run, req.Label, imagePath, note, externalPath);
+                else SimPriceActionMarkdownWriter.AppendCandleClose(run, req.Label, imagePath, note, externalPath, req.TradeLogPath);
             }
         }
         finally { _prWorking = false; }
@@ -1405,6 +1422,7 @@ public class TwoPanelChartsControl : UserControl
             ClaimPriceAction();
             Disposed += (s, e) => ReleasePriceAction();
             rthPanel.OnRthCandleClosedEvent += OnLiveCandleClosed;
+            rthPanel.OnRthOpenEvent += OnLiveSessionOpened;
             rthPanel.OnWickAnalysisArmedEvent += () =>
             {
                 if (_txtDeltaSpot != null && string.IsNullOrWhiteSpace(_txtDeltaSpot.Text)) _txtDeltaSpot.Text = "1";

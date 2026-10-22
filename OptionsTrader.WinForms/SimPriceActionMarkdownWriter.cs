@@ -71,19 +71,22 @@ internal static class SimPriceActionMarkdownWriter
     // The external-screen screenshot, when there is one, goes to the RIGHT of the combined image: a two-column table, so
     // the entry is as tall as the taller image and the next entry starts below it. Without the combined image
     // (chart not visible) the external one stands alone under the note.
-    private static string ImagesBlock(string? imagePath, string? externalPath)
+    private static string ImagesBlock(string? imagePath, string? externalPath, string? tradeLogPath = null)
     {
+        string block;
         if (imagePath != null && externalPath != null)
-            return $"| | |\n|---|---|\n| {ImageMarkdown(imagePath)} | {ImageMarkdown(externalPath)} |\n\n";
-        if (imagePath != null) return $"{ImageMarkdown(imagePath)}\n\n";
-        return externalPath != null ? $"{ImageMarkdown(externalPath)}\n\n" : string.Empty;
+            block = $"| | |\n|---|---|\n| {ImageMarkdown(imagePath)} | {ImageMarkdown(externalPath)} |\n\n";
+        else if (imagePath != null) block = $"{ImageMarkdown(imagePath)}\n\n";
+        else block = externalPath != null ? $"{ImageMarkdown(externalPath)}\n\n" : string.Empty;
+        // A trade's Close also carries the TradeLog screenshot (the Trades + Logger part of the window), below the charts.
+        return tradeLogPath != null ? block + $"{ImageMarkdown(tradeLogPath)}\n\n" : block;
     }
 
     // Candle close: label (just the time) + image, left margin.
-    public static void AppendCandleClose(SimPriceActionRun run, string timeLabel, string? imagePath, string? noteWhenNoImage = null, string? externalImagePath = null) =>
+    public static void AppendCandleClose(SimPriceActionRun run, string timeLabel, string? imagePath, string? noteWhenNoImage = null, string? externalImagePath = null, string? tradeLogPath = null) =>
         Append(run, imagePath != null
-            ? $"**{timeLabel}**\n\n{ImagesBlock(imagePath, externalImagePath)}"
-            : $"**{timeLabel}** _({noteWhenNoImage ?? "sin imagen: captura no disponible"})_\n\n{ImagesBlock(null, externalImagePath)}");
+            ? $"**{timeLabel}**\n\n{ImagesBlock(imagePath, externalImagePath, tradeLogPath)}"
+            : $"**{timeLabel}** _({noteWhenNoImage ?? "sin imagen: captura no disponible"})_\n\n{ImagesBlock(null, externalImagePath, tradeLogPath)}");
 
     // Event: label (time + description) + image, indented. note replaces the image when there is none.
     public static void AppendEvent(SimPriceActionRun run, string label, string? imagePath, string? noteWhenNoImage) =>
