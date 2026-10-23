@@ -107,6 +107,9 @@ public partial class Form1 : Form
     // price: T_Bid = Round(Ask * (1 + Target%/100) + this, 2)). Added ONCE per target, not per contract
     // count — T_Bid is a per-contract price. Also used by the Simulator.
     internal const decimal TargetCommissionPerContract = 0.02m;
+    // Broker commission per contract of a Demo trade (whole trade, charged once at the close): always taken off the
+    // demo balance, whether the trade won or lost.
+    internal const decimal BrokerCommissionPerContract = 1.30m;
 
     private string NextEntrySpotColor() => (++_entrySpotColorCounter % 2 == 1) ? "#ffffff" : "#ffeb3b";
     private CsvLogger? _csvLogger;
@@ -2308,6 +2311,10 @@ public partial class Form1 : Form
     // written to this window's log — the Charts tab repeats them, same colors, in the log of panel 2.
     public event Action<string, string, Color, string>? OnTradeCloseLogged;
 
+    // Fires (symbol, commission text, net text, net color) after OnTradeCloseLogged for a closed DEMO trade: the broker
+    // commission taken off the balance and the net PnL — shown on one line, the commission in orange, the net in its color.
+    public event Action<string, string, string, Color>? OnTradeCommissionLogged;
+
     // Read-only access to dgvTrades for MultiChartForm's mirror grid to copy values/colors from.
     // Same one-instance-per-ticker restriction as the methods above.
     internal DataGridView? GetTradesGrid(string symbol) =>
@@ -4300,10 +4307,22 @@ public partial class Form1 : Form
 
         // A DEMO (or Simulation) trade closing moves the demo balance by its PnL — every instance working in
         // Demo mode picks the new value up through the file watcher. Real trades leave the balances alone.
+        // Demo trades also pay the broker commission (1.30 x contracts, win or lose); Simulation ones do not. A Refuerzo's
+        // combined result row is bookkeeping only — its two legs already moved the balance by the same PnL — so it moves nothing.
         var tradeKind = row.Cells["colTradeDemoReal"].Value?.ToString();
-        if (!string.Equals(tradeKind, "Real", StringComparison.OrdinalIgnoreCase))
+        decimal commission = 0m;
+        int commissionContracts = 0;
+        decimal? netPnl = null;
+        if (!string.Equals(tradeKind, "Real", StringComparison.OrdinalIgnoreCase)
+            && !(row.Tag is TradeRowTag { IsReinforcementResult: true }))
         {
-            try { BalanceStore.AddToDemo(pnlVal); }
+            if (string.Equals(tradeKind, "Demo", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(row.Cells["colTradeContracts"].Value?.ToString(), out commissionContracts))
+            {
+                commission = Math.Round(BrokerCommissionPerContract * commissionContracts, 2);
+                netPnl = pnlVal - commission;
+            }
+            try { BalanceStore.AddToDemo(pnlVal - commission); }
             catch { /* balance bookkeeping must never get in the way of closing a trade */ }
         }
         row.Cells["colTradeExitTime"].Value   = nowStr;
@@ -4324,6 +4343,10 @@ public partial class Form1 : Form
         LogLine(pnlLine, pnlColor);
         LogLine(durationLine, Color.White);
         OnTradeCloseLogged?.Invoke(symbol, pnlLine, pnlColor, durationLine); // the Charts tab shows the same two lines, same colors
+        // Demo only: the breakdown (gross PnL is the line above) — commission and the net that reached the balance.
+        if (netPnl is { } net)
+            OnTradeCommissionLogged?.Invoke(symbol, $"{nowStr} Comisión: -{commission:F2} ({commissionContracts} × {BrokerCommissionPerContract:F2})  →  ",
+                $"Neto: {net:F2}", net >= 0 ? Color.LimeGreen : Color.Red);
         System.Windows.Forms.Application.DoEvents();
 
         // Remove from local persistence

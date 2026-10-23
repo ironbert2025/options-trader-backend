@@ -627,7 +627,8 @@ public class TwoPanelChartsControl : UserControl
     // accumulates; cleared when the trading day changes). Redrawing the whole box each time is what lets
     // a new set replace the top without wiping the history underneath.
     private string _log2Set = string.Empty;
-    private readonly List<(string Text, Color Color)> _log2Bb = new();
+    // Text (+ an optional second segment on the same line, e.g. commission in orange then the net in its own color).
+    private readonly List<(string Text, Color Color, string? Tail, Color TailColor)> _log2Bb = new();
     private DateOnly _log2BbDay;
     private const int Log2BbMaxLines = 400;
 
@@ -642,17 +643,17 @@ public class TwoPanelChartsControl : UserControl
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(eventUtc, EasternZone);
         var day = DateOnly.FromDateTime(eastern);
         if (day != _log2BbDay) { _log2Bb.Clear(); _log2BbDay = day; }
-        _log2Bb.Add(($"{eastern:HH:mm:ss.fff}  {text}", color));
+        _log2Bb.Add(($"{eastern:HH:mm:ss.fff}  {text}", color, null, color));
         if (_log2Bb.Count > Log2BbMaxLines) _log2Bb.RemoveAt(0);
         RenderLog2(scrollToEnd: true);
     }
 
     // A line already formatted by its source (no event-time prefix), kept in the same day history as the Bollinger events.
-    private void AddLog2Raw(string text, Color color)
+    private void AddLog2Raw(string text, Color color, string? tail = null, Color? tailColor = null)
     {
         var day = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
         if (day != _log2BbDay) { _log2Bb.Clear(); _log2BbDay = day; }
-        _log2Bb.Add((text, color));
+        _log2Bb.Add((text, color, tail, tailColor ?? color));
         if (_log2Bb.Count > Log2BbMaxLines) _log2Bb.RemoveAt(0);
         RenderLog2(scrollToEnd: true);
     }
@@ -662,8 +663,11 @@ public class TwoPanelChartsControl : UserControl
         _crossLog2.Clear();
         if (_log2Set.Length > 0) _crossLog2.AppendText(_log2Set);
         if (_log2Set.Length > 0 && _log2Bb.Count > 0) _crossLog2.AppendText(Environment.NewLine);
-        foreach (var (text, color) in _log2Bb)
-            ChartPanel.AppendColored(_crossLog2, new[] { (text + Environment.NewLine, (Color?)color) });
+        foreach (var (text, color, tail, tailColor) in _log2Bb)
+        {
+            if (tail == null) ChartPanel.AppendColored(_crossLog2, new[] { (text + Environment.NewLine, (Color?)color) });
+            else ChartPanel.AppendColored(_crossLog2, new (string, Color?)[] { (text, color), (tail + Environment.NewLine, tailColor) });
+        }
         _crossLog2.SelectionStart = scrollToEnd ? _crossLog2.TextLength : 0; // a new event shows the newest line; a new set shows its top
         _crossLog2.ScrollToCaret();
     }
@@ -2322,6 +2326,14 @@ public class TwoPanelChartsControl : UserControl
             AddLog2Raw(durationLine, Color.White);
         }
         Disposed += (s, e) => _form1.OnTradeCloseLogged -= OnForm1TradeCloseLogged;
+        // Demo trade: the commission and the net PnL on one more line (commission in orange, net in its own color).
+        _form1.OnTradeCommissionLogged += OnForm1TradeCommissionLogged;
+        void OnForm1TradeCommissionLogged(string closedSymbol, string commissionText, string netText, Color netColor)
+        {
+            if (closedSymbol != _symbol || IsDisposed) return;
+            AddLog2Raw(commissionText, Color.Orange, netText, netColor);
+        }
+        Disposed += (s, e) => _form1.OnTradeCommissionLogged -= OnForm1TradeCommissionLogged;
 
         _form1.OnTradesUpdatedEvent += OnForm1TradesUpdated;
         void OnForm1TradesUpdated(string updatedSymbol)
