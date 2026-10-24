@@ -5318,6 +5318,21 @@
       axisLabelVisible: true, lineVisible: true, title
     });
   }
+  // PUT / CALL setup arrows (Simulator, panel 2): one marker per 15m candle and direction, on the candle where the setup
+  // fired — red arrow down above the bar (PUT), green arrow up below it (CALL). Dedup by candle + direction.
+  let bbSetupMarkers = [];
+  function applyBbSetupMarkers() {
+    const ms = bbSetupMarkers.slice().sort((a, b) => a.time - b.time).map(m => ({ time: m.time, position: m.position, color: m.color, shape: m.shape, text: m.text }));
+    candleSeries.setMarkers(ms);
+  }
+  function markBbSetup(time, isCall) {
+    if (bbSetupMarkers.some(m => m.time === time && m.isCall === !!isCall)) return;
+    bbSetupMarkers.push({ time, isCall: !!isCall, position: isCall ? 'belowBar' : 'aboveBar', color: isCall ? '#26a69a' : '#ef5350',
+                          shape: isCall ? 'arrowUp' : 'arrowDown', text: isCall ? 'CALL' : 'PUT' });
+    applyBbSetupMarkers();
+  }
+  function clearBbSetupMarkers() { bbSetupMarkers = []; candleSeries.setMarkers([]); }
+
   function clearOpenRevisit() {
     if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; }
     openRevisitSelected = false;

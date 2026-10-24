@@ -1078,7 +1078,8 @@ public class SimulatorForm : Form
     private int _bbFirstIdx = -1;            // index in _intradayCandles of today's first RTH tick
     private int _bbCursor = -1;              // last tick index fed to _bbDetector
     private int _bbLoggedHighWater = -1;     // highest tick index whose events were already logged
-    private readonly Panel _pnlBb = new() { Location = new Point(1040, 160), Size = new Size(130, 68) };
+    private readonly Panel _pnlBb = new() { Location = new Point(1040, 160), Size = new Size(130, 94) };
+    private readonly CheckBox _chkSetup = new() { Text = "Señal PUT/CALL", Checked = true, AutoSize = true, Location = new Point(0, 72), Font = new Font("Segoe UI", 8F) };
     private readonly Label _lblBbRearm = new() { Text = "BB re-armado:", AutoSize = true, Location = new Point(0, 0), Font = new Font("Segoe UI", 8F) };
     private readonly ComboBox _cmbBbRearm = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(0, 15), Size = new Size(128, 24) };
     private readonly Button _btnBbScan = new() { Text = "Escaneo rápido BB", Location = new Point(0, 42), Size = new Size(128, 26), Enabled = false };
@@ -1101,6 +1102,16 @@ public class SimulatorForm : Form
         _pnlBb.Controls.Add(_lblBbRearm);
         _pnlBb.Controls.Add(_cmbBbRearm);
         _pnlBb.Controls.Add(_btnBbScan);
+        _pnlBb.Controls.Add(_chkSetup);
+        new ToolTip().SetToolTip(_chkSetup, "PUT/CALL: spot dentro de las bandas, moviéndose en esa dirección, punto medio inclinado en esa dirección y al menos una banda abriéndose.");
+        _chkSetup.CheckedChanged += (s, e) =>
+        {
+            if (!_chkSetup.Checked) { _rthChart.ClearBbSetupMarkers(); return; }
+            if (!_bbAvailable) return;
+            var keep = _bbCursor;       // resync silently; already-logged signals stay as they were
+            ResetBbDetector();
+            AdvanceBbDetector(keep);
+        };
     }
 
     // Completed closes of the prior days' RTH 15m candles (the "previous candle" for the first bucket
@@ -1116,7 +1127,27 @@ public class SimulatorForm : Form
     {
         _bbDetector = new BollingerMomentumDetector(BuildBbContextCloses(), _bbRearm, BbMovingWindow);
         _bbCursor = _bbFirstIdx - 1;
+        _setupDetector = new BbDirectionalSetupDetector(BuildBbContextCloses(), BbMovingWindow);
+        _rthChart.ClearBbSetupMarkers();
         ResetOpenRevisit();
+    }
+
+    // ===== PUT / CALL setup (BbDirectionalSetupDetector), fed by the same tick walk as the BB momentum detector =====
+    private BbDirectionalSetupDetector? _setupDetector;
+    private int _setupLoggedHighWater = -1;
+
+    private static string SetupText(BbSetupEvent ev, DateTime easternTime) =>
+        $"[Señal {(ev.Bullish ? "CALL" : "PUT")}] {easternTime:HH:mm:ss.fff} — spot {ev.Spot:F2} ({(ev.SpotAboveMid ? "sobre" : "bajo")} el medio) · " +
+        $"medio {ev.Mid:F2} ({(ev.Bullish ? "↑" : "↓")} vs {ev.MidPrev:F2}) · banda sup {ev.Up:F2} (vs {ev.UpPrev:F2}) · inf {ev.Lo:F2} (vs {ev.LoPrev:F2})";
+
+    private void HandleSetup(BbSetupEvent ev, int tickIndex)
+    {
+        _rthChart.MarkBbSetup(CandleAggregation.FifteenMinRthBucketStartUtc(ev.TimeUtc), ev.Bullish);
+        if (tickIndex <= _setupLoggedHighWater) return;
+        _setupLoggedHighWater = tickIndex;
+        var message = SetupText(ev, EasternTime(ev.TimeUtc));
+        var color = ev.Bullish ? Color.LimeGreen : Color.Tomato;
+        LogSimEvent(message, new List<(string Text, Color? Color)> { (message, color), (Environment.NewLine, null) }, ev.TimeUtc);
     }
 
     // ===== Open revisit (first 15m candle) — same detector as the live panel 2, fed by the same tick walk =====
@@ -1149,6 +1180,7 @@ public class SimulatorForm : Form
     private void InitBbForLoadedDay()
     {
         _bbLoggedHighWater = -1;
+        _setupLoggedHighWater = -1;
         _openRevisitLoggedHighWater = -1;
         _bbFirstIdx = _intradayCandles.FindIndex(c =>
         {
@@ -1200,6 +1232,7 @@ public class SimulatorForm : Form
         {
             var tick = _intradayCandles[i];
             FeedOpenRevisit(i, tick);
+            if (_chkSetup.Checked && _setupDetector?.OnTick(tick.Time, tick.Close) is { } setupEvent) HandleSetup(setupEvent, i);
             var events = _bbDetector.OnTick(tick.Time, tick.Close);
             if (i > _bbLoggedHighWater)
             {
@@ -1243,6 +1276,22 @@ public class SimulatorForm : Form
                     $"Alcista: {Count(BbMomentumEventKind.Validation, true)} validaciones / {Count(BbMomentumEventKind.Touch, true)} toques / {Count(BbMomentumEventKind.Lost, true)} perdidas · " +
                     $"Bajista: {Count(BbMomentumEventKind.Validation, false)} validaciones / {Count(BbMomentumEventKind.Touch, false)} toques / {Count(BbMomentumEventKind.Lost, false)} perdidas");
         foreach (var ev in all) LogBbEvent(ev, prefix: "[Escaneo] ");
+
+        // The PUT / CALL setup over the same day, with a fresh detector.
+        var setupDet = new BbDirectionalSetupDetector(BuildBbContextCloses(), BbMovingWindow);
+        var setups = new List<BbSetupEvent>();
+        for (var i = _bbFirstIdx; i < _intradayCandles.Count; i++)
+        {
+            var tick = _intradayCandles[i];
+            if (DateOnly.FromDateTime(EasternTime(tick.Time)) != _simDate) break;
+            if (setupDet.OnTick(tick.Time, tick.Close) is { } se) setups.Add(se);
+        }
+        LogSimEvent($"[Escaneo rápido BB] Señales PUT/CALL: {setups.Count(s => !s.Bullish)} PUT / {setups.Count(s => s.Bullish)} CALL");
+        foreach (var se in setups)
+        {
+            var text = "[Escaneo] " + SetupText(se, EasternTime(se.TimeUtc));
+            LogSimEvent(text, new List<(string Text, Color? Color)> { (text, se.Bullish ? Color.LimeGreen : Color.Tomato), (Environment.NewLine, null) }, se.TimeUtc);
+        }
     }
 
     // ===== RTH Price Action note (Simulator) =====

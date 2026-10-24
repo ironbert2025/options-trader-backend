@@ -272,6 +272,19 @@ public class SimulatedChartPanel : Panel
         _ = _webView.CoreWebView2.ExecuteScriptAsync($"markOpenRevisit({openStr}, {System.Text.Json.JsonSerializer.Serialize(title)});");
     }
 
+    // PUT / CALL setup arrow on the 15m candle (bucketStartUtc) where the setup fired.
+    public void MarkBbSetup(DateTime bucketStartUtc, bool isCall)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync($"markBbSetup({ToFakeUtcEpochSeconds(bucketStartUtc)}, {(isCall ? "true" : "false")});");
+    }
+
+    public void ClearBbSetupMarkers()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync("clearBbSetupMarkers();");
+    }
+
     public void ClearOpenRevisit()
     {
         if (_webView.CoreWebView2 == null) return;
