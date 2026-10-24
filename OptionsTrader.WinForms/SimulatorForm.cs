@@ -1078,7 +1078,7 @@ public class SimulatorForm : Form
     private int _bbFirstIdx = -1;            // index in _intradayCandles of today's first RTH tick
     private int _bbCursor = -1;              // last tick index fed to _bbDetector
     private int _bbLoggedHighWater = -1;     // highest tick index whose events were already logged
-    private readonly Panel _pnlBb = new() { Location = new Point(1040, 160), Size = new Size(130, 94) };
+    private readonly Panel _pnlBb = new() { Location = new Point(1040, 126), Size = new Size(130, 94) }; // up from y=160: the arrow/Stk panel (y>=232) covers whatever sits lower
     private readonly CheckBox _chkSetup = new() { Text = "Señal PUT/CALL", Checked = true, AutoSize = true, Location = new Point(0, 72), Font = new Font("Segoe UI", 8F) };
     private readonly Label _lblBbRearm = new() { Text = "BB re-armado:", AutoSize = true, Location = new Point(0, 0), Font = new Font("Segoe UI", 8F) };
     private readonly ComboBox _cmbBbRearm = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(0, 15), Size = new Size(128, 24) };
