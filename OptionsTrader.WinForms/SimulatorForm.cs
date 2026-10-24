@@ -1136,9 +1136,35 @@ public class SimulatorForm : Form
     private BbDirectionalSetupDetector? _setupDetector;
     private int _setupLoggedHighWater = -1;
 
+    // The bands that are opening, as text: "banda inferior abriéndose (216.60 → 216.30)" / both bands.
+    private static string BandsOpeningText(BbSetupEvent ev)
+    {
+        var upper = $"superior {ev.UpPrev:F2} → {ev.Up:F2}";
+        var lower = $"inferior {ev.LoPrev:F2} → {ev.Lo:F2}";
+        if (ev.UpperOpening && ev.LowerOpening) return $"ambas bandas abriéndose ({upper}; {lower})";
+        return ev.UpperOpening ? $"banda {upper} abriéndose" : $"banda {lower} abriéndose";
+    }
+
+    // One line for the log: what held, with the numbers.
     private static string SetupText(BbSetupEvent ev, DateTime easternTime) =>
-        $"[Señal {(ev.Bullish ? "CALL" : "PUT")}] {easternTime:HH:mm:ss.fff} — spot {ev.Spot:F2} ({(ev.SpotAboveMid ? "sobre" : "bajo")} el medio) · " +
-        $"medio {ev.Mid:F2} ({(ev.Bullish ? "↑" : "↓")} vs {ev.MidPrev:F2}) · banda sup {ev.Up:F2} (vs {ev.UpPrev:F2}) · inf {ev.Lo:F2} (vs {ev.LoPrev:F2})";
+        $"[Señal {(ev.Bullish ? "CALL" : "PUT")}] {easternTime:HH:mm:ss.fff} — spot {ev.Spot:F2} dentro de las bandas, " +
+        $"{(ev.Bullish ? "subiendo" : "bajando")} ({ev.SpotAgo:F2} → {ev.Spot:F2}); medio {ev.Mid:F2} {(ev.Bullish ? "↑" : "↓")} ({ev.MidPrev:F2} en la vela anterior); {BandsOpeningText(ev)}";
+
+    // The note entry: the four conditions as a checked list.
+    private string SetupDetails(BbSetupEvent ev)
+    {
+        var dir = ev.Bullish ? "arriba" : "abajo";
+        var midDelta = ev.Mid - ev.MidPrev;
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"Spot {ev.Spot:F2}, dentro de las bandas ({ev.Lo:F2} – {ev.Up:F2}), {(ev.SpotAboveMid ? "por encima" : "por debajo")} del punto medio.\n");
+        sb.Append($"- ✔ Dentro de las bandas: {ev.Lo:F2} < {ev.Spot:F2} < {ev.Up:F2}\n");
+        sb.Append($"- ✔ Moviéndose {dir}: {ev.SpotAgo:F2} hace 5 s → {ev.Spot:F2} ahora\n");
+        sb.Append($"- ✔ Punto medio hacia {dir}: {ev.Mid:F2} (vela anterior {ev.MidPrev:F2}, {midDelta:+0.00;-0.00})\n");
+        sb.Append($"- ✔ {char.ToUpper(BandsOpeningText(ev)[0])}{BandsOpeningText(ev)[1..]}");
+        if (!(ev.UpperOpening && ev.LowerOpening))
+            sb.Append(ev.UpperOpening ? $" (la inferior {ev.LoPrev:F2} → {ev.Lo:F2} no)" : $" (la superior {ev.UpPrev:F2} → {ev.Up:F2} no)");
+        return sb.ToString();
+    }
 
     private void HandleSetup(BbSetupEvent ev, int tickIndex)
     {
@@ -1148,6 +1174,30 @@ public class SimulatorForm : Form
         var message = SetupText(ev, EasternTime(ev.TimeUtc));
         var color = ev.Bullish ? Color.LimeGreen : Color.Tomato;
         LogSimEvent(message, new List<(string Text, Color? Color)> { (message, color), (Environment.NewLine, null) }, ev.TimeUtc);
+        RecordSetupNote(ev);
+    }
+
+    // BBSetup note: one entry per signal (candle + direction) with its description and the combined panel 1 + 2 image.
+    private SimPriceActionRun? _setupRun;
+    private readonly HashSet<(int Bucket, bool Bullish)> _setupNoted = new();
+
+    private void RecordSetupNote(BbSetupEvent ev)
+    {
+        if (_setupRun == null) return;
+        var bucket = PrBucketOf(ev.TimeUtc);
+        if (bucket < 0 || bucket > 25 || !_setupNoted.Add((bucket, ev.Bullish))) return; // once per candle and direction
+        var eastern = EasternTime(ev.TimeUtc);
+        var startOfCandle = PrRthStart + TimeSpan.FromMinutes(15 * bucket);
+        var heading = $"{eastern:HH:mm:ss.fff} — Señal {(ev.Bullish ? "CALL" : "PUT")} · vela {startOfCandle:hh\\:mm}–{startOfCandle + TimeSpan.FromMinutes(15):hh\\:mm} ({bucket + 1} de 26)";
+        var details = SetupDetails(ev);
+        if (!_prContinuous)
+        {
+            SimPriceActionMarkdownWriter.AppendSetup(_setupRun, heading, details, null, "sin imagen: salto de reproducción");
+            LogSimEvent("[Señales PUT/CALL] Sin imagen: salto de reproducción (entrada de texto en la nota)");
+            return;
+        }
+        var fileName = $"{eastern:HHmmssfff}_{(ev.Bullish ? "call" : "put")}.png";
+        EnqueuePrCapture(new PrCaptureRequest(_setupRun, heading, fileName, IsEvent: false, details));
     }
 
     // ===== Open revisit (first 15m candle) — same detector as the live panel 2, fed by the same tick walk =====
@@ -1316,7 +1366,7 @@ public class SimulatorForm : Form
     private readonly Queue<PrCaptureRequest> _prQueue = new();
     private bool _prWorking;
 
-    private sealed record PrCaptureRequest(SimPriceActionRun Run, string Label, string FileName, bool IsEvent);
+    private sealed record PrCaptureRequest(SimPriceActionRun Run, string Label, string FileName, bool IsEvent, string? SetupDetails = null);
 
     // Called from LoadSelectedDay once _intradayCandles / _bbFirstIdx for the new day are set.
     private void InitPriceActionForLoadedDay()
@@ -1331,6 +1381,8 @@ public class SimulatorForm : Form
             return DateOnly.FromDateTime(e) == _simDate && e.TimeOfDay >= PrRthStart && e.TimeOfDay < PrRthEnd;
         });
         _prRun = _bbFirstIdx >= 0 ? SimPriceActionMarkdownWriter.CreateRun(_symbol, _simDate, _simExp) : null;
+        _setupRun = _bbFirstIdx >= 0 ? SimPriceActionMarkdownWriter.CreateSetupRun(_symbol, _simDate, _simExp) : null;
+        _setupNoted.Clear();
     }
 
     // -1 before 9:30, 0..25 for the 26 RTH candles, 26 from 16:00 on.
@@ -1422,13 +1474,19 @@ public class SimulatorForm : Form
                             img.Save(imagePath, System.Drawing.Imaging.ImageFormat.Png);
                         }
                     }
-                    if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(req.Run, req.Label, imagePath, "sin imagen: captura no disponible");
+                    if (req.SetupDetails != null)
+                    {
+                        SimPriceActionMarkdownWriter.AppendSetup(req.Run, req.Label, req.SetupDetails, imagePath, "sin imagen: captura no disponible");
+                        LogSimEvent(imagePath != null ? $"[Señales PUT/CALL] Imagen guardada: {Path.GetFileName(imagePath)}" : "[Señales PUT/CALL] Sin imagen: captura no disponible");
+                    }
+                    else if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(req.Run, req.Label, imagePath, "sin imagen: captura no disponible");
                     else SimPriceActionMarkdownWriter.AppendCandleClose(req.Run, req.Label, imagePath);
                 }
                 catch
                 {
                     // A failed screenshot must never break playback — note it and move on.
-                    if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(req.Run, req.Label, null, "sin imagen: captura no disponible");
+                    if (req.SetupDetails != null) SimPriceActionMarkdownWriter.AppendSetup(req.Run, req.Label, req.SetupDetails, null, "sin imagen: captura no disponible");
+                    else if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(req.Run, req.Label, null, "sin imagen: captura no disponible");
                     else SimPriceActionMarkdownWriter.AppendCandleClose(req.Run, req.Label, null);
                 }
             }

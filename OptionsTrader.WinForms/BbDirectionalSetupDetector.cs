@@ -2,8 +2,12 @@ namespace OptionsTrader.WinForms;
 
 // A directional entry setup on the 15m RTH Bollinger(20, 2) bands. Bullish = CALL setup, otherwise PUT.
 internal sealed record BbSetupEvent(DateTime TimeUtc, bool Bullish, decimal Spot, double Mid, double Up, double Lo,
-    double MidPrev, double UpPrev, double LoPrev)
+    double MidPrev, double UpPrev, double LoPrev, double SpotAgo)
 {
+    // Which bands are opening versus the previous completed candle (at least one is true on any event).
+    public bool UpperOpening => Up > UpPrev;
+    public bool LowerOpening => Lo < LoPrev;
+
     // Where the spot sits relative to the middle band when the setup fires (informative only).
     public bool SpotAboveMid => (double)Spot > Mid;
 }
@@ -105,12 +109,12 @@ internal sealed class BbDirectionalSetupDetector
         if (bullish && _bullLockBucket != bucket)
         {
             _bullLockBucket = bucket;
-            return new BbSetupEvent(timeUtc, true, price, mid, up, lo, _midPrev, _upPrev, _loPrev);
+            return new BbSetupEvent(timeUtc, true, price, mid, up, lo, _midPrev, _upPrev, _loPrev, ago.Value);
         }
         if (bearish && _bearLockBucket != bucket)
         {
             _bearLockBucket = bucket;
-            return new BbSetupEvent(timeUtc, false, price, mid, up, lo, _midPrev, _upPrev, _loPrev);
+            return new BbSetupEvent(timeUtc, false, price, mid, up, lo, _midPrev, _upPrev, _loPrev, ago.Value);
         }
         return null;
     }

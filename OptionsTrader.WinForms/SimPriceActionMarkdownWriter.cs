@@ -47,6 +47,31 @@ internal static class SimPriceActionMarkdownWriter
         };
     }
 
+    // Simulator PUT/CALL setup note (..._BBSetup.md): one entry per signal with a description of what held and the combined
+    // panel 1 + 2 image at that moment. Apart from the candle-close note so only the signals are in it; its own image
+    // folder per Cargar, like CreateRun.
+    public static SimPriceActionRun CreateSetupRun(string symbol, DateOnly dataDate, DateOnly? exp)
+    {
+        var started = DateTime.Now;
+        var runDateStr = started.ToString("yyyy_MM_dd");
+        var expPart = exp.HasValue ? $"_exp{exp.Value:yyyyMMdd}" : string.Empty;
+        return new SimPriceActionRun
+        {
+            Symbol = symbol,
+            DataDate = dataDate,
+            Started = started,
+            MdPath = Path.Combine(VaultFolder, runDateStr, $"{runDateStr}_{Environment.MachineName}_{symbol}_Sim_{dataDate:yyyy_MM_dd}{expPart}_BBSetup.md"),
+            ImageFolder = Path.Combine(@"C:\OptionsData\Simulator\BbSetup", symbol, dataDate.ToString("yyyyMMdd"), started.ToString("yyyyMMdd_HHmmss")),
+            HeaderLine = $"# {symbol} — Señales PUT/CALL (Bollinger 15m RTH, simulación) — datos {dataDate:yyyy-MM-dd}{(exp.HasValue ? $" · exp {exp.Value:yyyy-MM-dd}" : string.Empty)}"
+        };
+    }
+
+    // One signal: a heading (time + direction + candle), the description lines, then the image — or the reason there is none.
+    public static void AppendSetup(SimPriceActionRun run, string heading, string details, string? imagePath, string? noteWhenNoImage) =>
+        Append(run, $"### {heading}\n\n{details}\n\n" + (imagePath != null
+            ? $"{ImageMarkdown(imagePath)}\n\n"
+            : $"_({noteWhenNoImage ?? "sin imagen: captura no disponible"})_\n\n"));
+
     // Live Charts tab: ONE note per symbol per trading day ({date}_{PC}_{SYMBOL}_RTH_PriceAction.md), kept
     // apart from the all-tickers Open/Close note (DailyChartSnapshotsMarkdownWriter), which is rewritten
     // whole at the close and would erase these entries. Images sit with the other live snapshots.
