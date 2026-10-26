@@ -5738,8 +5738,10 @@
   });
 
   const DetailStrikeSegmentPx = 100;
-  let detailStrikes = null; // { bullish, atRight, lines: [{ strike, bid, ask }], note }
-  let detailStrikeExtent = null; // { min, max } of the strikes shown, so the autoscale holds them
+  // Two independent drawings that can be on screen at the same time: "formed" (the strikes of a candle that had already closed when it
+  // was clicked, at the LEFT edge) and "forming" (the candle that was still forming, at the RIGHT edge). Each is { bullish, lines, note }.
+  let detailStrikes = { formed: null, forming: null };
+  let detailStrikeExtent = null; // { min, max } over both drawings, so the autoscale holds the strikes
   let detailStrikesAttached = false;
   class DetailStrikesPrimitive {
     attached() {}
@@ -5750,48 +5752,52 @@
         renderer() {
           return {
             draw(target) {
-              if (!detailStrikes) return;
+              if (!detailStrikes.formed && !detailStrikes.forming) return;
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
                 const seg = DetailStrikeSegmentPx * hpr;
-                const right = detailStrikes.atRight ? scope.bitmapSize.width : seg + 6 * hpr;
-                const left = right - seg;
-                const color = detailStrikes.bullish ? '#26a69a' : '#ef5350';
-                if (detailStrikes.note) {
-                  ctx.fillStyle = '#9aa0aa';
-                  ctx.font = `${11 * vpr}px sans-serif`;
-                  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-                  ctx.fillText(detailStrikes.note, left, 36 * vpr);
-                  return;
-                }
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 2 * hpr;
-                ctx.setLineDash([5 * hpr, 3 * hpr]);
-                detailStrikes.lines.forEach(l => {
-                  const y = candleSeries.priceToCoordinate(l.strike);
-                  if (y == null) return;
-                  ctx.beginPath(); ctx.moveTo(left, y * vpr); ctx.lineTo(right, y * vpr); ctx.stroke();
-                });
-                ctx.setLineDash([]);
-                ctx.font = `${10 * vpr}px sans-serif`;
-                detailStrikes.lines.forEach(l => {
-                  const y = candleSeries.priceToCoordinate(l.strike);
-                  if (y == null) return;
-                  // strike under the segment, at its left end (no trailing ".00" for whole numbers)
-                  ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-                  ctx.fillText(Number.isInteger(l.strike) ? String(l.strike) : l.strike.toFixed(2), left, y * vpr + 3 * vpr);
-                  // bid / ask over the segment, centered: bid orange, ask green
-                  const bid = l.bid.toFixed(2), ask = l.ask.toFixed(2);
-                  ctx.font = `${11 * vpr}px sans-serif`; ctx.textBaseline = 'bottom';
-                  const wBid = ctx.measureText(bid).width, wSep = ctx.measureText(' / ').width, wAsk = ctx.measureText(ask).width;
-                  let x = (left + right) / 2 - (wBid + wSep + wAsk) / 2;
-                  const ty = y * vpr - 4 * vpr;
-                  ctx.fillStyle = '#ffa726'; ctx.fillText(bid, x, ty); x += wBid;
-                  ctx.fillStyle = '#9aa0aa'; ctx.fillText(' / ', x, ty); x += wSep;
-                  ctx.fillStyle = '#4caf50'; ctx.fillText(ask, x, ty);
-                  ctx.font = `${10 * vpr}px sans-serif`;
-                });
+                const drawSlot = (d, atRight) => {
+                  if (!d) return;
+                  const right = atRight ? scope.bitmapSize.width : seg + 6 * hpr;
+                  const left = right - seg;
+                  const color = d.bullish ? '#26a69a' : '#ef5350';
+                  if (d.note) {
+                    ctx.fillStyle = '#9aa0aa';
+                    ctx.font = `${11 * vpr}px sans-serif`;
+                    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                    ctx.fillText(d.note, left, (atRight ? 54 : 36) * vpr);
+                    return;
+                  }
+                  ctx.strokeStyle = color;
+                  ctx.lineWidth = 2 * hpr;
+                  ctx.setLineDash([5 * hpr, 3 * hpr]);
+                  d.lines.forEach(l => {
+                    const y = candleSeries.priceToCoordinate(l.strike);
+                    if (y == null) return;
+                    ctx.beginPath(); ctx.moveTo(left, y * vpr); ctx.lineTo(right, y * vpr); ctx.stroke();
+                  });
+                  ctx.setLineDash([]);
+                  d.lines.forEach(l => {
+                    const y = candleSeries.priceToCoordinate(l.strike);
+                    if (y == null) return;
+                    // strike under the segment, at its left end (no trailing ".00" for whole numbers)
+                    ctx.font = `${10 * vpr}px sans-serif`;
+                    ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                    ctx.fillText(Number.isInteger(l.strike) ? String(l.strike) : l.strike.toFixed(2), left, y * vpr + 3 * vpr);
+                    // bid / ask over the segment, centered: bid orange, ask green
+                    const bid = l.bid.toFixed(2), ask = l.ask.toFixed(2);
+                    ctx.font = `${11 * vpr}px sans-serif`; ctx.textBaseline = 'bottom';
+                    const wBid = ctx.measureText(bid).width, wSep = ctx.measureText(' / ').width, wAsk = ctx.measureText(ask).width;
+                    let x = (left + right) / 2 - (wBid + wSep + wAsk) / 2;
+                    const ty = y * vpr - 4 * vpr;
+                    ctx.fillStyle = '#ffa726'; ctx.fillText(bid, x, ty); x += wBid;
+                    ctx.fillStyle = '#9aa0aa'; ctx.fillText(' / ', x, ty); x += wSep;
+                    ctx.fillStyle = '#4caf50'; ctx.fillText(ask, x, ty);
+                  });
+                };
+                drawSlot(detailStrikes.formed, false);
+                drawSlot(detailStrikes.forming, true);
               });
             }
           };
@@ -5801,21 +5807,31 @@
   }
   const detailStrikesPrimitive = new DetailStrikesPrimitive();
 
+  function detailStrikeExtentKey() { return detailStrikeExtent ? detailStrikeExtent.min + '|' + detailStrikeExtent.max : ''; }
+  function detailRecomputeStrikeExtent() {
+    const ks = [];
+    [detailStrikes.formed, detailStrikes.forming].forEach(d => { if (d) d.lines.forEach(l => ks.push(l.strike)); });
+    detailStrikeExtent = ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
+  }
+
+  // slot: 'formed' | 'forming'. A drawing stays until it is replaced (another double click in that slot), toggled off
+  // (double click on the same candle) or the window is pointed at another 15-minute candle.
   function detailSetStrikes(payload) {
     if (!detailView) return;
     if (!detailStrikesAttached) { candleSeries.attachPrimitive(detailStrikesPrimitive); detailStrikesAttached = true; }
-    detailStrikes = { bullish: !!payload.bullish, atRight: !!payload.atRight, lines: payload.lines || [], note: payload.note || null };
-    const ks = detailStrikes.lines.map(l => l.strike);
-    const before = detailStrikeExtent ? detailStrikeExtent.min + '|' + detailStrikeExtent.max : '';
-    detailStrikeExtent = ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
-    const after = detailStrikeExtent ? detailStrikeExtent.min + '|' + detailStrikeExtent.max : '';
-    if (before !== after) candleSeries.priceScale().applyOptions({ autoScale: true }); // re-fit the axis to hold the strikes
+    const before = detailStrikeExtentKey();
+    detailStrikes[payload.slot === 'forming' ? 'forming' : 'formed'] =
+      { bullish: !!payload.bullish, lines: payload.lines || [], note: payload.note || null };
+    detailRecomputeStrikeExtent();
+    if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true }); // re-fit the axis to hold the strikes
     forceRepaint();
   }
 
-  function detailClearStrikes() {
-    detailStrikes = null;
-    if (detailStrikeExtent) { detailStrikeExtent = null; candleSeries.priceScale().applyOptions({ autoScale: true }); }
+  function detailClearStrikes(slot) {
+    const before = detailStrikeExtentKey();
+    if (slot === 'formed' || slot === 'forming') detailStrikes[slot] = null; else detailStrikes = { formed: null, forming: null };
+    detailRecomputeStrikeExtent();
+    if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true });
     forceRepaint();
   }
 
