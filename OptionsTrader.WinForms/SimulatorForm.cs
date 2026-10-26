@@ -2198,6 +2198,19 @@ public class SimulatorForm : Form
         if (_candleDetail == null || _candleDetail.IsDisposed)
         {
             var window = new CandleDetailForm(_symbol, _rthChart.Height);
+            // Double click on a 1-minute candle: the 4 nearest OTM strikes of its side, from the replayed chain — the step at/before
+            // the last second of that minute (or the one the clock is on, for the minute still forming).
+            window.StrikeProvider = (minuteUtc, bullish, forming) =>
+            {
+                var cutoff = forming ? _lastChartClockUtc : minuteUtc.AddSeconds(59);
+                SimulationStep? step = null;
+                for (var i = _steps.Count - 1; i >= 0; i--)
+                    if (_steps[i].Time <= cutoff) { step = _steps[i]; break; }
+                if (step == null || step.Quotes.Count == 0)
+                    return new StrikeQuoteResult(Array.Empty<StrikeQuote>(), "sin datos de opciones en ese minuto");
+                var picked = StrikeQuotePicker.Nearest(step.Quotes, bullish, step.UnderlyingPrice);
+                return new StrikeQuoteResult(picked, picked.Count == 0 ? "sin datos de opciones en ese minuto" : null);
+            };
             _candleDetail = window;
             // a trade opened/closed while the window is open gets its rayita too
             Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);

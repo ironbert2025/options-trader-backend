@@ -1378,6 +1378,21 @@ public class TwoPanelChartsControl : UserControl
                 if (candleDetail == null || candleDetail.IsDisposed)
                 {
                     var window = new CandleDetailForm(_symbol, rthPanel.Height);
+                    // Double click on a 1-minute candle: the 4 nearest OTM strikes of its side. Forming minute: the live chain;
+                    // a formed one: the last poll saved at or before its last second (needs "Save to CSV" on at that time).
+                    window.StrikeProvider = (minuteUtc, bullish, forming) =>
+                    {
+                        var snapshot = _form1.GetQuoteSnapshot(_symbol);
+                        if (snapshot == null || snapshot.Value.AllQuotes.Count == 0)
+                            return new StrikeQuoteResult(Array.Empty<StrikeQuote>(), "sin cadena de opciones");
+                        if (forming)
+                        {
+                            var spot = snapshot.Value.AllQuotes[0].SpotPrice;
+                            var live = StrikeQuotePicker.Nearest(snapshot.Value.AllQuotes, bullish, spot);
+                            return new StrikeQuoteResult(live, live.Count == 0 ? "sin datos de opciones ahora" : null);
+                        }
+                        return OptionChainHistory.GetAtEndOfMinute(_symbol, snapshot.Value.AllQuotes[0].ExpirationDate, bullish, minuteUtc);
+                    };
                     candleDetail = window;
                     minutesChanged = () => window.MarkDirty();
                     rthPanel.OnMinuteCandlesChanged += minutesChanged;

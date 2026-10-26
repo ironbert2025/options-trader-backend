@@ -5453,13 +5453,20 @@
     candleSeries.applyOptions({
       autoscaleInfoProvider: original => {
         const res = original();
-        if (detailView.priceMin == null || detailView.priceMax == null) return res;
-        if (!res || !res.priceRange) return { priceRange: { minValue: detailView.priceMin, maxValue: detailView.priceMax } };
+        const sMin = detailStrikeExtent ? detailStrikeExtent.min : null, sMax = detailStrikeExtent ? detailStrikeExtent.max : null;
+        if (detailView.priceMin == null || detailView.priceMax == null) {
+          if (res && res.priceRange && sMin != null)
+            return { ...res, priceRange: { minValue: Math.min(res.priceRange.minValue, sMin), maxValue: Math.max(res.priceRange.maxValue, sMax) } };
+          return res;
+        }
+        const lo = sMin != null ? Math.min(detailView.priceMin, sMin) : detailView.priceMin;
+        const hi = sMax != null ? Math.max(detailView.priceMax, sMax) : detailView.priceMax;
+        if (!res || !res.priceRange) return { priceRange: { minValue: lo, maxValue: hi } };
         return {
           ...res,
           priceRange: {
-            minValue: Math.min(res.priceRange.minValue, detailView.priceMin),
-            maxValue: Math.max(res.priceRange.maxValue, detailView.priceMax)
+            minValue: Math.min(res.priceRange.minValue, lo),
+            maxValue: Math.max(res.priceRange.maxValue, hi)
           }
         };
       }
@@ -5711,6 +5718,104 @@
     detailView.userMoved = false;
     detailApplyView();
     detailRenderIndexLabels();
+    forceRepaint();
+  }
+
+  // ---- Double click on a 1-minute candle (detail window only): its 4 nearest OTM strikes ----
+  // C# gets the minute and its color (green -> calls, red -> puts; a doji sends up = null and nothing is drawn) and answers with
+  // detailSetStrikes: 4 short segments at the LEFT edge for a formed candle, at the RIGHT edge for the one still forming; the strike
+  // under each segment (left), "bid / ask" over it. The price axis widens to hold the strikes so they are on screen.
+  container.addEventListener('dblclick', ev => {
+    if (!detailView) return;
+    const rect = container.getBoundingClientRect();
+    const time = chart.timeScale().coordinateToTime(ev.clientX - rect.left);
+    if (time == null) return;
+    let hit = null;
+    for (let i = allCandles.length - 1; i >= 0; i--) { if (allCandles[i].time <= time) { hit = allCandles[i]; break; } }
+    if (!hit) return;
+    const up = hit.close > hit.open ? true : (hit.close < hit.open ? false : null);
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'detail_minute_click', time: hit.time, up });
+  });
+
+  const DetailStrikeSegmentPx = 100;
+  let detailStrikes = null; // { bullish, atRight, lines: [{ strike, bid, ask }], note }
+  let detailStrikeExtent = null; // { min, max } of the strikes shown, so the autoscale holds them
+  let detailStrikesAttached = false;
+  class DetailStrikesPrimitive {
+    attached() {}
+    updateAllViews() {}
+    paneViews() {
+      return [{
+        zOrder() { return 'top'; },
+        renderer() {
+          return {
+            draw(target) {
+              if (!detailStrikes) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
+                const seg = DetailStrikeSegmentPx * hpr;
+                const right = detailStrikes.atRight ? scope.bitmapSize.width : seg + 6 * hpr;
+                const left = right - seg;
+                const color = detailStrikes.bullish ? '#26a69a' : '#ef5350';
+                if (detailStrikes.note) {
+                  ctx.fillStyle = '#9aa0aa';
+                  ctx.font = `${11 * vpr}px sans-serif`;
+                  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                  ctx.fillText(detailStrikes.note, left, 36 * vpr);
+                  return;
+                }
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2 * hpr;
+                ctx.setLineDash([5 * hpr, 3 * hpr]);
+                detailStrikes.lines.forEach(l => {
+                  const y = candleSeries.priceToCoordinate(l.strike);
+                  if (y == null) return;
+                  ctx.beginPath(); ctx.moveTo(left, y * vpr); ctx.lineTo(right, y * vpr); ctx.stroke();
+                });
+                ctx.setLineDash([]);
+                ctx.font = `${10 * vpr}px sans-serif`;
+                detailStrikes.lines.forEach(l => {
+                  const y = candleSeries.priceToCoordinate(l.strike);
+                  if (y == null) return;
+                  // strike under the segment, at its left end (no trailing ".00" for whole numbers)
+                  ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                  ctx.fillText(Number.isInteger(l.strike) ? String(l.strike) : l.strike.toFixed(2), left, y * vpr + 3 * vpr);
+                  // bid / ask over the segment, centered: bid orange, ask green
+                  const bid = l.bid.toFixed(2), ask = l.ask.toFixed(2);
+                  ctx.font = `${11 * vpr}px sans-serif`; ctx.textBaseline = 'bottom';
+                  const wBid = ctx.measureText(bid).width, wSep = ctx.measureText(' / ').width, wAsk = ctx.measureText(ask).width;
+                  let x = (left + right) / 2 - (wBid + wSep + wAsk) / 2;
+                  const ty = y * vpr - 4 * vpr;
+                  ctx.fillStyle = '#ffa726'; ctx.fillText(bid, x, ty); x += wBid;
+                  ctx.fillStyle = '#9aa0aa'; ctx.fillText(' / ', x, ty); x += wSep;
+                  ctx.fillStyle = '#4caf50'; ctx.fillText(ask, x, ty);
+                  ctx.font = `${10 * vpr}px sans-serif`;
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const detailStrikesPrimitive = new DetailStrikesPrimitive();
+
+  function detailSetStrikes(payload) {
+    if (!detailView) return;
+    if (!detailStrikesAttached) { candleSeries.attachPrimitive(detailStrikesPrimitive); detailStrikesAttached = true; }
+    detailStrikes = { bullish: !!payload.bullish, atRight: !!payload.atRight, lines: payload.lines || [], note: payload.note || null };
+    const ks = detailStrikes.lines.map(l => l.strike);
+    const before = detailStrikeExtent ? detailStrikeExtent.min + '|' + detailStrikeExtent.max : '';
+    detailStrikeExtent = ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
+    const after = detailStrikeExtent ? detailStrikeExtent.min + '|' + detailStrikeExtent.max : '';
+    if (before !== after) candleSeries.priceScale().applyOptions({ autoScale: true }); // re-fit the axis to hold the strikes
+    forceRepaint();
+  }
+
+  function detailClearStrikes() {
+    detailStrikes = null;
+    if (detailStrikeExtent) { detailStrikeExtent = null; candleSeries.priceScale().applyOptions({ autoScale: true }); }
     forceRepaint();
   }
 

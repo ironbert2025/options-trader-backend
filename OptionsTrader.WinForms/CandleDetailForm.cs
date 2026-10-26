@@ -26,6 +26,14 @@ internal sealed class CandleDetailForm : Form
     private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
     private bool _pendingViewReset = true;
+
+    // ---- Double click on a 1-minute candle: its 4 nearest OTM strikes (green candle -> calls, red -> puts) ----
+    // The host sets StrikeProvider(minuteStartUtc, bullish, forming): the quotes as of the last second of that minute, or the
+    // live ones for the minute still forming. Null (the Daily form) -> the double click does nothing.
+    public Func<DateTime, bool, bool, StrikeQuoteResult?>? StrikeProvider { get; set; }
+    private (DateTime Minute, bool Bullish)? _pick;
+    private DateTime _lastPickRefreshUtc = DateTime.MinValue;
+    private bool _pickBusy;
     private bool _sawForming;                   // the candle on screen was seen forming: when it ends, follow the next one
     private double? _parentBarSpacing;
     private Func<DateTime>? _getClockUtc;       // "now" of the data (last tick / replay clock), for the seconds of the forming minute
@@ -68,6 +76,8 @@ internal sealed class CandleDetailForm : Form
         {
             if (_dirty && _following) await RedrawAsync();
             else UpdateTitle(); // the seconds of the forming minute move even when no data changed
+            // the strikes of a minute still forming follow the live quotes (about once a second)
+            if (_pick != null && (DateTime.UtcNow - _lastPickRefreshUtc).TotalSeconds >= 1) await RefreshPickAsync();
         };
         FormClosed += (s, e) => { _redrawTimer.Stop(); _redrawTimer.Dispose(); };
     }
@@ -125,6 +135,7 @@ internal sealed class CandleDetailForm : Form
         _lastJson = string.Empty;
 
         await EnsurePageAsync();
+        await ClearPickAsync(); // a new target: the strikes picked on the previous one go away
 
         // New target: lay the view out once — a fixed bar width (15 candles take ~80 % of the plot), the
         // price axis over the same span the 15m chart shows. Redraws then leave the view alone.
@@ -156,6 +167,7 @@ internal sealed class CandleDetailForm : Form
         var next = _bucketStartUtc.AddMinutes(15);
         if (TimeZoneInfo.ConvertTimeFromUtc(next, EasternZone).TimeOfDay >= new TimeSpan(16, 0, 0)) return false;
         _bucketStartUtc = next;
+        _ = ClearPickAsync(); // the next 15-minute candle: the strikes of the previous one go away
         _sawForming = false;
         _lastJson = string.Empty;
         _lastOverlay = string.Empty;
@@ -164,6 +176,61 @@ internal sealed class CandleDetailForm : Form
         await _web.CoreWebView2.ExecuteScriptAsync($"detailAdvanceBucket({ChartPanel.FakeUtcEpochSeconds(next)});");
         _pendingViewReset = false;
         return true;
+    }
+
+    private async void OnPageMessage(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var type) || type.GetString() != "detail_minute_click") return;
+            if (StrikeProvider == null || !root.TryGetProperty("time", out var tEl) || !tEl.TryGetInt64(out var seconds)) return;
+            var minute = ChartPanel.UtcFromFakeEpochSeconds(seconds);
+            if (_pick is { } current && current.Minute == minute) { await ClearPickAsync(); return; } // same candle again: off
+            if (!root.TryGetProperty("up", out var upEl) || upEl.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                await ClearPickAsync(); // a doji has no direction
+                return;
+            }
+            _pick = (minute, upEl.GetBoolean());
+            await RefreshPickAsync();
+        }
+        catch { /* diagnostics window */ }
+    }
+
+    // Is this minute the one still being formed (the last candle of a candle that is still forming)?
+    private bool IsMinuteForming(DateTime minute) =>
+        _lastState == MinuteBucketState.Forming && _getClockUtc != null && MinuteCandleStore.MinuteStart(_getClockUtc()) == minute;
+
+    private async Task RefreshPickAsync()
+    {
+        if (_pick is not { } pick || StrikeProvider == null || _pickBusy || _web.CoreWebView2 == null) return;
+        _pickBusy = true;
+        try
+        {
+            _lastPickRefreshUtc = DateTime.UtcNow;
+            var forming = IsMinuteForming(pick.Minute);
+            var result = StrikeProvider(pick.Minute, pick.Bullish, forming);
+            var quotes = result?.Quotes ?? Array.Empty<StrikeQuote>();
+            var payload = new
+            {
+                bullish = pick.Bullish,
+                atRight = forming,
+                note = quotes.Count == 0 ? (result?.Note ?? "sin datos de opciones") : null,
+                lines = quotes.Select(q => new { strike = q.Strike, bid = q.Bid, ask = q.Ask })
+            };
+            await _web.CoreWebView2.ExecuteScriptAsync($"detailSetStrikes({JsonSerializer.Serialize(payload)});");
+        }
+        catch { /* diagnostics window */ }
+        finally { _pickBusy = false; }
+    }
+
+    private async Task ClearPickAsync()
+    {
+        _pick = null;
+        if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
+            await _web.CoreWebView2.ExecuteScriptAsync("detailClearStrikes();");
     }
 
     // A trade opened or closed: its white rayita goes on the 1-minute candle of that moment (only drawn if
@@ -190,6 +257,7 @@ internal sealed class CandleDetailForm : Form
         {
             await _web.EnsureCoreWebView2Async();
             var chartPath = Path.Combine(AppContext.BaseDirectory, "ChartAssets", "chart.html");
+            _web.CoreWebView2.WebMessageReceived += OnPageMessage;
             _web.CoreWebView2.NavigationCompleted += (s, args) => { if (args.IsSuccess) _pageReady.TrySetResult(); };
             _web.CoreWebView2.Navigate(new Uri(chartPath).AbsoluteUri + $"?v={File.GetLastWriteTimeUtc(chartPath).Ticks}");
             await _pageReady.Task;
