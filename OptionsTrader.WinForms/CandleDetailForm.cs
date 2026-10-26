@@ -32,6 +32,37 @@ internal sealed class CandleDetailForm : Form
     // live ones for the minute still forming. Null (the Daily form) -> the click does nothing.
     // The 4th argument, when not null, asks for EXACTLY those strikes (ITM or not) instead of the 4 nearest OTM.
     public Func<DateTime, bool, bool, IReadOnlyList<decimal>?, StrikeQuoteResult?>? StrikeProvider { get; set; }
+
+    // The price target (the Simulator's P-Line). With a target set, the leg (calls / puts) comes from it, not from the candle's color,
+    // and each drawing gets an estimate of every strike if the spot reaches it. ContractsFor(ask): contracts the position budget buys.
+    public Func<decimal, int>? ContractsFor { get; set; }
+    private decimal? _targetPrice;
+    private bool _targetBullish;
+    private readonly Dictionary<string, object> _estimateBlocks = new(); // page slot -> block of the estimate box
+
+    public async void SetTarget(decimal? price, bool bullish)
+    {
+        _targetPrice = price;
+        _targetBullish = bullish;
+        try
+        {
+            if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
+            {
+                var arg = price.HasValue ? price.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
+                await _web.CoreWebView2.ExecuteScriptAsync($"detailSetTarget({arg});");
+            }
+            // the picks follow the new leg and get re-estimated
+            if (price.HasValue)
+            {
+                if (_formedPick is { } l) _formedPick = (l.Minute, bullish);
+                if (_formingPick is { } r) _formingPick = (r.Minute, bullish, r.Live);
+            }
+            await RefreshPickAsync(right: false);
+            await RefreshPickAsync(right: true);
+            await PushEstimatesAsync();
+        }
+        catch { /* diagnostics window */ }
+    }
     // The strikes the LEFT drawing shows: the RIGHT one repeats them (same side, same strikes) so the same options can be compared.
     private IReadOnlyList<decimal>? _leftStrikes;
     // Two independent drawings that coexist, at the LEFT and RIGHT edge: the first formed candle clicked goes LEFT; the RIGHT one is the
@@ -155,6 +186,8 @@ internal sealed class CandleDetailForm : Form
         // parent chart's bar width at its current zoom). Only without it (unknown) is a width derived from
         // this window's size.
         await ConfigureViewAsync(priceMin, priceMax);
+        if (_targetPrice.HasValue) // the page was just laid out: draw the price target again
+            await _web.CoreWebView2.ExecuteScriptAsync($"detailSetTarget({_targetPrice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)});");
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetLines({(string.IsNullOrWhiteSpace(linesJson) ? "[]" : linesJson)});");
         _pendingViewReset = true;
 
@@ -199,8 +232,9 @@ internal sealed class CandleDetailForm : Form
             {
                 // Delete on a selected drawing: the page already removed it — forget its pick so a new double click starts fresh.
                 var slot = root.TryGetProperty("slot", out var slotEl) ? slotEl.GetString() : null;
-                if (slot == "forming") _formingPick = null;
-                else if (slot == "formed") { _formedPick = null; _leftStrikes = null; }
+                if (slot == "forming") { _formingPick = null; _estimateBlocks.Remove("forming"); }
+                else if (slot == "formed") { _formedPick = null; _leftStrikes = null; _estimateBlocks.Remove("formed"); }
+                await PushEstimatesAsync();
                 return;
             }
             if (!root.TryGetProperty("type", out var type) || type.GetString() != "detail_minute_click") return;
@@ -209,6 +243,7 @@ internal sealed class CandleDetailForm : Form
             var forming = IsMinuteForming(minute);
             bool? up = root.TryGetProperty("up", out var upEl) && (upEl.ValueKind == JsonValueKind.True || upEl.ValueKind == JsonValueKind.False)
                 ? upEl.GetBoolean() : (bool?)null; // null = doji
+            if (_targetPrice.HasValue) up = _targetBullish; // with a price target the leg is the target's, whatever the candle's color
 
             if (forming)
             {
@@ -287,18 +322,58 @@ internal sealed class CandleDetailForm : Form
                 lines = quotes.Select(q => new { strike = q.Strike, bid = q.Bid, ask = q.Ask })
             };
             await _web.CoreWebView2.ExecuteScriptAsync($"detailSetStrikes({JsonSerializer.Serialize(payload)});");
+
+            // The estimate box row set of this drawing (only with a price target and a way to size the position).
+            var slotKey = right ? "forming" : "formed";
+            if (_targetPrice is { } target && ContractsFor != null && quotes.Count > 0 && result!.Spot > 0)
+            {
+                var estimates = TargetEstimator.Compute(quotes, result.Spot, target, pick.Bullish, ContractsFor);
+                _estimateBlocks[slotKey] = new
+                {
+                    label = $"{payload.label} · spot {result.Spot:F2} · ΔS {(pick.Bullish ? target - result.Spot : result.Spot - target):+0.00;-0.00}",
+                    rows = estimates.Select(e => new
+                    {
+                        strike = e.Strike.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+                        exitText = e.ExitBid.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                        contracts = e.Contracts,
+                        netText = (e.Net >= 0 ? "+$" : "-$") + Math.Abs(e.Net).ToString("N0", System.Globalization.CultureInfo.InvariantCulture),
+                        beText = "+" + e.BreakEvenMove.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                        best = e.Best,
+                        ok = e.Reaches2xBreakEven
+                    }).ToList()
+                };
+            }
+            else _estimateBlocks.Remove(slotKey);
+            await PushEstimatesAsync();
         }
         catch { /* diagnostics window */ }
         finally { _pickBusy = false; }
     }
 
+    // The estimate box: header with the target and the budget, then the left drawing's block and the right one's.
+    private async Task PushEstimatesAsync()
+    {
+        if (_web.CoreWebView2 == null || _pageReady?.Task.IsCompletedSuccessfully != true) return;
+        if (_targetPrice is not { } target || _estimateBlocks.Count == 0)
+        {
+            await _web.CoreWebView2.ExecuteScriptAsync("detailSetEstimates(null);");
+            return;
+        }
+        var blocks = new List<object>();
+        if (_estimateBlocks.TryGetValue("formed", out var left) && _formedPick != null) blocks.Add(left);
+        if (_estimateBlocks.TryGetValue("forming", out var right) && _formingPick != null) blocks.Add(right);
+        var payload = new { header = $"Objetivo {target:F2} · {(_targetBullish ? "CALL" : "PUT")} · neto tras comisión 1.30/contr.", blocks };
+        await _web.CoreWebView2.ExecuteScriptAsync($"detailSetEstimates({JsonSerializer.Serialize(payload)});");
+    }
+
     // slot: "formed" | "forming" | null (both).
     private async Task ClearPickAsync(string? slot = null)
     {
-        if (slot != "forming") { _formedPick = null; _leftStrikes = null; }
-        if (slot != "formed") _formingPick = null;
+        if (slot != "forming") { _formedPick = null; _leftStrikes = null; _estimateBlocks.Remove("formed"); }
+        if (slot != "formed") { _formingPick = null; _estimateBlocks.Remove("forming"); }
         if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
             await _web.CoreWebView2.ExecuteScriptAsync(slot == null ? "detailClearStrikes();" : $"detailClearStrikes('{slot}');");
+        await PushEstimatesAsync();
     }
 
     // A trade opened or closed: its white rayita goes on the 1-minute candle of that moment (only drawn if

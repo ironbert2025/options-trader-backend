@@ -303,7 +303,35 @@ public class SimulatorForm : Form
         var btnOneMinChart = new Button { Text = "1 Min Chart", Location = new Point(88, 0), Size = new Size(100, 26) };
         btnOneMinChart.Click += (s, e) => { _ = _rthChart.RequestLastCandleDetailAsync(); };
         _pnlDzSz.Controls.Add(btnOneMinChart);
+
+        // "P-Line": one price line on panel 2 = the price TARGET of the leg being analysed. Above the price -> a CALL, below -> a PUT.
+        // Placing another replaces it; Delete (click it, then Delete) removes it. The 1-minute window shows it and estimates each strike.
+        var btnPLine = new Button { Text = "P-Line", Location = new Point(196, 0), Size = new Size(70, 26) };
+        btnPLine.Click += async (s, e) =>
+        {
+            var on = await _rthChart.TogglePLineModeAsync();
+            btnPLine.BackColor = on ? Color.MediumPurple : SystemColors.Control;
+        };
+        _rthChart.OnPLinePlaced += () => btnPLine.BackColor = SystemColors.Control;
+        _rthChart.OnTargetChanged += (price, bullish) =>
+        {
+            _targetPrice = price;
+            _targetBullish = bullish;
+            LogSimEvent($"[Objetivo] P-Line en {price:F2} — pata {(bullish ? "CALL" : "PUT")}");
+            _candleDetail?.SetTarget(price, bullish);
+        };
+        _rthChart.OnTargetCleared += () =>
+        {
+            _targetPrice = null;
+            LogSimEvent("[Objetivo] P-Line eliminada");
+            _candleDetail?.SetTarget(null, false);
+        };
+        _pnlDzSz.Controls.Add(btnPLine);
     }
+
+    // The price target set with the P-Line (null = none) and the leg it implies.
+    private decimal? _targetPrice;
+    private bool _targetBullish;
 
     // "Arrow" (diagonal, RTH chart only) + "Stk Call"/"Stk Put" — ported from the live app's
     // TwoPanelChartsControl. Arrow stays armed across multiple draws with the same 15s
@@ -1230,6 +1258,8 @@ public class SimulatorForm : Form
     private void InitBbForLoadedDay()
     {
         _bbLoggedHighWater = -1;
+        _targetPrice = null;
+        _rthChart.ClearTargetLine();
         _setupLoggedHighWater = -1;
         _openRevisitLoggedHighWater = -1;
         _bbFirstIdx = _intradayCandles.FindIndex(c =>
@@ -2211,8 +2241,11 @@ public class SimulatorForm : Form
                 var picked = fixedStrikes != null
                     ? StrikeQuotePicker.ForStrikes(step.Quotes, bullish, fixedStrikes)
                     : StrikeQuotePicker.Nearest(step.Quotes, bullish, step.UnderlyingPrice);
-                return new StrikeQuoteResult(picked, picked.Count == 0 ? "sin datos de opciones en ese minuto" : null);
+                return new StrikeQuoteResult(picked, picked.Count == 0 ? "sin datos de opciones en ese minuto" : null, step.UnderlyingPrice);
             };
+            // Price target (P-Line): the estimate of each strike needs the contracts the position budget buys.
+            window.ContractsFor = ask => int.TryParse(GetSimContractsValue(ask), out var n) ? n : 0;
+            window.SetTarget(_targetPrice, _targetBullish);
             _candleDetail = window;
             // a trade opened/closed while the window is open gets its rayita too
             Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);

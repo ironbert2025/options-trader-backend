@@ -99,6 +99,7 @@ public class SimulatedChartPanel : Panel
                 // Light gray fill between the bands — per explicit request, panel 2 (15m RTH) only.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
                 await _webView.CoreWebView2.ExecuteScriptAsync("configureCandleDetail(true);"); // double click on a candle -> its 1-minute candles
+                await _webView.CoreWebView2.ExecuteScriptAsync("setPLineSingle(true);");       // one P-Line = the price target being analysed
 
                 // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
                 // arms DZ/SZ itself), but the mirrored copy is still independently selectable/
@@ -953,6 +954,24 @@ public class SimulatedChartPanel : Panel
     // The user deleted the "open revisit" line (click + Delete) — the Simulator re-arms the opposite direction.
     public event Action? OnOpenRevisitDeleted;
 
+    // The Simulator's P-Line (price target): placed (price, bullish = the line is above the price -> CALL), deleted, and the
+    // single-shot tool finishing its placement (the host un-highlights its button).
+    public event Action<decimal, bool>? OnTargetChanged;
+    public event Action? OnTargetCleared;
+    public event Action? OnPLinePlaced;
+
+    public async Task<bool> TogglePLineModeAsync()
+    {
+        if (_webView.CoreWebView2 == null) return false;
+        return await _webView.CoreWebView2.ExecuteScriptAsync("togglePLine();") == "true";
+    }
+
+    public void ClearTargetLine()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync("clearPLines();");
+    }
+
     // Last trend state seen from the page + the header title, for the combined images' header strip
     // (CombinedChartHeader) — this panel's own header shows only the title, the trend words reach the log.
     private string? _trendShortDir, _trendLongDir;
@@ -1173,6 +1192,16 @@ public class SimulatedChartPanel : Panel
                 OnOpenRevisitDeleted?.Invoke();
                 return;
             }
+
+            if (type == "pline_add")
+            {
+                // The P-Line placed on panel 2: the price target. Above the price = a CALL leg, below = a PUT leg.
+                if (root.TryGetProperty("price", out var plPrice) && plPrice.TryGetDecimal(out var targetPrice))
+                    OnTargetChanged?.Invoke(targetPrice, root.TryGetProperty("direction", out var plDir) && plDir.GetString() != "below");
+                return;
+            }
+            if (type == "pline_delete") { OnTargetCleared?.Invoke(); return; }
+            if (type == "pline_placed") { OnPLinePlaced?.Invoke(); return; }
 
             if (type == "candle_detail")
             {

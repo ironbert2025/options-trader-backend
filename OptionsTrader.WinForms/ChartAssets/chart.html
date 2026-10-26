@@ -1637,6 +1637,7 @@
     if (pLineArmed) {
       const refPrice = currentReferencePrice();
       const direction = refPrice != null && price < refPrice ? 'below' : 'above';
+      if (pLineSingle) pLinePrimitive._segments = [];
       pLinePrimitive._segments.push({ time: clickTime, price, direction, selected: false });
       // Reported to C# (ChartPanel.CoreWebView2_WebMessageReceived) — owns the actual live-tick
       // cross-detection and Telegram push, no mirroring (panel 2 only, per explicit request).
@@ -1981,6 +1982,11 @@
   const pLinePrimitive = new PLinePrimitive();
   let pLineAttached = false;
   let pLineArmed = false;
+
+  // Simulator: ONE P-Line at a time (the price target being analysed) — placing a new one replaces the previous.
+  let pLineSingle = false;
+  function setPLineSingle(on) { pLineSingle = !!on; }
+  function clearPLines() { pLinePrimitive._segments = []; forceRepaint(); }
 
   function togglePLine() {
     if (!pLineAttached) { candleSeries.attachPrimitive(pLinePrimitive); pLineAttached = true; }
@@ -5453,7 +5459,8 @@
     candleSeries.applyOptions({
       autoscaleInfoProvider: original => {
         const res = original();
-        const sMin = detailStrikeExtent ? detailStrikeExtent.min : null, sMax = detailStrikeExtent ? detailStrikeExtent.max : null;
+        const ex = detailExtraRange();
+        const sMin = ex ? ex.min : null, sMax = ex ? ex.max : null;
         if (detailView.priceMin == null || detailView.priceMax == null) {
           if (res && res.priceRange && sMin != null)
             return { ...res, priceRange: { minValue: Math.min(res.priceRange.minValue, sMin), maxValue: Math.max(res.priceRange.maxValue, sMax) } };
@@ -5830,11 +5837,55 @@
   }
   const detailStrikesPrimitive = new DetailStrikesPrimitive();
 
-  function detailStrikeExtentKey() { return detailStrikeExtent ? detailStrikeExtent.min + '|' + detailStrikeExtent.max : ''; }
+  // the price span the detail axis must hold beyond the candles: the strikes drawn and the target line
+  let detailTargetPrice = null, detailTargetLine = null;
+  function detailExtraRange() {
+    const ks = detailStrikeExtent ? [detailStrikeExtent.min, detailStrikeExtent.max] : [];
+    if (detailTargetPrice != null) ks.push(detailTargetPrice);
+    return ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
+  }
+  function detailStrikeExtentKey() { const e = detailExtraRange(); return e ? e.min + '|' + e.max : ''; }
   function detailRecomputeStrikeExtent() {
     const ks = [];
     [detailStrikes.formed, detailStrikes.forming].forEach(d => { if (d) d.lines.forEach(l => ks.push(l.strike)); });
     detailStrikeExtent = ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
+  }
+
+  // The price target (the Simulator's P-Line): a dashed purple line "OBJ" across the 1-minute window, or null to remove it.
+  function detailSetTarget(price) {
+    if (!detailView) return;
+    const before = detailStrikeExtentKey();
+    if (detailTargetLine) { candleSeries.removePriceLine(detailTargetLine); detailTargetLine = null; }
+    detailTargetPrice = price == null ? null : price;
+    if (detailTargetPrice != null)
+      detailTargetLine = candleSeries.createPriceLine({ price: detailTargetPrice, color: '#ba68c8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'OBJ' });
+    if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true });
+    forceRepaint();
+  }
+
+  // Estimates of each strike if the spot reaches the target — a small box at the top left of the window.
+  // payload: { header, blocks: [{ label, rows: [{ strike, exitText, contracts, netText, beText, best, ok }] }] }; null clears it.
+  function detailSetEstimates(payload) {
+    let el = document.getElementById('detailEstimate');
+    if (!payload || !payload.blocks || payload.blocks.length === 0) { if (el) el.style.display = 'none'; return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'detailEstimate';
+      el.style.cssText = 'position:absolute; left:6px; top:34px; pointer-events:none; z-index:7; font:10px sans-serif; line-height:13px; ' +
+                         'background:rgba(19,23,34,0.82); padding:3px 5px; border:1px solid #2a2e39; border-radius:3px; white-space:pre;';
+      document.body.appendChild(el);
+    }
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    let html = '<span style="color:#ba68c8">' + esc(payload.header) + '</span>';
+    payload.blocks.forEach(b => {
+      html += '\n<span style="color:#9aa0aa">' + esc(b.label) + '</span>';
+      b.rows.forEach(r => {
+        const color = r.best ? '#4caf50' : (r.ok ? '#d1d4dc' : '#6b7280');
+        html += '\n<span style="color:' + color + '">' + (r.best ? '★ ' : '  ') + esc(r.strike) + '  sal ' + esc(r.exitText) + '  ' + esc(r.contracts) + '×  ' + esc(r.netText) + '  BE ' + esc(r.beText) + '</span>';
+      });
+    });
+    el.innerHTML = html;
+    el.style.display = 'block';
   }
 
   // slot: 'formed' | 'forming'. A drawing stays until it is replaced (another double click in that slot), toggled off

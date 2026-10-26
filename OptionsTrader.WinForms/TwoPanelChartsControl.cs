@@ -1391,7 +1391,7 @@ public class TwoPanelChartsControl : UserControl
                             var live = fixedStrikes != null
                                 ? StrikeQuotePicker.ForStrikes(snapshot.Value.AllQuotes, bullish, fixedStrikes)
                                 : StrikeQuotePicker.Nearest(snapshot.Value.AllQuotes, bullish, spot);
-                            return new StrikeQuoteResult(live, live.Count == 0 ? "sin datos de opciones ahora" : null);
+                            return new StrikeQuoteResult(live, live.Count == 0 ? "sin datos de opciones ahora" : null, spot);
                         }
                         return OptionChainHistory.GetAtEndOfMinute(_symbol, snapshot.Value.AllQuotes[0].ExpirationDate, bullish, minuteUtc, fixedStrikes);
                     };
