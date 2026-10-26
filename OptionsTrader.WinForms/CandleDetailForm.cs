@@ -31,11 +31,13 @@ internal sealed class CandleDetailForm : Form
     // The host sets StrikeProvider(minuteStartUtc, bullish, forming): the quotes as of the last second of that minute, or the
     // live ones for the minute still forming. Null (the Daily form) -> the click does nothing.
     public Func<DateTime, bool, bool, StrikeQuoteResult?>? StrikeProvider { get; set; }
-    // Two independent drawings that coexist: the one of a candle that had already closed when it was clicked ("formed", left edge)
-    // and the one of the candle still forming ("forming", right edge — refreshed live while that minute lasts, then frozen).
-    // Neither goes away by itself: a click on the same candle toggles it off, on another candle of the same kind replaces it.
-    private (DateTime Minute, bool Bullish)? _formedPick;
-    private (DateTime Minute, bool Bullish)? _formingPick;
+    // Two independent drawings that coexist, at the LEFT and RIGHT edge: the first formed candle clicked goes LEFT; the RIGHT one is the
+    // live drawing of the candle still forming (follows the newest forming minute) or, when a second formed candle is clicked, that
+    // candle (it takes the place of the live one). With both holding formed candles, a new click replaces the older. Neither goes away
+    // by itself: a click on the same candle toggles it off. (Page slots: "formed" = left, "forming" = right.)
+    private (DateTime Minute, bool Bullish)? _formedPick;                  // LEFT
+    private (DateTime Minute, bool Bullish, bool Live)? _formingPick;      // RIGHT (Live = follows the forming candle)
+    private DateTime _formedSetAt = DateTime.MinValue, _formingSetAt = DateTime.MinValue;
     private DateTime _lastPickRefreshUtc = DateTime.MinValue;
     private bool _pickBusy;
     private bool _sawForming;                   // the candle on screen was seen forming: when it ends, follow the next one
@@ -83,8 +85,8 @@ internal sealed class CandleDetailForm : Form
             // the strikes of the minute still forming follow the live quotes (about once a second); once that minute is over they stay as they were
             // The forming drawing FOLLOWS the newest forming candle: every second it takes the live chain and the minute now forming,
             // minute after minute (and into the next 15-minute candle), until it is deleted or toggled off. It only stops while nothing is forming.
-            if (_formingPick != null && _lastState == MinuteBucketState.Forming && (DateTime.UtcNow - _lastPickRefreshUtc).TotalSeconds >= 1)
-                await RefreshPickAsync(forming: true);
+            if (_formingPick is { Live: true } && _lastState == MinuteBucketState.Forming && (DateTime.UtcNow - _lastPickRefreshUtc).TotalSeconds >= 1)
+                await RefreshPickAsync(right: true);
         };
         FormClosed += (s, e) => { _redrawTimer.Stop(); _redrawTimer.Dispose(); };
     }
@@ -201,15 +203,44 @@ internal sealed class CandleDetailForm : Form
             if (!root.TryGetProperty("type", out var type) || type.GetString() != "detail_minute_click") return;
             if (StrikeProvider == null || !root.TryGetProperty("time", out var tEl) || !tEl.TryGetInt64(out var seconds)) return;
             var minute = ChartPanel.UtcFromFakeEpochSeconds(seconds);
-            // Which drawing this click belongs to: the candle still forming, or one that had already closed.
             var forming = IsMinuteForming(minute);
-            // A click on the forming candle while its drawing is on turns it off (it is not tied to one minute); on a formed one, only the same candle toggles.
-            var current = forming ? _formingPick : _formedPick;
-            if (current is { } c && (forming || c.Minute == minute)) { await ClearPickAsync(forming ? "forming" : "formed"); return; }
-            if (!root.TryGetProperty("up", out var upEl) || upEl.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                return; // a doji has no direction: nothing to draw (the other drawing stays)
-            if (forming) _formingPick = (minute, upEl.GetBoolean()); else _formedPick = (minute, upEl.GetBoolean());
-            await RefreshPickAsync(forming);
+            bool? up = root.TryGetProperty("up", out var upEl) && (upEl.ValueKind == JsonValueKind.True || upEl.ValueKind == JsonValueKind.False)
+                ? upEl.GetBoolean() : (bool?)null; // null = doji
+
+            if (forming)
+            {
+                // The candle still forming: its live drawing takes the RIGHT edge (replacing a second formed candle that was there);
+                // a click on it while it is live turns it off.
+                if (_formingPick is { Live: true }) { await ClearPickAsync("forming"); return; }
+                if (up == null) return;
+                _formingPick = (minute, up.Value, true);
+                _formingSetAt = DateTime.UtcNow;
+                await RefreshPickAsync(right: true);
+                return;
+            }
+
+            // A candle that had already closed: the same candle again turns its drawing off.
+            if (_formedPick is { } left && left.Minute == minute) { await ClearPickAsync("formed"); return; }
+            if (_formingPick is { Live: false } right && right.Minute == minute) { await ClearPickAsync("forming"); return; }
+            if (up == null) return; // a doji has no direction: nothing to draw
+
+            // Where it goes: LEFT if free; otherwise RIGHT (over the live drawing or when free); with both holding formed candles, over the older.
+            bool toLeft;
+            if (_formedPick == null) toLeft = true;
+            else if (_formingPick == null || _formingPick.Value.Live) toLeft = false;
+            else toLeft = _formedSetAt <= _formingSetAt;
+            if (toLeft)
+            {
+                _formedPick = (minute, up.Value);
+                _formedSetAt = DateTime.UtcNow;
+                await RefreshPickAsync(right: false);
+            }
+            else
+            {
+                _formingPick = (minute, up.Value, false);
+                _formingSetAt = DateTime.UtcNow;
+                await RefreshPickAsync(right: true);
+            }
         }
         catch { /* diagnostics window */ }
     }
@@ -218,28 +249,32 @@ internal sealed class CandleDetailForm : Form
     private bool IsMinuteForming(DateTime minute) =>
         _lastState == MinuteBucketState.Forming && _getClockUtc != null && MinuteCandleStore.MinuteStart(_getClockUtc()) == minute;
 
-    private async Task RefreshPickAsync(bool forming)
+    // right: the drawing at the RIGHT edge (page slot "forming"); otherwise the LEFT one (page slot "formed").
+    private async Task RefreshPickAsync(bool right)
     {
-        var pickOrNull = forming ? _formingPick : _formedPick;
+        (DateTime Minute, bool Bullish, bool Live)? pickOrNull = right
+            ? _formingPick
+            : (_formedPick is { } l ? (l.Minute, l.Bullish, false) : null);
         if (pickOrNull is not { } pick || StrikeProvider == null || _pickBusy || _web.CoreWebView2 == null) return;
         _pickBusy = true;
         try
         {
-            if (forming) _lastPickRefreshUtc = DateTime.UtcNow;
-            // The forming drawing asks for the live chain and always targets the minute now forming (the side — calls or puts — stays the
-            // one chosen at the click); with nothing forming it keeps its last values.
-            var live = forming && _lastState == MinuteBucketState.Forming && _getClockUtc != null;
+            if (right) _lastPickRefreshUtc = DateTime.UtcNow;
+            // The live drawing asks for the live chain and always targets the minute now forming (the side — calls or puts — stays the
+            // one chosen at the click); with nothing forming it keeps its last values. A formed candle's drawing asks for its last second.
+            var live = right && pick.Live && _lastState == MinuteBucketState.Forming && _getClockUtc != null;
             if (live)
             {
-                pick = (MinuteCandleStore.MinuteStart(_getClockUtc!()), pick.Bullish);
+                pick = (MinuteCandleStore.MinuteStart(_getClockUtc!()), pick.Bullish, true);
                 _formingPick = pick;
             }
             var result = StrikeProvider(pick.Minute, pick.Bullish, live);
             var quotes = result?.Quotes ?? Array.Empty<StrikeQuote>();
             var payload = new
             {
-                slot = forming ? "forming" : "formed",
+                slot = right ? "forming" : "formed",
                 bullish = pick.Bullish,
+                label = TimeZoneInfo.ConvertTimeFromUtc(pick.Minute, EasternZone).ToString("HH:mm"),
                 note = quotes.Count == 0 ? (result?.Note ?? "sin datos de opciones") : null,
                 lines = quotes.Select(q => new { strike = q.Strike, bid = q.Bid, ask = q.Ask })
             };

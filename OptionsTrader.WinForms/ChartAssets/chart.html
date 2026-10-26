@@ -5733,8 +5733,8 @@
   }
 
   const DetailStrikeSegmentPx = 100;
-  // Two independent drawings that can be on screen at the same time: "formed" (the strikes of a candle that had already closed when it
-  // was clicked, at the LEFT edge) and "forming" (the candle that was still forming, at the RIGHT edge). Each is { bullish, lines, note }.
+  // Two independent drawings that can be on screen at the same time: slot "formed" = the LEFT edge, slot "forming" = the RIGHT edge (the right
+  // one holds the live drawing of the candle still forming, or a second formed candle). Each is { bullish, lines, note, label }.
   let detailStrikes = { formed: null, forming: null };
   let detailStrikeExtent = null; // { min, max } over both drawings, so the autoscale holds the strikes
   let detailStrikesAttached = false;
@@ -5772,6 +5772,15 @@
                       if (y == null) return;
                       ctx.beginPath(); ctx.moveTo(left, y * vpr); ctx.lineTo(right, y * vpr); ctx.stroke();
                     });
+                  }
+                  // which candle this drawing belongs to (HH:mm), small and gray over its top line
+                  if (d.label) {
+                    const ys = d.lines.map(l => candleSeries.priceToCoordinate(l.strike)).filter(y => y != null);
+                    if (ys.length) {
+                      ctx.font = `${10 * vpr}px sans-serif`;
+                      ctx.fillStyle = '#9aa0aa'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+                      ctx.fillText(d.label, left, Math.min(...ys) * vpr - 19 * vpr);
+                    }
                   }
                   ctx.strokeStyle = color;
                   ctx.lineWidth = 2 * hpr;
@@ -5826,7 +5835,7 @@
     const before = detailStrikeExtentKey();
     const slotKey = payload.slot === 'forming' ? 'forming' : 'formed';
     const wasSelected = !!(detailStrikes[slotKey] && detailStrikes[slotKey].selected); // a live refresh keeps the selection
-    detailStrikes[slotKey] = { bullish: !!payload.bullish, lines: payload.lines || [], note: payload.note || null, selected: wasSelected };
+    detailStrikes[slotKey] = { bullish: !!payload.bullish, lines: payload.lines || [], note: payload.note || null, label: payload.label || null, selected: wasSelected };
     detailRecomputeStrikeExtent();
     if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true }); // re-fit the axis to hold the strikes
     forceRepaint();
