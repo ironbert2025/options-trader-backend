@@ -107,10 +107,12 @@ internal static class TargetEstimator
 {
     public const decimal CommissionPerContract = 1.30m;
 
-    // dS = how far the spot has to move in favor of the leg: target - spot for calls, spot - target for puts (negative = against it).
-    public static List<TargetEstimate> Compute(IReadOnlyList<StrikeQuote> quotes, decimal spot, decimal target, bool bullish, Func<decimal, int> contractsFor)
+    // dS = how far the spot moves in favor of the leg (negative = against it): target - spot for calls, spot - target for puts —
+    // or a fixed move typed with the quick buttons.
+    public static decimal MoveToTarget(decimal spot, decimal target, bool bullish) => bullish ? target - spot : spot - target;
+
+    public static List<TargetEstimate> Compute(IReadOnlyList<StrikeQuote> quotes, decimal dS, Func<decimal, int> contractsFor)
     {
-        var dS = bullish ? target - spot : spot - target;
         var list = new List<TargetEstimate>();
         foreach (var q in quotes)
         {

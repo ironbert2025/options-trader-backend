@@ -313,8 +313,33 @@ public class SimulatorForm : Form
             btnPLine.BackColor = on ? Color.MediumPurple : SystemColors.Control;
         };
         _rthChart.OnPLinePlaced += () => btnPLine.BackColor = SystemColors.Control;
+
+        // ".50" / "1.00": a fixed spot move (ΔS) in USD, one click instead of placing a P-Line; the 1-minute window calculates at once.
+        // They toggle (press the lit one again to turn it off) and replace each other; the leg comes from the candle's color.
+        var btnMove05 = new Button { Text = ".50", Location = new Point(274, 0), Size = new Size(50, 26) };
+        var btnMove10 = new Button { Text = "1.00", Location = new Point(330, 0), Size = new Size(50, 26) };
+        void SetMoveButtons(decimal? move)
+        {
+            btnMove05.BackColor = move == 0.50m ? Color.MediumPurple : SystemColors.Control;
+            btnMove10.BackColor = move == 1.00m ? Color.MediumPurple : SystemColors.Control;
+        }
+        async void PressMove(decimal value)
+        {
+            _deltaSpot = _deltaSpot == value ? null : value;
+            SetMoveButtons(_deltaSpot);
+            if (_deltaSpot.HasValue && (_candleDetail == null || _candleDetail.IsDisposed))
+                await _rthChart.RequestLastCandleDetailAsync(); // opens the 1-minute window on the candle forming
+            _candleDetail?.SetDeltaSpot(_deltaSpot);
+        }
+        btnMove05.Click += (s, e) => PressMove(0.50m);
+        btnMove10.Click += (s, e) => PressMove(1.00m);
+        _pnlDzSz.Controls.Add(btnMove05);
+        _pnlDzSz.Controls.Add(btnMove10);
+        _clearMoveButtons = () => SetMoveButtons(null);
+
         _rthChart.OnTargetChanged += (price, bullish) =>
         {
+            if (_deltaSpot != null) { _deltaSpot = null; _clearMoveButtons?.Invoke(); _candleDetail?.SetDeltaSpot(null); } // a P-Line replaces the quick move
             _targetPrice = price;
             _targetBullish = bullish;
             LogSimEvent($"[Objetivo] P-Line en {price:F2} — pata {(bullish ? "CALL" : "PUT")}");
@@ -332,6 +357,8 @@ public class SimulatorForm : Form
     // The price target set with the P-Line (null = none) and the leg it implies.
     private decimal? _targetPrice;
     private bool _targetBullish;
+    private decimal? _deltaSpot;          // the quick ΔS buttons (.50 / 1.00); null = off
+    private Action? _clearMoveButtons;
 
     // "Arrow" (diagonal, RTH chart only) + "Stk Call"/"Stk Put" — ported from the live app's
     // TwoPanelChartsControl. Arrow stays armed across multiple draws with the same 15s
@@ -1259,6 +1286,8 @@ public class SimulatorForm : Form
     {
         _bbLoggedHighWater = -1;
         _targetPrice = null;
+        _deltaSpot = null;
+        _clearMoveButtons?.Invoke();
         _rthChart.ClearTargetLine();
         _setupLoggedHighWater = -1;
         _openRevisitLoggedHighWater = -1;
@@ -2246,6 +2275,7 @@ public class SimulatorForm : Form
             // Price target (P-Line): the estimate of each strike needs the contracts the position budget buys.
             window.ContractsFor = ask => int.TryParse(GetSimContractsValue(ask), out var n) ? n : 0;
             window.SetTarget(_targetPrice, _targetBullish);
+            window.SetDeltaSpot(_deltaSpot);
             _candleDetail = window;
             // a trade opened/closed while the window is open gets its rayita too
             Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);
@@ -2261,6 +2291,7 @@ public class SimulatorForm : Form
                 (start, end) => MinuteCandleStore.FromTicks(_intradayCandles, start, end, _lastChartClockUtc),
                 start => _lastChartClockUtc < start.AddMinutes(15) ? MinuteBucketState.Forming : MinuteBucketState.Closed,
                 freezeWhenClosed: false, priceMin, priceMax, barSpacing, () => _lastChartClockUtc, linesJson);
+            if (_deltaSpot.HasValue) _candleDetail.SetDeltaSpot(_deltaSpot); // the page is ready now: draw the quick move's estimate
         }
         catch { /* diagnostics window — never disturb the playback */ }
     }

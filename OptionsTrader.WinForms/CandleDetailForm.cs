@@ -38,6 +38,30 @@ internal sealed class CandleDetailForm : Form
     public Func<decimal, int>? ContractsFor { get; set; }
     private decimal? _targetPrice;
     private bool _targetBullish;
+    // A fixed spot move in USD (the quick .50 / 1.00 buttons): used instead of the target price while set; the leg is then the candle's color.
+    private decimal? _deltaSpot;
+
+    // The quick buttons: set (or clear with null) the fixed move and recalculate. With no drawing yet, the candle forming gets one
+    // right away (its leg from its color), so pressing the button already shows the numbers.
+    public async void SetDeltaSpot(decimal? move)
+    {
+        _deltaSpot = move;
+        try
+        {
+            if (move.HasValue && _formedPick == null && _formingPick == null && _getMinutes != null && _lastState == MinuteBucketState.Forming && _getClockUtc != null)
+            {
+                var minuteNow = MinuteCandleStore.MinuteStart(_getClockUtc());
+                var last = _getMinutes(_firstBucketStartUtc, _bucketStartUtc.AddMinutes(15)).LastOrDefault(c => c.Time == minuteNow);
+                var up = last == null || last.Close >= last.Open; // a doji or a candle not yet started counts as up
+                _formingPick = (minuteNow, up, true);
+                _formingSetAt = DateTime.UtcNow;
+            }
+            await RefreshPickAsync(right: false);
+            await RefreshPickAsync(right: true);
+            await PushEstimatesAsync();
+        }
+        catch { /* diagnostics window */ }
+    }
     private readonly Dictionary<string, object> _estimateBlocks = new(); // page slot -> block of the estimate box
 
     public async void SetTarget(decimal? price, bool bullish)
@@ -52,7 +76,7 @@ internal sealed class CandleDetailForm : Form
                 await _web.CoreWebView2.ExecuteScriptAsync($"detailSetTarget({arg});");
             }
             // the picks follow the new leg and get re-estimated
-            if (price.HasValue)
+            if (price.HasValue && _deltaSpot == null)
             {
                 if (_formedPick is { } l) _formedPick = (l.Minute, bullish);
                 if (_formingPick is { } r) _formingPick = (r.Minute, bullish, r.Live);
@@ -243,7 +267,7 @@ internal sealed class CandleDetailForm : Form
             var forming = IsMinuteForming(minute);
             bool? up = root.TryGetProperty("up", out var upEl) && (upEl.ValueKind == JsonValueKind.True || upEl.ValueKind == JsonValueKind.False)
                 ? upEl.GetBoolean() : (bool?)null; // null = doji
-            if (_targetPrice.HasValue) up = _targetBullish; // with a price target the leg is the target's, whatever the candle's color
+            if (_targetPrice.HasValue && _deltaSpot == null) up = _targetBullish; // with a price target the leg is the target's, whatever the candle's color
 
             if (forming)
             {
@@ -325,12 +349,13 @@ internal sealed class CandleDetailForm : Form
 
             // The estimate box row set of this drawing (only with a price target and a way to size the position).
             var slotKey = right ? "forming" : "formed";
-            if (_targetPrice is { } target && ContractsFor != null && quotes.Count > 0 && result!.Spot > 0)
+            decimal? move = _deltaSpot ?? (_targetPrice is { } tp && result != null && result.Spot > 0 ? TargetEstimator.MoveToTarget(result.Spot, tp, pick.Bullish) : null);
+            if (move is { } dS && ContractsFor != null && quotes.Count > 0 && result!.Spot > 0)
             {
-                var estimates = TargetEstimator.Compute(quotes, result.Spot, target, pick.Bullish, ContractsFor);
+                var estimates = TargetEstimator.Compute(quotes, dS, ContractsFor);
                 _estimateBlocks[slotKey] = new
                 {
-                    label = $"{payload.label} · spot {result.Spot:F2} · ΔS {(pick.Bullish ? target - result.Spot : result.Spot - target):+0.00;-0.00}",
+                    label = $"{payload.label} · {(pick.Bullish ? "CALL" : "PUT")} · spot {result.Spot:F2} · ΔS {dS:+0.00;-0.00}",
                     rows = estimates.Select(e => new
                     {
                         strike = e.Strike.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
@@ -354,7 +379,7 @@ internal sealed class CandleDetailForm : Form
     private async Task PushEstimatesAsync()
     {
         if (_web.CoreWebView2 == null || _pageReady?.Task.IsCompletedSuccessfully != true) return;
-        if (_targetPrice is not { } target || _estimateBlocks.Count == 0)
+        if ((_targetPrice == null && _deltaSpot == null) || _estimateBlocks.Count == 0)
         {
             await _web.CoreWebView2.ExecuteScriptAsync("detailSetEstimates(null);");
             return;
@@ -362,7 +387,10 @@ internal sealed class CandleDetailForm : Form
         var blocks = new List<object>();
         if (_estimateBlocks.TryGetValue("formed", out var left) && _formedPick != null) blocks.Add(left);
         if (_estimateBlocks.TryGetValue("forming", out var right) && _formingPick != null) blocks.Add(right);
-        var payload = new { header = $"Objetivo {target:F2} · {(_targetBullish ? "CALL" : "PUT")} · neto tras comisión 1.30/contr.", blocks };
+        var headerLead = _deltaSpot is { } fixedMove
+            ? $"ΔS fijo +{fixedMove:0.00} a favor de la pata"
+            : $"Objetivo {_targetPrice!.Value:F2} · {(_targetBullish ? "CALL" : "PUT")}";
+        var payload = new { header = $"{headerLead} · neto tras comisión 1.30/contr.", blocks };
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetEstimates({JsonSerializer.Serialize(payload)});");
     }
 
