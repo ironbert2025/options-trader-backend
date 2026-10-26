@@ -30,7 +30,10 @@ internal sealed class CandleDetailForm : Form
     // ---- Click on a 1-minute candle: its 4 nearest OTM strikes (green candle -> calls, red -> puts) ----
     // The host sets StrikeProvider(minuteStartUtc, bullish, forming): the quotes as of the last second of that minute, or the
     // live ones for the minute still forming. Null (the Daily form) -> the click does nothing.
-    public Func<DateTime, bool, bool, StrikeQuoteResult?>? StrikeProvider { get; set; }
+    // The 4th argument, when not null, asks for EXACTLY those strikes (ITM or not) instead of the 4 nearest OTM.
+    public Func<DateTime, bool, bool, IReadOnlyList<decimal>?, StrikeQuoteResult?>? StrikeProvider { get; set; }
+    // The strikes the LEFT drawing shows: the RIGHT one repeats them (same side, same strikes) so the same options can be compared.
+    private IReadOnlyList<decimal>? _leftStrikes;
     // Two independent drawings that coexist, at the LEFT and RIGHT edge: the first formed candle clicked goes LEFT; the RIGHT one is the
     // live drawing of the candle still forming (follows the newest forming minute) or, when a second formed candle is clicked, that
     // candle (it takes the place of the live one). With both holding formed candles, a new click replaces the older. Neither goes away
@@ -197,7 +200,7 @@ internal sealed class CandleDetailForm : Form
                 // Delete on a selected drawing: the page already removed it — forget its pick so a new double click starts fresh.
                 var slot = root.TryGetProperty("slot", out var slotEl) ? slotEl.GetString() : null;
                 if (slot == "forming") _formingPick = null;
-                else if (slot == "formed") _formedPick = null;
+                else if (slot == "formed") { _formedPick = null; _leftStrikes = null; }
                 return;
             }
             if (!root.TryGetProperty("type", out var type) || type.GetString() != "detail_minute_click") return;
@@ -234,6 +237,7 @@ internal sealed class CandleDetailForm : Form
                 _formedPick = (minute, up.Value);
                 _formedSetAt = DateTime.UtcNow;
                 await RefreshPickAsync(right: false);
+                if (_formingPick != null) await RefreshPickAsync(right: true); // the right drawing repeats the strikes of this new left one
             }
             else
             {
@@ -268,13 +272,17 @@ internal sealed class CandleDetailForm : Form
                 pick = (MinuteCandleStore.MinuteStart(_getClockUtc!()), pick.Bullish, true);
                 _formingPick = pick;
             }
-            var result = StrikeProvider(pick.Minute, pick.Bullish, live);
+            // With a LEFT drawing on, the RIGHT one shows the same strikes and the same side as the LEFT one.
+            IReadOnlyList<decimal>? anchor = right && _formedPick != null && _leftStrikes is { Count: > 0 } ? _leftStrikes : null;
+            if (anchor != null) pick = (pick.Minute, _formedPick!.Value.Bullish, pick.Live);
+            var result = StrikeProvider(pick.Minute, pick.Bullish, live, anchor);
             var quotes = result?.Quotes ?? Array.Empty<StrikeQuote>();
+            if (!right) _leftStrikes = quotes.Count > 0 ? quotes.Select(q => q.Strike).ToList() : null;
             var payload = new
             {
                 slot = right ? "forming" : "formed",
                 bullish = pick.Bullish,
-                label = TimeZoneInfo.ConvertTimeFromUtc(pick.Minute, EasternZone).ToString("HH:mm"),
+                label = TimeZoneInfo.ConvertTimeFromUtc(pick.Minute, EasternZone).ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
                 note = quotes.Count == 0 ? (result?.Note ?? "sin datos de opciones") : null,
                 lines = quotes.Select(q => new { strike = q.Strike, bid = q.Bid, ask = q.Ask })
             };
@@ -287,7 +295,7 @@ internal sealed class CandleDetailForm : Form
     // slot: "formed" | "forming" | null (both).
     private async Task ClearPickAsync(string? slot = null)
     {
-        if (slot != "forming") _formedPick = null;
+        if (slot != "forming") { _formedPick = null; _leftStrikes = null; }
         if (slot != "formed") _formingPick = null;
         if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
             await _web.CoreWebView2.ExecuteScriptAsync(slot == null ? "detailClearStrikes();" : $"detailClearStrikes('{slot}');");

@@ -2200,7 +2200,7 @@ public class SimulatorForm : Form
             var window = new CandleDetailForm(_symbol, _rthChart.Height);
             // Double click on a 1-minute candle: the 4 nearest OTM strikes of its side, from the replayed chain — the step at/before
             // the last second of that minute (or the one the clock is on, for the minute still forming).
-            window.StrikeProvider = (minuteUtc, bullish, forming) =>
+            window.StrikeProvider = (minuteUtc, bullish, forming, fixedStrikes) =>
             {
                 var cutoff = forming ? _lastChartClockUtc : minuteUtc.AddSeconds(59);
                 SimulationStep? step = null;
@@ -2208,7 +2208,9 @@ public class SimulatorForm : Form
                     if (_steps[i].Time <= cutoff) { step = _steps[i]; break; }
                 if (step == null || step.Quotes.Count == 0)
                     return new StrikeQuoteResult(Array.Empty<StrikeQuote>(), "sin datos de opciones en ese minuto");
-                var picked = StrikeQuotePicker.Nearest(step.Quotes, bullish, step.UnderlyingPrice);
+                var picked = fixedStrikes != null
+                    ? StrikeQuotePicker.ForStrikes(step.Quotes, bullish, fixedStrikes)
+                    : StrikeQuotePicker.Nearest(step.Quotes, bullish, step.UnderlyingPrice);
                 return new StrikeQuoteResult(picked, picked.Count == 0 ? "sin datos de opciones en ese minuto" : null);
             };
             _candleDetail = window;

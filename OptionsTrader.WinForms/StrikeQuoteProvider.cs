@@ -22,6 +22,18 @@ internal static class StrikeQuotePicker
         return picked.Take(count).Select(q => new StrikeQuote(q.Strike, q.Bid, q.Ask)).ToList();
     }
 
+    // EXACTLY these strikes (in the given order), whether they are OTM or ITM by now. A strike with no quote in the data is left out.
+    public static IReadOnlyList<StrikeQuote> ForStrikes(IEnumerable<(decimal Strike, decimal Bid, decimal Ask)> quotes, IReadOnlyList<decimal> strikes)
+    {
+        var byStrike = quotes.GroupBy(q => q.Strike).ToDictionary(g => g.Key, g => g.First());
+        return strikes.Where(byStrike.ContainsKey).Select(s => new StrikeQuote(s, byStrike[s].Bid, byStrike[s].Ask)).ToList();
+    }
+
+    public static IReadOnlyList<StrikeQuote> ForStrikes(IEnumerable<OptionQuoteDto> quotes, bool calls, IReadOnlyList<decimal> strikes) =>
+        ForStrikes(quotes
+            .Where(q => q.OptionType == (calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put))
+            .Select(q => (q.StrikePrice, q.Bid, q.Ask)), strikes);
+
     public static IReadOnlyList<StrikeQuote> Nearest(IEnumerable<OptionQuoteDto> quotes, bool calls, decimal spot, int count = 4) =>
         Nearest(quotes
             .Where(q => q.OptionType == (calls ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put))
@@ -35,7 +47,8 @@ internal static class OptionChainHistory
 {
     private const string Folder = @"C:\OptionsData\Trades\Iv";
 
-    public static StrikeQuoteResult GetAtEndOfMinute(string symbol, DateOnly expiration, bool calls, DateTime minuteStartUtc)
+    // strikes: when given, exactly those strikes (ITM or not); otherwise the 4 nearest OTM.
+    public static StrikeQuoteResult GetAtEndOfMinute(string symbol, DateOnly expiration, bool calls, DateTime minuteStartUtc, IReadOnlyList<decimal>? strikes = null)
     {
         var startLocal = TimeZoneInfo.ConvertTimeFromUtc(minuteStartUtc, TimeZoneInfo.Local);
         var day = DateOnly.FromDateTime(startLocal);
@@ -69,7 +82,7 @@ internal static class OptionChainHistory
         catch (IOException) { return new StrikeQuoteResult(Array.Empty<StrikeQuote>(), "sin datos de opciones (archivo ocupado)"); }
 
         if (lastTime == null || spot <= 0) return new StrikeQuoteResult(Array.Empty<StrikeQuote>(), "sin datos de opciones en ese minuto");
-        var quotes = StrikeQuotePicker.Nearest(rows, calls, spot);
+        var quotes = strikes != null ? StrikeQuotePicker.ForStrikes(rows, strikes) : StrikeQuotePicker.Nearest(rows, calls, spot);
         return quotes.Count > 0 ? new StrikeQuoteResult(quotes) : new StrikeQuoteResult(quotes, "sin datos de opciones en ese minuto");
     }
 }
