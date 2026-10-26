@@ -5807,6 +5807,16 @@
                     ctx.fillStyle = '#ffa726'; ctx.fillText(bid, x, ty); x += wBid;
                     ctx.fillStyle = '#9aa0aa'; ctx.fillText(' / ', x, ty); x += wSep;
                     ctx.fillStyle = '#4caf50'; ctx.fillText(ask, x, ty);
+                    // RIGHT drawing only: how much higher (green) or lower (red) this ask is than the ask of the same strike on the LEFT drawing,
+                    // under the ask value (below the line, aligned with the ask).
+                    const refLeft = atRight && detailStrikes.formed && !detailStrikes.formed.note ? detailStrikes.formed : null;
+                    const refLine = refLeft ? refLeft.lines.find(r => r.strike === l.strike) : null;
+                    if (refLine && refLine.ask > 0 && l.ask > 0) {
+                      const pct = (l.ask - refLine.ask) / refLine.ask * 100;
+                      ctx.font = `${10 * vpr}px sans-serif`; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+                      ctx.fillStyle = pct > 0 ? '#4caf50' : (pct < 0 ? '#ef5350' : '#9aa0aa');
+                      ctx.fillText((pct > 0 ? '+' : '') + pct.toFixed(1) + '%', x, y * vpr + 3 * vpr);
+                    }
                   });
                 };
                 drawSlot(detailStrikes.formed, false);
