@@ -40,6 +40,35 @@ internal sealed class CandleDetailForm : Form
     private bool _targetBullish;
     // A fixed spot move in USD (the quick .50 / 1.00 buttons): used instead of the target price while set; the leg is then the candle's color.
     private decimal? _deltaSpot;
+    // The P-Line the fixed move draws on its own (the price the spot must reach, from the clicked candle to the right) and the spot
+    // each drawing was calculated at.
+    private bool _moveLineActive;
+    private decimal _leftSpot, _rightSpot;
+
+    // With a fixed move on and both drawings present: a P-Line at spot ± ΔS (above for a CALL, below for a PUT) from the candle just
+    // clicked. It replaces a hand-placed P-Line (only one exists) and is only a marker: the estimate keeps using the fixed move.
+    private async Task DrawMoveLineAsync(bool right)
+    {
+        if (_deltaSpot is not { } dS || _formedPick == null || _formingPick == null || _web.CoreWebView2 == null) return;
+        var spot = right ? _rightSpot : _leftSpot;
+        if (spot <= 0) return;
+        var bullish = right ? _formingPick.Value.Bullish : _formedPick.Value.Bullish;
+        var minute = right ? _formingPick.Value.Minute : _formedPick.Value.Minute;
+        var price = spot + (bullish ? dS : -dS);
+        _targetPrice = null;
+        _moveLineActive = true;
+        await _web.CoreWebView2.ExecuteScriptAsync(
+            $"detailDrawMovePLine({ChartPanel.FakeUtcEpochSeconds(minute)}, {price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {(bullish ? "true" : "false")});");
+        UpdateAnalysisStatus();
+    }
+
+    private async Task ClearMoveLineAsync()
+    {
+        if (!_moveLineActive) return;
+        _moveLineActive = false;
+        if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
+            await _web.CoreWebView2.ExecuteScriptAsync("detailClearMovePLine();");
+    }
 
     // The quick buttons: set (or clear with null) the fixed move and recalculate. With no drawing yet, the candle forming gets one
     // right away (its leg from its color), so pressing the button already shows the numbers.
@@ -48,6 +77,7 @@ internal sealed class CandleDetailForm : Form
         _deltaSpot = move;
         try
         {
+            if (!move.HasValue) await ClearMoveLineAsync();
             if (move.HasValue && _formedPick == null && _formingPick == null && _getMinutes != null && _lastState == MinuteBucketState.Forming && _getClockUtc != null)
             {
                 var minuteNow = MinuteCandleStore.MinuteStart(_getClockUtc());
@@ -169,6 +199,7 @@ internal sealed class CandleDetailForm : Form
         {
             if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
                 await _web.CoreWebView2.ExecuteScriptAsync("clearPLines();");
+            _moveLineActive = false;
             await ClearPickAsync();
         }
         catch { /* diagnostics window */ }
@@ -348,11 +379,12 @@ internal sealed class CandleDetailForm : Form
                 {
                     var bullish = !(root.TryGetProperty("direction", out var plDir) && plDir.GetString() == "below");
                     if (_deltaSpot != null) { _deltaSpot = null; SetMoveButtons(null); }
+                    _moveLineActive = false; // the page's single P-Line is now the hand-placed one
                     await ApplyTargetAsync(targetPrice, bullish);
                 }
                 return;
             }
-            if (msgType == "pline_delete") { await ApplyTargetAsync(null, false); return; }
+            if (msgType == "pline_delete") { _moveLineActive = false; await ApplyTargetAsync(null, false); return; }
             if (msgType == "pline_placed") { SetButtonLit(_btnPLine, false); return; }
             if (root.TryGetProperty("type", out var delType) && delType.GetString() == "detail_strikes_deleted")
             {
@@ -380,6 +412,7 @@ internal sealed class CandleDetailForm : Form
                 _formingPick = (minute, up.Value, true);
                 _formingSetAt = DateTime.UtcNow;
                 await RefreshPickAsync(right: true);
+                await DrawMoveLineAsync(right: true);
                 return;
             }
 
@@ -399,12 +432,14 @@ internal sealed class CandleDetailForm : Form
                 _formedSetAt = DateTime.UtcNow;
                 await RefreshPickAsync(right: false);
                 if (_formingPick != null) await RefreshPickAsync(right: true); // the right drawing repeats the strikes of this new left one
+                await DrawMoveLineAsync(right: false);
             }
             else
             {
                 _formingPick = (minute, up.Value, false);
                 _formingSetAt = DateTime.UtcNow;
                 await RefreshPickAsync(right: true);
+                await DrawMoveLineAsync(right: true);
             }
         }
         catch { /* diagnostics window */ }
@@ -438,6 +473,7 @@ internal sealed class CandleDetailForm : Form
             if (anchor != null) pick = (pick.Minute, _formedPick!.Value.Bullish, pick.Live);
             var result = StrikeProvider(pick.Minute, pick.Bullish, live, anchor);
             var quotes = result?.Quotes ?? Array.Empty<StrikeQuote>();
+            if (result != null) { if (right) _rightSpot = result.Spot; else _leftSpot = result.Spot; }
             if (!right) _leftStrikes = quotes.Count > 0 ? quotes.Select(q => q.Strike).ToList() : null;
             var payload = new
             {
@@ -502,6 +538,7 @@ internal sealed class CandleDetailForm : Form
     {
         if (slot != "forming") { _formedPick = null; _leftStrikes = null; _estimateBlocks.Remove("formed"); }
         if (slot != "formed") { _formingPick = null; _estimateBlocks.Remove("forming"); }
+        await ClearMoveLineAsync(); // the line needs both drawings
         if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
             await _web.CoreWebView2.ExecuteScriptAsync(slot == null ? "detailClearStrikes();" : $"detailClearStrikes('{slot}');");
         await PushEstimatesAsync();

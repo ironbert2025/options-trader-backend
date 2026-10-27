@@ -1990,6 +1990,21 @@
   function setPLineSingle(on) { pLineSingle = !!on; }
   function clearPLines() { pLinePrimitive._segments = []; forceRepaint(); }
 
+  // 1-minute window: the P-Line the fixed spot move (.50 / 1.00) draws by itself — the price the spot has to reach, from the clicked candle
+  // to the right. It is the single P-Line (replaces another) and sends no "placed" message to C#; flagged so it can be removed on its own.
+  function detailDrawMovePLine(time, price, bullish) {
+    if (!pLineAttached) { candleSeries.attachPrimitive(pLinePrimitive); pLineAttached = true; }
+    pLinePrimitive._segments = [{ time, price, direction: bullish ? 'above' : 'below', selected: false, fromMove: true }];
+    candleSeries.priceScale().applyOptions({ autoScale: true }); // the axis holds the line
+    forceRepaint();
+  }
+  function detailClearMovePLine() {
+    if (!pLinePrimitive._segments.some(s => s.fromMove)) return;
+    pLinePrimitive._segments = pLinePrimitive._segments.filter(s => !s.fromMove);
+    candleSeries.priceScale().applyOptions({ autoScale: true });
+    forceRepaint();
+  }
+
   function togglePLine() {
     if (!pLineAttached) { candleSeries.attachPrimitive(pLinePrimitive); pLineAttached = true; }
     pLineArmed = !pLineArmed;
