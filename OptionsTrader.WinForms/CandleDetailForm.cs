@@ -61,6 +61,25 @@ internal sealed class CandleDetailForm : Form
         return _targetPrice is { } target && (_targetBullish ? spot >= target : spot <= target);
     }
     private decimal _leftSpot, _rightSpot;
+
+    // The PnL% path of the right drawing's strikes from the 2nd click (the moment the line appears) to the target: the entry is the ask
+    // of the reference drawing at that moment; the exit is the live bid (real market, not the model), less the commission. Only the
+    // worst and the best % reached are kept; they freeze when the spot crosses the target.
+    private Dictionary<decimal, decimal>? _pnlEntry;
+    private readonly Dictionary<decimal, (decimal Min, decimal Max)> _pnlRange = new();
+
+    private void StartPnl(bool fromRight)
+    {
+        _pnlRange.Clear();
+        _pnlEntry = null;
+        if (!_estCache.TryGetValue(fromRight ? "forming" : "formed", out var c) || c.Quotes.Count == 0) return;
+        _pnlEntry = c.Quotes.Where(q => q.Ask > 0).ToDictionary(q => q.Strike, q => q.Ask);
+    }
+
+    private void StopPnl() { _pnlEntry = null; _pnlRange.Clear(); }
+
+    private static decimal PnlPercent(decimal entryAsk, decimal bid) =>
+        (100m * (bid - entryAsk) - TargetEstimator.CommissionPerContract) / (100m * entryAsk) * 100m;
     // The last quotes of each drawing, so the estimate blocks can be rebuilt without asking the provider again.
     private readonly Dictionary<string, (IReadOnlyList<StrikeQuote> Quotes, decimal Spot, string Label, bool Bullish)> _estCache = new();
 
@@ -79,6 +98,7 @@ internal sealed class CandleDetailForm : Form
         _moveLinePrice = price;
         _moveLineFromRight = right;
         _targetCrossed = false; // a new line: the calculation starts again
+        StartPnl(right);
         RebuildEstimateBlocks(); // the calculations now reference the 2nd click: the target is this line's price for BOTH drawings
         await PushEstimatesAsync();
         await _web.CoreWebView2.ExecuteScriptAsync(
@@ -91,6 +111,7 @@ internal sealed class CandleDetailForm : Form
         if (!_moveLineActive) return;
         _moveLineActive = false;
         _targetCrossed = false;
+        StopPnl();
         if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
         {
             await _web.CoreWebView2.ExecuteScriptAsync("detailClearMovePLine();");
@@ -122,6 +143,7 @@ internal sealed class CandleDetailForm : Form
     private async Task ApplyTargetAsync(decimal? price, bool bullish)
     {
         _targetCrossed = false; // another target: the calculation starts again
+        StopPnl();
         _targetPrice = price;
         _targetBullish = bullish;
         try
@@ -222,6 +244,7 @@ internal sealed class CandleDetailForm : Form
     {
         _targetPrice = null;
         _targetCrossed = false;
+        StopPnl();
         _deltaSpot = _analysisBar?.Visible == true ? DefaultMove : (decimal?)null; // a new day: back to the default, .50 armed
         SetMoveButtons(_deltaSpot);
         SetButtonLit(_btnPLine, false);
@@ -431,6 +454,7 @@ internal sealed class CandleDetailForm : Form
             var minute = ChartPanel.UtcFromFakeEpochSeconds(seconds);
             var forming = IsMinuteForming(minute);
             _targetCrossed = false; // a new selection: the calculation starts again
+            StopPnl();
             bool? up = root.TryGetProperty("up", out var upEl) && (upEl.ValueKind == JsonValueKind.True || upEl.ValueKind == JsonValueKind.False)
                 ? upEl.GetBoolean() : (bool?)null; // null = doji
             if (_targetPrice.HasValue && _deltaSpot == null) up = _targetBullish; // with a price target the leg is the target's, whatever the candle's color
@@ -507,6 +531,14 @@ internal sealed class CandleDetailForm : Form
             var quotes = result?.Quotes ?? Array.Empty<StrikeQuote>();
             if (result != null) { if (right) _rightSpot = result.Spot; else _leftSpot = result.Spot; }
             if (!right) _leftStrikes = quotes.Count > 0 ? quotes.Select(q => q.Strike).ToList() : null;
+            // PnL% path (right drawing only, while a target line exists): worst / best % reached so far; frozen once the target is crossed.
+            if (right && _pnlEntry != null && !_targetCrossed)
+                foreach (var q in quotes)
+                    if (_pnlEntry.TryGetValue(q.Strike, out var entryAsk) && q.Bid > 0)
+                    {
+                        var p = PnlPercent(entryAsk, q.Bid);
+                        _pnlRange[q.Strike] = _pnlRange.TryGetValue(q.Strike, out var r) ? (Math.Min(r.Min, p), Math.Max(r.Max, p)) : (p, p);
+                    }
             var payload = new
             {
                 slot = right ? "forming" : "formed",
@@ -514,7 +546,12 @@ internal sealed class CandleDetailForm : Form
                 bullish = pick.Bullish,
                 label = TimeZoneInfo.ConvertTimeFromUtc(pick.Minute, EasternZone).ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
                 note = quotes.Count == 0 ? (result?.Note ?? "sin datos de opciones") : null,
-                lines = quotes.Select(q => new { strike = q.Strike, bid = q.Bid, ask = q.Ask })
+                lines = quotes.Select(q => new
+                {
+                    strike = q.Strike, bid = q.Bid, ask = q.Ask,
+                    pnlMin = right && _pnlEntry != null && _pnlRange.TryGetValue(q.Strike, out var pr) ? (decimal?)Math.Min(pr.Min, 0m) : null,
+                    pnlMax = right && _pnlEntry != null && _pnlRange.TryGetValue(q.Strike, out var pr2) ? (decimal?)Math.Max(pr2.Max, 0m) : null
+                })
             };
             await _web.CoreWebView2.ExecuteScriptAsync($"detailSetStrikes({JsonSerializer.Serialize(payload)});");
 
