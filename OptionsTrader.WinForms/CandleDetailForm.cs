@@ -170,7 +170,7 @@ internal sealed class CandleDetailForm : Form
 
     // ---- The analysis bar (Simulator only): P-Line + the quick .50 / 1.00 moves, in a strip above the chart ----
     private Panel? _analysisBar;
-    private Button? _btnPLine, _btnMove05, _btnMove10;
+    private Button? _btnPLine, _btnMove05, _btnMove10, _btnCls;
     private Label? _lblAnalysis;
     private const int AnalysisBarHeight = 30;
 
@@ -188,7 +188,8 @@ internal sealed class CandleDetailForm : Form
         _btnPLine = MakeButton("P-Line", 4, 62);
         _btnMove05 = MakeButton(".50", 70, 46);
         _btnMove10 = MakeButton("1.00", 120, 46);
-        _lblAnalysis = new Label { AutoSize = true, Location = new Point(174, 8), ForeColor = Color.Silver, Font = new Font("Segoe UI", 8F), Text = "Sin objetivo" };
+        _btnCls = MakeButton("Cls", 170, 38);
+        _lblAnalysis = new Label { AutoSize = true, Location = new Point(214, 8), ForeColor = Color.Silver, Font = new Font("Segoe UI", 8F), Text = "Sin objetivo" };
         _analysisBar.Controls.Add(_lblAnalysis);
 
         // P-Line: one price line on THIS chart = the price target. Above the last price -> CALL, below -> PUT.
@@ -201,6 +202,7 @@ internal sealed class CandleDetailForm : Form
         // .50 / 1.00: a fixed spot move; they toggle and replace each other; the calculation is immediate.
         _btnMove05.Click += (s, e) => PressMove(0.50m);
         _btnMove10.Click += (s, e) => PressMove(1.00m);
+        _btnCls.Click += async (s, e) => await ClearAllAsync();
     }
 
     private void SetButtonLit(Button? b, bool on)
@@ -648,6 +650,27 @@ internal sealed class CandleDetailForm : Form
     }
 
     // slot: "formed" | "forming" | null (both).
+    // Cls: wipes everything drawn on this chart (P-Lines, strike drawings, arrows, estimates, PnL path) and leaves only the candles.
+    // The fixed move chosen (.50 / 1.00) stays armed.
+    private async Task ClearAllAsync()
+    {
+        try
+        {
+            _targetPrice = null;
+            _targetCrossed = false;
+            StopPnl();
+            _askPctFixed.Clear();
+            _askAtClick.Clear();
+            SetButtonLit(_btnPLine, false);
+            _moveLineActive = false;
+            if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
+                await _web.CoreWebView2.ExecuteScriptAsync("clearPLines();");
+            await ClearPickAsync();
+        }
+        catch { /* diagnostics window */ }
+        UpdateAnalysisStatus();
+    }
+
     private async Task ClearPickAsync(string? slot = null)
     {
         if (slot != "forming") { _formedPick = null; _leftStrikes = null; _estimateBlocks.Remove("formed"); _estCache.Remove("formed"); }
