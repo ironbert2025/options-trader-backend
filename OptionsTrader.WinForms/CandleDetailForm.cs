@@ -155,6 +155,7 @@ internal sealed class CandleDetailForm : Form
             }
             await RefreshPickAsync(right: false);
             await RefreshPickAsync(right: true);
+            if (price.HasValue && _formingPick != null) StartPnl(fromRight: true); // hand-placed P-Line: the path starts from the right drawing
             await PushEstimatesAsync();
         }
         catch { /* diagnostics window */ }
