@@ -78,8 +78,10 @@ internal sealed class CandleDetailForm : Form
 
     // The % under the right ask (vs the left drawing's ask of the same strike) is fixed the first time it is drawn after a click.
     private readonly Dictionary<decimal, decimal> _askPctFixed = new();
+    private readonly Dictionary<decimal, decimal> _pnlNow = new();   // live PnL% of each strike (frozen when the target is crossed)
+    private DateTime _formingClickMinute;                           // the candle of the 2nd click: where the '2' arrow stays
 
-    private void StopPnl() { _pnlEntry = null; _pnlRange.Clear(); }
+    private void StopPnl() { _pnlEntry = null; _pnlRange.Clear(); _pnlNow.Clear(); }
 
     private static decimal PnlPercent(decimal entryAsk, decimal bid) =>
         (100m * (bid - entryAsk) - TargetEstimator.CommissionPerContract) / (100m * entryAsk) * 100m;
@@ -471,6 +473,7 @@ internal sealed class CandleDetailForm : Form
                 if (_formingPick is { Live: true }) { await ClearPickAsync("forming"); return; }
                 if (up == null) return;
                 _formingPick = (minute, up.Value, true);
+                _formingClickMinute = minute;
                 _formingSetAt = DateTime.UtcNow;
                 await RefreshPickAsync(right: true);
                 await DrawMoveLineAsync(right: true);
@@ -498,6 +501,7 @@ internal sealed class CandleDetailForm : Form
             else
             {
                 _formingPick = (minute, up.Value, false);
+                _formingClickMinute = minute;
                 _formingSetAt = DateTime.UtcNow;
                 await RefreshPickAsync(right: true);
                 await DrawMoveLineAsync(right: true);
@@ -546,12 +550,14 @@ internal sealed class CandleDetailForm : Form
                     if (_pnlEntry.TryGetValue(q.Strike, out var entryAsk) && q.Bid > 0)
                     {
                         var p = PnlPercent(entryAsk, q.Bid);
+                        _pnlNow[q.Strike] = p;
                         _pnlRange[q.Strike] = _pnlRange.TryGetValue(q.Strike, out var r) ? (Math.Min(r.Min, p), Math.Max(r.Max, p)) : (p, p);
                     }
             var payload = new
             {
                 slot = right ? "forming" : "formed",
                 minute = ChartPanel.FakeUtcEpochSeconds(pick.Minute),
+                markerMinute = ChartPanel.FakeUtcEpochSeconds(right && _formingClickMinute != default ? _formingClickMinute : pick.Minute),
                 bullish = pick.Bullish,
                 label = TimeZoneInfo.ConvertTimeFromUtc(pick.Minute, EasternZone).ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
                 note = quotes.Count == 0 ? (result?.Note ?? "sin datos de opciones") : null,
@@ -560,6 +566,7 @@ internal sealed class CandleDetailForm : Form
                     strike = q.Strike, bid = q.Bid, ask = q.Ask,
                     askPct = right && _askPctFixed.TryGetValue(q.Strike, out var ap) ? (decimal?)ap : null,
                     pnlMin = right && _pnlEntry != null && _pnlRange.TryGetValue(q.Strike, out var pr) ? (decimal?)Math.Min(pr.Min, 0m) : null,
+                    pnlNow = right && _pnlEntry != null && _pnlNow.TryGetValue(q.Strike, out var pn) ? (decimal?)pn : null,
                     pnlMax = right && _pnlEntry != null && _pnlRange.TryGetValue(q.Strike, out var pr2) ? (decimal?)Math.Max(pr2.Max, 0m) : null
                 })
             };

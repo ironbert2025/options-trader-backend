@@ -5766,7 +5766,7 @@
   // a drawing that carries the PnL% path (right one, after the 2nd click) is longer to hold "bid / ask (min max)" at its start
   const DetailLeftSegPx = 75, DetailRightSegPx = 50; // line lengths (75% / 50% of the original 100)
   // width of the clickable area: the line plus, for the right drawing, the bid / ask (path) text that sits to the left of its line
-  function detailSegPx(d, atRight) { return atRight ? DetailRightSegPx + (d && d.lines && d.lines.some(l => l.pnlMin != null) ? 230 : 110) : DetailLeftSegPx; }
+  function detailSegPx(d, atRight) { return atRight ? DetailRightSegPx + (d && d.lines && d.lines.some(l => l.pnlMin != null) ? 290 : 110) : DetailLeftSegPx; }
   class DetailStrikesPrimitive {
     attached() {}
     updateAllViews() {}
@@ -5832,7 +5832,7 @@
                     ctx.font = `${11 * vpr}px sans-serif`; ctx.textBaseline = 'bottom';
                     const wBid = ctx.measureText(bid).width, wSep = ctx.measureText(' / ').width, wAsk = ctx.measureText(ask).width;
                     const hasPnl = l.pnlMin != null && l.pnlMax != null;
-                    const pnlParts = hasPnl ? [[' (', '#9aa0aa'], [l.pnlMin.toFixed(1) + '%', '#ef5350'], [' ', '#9aa0aa'], ['+' + l.pnlMax.toFixed(1) + '%', '#4caf50'], [')', '#9aa0aa']] : [];
+                    const pnlParts = hasPnl ? [[' (', '#9aa0aa'], [l.pnlMin.toFixed(1) + '%', '#ef5350'], [' ', '#9aa0aa'], ['+' + l.pnlMax.toFixed(1) + '%', '#4caf50'], [')', '#9aa0aa']].concat(l.pnlNow != null ? [['  ' + (l.pnlNow >= 0 ? '+' : '') + l.pnlNow.toFixed(1) + '%', l.pnlNow >= 0 ? '#4caf50' : '#ef5350']] : []) : [];
                     const wPnl = pnlParts.reduce((a, p) => a + ctx.measureText(p[0]).width, 0);
                     // right drawing: the values sit to the LEFT of its (short) line, ending just before it; left drawing: centered over its line
                     let x = atRight ? left - 6 * hpr - (wBid + wSep + wAsk + wPnl) : (left + right) / 2 - (wBid + wSep + wAsk) / 2;
@@ -5915,7 +5915,7 @@
     [['formed', '1'], ['forming', '2']].forEach(([slot, number]) => {
       const d = detailStrikes[slot];
       if (!d || d.minute == null) return;
-      const c = allCandles.find(x => x.time === d.minute);
+      const c = allCandles.find(x => x.time === (d.markerMinute || d.minute)); // the arrow stays on the clicked candle even if the drawing follows the forming one
       if (!c) return; // that minute has no candle (yet)
       const green = c.close >= c.open;
       marks.push({ time: c.time, position: green ? 'aboveBar' : 'belowBar', color: d.bullish ? '#26a69a' : '#ef5350',
@@ -5931,7 +5931,7 @@
     const before = detailStrikeExtentKey();
     const slotKey = payload.slot === 'forming' ? 'forming' : 'formed';
     const wasSelected = !!(detailStrikes[slotKey] && detailStrikes[slotKey].selected); // a live refresh keeps the selection
-    detailStrikes[slotKey] = { bullish: !!payload.bullish, lines: payload.lines || [], note: payload.note || null, label: payload.label || null, minute: payload.minute || null, selected: wasSelected };
+    detailStrikes[slotKey] = { bullish: !!payload.bullish, lines: payload.lines || [], note: payload.note || null, label: payload.label || null, minute: payload.minute || null, markerMinute: payload.markerMinute || payload.minute || null, selected: wasSelected };
     detailApplyMarkers();
     detailRecomputeStrikeExtent();
     if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true }); // re-fit the axis to hold the strikes
