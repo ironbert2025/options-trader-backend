@@ -90,17 +90,10 @@ internal sealed class CandleDetailForm : Form
         try
         {
             if (!move.HasValue) await ClearMoveLineAsync();
-            if (move.HasValue && _formedPick == null && _formingPick == null && _getMinutes != null && _lastState == MinuteBucketState.Forming && _getClockUtc != null)
-            {
-                var minuteNow = MinuteCandleStore.MinuteStart(_getClockUtc());
-                var last = _getMinutes(_firstBucketStartUtc, _bucketStartUtc.AddMinutes(15)).LastOrDefault(c => c.Time == minuteNow);
-                var up = last == null || last.Close >= last.Open; // a doji or a candle not yet started counts as up
-                _formingPick = (minuteNow, up, true);
-                _formingSetAt = DateTime.UtcNow;
-            }
             await RefreshPickAsync(right: false);
             await RefreshPickAsync(right: true);
             if (move.HasValue && _moveLineActive) await DrawMoveLineAsync(_moveLineFromRight); // .50 <-> 1.00: the line moves to the new distance
+            else if (move.HasValue && _formedPick != null && _formingPick != null) await DrawMoveLineAsync(right: true); // armed again with both drawings on
             await PushEstimatesAsync();
         }
         catch { /* diagnostics window */ }
@@ -199,14 +192,19 @@ internal sealed class CandleDetailForm : Form
         if (_analysisBar == null || _analysisBar.Visible) return;
         _analysisBar.Visible = true;
         ClientSize = new Size(ClientSize.Width, ClientSize.Height + AnalysisBarHeight);
+        _deltaSpot = DefaultMove; // .50 is armed from the start: nothing is calculated until the 2nd click
+        SetMoveButtons(DefaultMove);
+        UpdateAnalysisStatus();
     }
+
+    private const decimal DefaultMove = 0.50m;
 
     // A new day was loaded: forget the target, the fixed move and what was drawn from them.
     public async void ResetAnalysis()
     {
         _targetPrice = null;
-        _deltaSpot = null;
-        SetMoveButtons(null);
+        _deltaSpot = _analysisBar?.Visible == true ? DefaultMove : (decimal?)null; // a new day: back to the default, .50 armed
+        SetMoveButtons(_deltaSpot);
         SetButtonLit(_btnPLine, false);
         try
         {
@@ -511,10 +509,9 @@ internal sealed class CandleDetailForm : Form
     }
 
     // One block per drawing. The move each is calculated with:
-    //  - fixed move (.50 / 1.00) with the move line on (both drawings exist): the target is the line's price — set at the 2nd click —
-    //    so the drawing of the FIRST click gets the whole distance from its own spot to that price, the 2nd one gets ΔS;
-    //  - fixed move without the line: ΔS from the drawing's own spot;
-    //  - a hand-placed P-Line: distance from the drawing's spot to its price.
+    //  - fixed move (.50 / 1.00): ONLY the drawing of the 2nd click (when the move line is shown) is calculated, with ΔS from its own
+    //    spot; the 1st click calculates nothing;
+    //  - a hand-placed P-Line: distance from each drawing's spot to its price.
     private void RebuildEstimateBlocks()
     {
         _estimateBlocks.Clear();
@@ -524,7 +521,7 @@ internal sealed class CandleDetailForm : Form
             if (c.Quotes.Count == 0 || c.Spot <= 0) continue;
             if (slotKey == "formed" ? _formedPick == null : _formingPick == null) continue;
             decimal? move = _deltaSpot is { } fixedMove
-                ? (_moveLineActive ? TargetEstimator.MoveToTarget(c.Spot, _moveLinePrice, c.Bullish) : fixedMove)
+                ? (_moveLineActive && slotKey == (_moveLineFromRight ? "forming" : "formed") ? fixedMove : (decimal?)null)
                 : (_targetPrice is { } tp ? TargetEstimator.MoveToTarget(c.Spot, tp, c.Bullish) : null);
             if (move is not { } dS) continue;
             var estimates = TargetEstimator.Compute(c.Quotes, dS, ContractsFor);
@@ -558,7 +555,7 @@ internal sealed class CandleDetailForm : Form
         if (_estimateBlocks.TryGetValue("formed", out var left) && _formedPick != null) blocks.Add(left);
         if (_estimateBlocks.TryGetValue("forming", out var right) && _formingPick != null) blocks.Add(right);
         var headerLead = _deltaSpot is { } fixedMove
-            ? (_moveLineActive ? $"ΔS fijo +{fixedMove:0.00} · objetivo {_moveLinePrice:F2} (2.º click)" : $"ΔS fijo +{fixedMove:0.00} a favor de la pata")
+            ? $"ΔS fijo +{fixedMove:0.00} · objetivo {_moveLinePrice:F2} (2.º click)"
             : $"Objetivo {_targetPrice!.Value:F2} · {(_targetBullish ? "CALL" : "PUT")}";
         var payload = new { header = $"{headerLead} · neto tras comisión 1.30/contr.", blocks };
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetEstimates({JsonSerializer.Serialize(payload)});");
