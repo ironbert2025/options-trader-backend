@@ -43,7 +43,11 @@ internal sealed class CandleDetailForm : Form
     // The P-Line the fixed move draws on its own (the price the spot must reach, from the clicked candle to the right) and the spot
     // each drawing was calculated at.
     private bool _moveLineActive;
+    private decimal _moveLinePrice;        // the price that P-Line sits at = the target of BOTH estimate blocks while it is on
+    private bool _moveLineFromRight;       // which drawing the 2nd click created (the reference)
     private decimal _leftSpot, _rightSpot;
+    // The last quotes of each drawing, so the estimate blocks can be rebuilt without asking the provider again.
+    private readonly Dictionary<string, (IReadOnlyList<StrikeQuote> Quotes, decimal Spot, string Label, bool Bullish)> _estCache = new();
 
     // With a fixed move on and both drawings present: a P-Line at spot ± ΔS (above for a CALL, below for a PUT) from the candle just
     // clicked. It replaces a hand-placed P-Line (only one exists) and is only a marker: the estimate keeps using the fixed move.
@@ -57,6 +61,10 @@ internal sealed class CandleDetailForm : Form
         var price = spot + (bullish ? dS : -dS);
         _targetPrice = null;
         _moveLineActive = true;
+        _moveLinePrice = price;
+        _moveLineFromRight = right;
+        RebuildEstimateBlocks(); // the calculations now reference the 2nd click: the target is this line's price for BOTH drawings
+        await PushEstimatesAsync();
         await _web.CoreWebView2.ExecuteScriptAsync(
             $"detailDrawMovePLine({ChartPanel.FakeUtcEpochSeconds(minute)}, {price.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {(bullish ? "true" : "false")});");
         UpdateAnalysisStatus();
@@ -67,7 +75,11 @@ internal sealed class CandleDetailForm : Form
         if (!_moveLineActive) return;
         _moveLineActive = false;
         if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
+        {
             await _web.CoreWebView2.ExecuteScriptAsync("detailClearMovePLine();");
+            RebuildEstimateBlocks(); // back to each drawing's own ΔS
+            await PushEstimatesAsync();
+        }
     }
 
     // The quick buttons: set (or clear with null) the fixed move and recalculate. With no drawing yet, the candle forming gets one
@@ -88,6 +100,7 @@ internal sealed class CandleDetailForm : Form
             }
             await RefreshPickAsync(right: false);
             await RefreshPickAsync(right: true);
+            if (move.HasValue && _moveLineActive) await DrawMoveLineAsync(_moveLineFromRight); // .50 <-> 1.00: the line moves to the new distance
             await PushEstimatesAsync();
         }
         catch { /* diagnostics window */ }
@@ -390,8 +403,9 @@ internal sealed class CandleDetailForm : Form
             {
                 // Delete on a selected drawing: the page already removed it — forget its pick so a new double click starts fresh.
                 var slot = root.TryGetProperty("slot", out var slotEl) ? slotEl.GetString() : null;
-                if (slot == "forming") { _formingPick = null; _estimateBlocks.Remove("forming"); }
-                else if (slot == "formed") { _formedPick = null; _leftStrikes = null; _estimateBlocks.Remove("formed"); }
+                if (slot == "forming") { _formingPick = null; _estimateBlocks.Remove("forming"); _estCache.Remove("forming"); }
+                else if (slot == "formed") { _formedPick = null; _leftStrikes = null; _estimateBlocks.Remove("formed"); _estCache.Remove("formed"); }
+                await ClearMoveLineAsync(); // the line needs both drawings
                 await PushEstimatesAsync();
                 return;
             }
@@ -486,32 +500,49 @@ internal sealed class CandleDetailForm : Form
             };
             await _web.CoreWebView2.ExecuteScriptAsync($"detailSetStrikes({JsonSerializer.Serialize(payload)});");
 
-            // The estimate box row set of this drawing (only with a price target and a way to size the position).
+            // The estimate box is rebuilt from what each drawing last showed.
             var slotKey = right ? "forming" : "formed";
-            decimal? move = _deltaSpot ?? (_targetPrice is { } tp && result != null && result.Spot > 0 ? TargetEstimator.MoveToTarget(result.Spot, tp, pick.Bullish) : null);
-            if (move is { } dS && ContractsFor != null && quotes.Count > 0 && result!.Spot > 0)
-            {
-                var estimates = TargetEstimator.Compute(quotes, dS, ContractsFor);
-                _estimateBlocks[slotKey] = new
-                {
-                    label = $"{payload.label} · {(pick.Bullish ? "CALL" : "PUT")} · spot {result.Spot:F2} · ΔS {dS:+0.00;-0.00}",
-                    rows = estimates.Select(e => new
-                    {
-                        strike = e.Strike.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
-                        exitText = e.ExitBid.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
-                        contracts = e.Contracts,
-                        netText = (e.Net >= 0 ? "+$" : "-$") + Math.Abs(e.Net).ToString("N0", System.Globalization.CultureInfo.InvariantCulture),
-                        beText = "+" + e.BreakEvenMove.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
-                        best = e.Best,
-                        ok = e.Reaches2xBreakEven
-                    }).ToList()
-                };
-            }
-            else _estimateBlocks.Remove(slotKey);
+            _estCache[slotKey] = (quotes, result?.Spot ?? 0m, (string)payload.label, pick.Bullish);
+            RebuildEstimateBlocks();
             await PushEstimatesAsync();
         }
         catch { /* diagnostics window */ }
         finally { _pickBusy = false; }
+    }
+
+    // One block per drawing. The move each is calculated with:
+    //  - fixed move (.50 / 1.00) with the move line on (both drawings exist): the target is the line's price — set at the 2nd click —
+    //    so the drawing of the FIRST click gets the whole distance from its own spot to that price, the 2nd one gets ΔS;
+    //  - fixed move without the line: ΔS from the drawing's own spot;
+    //  - a hand-placed P-Line: distance from the drawing's spot to its price.
+    private void RebuildEstimateBlocks()
+    {
+        _estimateBlocks.Clear();
+        if (ContractsFor == null) return;
+        foreach (var (slotKey, c) in _estCache)
+        {
+            if (c.Quotes.Count == 0 || c.Spot <= 0) continue;
+            if (slotKey == "formed" ? _formedPick == null : _formingPick == null) continue;
+            decimal? move = _deltaSpot is { } fixedMove
+                ? (_moveLineActive ? TargetEstimator.MoveToTarget(c.Spot, _moveLinePrice, c.Bullish) : fixedMove)
+                : (_targetPrice is { } tp ? TargetEstimator.MoveToTarget(c.Spot, tp, c.Bullish) : null);
+            if (move is not { } dS) continue;
+            var estimates = TargetEstimator.Compute(c.Quotes, dS, ContractsFor);
+            _estimateBlocks[slotKey] = new
+            {
+                label = $"{c.Label} · {(c.Bullish ? "CALL" : "PUT")} · spot {c.Spot:F2} · ΔS {dS:+0.00;-0.00}",
+                rows = estimates.Select(e => new
+                {
+                    strike = e.Strike.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+                    exitText = e.ExitBid.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                    contracts = e.Contracts,
+                    netText = (e.Net >= 0 ? "+$" : "-$") + Math.Abs(e.Net).ToString("N0", System.Globalization.CultureInfo.InvariantCulture),
+                    beText = "+" + e.BreakEvenMove.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                    best = e.Best,
+                    ok = e.Reaches2xBreakEven
+                }).ToList()
+            };
+        }
     }
 
     // The estimate box: header with the target and the budget, then the left drawing's block and the right one's.
@@ -527,7 +558,7 @@ internal sealed class CandleDetailForm : Form
         if (_estimateBlocks.TryGetValue("formed", out var left) && _formedPick != null) blocks.Add(left);
         if (_estimateBlocks.TryGetValue("forming", out var right) && _formingPick != null) blocks.Add(right);
         var headerLead = _deltaSpot is { } fixedMove
-            ? $"ΔS fijo +{fixedMove:0.00} a favor de la pata"
+            ? (_moveLineActive ? $"ΔS fijo +{fixedMove:0.00} · objetivo {_moveLinePrice:F2} (2.º click)" : $"ΔS fijo +{fixedMove:0.00} a favor de la pata")
             : $"Objetivo {_targetPrice!.Value:F2} · {(_targetBullish ? "CALL" : "PUT")}";
         var payload = new { header = $"{headerLead} · neto tras comisión 1.30/contr.", blocks };
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetEstimates({JsonSerializer.Serialize(payload)});");
@@ -536,8 +567,8 @@ internal sealed class CandleDetailForm : Form
     // slot: "formed" | "forming" | null (both).
     private async Task ClearPickAsync(string? slot = null)
     {
-        if (slot != "forming") { _formedPick = null; _leftStrikes = null; _estimateBlocks.Remove("formed"); }
-        if (slot != "formed") { _formingPick = null; _estimateBlocks.Remove("forming"); }
+        if (slot != "forming") { _formedPick = null; _leftStrikes = null; _estimateBlocks.Remove("formed"); _estCache.Remove("formed"); }
+        if (slot != "formed") { _formingPick = null; _estimateBlocks.Remove("forming"); _estCache.Remove("forming"); }
         await ClearMoveLineAsync(); // the line needs both drawings
         if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
             await _web.CoreWebView2.ExecuteScriptAsync(slot == null ? "detailClearStrikes();" : $"detailClearStrikes('{slot}');");
