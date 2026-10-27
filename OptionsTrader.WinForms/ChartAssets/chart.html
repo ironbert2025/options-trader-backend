@@ -5852,7 +5852,13 @@
                       const pct = l.askPct;
                       ctx.font = `${10 * vpr}px sans-serif`; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
                       ctx.fillStyle = pct > 0 ? '#4caf50' : (pct < 0 ? '#ef5350' : '#9aa0aa');
-                      ctx.fillText((pct > 0 ? '+' : '') + pct.toFixed(1) + '%', x, y * vpr + 3 * vpr);
+                      const pctTxt = (pct > 0 ? '+' : '') + pct.toFixed(1) + '%';
+                      ctx.fillText(pctTxt, x, y * vpr + 3 * vpr);
+                      // next to it, frozen: the ask at the moment of the 2nd click (the price it would have been bought at)
+                      if (l.askAtClick != null) {
+                        ctx.fillStyle = '#4caf50';
+                        ctx.fillText(' @ ' + l.askAtClick.toFixed(2), x + ctx.measureText(pctTxt).width, y * vpr + 3 * vpr);
+                      }
                     }
                   });
                 };
