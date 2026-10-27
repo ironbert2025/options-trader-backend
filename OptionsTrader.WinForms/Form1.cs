@@ -5190,7 +5190,7 @@ public partial class Form1 : Form
         return contracts.ToString("F0");
     }
 
-    private static string GetContractsValue(decimal ask)
+    internal static string GetContractsValue(decimal ask)
     {
         var selected = ContractsSettingsStore.Load();
         if (selected != "PositionSize" && int.TryParse(selected, out var fixedCount))

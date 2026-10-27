@@ -1395,6 +1395,8 @@ public class TwoPanelChartsControl : UserControl
                         }
                         return OptionChainHistory.GetAtEndOfMinute(_symbol, snapshot.Value.AllQuotes[0].ExpirationDate, bullish, minuteUtc, fixedStrikes);
                     };
+                    // P-Line / .50 / 1.00 and the PnL path, like in the Simulator; the estimate sizes the position with the live settings.
+                    window.EnableAnalysisBar(ask => int.TryParse(Form1.GetContractsValue(ask), out var n) ? n : 0);
                     candleDetail = window;
                     minutesChanged = () => window.MarkDirty();
                     rthPanel.OnMinuteCandlesChanged += minutesChanged;
