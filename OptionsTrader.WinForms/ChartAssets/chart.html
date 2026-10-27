@@ -1639,6 +1639,7 @@
       const direction = refPrice != null && price < refPrice ? 'below' : 'above';
       if (pLineSingle) pLinePrimitive._segments = [];
       pLinePrimitive._segments.push({ time: clickTime, price, direction, selected: false });
+      pLinePlacedAt = performance.now();
       // Reported to C# (ChartPanel.CoreWebView2_WebMessageReceived) — owns the actual live-tick
       // cross-detection and Telegram push, no mirroring (panel 2 only, per explicit request).
       if (window.chrome && window.chrome.webview) {
@@ -1985,6 +1986,7 @@
 
   // Simulator: ONE P-Line at a time (the price target being analysed) — placing a new one replaces the previous.
   let pLineSingle = false;
+  let pLinePlacedAt = -1e9; // when the last P-Line was placed (the 1-minute window ignores that click as a candle click)
   function setPLineSingle(on) { pLineSingle = !!on; }
   function clearPLines() { pLinePrimitive._segments = []; forceRepaint(); }
 
@@ -5838,10 +5840,9 @@
   const detailStrikesPrimitive = new DetailStrikesPrimitive();
 
   // the price span the detail axis must hold beyond the candles: the strikes drawn and the target line
-  let detailTargetPrice = null, detailTargetLine = null;
   function detailExtraRange() {
     const ks = detailStrikeExtent ? [detailStrikeExtent.min, detailStrikeExtent.max] : [];
-    if (detailTargetPrice != null) ks.push(detailTargetPrice);
+    pLinePrimitive._segments.forEach(s => ks.push(s.price)); // the P-Line (the price target) must stay on screen
     return ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
   }
   function detailStrikeExtentKey() { const e = detailExtraRange(); return e ? e.min + '|' + e.max : ''; }
@@ -5849,18 +5850,6 @@
     const ks = [];
     [detailStrikes.formed, detailStrikes.forming].forEach(d => { if (d) d.lines.forEach(l => ks.push(l.strike)); });
     detailStrikeExtent = ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
-  }
-
-  // The price target (the Simulator's P-Line): a dashed purple line "OBJ" across the 1-minute window, or null to remove it.
-  function detailSetTarget(price) {
-    if (!detailView) return;
-    const before = detailStrikeExtentKey();
-    if (detailTargetLine) { candleSeries.removePriceLine(detailTargetLine); detailTargetLine = null; }
-    detailTargetPrice = price == null ? null : price;
-    if (detailTargetPrice != null)
-      detailTargetLine = candleSeries.createPriceLine({ price: detailTargetPrice, color: '#ba68c8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'OBJ' });
-    if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true });
-    forceRepaint();
   }
 
   // Estimates of each strike if the spot reaches the target — a small box at the top left of the window.
@@ -5914,6 +5903,7 @@
   }
   container.addEventListener('click', ev => {
     if (!detailView || detailClickWasDrag(ev)) return;
+    if (pLineArmed || performance.now() - pLinePlacedAt < 400) return; // placing the P-Line: this click is not a candle click
     const rect = container.getBoundingClientRect();
     const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
     // 1) on a drawing's segments: select it (white halo); Delete removes it

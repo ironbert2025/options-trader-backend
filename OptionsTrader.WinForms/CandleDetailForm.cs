@@ -61,21 +61,17 @@ internal sealed class CandleDetailForm : Form
             await PushEstimatesAsync();
         }
         catch { /* diagnostics window */ }
+        UpdateAnalysisStatus();
     }
     private readonly Dictionary<string, object> _estimateBlocks = new(); // page slot -> block of the estimate box
 
-    public async void SetTarget(decimal? price, bool bullish)
+    // The target changed (a P-Line placed or deleted in this window): the picks follow its leg and get re-estimated.
+    private async Task ApplyTargetAsync(decimal? price, bool bullish)
     {
         _targetPrice = price;
         _targetBullish = bullish;
         try
         {
-            if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
-            {
-                var arg = price.HasValue ? price.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
-                await _web.CoreWebView2.ExecuteScriptAsync($"detailSetTarget({arg});");
-            }
-            // the picks follow the new leg and get re-estimated
             if (price.HasValue && _deltaSpot == null)
             {
                 if (_formedPick is { } l) _formedPick = (l.Minute, bullish);
@@ -86,7 +82,99 @@ internal sealed class CandleDetailForm : Form
             await PushEstimatesAsync();
         }
         catch { /* diagnostics window */ }
+        UpdateAnalysisStatus();
     }
+
+    // ---- The analysis bar (Simulator only): P-Line + the quick .50 / 1.00 moves, in a strip above the chart ----
+    private Panel? _analysisBar;
+    private Button? _btnPLine, _btnMove05, _btnMove10;
+    private Label? _lblAnalysis;
+    private const int AnalysisBarHeight = 30;
+
+    private void BuildAnalysisBar()
+    {
+        _analysisBar = new Panel { Dock = DockStyle.Top, Height = AnalysisBarHeight, BackColor = Color.FromArgb(19, 23, 34), Visible = false };
+        Button MakeButton(string text, int x, int w)
+        {
+            var b = new Button { Text = text, Location = new Point(x, 3), Size = new Size(w, 24), FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.White, BackColor = Color.FromArgb(40, 46, 62), UseVisualStyleBackColor = false };
+            b.FlatAppearance.BorderColor = Color.DimGray;
+            _analysisBar.Controls.Add(b);
+            return b;
+        }
+        _btnPLine = MakeButton("P-Line", 4, 62);
+        _btnMove05 = MakeButton(".50", 70, 46);
+        _btnMove10 = MakeButton("1.00", 120, 46);
+        _lblAnalysis = new Label { AutoSize = true, Location = new Point(174, 8), ForeColor = Color.Silver, Font = new Font("Segoe UI", 8F), Text = "Sin objetivo" };
+        _analysisBar.Controls.Add(_lblAnalysis);
+
+        // P-Line: one price line on THIS chart = the price target. Above the last price -> CALL, below -> PUT.
+        _btnPLine.Click += async (s, e) =>
+        {
+            if (_web.CoreWebView2 == null || _pageReady?.Task.IsCompletedSuccessfully != true) return;
+            var on = await _web.CoreWebView2.ExecuteScriptAsync("togglePLine();") == "true";
+            SetButtonLit(_btnPLine, on);
+        };
+        // .50 / 1.00: a fixed spot move; they toggle and replace each other; the calculation is immediate.
+        _btnMove05.Click += (s, e) => PressMove(0.50m);
+        _btnMove10.Click += (s, e) => PressMove(1.00m);
+    }
+
+    private void SetButtonLit(Button? b, bool on)
+    {
+        if (b == null) return;
+        b.BackColor = on ? Color.MediumPurple : Color.FromArgb(40, 46, 62);
+    }
+
+    private void SetMoveButtons(decimal? move)
+    {
+        SetButtonLit(_btnMove05, move == 0.50m);
+        SetButtonLit(_btnMove10, move == 1.00m);
+    }
+
+    private void PressMove(decimal value)
+    {
+        var next = _deltaSpot == value ? (decimal?)null : value;
+        SetMoveButtons(next);
+        SetDeltaSpot(next);
+        UpdateAnalysisStatus();
+    }
+
+    private void UpdateAnalysisStatus()
+    {
+        if (_lblAnalysis == null || IsDisposed) return;
+        _lblAnalysis.Text = _deltaSpot is { } move ? $"ΔS fijo +{move:0.00}"
+            : _targetPrice is { } target ? $"Objetivo {target:F2} · {(_targetBullish ? "CALL" : "PUT")}"
+            : "Sin objetivo";
+    }
+
+    // Called by the Simulator when it opens this window: shows the bar (the window grows to hold it) and gives the position sizing
+    // the estimate needs (contracts the budget buys at a given ask).
+    public void EnableAnalysisBar(Func<decimal, int> contractsFor)
+    {
+        ContractsFor = contractsFor;
+        if (_analysisBar == null || _analysisBar.Visible) return;
+        _analysisBar.Visible = true;
+        ClientSize = new Size(ClientSize.Width, ClientSize.Height + AnalysisBarHeight);
+    }
+
+    // A new day was loaded: forget the target, the fixed move and what was drawn from them.
+    public async void ResetAnalysis()
+    {
+        _targetPrice = null;
+        _deltaSpot = null;
+        SetMoveButtons(null);
+        SetButtonLit(_btnPLine, false);
+        try
+        {
+            if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
+                await _web.CoreWebView2.ExecuteScriptAsync("clearPLines();");
+            await ClearPickAsync();
+        }
+        catch { /* diagnostics window */ }
+        UpdateAnalysisStatus();
+    }
+
     // The strikes the LEFT drawing shows: the RIGHT one repeats them (same side, same strikes) so the same options can be compared.
     private IReadOnlyList<decimal>? _leftStrikes;
     // Two independent drawings that coexist, at the LEFT and RIGHT edge: the first formed candle clicked goes LEFT; the RIGHT one is the
@@ -133,7 +221,9 @@ internal sealed class CandleDetailForm : Form
         };
         var topBar = new Panel { Dock = DockStyle.Top, Height = 26, BackColor = Color.FromArgb(19, 23, 34) };
         topBar.Controls.Add(resetButton);
+        BuildAnalysisBar();
         Controls.Add(_web);
+        Controls.Add(_analysisBar!);   // below the top bar, above the chart (hidden until the Simulator enables it)
         Controls.Add(topBar);
 
         _redrawTimer.Tick += async (s, e) =>
@@ -210,8 +300,6 @@ internal sealed class CandleDetailForm : Form
         // parent chart's bar width at its current zoom). Only without it (unknown) is a width derived from
         // this window's size.
         await ConfigureViewAsync(priceMin, priceMax);
-        if (_targetPrice.HasValue) // the page was just laid out: draw the price target again
-            await _web.CoreWebView2.ExecuteScriptAsync($"detailSetTarget({_targetPrice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)});");
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetLines({(string.IsNullOrWhiteSpace(linesJson) ? "[]" : linesJson)});");
         _pendingViewReset = true;
 
@@ -252,6 +340,20 @@ internal sealed class CandleDetailForm : Form
         {
             using var doc = JsonDocument.Parse(e.WebMessageAsJson);
             var root = doc.RootElement;
+            var msgType = root.TryGetProperty("type", out var msgTypeEl) ? msgTypeEl.GetString() : null;
+            if (msgType == "pline_add")
+            {
+                // The P-Line placed in this window = the price target: above the last price a CALL, below a PUT. It replaces a fixed move.
+                if (root.TryGetProperty("price", out var plPrice) && plPrice.TryGetDecimal(out var targetPrice))
+                {
+                    var bullish = !(root.TryGetProperty("direction", out var plDir) && plDir.GetString() == "below");
+                    if (_deltaSpot != null) { _deltaSpot = null; SetMoveButtons(null); }
+                    await ApplyTargetAsync(targetPrice, bullish);
+                }
+                return;
+            }
+            if (msgType == "pline_delete") { await ApplyTargetAsync(null, false); return; }
+            if (msgType == "pline_placed") { SetButtonLit(_btnPLine, false); return; }
             if (root.TryGetProperty("type", out var delType) && delType.GetString() == "detail_strikes_deleted")
             {
                 // Delete on a selected drawing: the page already removed it — forget its pick so a new double click starts fresh.
@@ -432,6 +534,7 @@ internal sealed class CandleDetailForm : Form
             _web.CoreWebView2.NavigationCompleted += (s, args) => { if (args.IsSuccess) _pageReady.TrySetResult(); };
             _web.CoreWebView2.Navigate(new Uri(chartPath).AbsoluteUri + $"?v={File.GetLastWriteTimeUtc(chartPath).Ticks}");
             await _pageReady.Task;
+            await _web.CoreWebView2.ExecuteScriptAsync("setPLineSingle(true);"); // one P-Line at a time: the price target
         }
         catch (Exception ex)
         {
