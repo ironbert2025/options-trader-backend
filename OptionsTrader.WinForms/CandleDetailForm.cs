@@ -45,6 +45,21 @@ internal sealed class CandleDetailForm : Form
     private bool _moveLineActive;
     private decimal _moveLinePrice;        // the price that P-Line sits at = the target of BOTH estimate blocks while it is on
     private bool _moveLineFromRight;       // which drawing the 2nd click created (the reference)
+    // Once the live spot reaches the target line (the move line or a hand-placed P-Line) the estimates stop being recalculated: the blocks
+    // keep the values of that moment while the spot keeps moving. A new click / line / target starts over.
+    private bool _targetCrossed;
+    private DateTime _targetCrossedAtUtc;
+
+    private bool SpotCrossedTarget(decimal spot)
+    {
+        if (spot <= 0) return false;
+        if (_moveLineActive)
+        {
+            var bullish = (_moveLineFromRight ? _formingPick?.Bullish : _formedPick?.Bullish) ?? true;
+            return bullish ? spot >= _moveLinePrice : spot <= _moveLinePrice;
+        }
+        return _targetPrice is { } target && (_targetBullish ? spot >= target : spot <= target);
+    }
     private decimal _leftSpot, _rightSpot;
     // The last quotes of each drawing, so the estimate blocks can be rebuilt without asking the provider again.
     private readonly Dictionary<string, (IReadOnlyList<StrikeQuote> Quotes, decimal Spot, string Label, bool Bullish)> _estCache = new();
@@ -63,6 +78,7 @@ internal sealed class CandleDetailForm : Form
         _moveLineActive = true;
         _moveLinePrice = price;
         _moveLineFromRight = right;
+        _targetCrossed = false; // a new line: the calculation starts again
         RebuildEstimateBlocks(); // the calculations now reference the 2nd click: the target is this line's price for BOTH drawings
         await PushEstimatesAsync();
         await _web.CoreWebView2.ExecuteScriptAsync(
@@ -74,6 +90,7 @@ internal sealed class CandleDetailForm : Form
     {
         if (!_moveLineActive) return;
         _moveLineActive = false;
+        _targetCrossed = false;
         if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
         {
             await _web.CoreWebView2.ExecuteScriptAsync("detailClearMovePLine();");
@@ -104,6 +121,7 @@ internal sealed class CandleDetailForm : Form
     // The target changed (a P-Line placed or deleted in this window): the picks follow its leg and get re-estimated.
     private async Task ApplyTargetAsync(decimal? price, bool bullish)
     {
+        _targetCrossed = false; // another target: the calculation starts again
         _targetPrice = price;
         _targetBullish = bullish;
         try
@@ -203,6 +221,7 @@ internal sealed class CandleDetailForm : Form
     public async void ResetAnalysis()
     {
         _targetPrice = null;
+        _targetCrossed = false;
         _deltaSpot = _analysisBar?.Visible == true ? DefaultMove : (decimal?)null; // a new day: back to the default, .50 armed
         SetMoveButtons(_deltaSpot);
         SetButtonLit(_btnPLine, false);
@@ -411,6 +430,7 @@ internal sealed class CandleDetailForm : Form
             if (StrikeProvider == null || !root.TryGetProperty("time", out var tEl) || !tEl.TryGetInt64(out var seconds)) return;
             var minute = ChartPanel.UtcFromFakeEpochSeconds(seconds);
             var forming = IsMinuteForming(minute);
+            _targetCrossed = false; // a new selection: the calculation starts again
             bool? up = root.TryGetProperty("up", out var upEl) && (upEl.ValueKind == JsonValueKind.True || upEl.ValueKind == JsonValueKind.False)
                 ? upEl.GetBoolean() : (bool?)null; // null = doji
             if (_targetPrice.HasValue && _deltaSpot == null) up = _targetBullish; // with a price target the leg is the target's, whatever the candle's color
@@ -500,7 +520,12 @@ internal sealed class CandleDetailForm : Form
 
             // The estimate box is rebuilt from what each drawing last showed.
             var slotKey = right ? "forming" : "formed";
-            _estCache[slotKey] = (quotes, result?.Spot ?? 0m, (string)payload.label, pick.Bullish);
+            if (!_targetCrossed) _estCache[slotKey] = (quotes, result?.Spot ?? 0m, (string)payload.label, pick.Bullish);
+            if (live && !_targetCrossed && SpotCrossedTarget(result?.Spot ?? 0m))
+            {
+                _targetCrossed = true; // this refresh is the last one that calculates
+                _targetCrossedAtUtc = _getClockUtc?.Invoke() ?? DateTime.UtcNow;
+            }
             RebuildEstimateBlocks();
             await PushEstimatesAsync();
         }
@@ -527,7 +552,8 @@ internal sealed class CandleDetailForm : Form
             var estimates = TargetEstimator.Compute(c.Quotes, dS, ContractsFor);
             _estimateBlocks[slotKey] = new
             {
-                label = $"{c.Label} · {(c.Bullish ? "CALL" : "PUT")} · spot {c.Spot:F2} · ΔS {dS:+0.00;-0.00}",
+                label = $"{c.Label} · {(c.Bullish ? "CALL" : "PUT")} · spot {c.Spot:F2} · ΔS {dS:+0.00;-0.00}" +
+                        (_targetCrossed ? $" · ✔ objetivo alcanzado {TimeZoneInfo.ConvertTimeFromUtc(_targetCrossedAtUtc, EasternZone).ToString("h:mm:ss tt", System.Globalization.CultureInfo.InvariantCulture)}" : string.Empty),
                 rows = estimates.Select(e => new
                 {
                     strike = e.Strike.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
