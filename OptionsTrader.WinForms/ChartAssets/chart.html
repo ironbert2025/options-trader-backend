@@ -5764,7 +5764,9 @@
   let detailStrikeExtent = null; // { min, max } over both drawings, so the autoscale holds the strikes
   let detailStrikesAttached = false;
   // a drawing that carries the PnL% path (right one, after the 2nd click) is longer to hold "bid / ask (min max)" at its start
-  function detailSegPx(d) { return d && d.lines && d.lines.some(l => l.pnlMin != null) ? 250 : DetailStrikeSegmentPx; }
+  const DetailLeftSegPx = 75, DetailRightSegPx = 50; // line lengths (75% / 50% of the original 100)
+  // width of the clickable area: the line plus, for the right drawing, the bid / ask (path) text that sits to the left of its line
+  function detailSegPx(d, atRight) { return atRight ? DetailRightSegPx + (d && d.lines && d.lines.some(l => l.pnlMin != null) ? 230 : 110) : DetailLeftSegPx; }
   class DetailStrikesPrimitive {
     attached() {}
     updateAllViews() {}
@@ -5780,7 +5782,7 @@
                 const hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
                 const drawSlot = (d, atRight) => {
                   if (!d) return;
-                  const seg = detailSegPx(d) * hpr;
+                  const seg = (atRight ? DetailRightSegPx : DetailLeftSegPx) * hpr; // the line itself
                   const right = atRight ? scope.bitmapSize.width : seg + 6 * hpr;
                   const left = right - seg;
                   const color = d.bullish ? '#26a69a' : '#ef5350';
@@ -5830,7 +5832,10 @@
                     ctx.font = `${11 * vpr}px sans-serif`; ctx.textBaseline = 'bottom';
                     const wBid = ctx.measureText(bid).width, wSep = ctx.measureText(' / ').width, wAsk = ctx.measureText(ask).width;
                     const hasPnl = l.pnlMin != null && l.pnlMax != null;
-                    let x = hasPnl ? left : (left + right) / 2 - (wBid + wSep + wAsk) / 2; // with the PnL path: at the start of the line
+                    const pnlParts = hasPnl ? [[' (', '#9aa0aa'], [l.pnlMin.toFixed(1) + '%', '#ef5350'], [' ', '#9aa0aa'], ['+' + l.pnlMax.toFixed(1) + '%', '#4caf50'], [')', '#9aa0aa']] : [];
+                    const wPnl = pnlParts.reduce((a, p) => a + ctx.measureText(p[0]).width, 0);
+                    // right drawing: the values sit to the LEFT of its (short) line, ending just before it; left drawing: centered over its line
+                    let x = atRight ? left - 6 * hpr - (wBid + wSep + wAsk + wPnl) : (left + right) / 2 - (wBid + wSep + wAsk) / 2;
                     const ty = y * vpr - 4 * vpr;
                     ctx.fillStyle = '#ffa726'; ctx.fillText(bid, x, ty); x += wBid;
                     ctx.fillStyle = '#9aa0aa'; ctx.fillText(' / ', x, ty); x += wSep;
@@ -5838,19 +5843,13 @@
                     if (hasPnl) {
                       // (worst % in red, best % in green): the path of the PnL of this strike since the 2nd click
                       let px2 = x + wAsk;
-                      const part = (txt, col) => { ctx.fillStyle = col; ctx.fillText(txt, px2, ty); px2 += ctx.measureText(txt).width; };
-                      part(' (', '#9aa0aa');
-                      part(l.pnlMin.toFixed(1) + '%', '#ef5350');
-                      part(' ', '#9aa0aa');
-                      part('+' + l.pnlMax.toFixed(1) + '%', '#4caf50');
-                      part(')', '#9aa0aa');
+                      pnlParts.forEach(p => { ctx.fillStyle = p[1]; ctx.fillText(p[0], px2, ty); px2 += ctx.measureText(p[0]).width; });
                     }
                     // RIGHT drawing only: how much higher (green) or lower (red) this ask is than the ask of the same strike on the LEFT drawing,
                     // under the ask value (below the line, aligned with the ask).
-                    const refLeft = atRight && detailStrikes.formed && !detailStrikes.formed.note ? detailStrikes.formed : null;
-                    const refLine = refLeft ? refLeft.lines.find(r => r.strike === l.strike) : null;
-                    if (refLine && refLine.ask > 0 && l.ask > 0) {
-                      const pct = (l.ask - refLine.ask) / refLine.ask * 100;
+                    // fixed by C# the first time it is drawn after the click (it does not follow the live ask)
+                    if (atRight && l.askPct != null) {
+                      const pct = l.askPct;
                       ctx.font = `${10 * vpr}px sans-serif`; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
                       ctx.fillStyle = pct > 0 ? '#4caf50' : (pct < 0 ? '#ef5350' : '#9aa0aa');
                       ctx.fillText((pct > 0 ? '+' : '') + pct.toFixed(1) + '%', x, y * vpr + 3 * vpr);
@@ -5944,8 +5943,8 @@
     const d = detailStrikes[slot];
     if (!d || d.note) return false;
     const w = chart.paneSize().width;
-    const xMin = slot === 'forming' ? w - detailSegPx(d) : 0;
-    const xMax = slot === 'forming' ? w : detailSegPx(d) + 6;
+    const xMin = slot === 'forming' ? w - detailSegPx(d, true) : 0;
+    const xMax = slot === 'forming' ? w : detailSegPx(d, false) + 6;
     if (px < xMin || px > xMax) return false;
     return d.lines.some(l => { const y = candleSeries.priceToCoordinate(l.strike); return y != null && Math.abs(y - py) <= 6; });
   }

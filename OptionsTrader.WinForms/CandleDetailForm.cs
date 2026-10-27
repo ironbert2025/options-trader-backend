@@ -76,6 +76,9 @@ internal sealed class CandleDetailForm : Form
         _pnlEntry = c.Quotes.Where(q => q.Ask > 0).ToDictionary(q => q.Strike, q => q.Ask);
     }
 
+    // The % under the right ask (vs the left drawing's ask of the same strike) is fixed the first time it is drawn after a click.
+    private readonly Dictionary<decimal, decimal> _askPctFixed = new();
+
     private void StopPnl() { _pnlEntry = null; _pnlRange.Clear(); }
 
     private static decimal PnlPercent(decimal entryAsk, decimal bid) =>
@@ -456,6 +459,7 @@ internal sealed class CandleDetailForm : Form
             var forming = IsMinuteForming(minute);
             _targetCrossed = false; // a new selection: the calculation starts again
             StopPnl();
+            _askPctFixed.Clear();
             bool? up = root.TryGetProperty("up", out var upEl) && (upEl.ValueKind == JsonValueKind.True || upEl.ValueKind == JsonValueKind.False)
                 ? upEl.GetBoolean() : (bool?)null; // null = doji
             if (_targetPrice.HasValue && _deltaSpot == null) up = _targetBullish; // with a price target the leg is the target's, whatever the candle's color
@@ -532,6 +536,10 @@ internal sealed class CandleDetailForm : Form
             var quotes = result?.Quotes ?? Array.Empty<StrikeQuote>();
             if (result != null) { if (right) _rightSpot = result.Spot; else _leftSpot = result.Spot; }
             if (!right) _leftStrikes = quotes.Count > 0 ? quotes.Select(q => q.Strike).ToList() : null;
+            if (right && _estCache.TryGetValue("formed", out var leftC) && _formedPick != null)
+                foreach (var q in quotes)
+                    if (!_askPctFixed.ContainsKey(q.Strike) && q.Ask > 0 && leftC.Quotes.FirstOrDefault(x => x.Strike == q.Strike) is { Ask: > 0 } lq)
+                        _askPctFixed[q.Strike] = (q.Ask - lq.Ask) / lq.Ask * 100m;
             // PnL% path (right drawing only, while a target line exists): worst / best % reached so far; frozen once the target is crossed.
             if (right && _pnlEntry != null && !_targetCrossed)
                 foreach (var q in quotes)
@@ -550,6 +558,7 @@ internal sealed class CandleDetailForm : Form
                 lines = quotes.Select(q => new
                 {
                     strike = q.Strike, bid = q.Bid, ask = q.Ask,
+                    askPct = right && _askPctFixed.TryGetValue(q.Strike, out var ap) ? (decimal?)ap : null,
                     pnlMin = right && _pnlEntry != null && _pnlRange.TryGetValue(q.Strike, out var pr) ? (decimal?)Math.Min(pr.Min, 0m) : null,
                     pnlMax = right && _pnlEntry != null && _pnlRange.TryGetValue(q.Strike, out var pr2) ? (decimal?)Math.Max(pr2.Max, 0m) : null
                 })
