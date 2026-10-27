@@ -442,6 +442,7 @@ internal sealed class CandleDetailForm : Form
             var payload = new
             {
                 slot = right ? "forming" : "formed",
+                minute = ChartPanel.FakeUtcEpochSeconds(pick.Minute),
                 bullish = pick.Bullish,
                 label = TimeZoneInfo.ConvertTimeFromUtc(pick.Minute, EasternZone).ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
                 note = quotes.Count == 0 ? (result?.Note ?? "sin datos de opciones") : null,

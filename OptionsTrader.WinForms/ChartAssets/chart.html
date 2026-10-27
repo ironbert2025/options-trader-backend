@@ -5716,6 +5716,7 @@
     if (resetView && detailView) detailView.userMoved = false;
     if (detailView && !detailView.userMoved) detailApplyView();
     detailRenderIndexLabels();
+    detailApplyMarkers(); // setData does not keep what the markers pointed at
   }
 
   // The 15-minute candle being followed ended: the window moves on to the next one. The candles already drawn stay
@@ -5879,13 +5880,32 @@
 
   // slot: 'formed' | 'forming'. A drawing stays until it is replaced (another double click in that slot), toggled off
   // (double click on the same candle) or the window is pointed at another 15-minute candle.
+  // A small arrow on each candle that has a drawing: ABOVE a green candle (pointing down at it), BELOW a red one (pointing up), in the
+  // color of the drawing's leg (green call / red put), numbered 1 (left drawing) and 2 (right drawing). A doji counts as green.
+  function detailApplyMarkers() {
+    if (!detailView) return;
+    const marks = [];
+    [['formed', '1'], ['forming', '2']].forEach(([slot, number]) => {
+      const d = detailStrikes[slot];
+      if (!d || d.minute == null) return;
+      const c = allCandles.find(x => x.time === d.minute);
+      if (!c) return; // that minute has no candle (yet)
+      const green = c.close >= c.open;
+      marks.push({ time: c.time, position: green ? 'aboveBar' : 'belowBar', color: d.bullish ? '#26a69a' : '#ef5350',
+                   shape: green ? 'arrowDown' : 'arrowUp', text: number });
+    });
+    marks.sort((a, b) => a.time - b.time);
+    candleSeries.setMarkers(marks);
+  }
+
   function detailSetStrikes(payload) {
     if (!detailView) return;
     if (!detailStrikesAttached) { candleSeries.attachPrimitive(detailStrikesPrimitive); detailStrikesAttached = true; }
     const before = detailStrikeExtentKey();
     const slotKey = payload.slot === 'forming' ? 'forming' : 'formed';
     const wasSelected = !!(detailStrikes[slotKey] && detailStrikes[slotKey].selected); // a live refresh keeps the selection
-    detailStrikes[slotKey] = { bullish: !!payload.bullish, lines: payload.lines || [], note: payload.note || null, label: payload.label || null, selected: wasSelected };
+    detailStrikes[slotKey] = { bullish: !!payload.bullish, lines: payload.lines || [], note: payload.note || null, label: payload.label || null, minute: payload.minute || null, selected: wasSelected };
+    detailApplyMarkers();
     detailRecomputeStrikeExtent();
     if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true }); // re-fit the axis to hold the strikes
     forceRepaint();
@@ -5935,6 +5955,7 @@
   function detailClearStrikes(slot) {
     const before = detailStrikeExtentKey();
     if (slot === 'formed' || slot === 'forming') detailStrikes[slot] = null; else detailStrikes = { formed: null, forming: null };
+    detailApplyMarkers();
     detailRecomputeStrikeExtent();
     if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true });
     forceRepaint();
