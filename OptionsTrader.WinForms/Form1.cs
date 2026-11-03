@@ -1331,12 +1331,12 @@ public partial class Form1 : Form
 
     private void BuildReinvestGroup()
     {
-        var grp = new GroupBox { Text = "Resultado de trades Demo", Location = new Point(525, 345), Size = new Size(265, 125) };
-        _rbReinvestBalance = new RadioButton { Text = "Se suma al balance", Location = new Point(10, 20), AutoSize = true };
-        _rbReinvestPremium = new RadioButton { Text = "Se suma al premium (reinvertir)", Location = new Point(10, 42), AutoSize = true };
+        var grp = new GroupBox { Text = "Demo trade result", Location = new Point(525, 345), Size = new Size(265, 125) };
+        _rbReinvestBalance = new RadioButton { Text = "Add to balance", Location = new Point(10, 20), AutoSize = true };
+        _rbReinvestPremium = new RadioButton { Text = "Add to premium (reinvest)", Location = new Point(10, 42), AutoSize = true };
         _lblPremiumFund = new Label { Location = new Point(10, 66), AutoSize = true };
-        var btnReset = new Button { Text = "Reiniciar fondo", Location = new Point(10, 90), Size = new Size(110, 24) };
-        var btnMove = new Button { Text = "Pasar al balance", Location = new Point(126, 90), Size = new Size(120, 24) };
+        var btnReset = new Button { Text = "Reset fund", Location = new Point(10, 90), Size = new Size(110, 24) };
+        var btnMove = new Button { Text = "Move to balance", Location = new Point(126, 90), Size = new Size(120, 24) };
         grp.Controls.AddRange(new Control[] { _rbReinvestBalance, _rbReinvestPremium, _lblPremiumFund, btnReset, btnMove });
         tabSettings.Controls.Add(grp);
 
@@ -1360,7 +1360,7 @@ public partial class Form1 : Form
     private void RefreshReinvestUi()
     {
         if (_lblPremiumFund == null) return;
-        _lblPremiumFund.Text = $"Fondo reinvertido: {BalanceStore.LoadPremiumFund():N2}";
+        _lblPremiumFund.Text = $"Reinvested fund: {BalanceStore.LoadPremiumFund():N2}";
     }
 
     private void UpdatePositionAmount()
