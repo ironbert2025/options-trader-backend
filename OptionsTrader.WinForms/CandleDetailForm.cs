@@ -535,6 +535,16 @@ internal sealed class CandleDetailForm : Form
             }
             if (msgType == "pline_delete") { _moveLineActive = false; await ApplyTargetAsync(null, false); return; }
             if (msgType == "pline_placed") { SetButtonLit(_btnPLine, false); return; }
+            if (root.TryGetProperty("type", out var p3Type) && p3Type.GetString() == "detail_p3_deleted")
+            {
+                // P3 deleted (the page already removed its arrow and line): the path goes back to run live from the 2nd click.
+                _p3Minute = null; _p3Live = false; _p3Note = null;
+                _p3Range.Clear(); _p3Final.Clear();
+                foreach (var (k, v) in _pnlStart) { _pnlRange[k] = (v, v); _pnlNow[k] = v; }
+                UpdateAnalysisStatus();
+                await RefreshPickAsync(right: true);
+                return;
+            }
             if (root.TryGetProperty("type", out var delType) && delType.GetString() == "detail_strikes_deleted")
             {
                 // Delete on a selected drawing: the page already removed it — forget its pick so a new double click starts fresh.

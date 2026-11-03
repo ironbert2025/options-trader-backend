@@ -5784,6 +5784,7 @@
                   let x3 = null;
                   try { x3 = chart.timeScale().timeToCoordinate(detailP3.time); } catch { x3 = null; }
                   if (x3 != null) {
+                    if (detailP3.selected) { ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5 * hpr; ctx.beginPath(); ctx.moveTo(x3 * hpr, 0); ctx.lineTo(x3 * hpr, scope.bitmapSize.height); ctx.stroke(); }
                     ctx.strokeStyle = 'rgba(186,104,200,0.8)'; ctx.lineWidth = 1 * hpr; ctx.setLineDash([2 * hpr, 3 * hpr]);
                     ctx.beginPath(); ctx.moveTo(x3 * hpr, 0); ctx.lineTo(x3 * hpr, scope.bitmapSize.height); ctx.stroke();
                     ctx.setLineDash([]);
@@ -5988,6 +5989,19 @@
     const rect = container.getBoundingClientRect();
     const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
     // 1) on a drawing's segments: select it (white halo); Delete removes it
+    // P3's line: click selects it (thicker white line); Delete removes it
+    if (detailP3) {
+      let x3 = null;
+      try { x3 = chart.timeScale().timeToCoordinate(detailP3.time); } catch { x3 = null; }
+      const onP3 = x3 != null && Math.abs(px - x3) <= 8;
+      detailP3.selected = onP3;
+      if (onP3) {
+        if (detailStrikes.formed) detailStrikes.formed.selected = false;
+        if (detailStrikes.forming) detailStrikes.forming.selected = false;
+        forceRepaint();
+        return;
+      }
+    }
     const hitForming = detailStrikeHit('forming', px, py);
     const hitFormed = !hitForming && detailStrikeHit('formed', px, py);
     if (detailStrikes.formed) detailStrikes.formed.selected = hitFormed;
@@ -6005,6 +6019,11 @@
   });
   window.addEventListener('keydown', ev => {
     if (ev.key !== 'Delete' || !detailView) return;
+    if (detailP3 && detailP3.selected) {
+      detailSetP3(null);
+      if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'detail_p3_deleted' });
+      return;
+    }
     ['forming', 'formed'].forEach(slot => {
       if (detailStrikes[slot] && detailStrikes[slot].selected) {
         detailClearStrikes(slot);
