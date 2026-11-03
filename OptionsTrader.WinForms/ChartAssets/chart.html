@@ -5736,9 +5736,25 @@
 
   // The 15-minute candle being followed ended: the window moves on to the next one. The candles already drawn stay
   // (now formed, to the left); the view scrolls so the new candle starts at the usual place.
+  // Extended mode (double click on a formed 15-minute candle): every later 15-minute candle up to now is already in the
+  // data; the view stays on the clicked one until the user moves on ("Ahora" jumps to the newest).
+  function detailExtendStarts(arr) {
+    if (!detailView) return;
+    arr.forEach(s => detailView.starts.push(s));
+    detailView.extended = true;
+    detailRenderIndexLabels();
+    forceRepaint();
+  }
+  function detailGoLatest() {
+    if (!detailView) return;
+    detailView.bucketStart = detailView.starts[detailView.starts.length - 1];
+    detailView.userMoved = false;
+    detailApplyView();
+  }
   function detailAdvanceBucket(newStart) {
     if (!detailView) return;
     detailView.starts.push(newStart);
+    if (detailView.extended) { detailRenderIndexLabels(); forceRepaint(); return; } // the view is the user's
     detailView.bucketStart = newStart;
     detailView.userMoved = false;
     detailApplyView();

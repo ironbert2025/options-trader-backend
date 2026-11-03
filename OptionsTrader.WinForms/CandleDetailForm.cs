@@ -20,6 +20,10 @@ internal sealed class CandleDetailForm : Form
     private Func<DateTime, DateTime, List<CandleData>>? _getMinutes;
     private Func<DateTime, MinuteBucketState>? _getState;
     private bool _freezeWhenClosed;
+    // Double click on an already formed 15-minute candle: every candle from there up to "now" is shown (not only that one).
+    private bool _extendedMode;
+    private int _lastTotalCount;
+    private Button? _btnNow;
     private bool _following;
     private volatile bool _dirty;
     private string _lastJson = string.Empty;
@@ -399,7 +403,19 @@ internal sealed class CandleDetailForm : Form
         {
             if (_web.CoreWebView2 != null) await _web.CoreWebView2.ExecuteScriptAsync("detailResetView();");
         };
+        // "Ahora": jump to the newest candle (only when the window shows every candle from a formed one on).
+        _btnNow = new Button
+        {
+            Text = "Ahora", Dock = DockStyle.Left, Width = 60, FlatStyle = FlatStyle.Flat, Visible = false,
+            ForeColor = Color.White, BackColor = Color.FromArgb(40, 46, 62), UseVisualStyleBackColor = false
+        };
+        _btnNow.FlatAppearance.BorderColor = Color.DimGray;
+        _btnNow.Click += async (s, e) =>
+        {
+            if (_web.CoreWebView2 != null) await _web.CoreWebView2.ExecuteScriptAsync("detailGoLatest();");
+        };
         var topBar = new Panel { Dock = DockStyle.Top, Height = 26, BackColor = Color.FromArgb(19, 23, 34) };
+        topBar.Controls.Add(_btnNow);   // added first: docks after the reset button (the last one added docks first)
         topBar.Controls.Add(resetButton);
         BuildAnalysisBar();
         Controls.Add(_web);
@@ -471,6 +487,19 @@ internal sealed class CandleDetailForm : Form
         _parentBarSpacing = parentBarSpacing;
         _lastJson = string.Empty;
 
+        // A formed candle: from it on, up to the 15-minute candle that holds "now" (never past the end of that session day).
+        var latest = bucketStartUtc;
+        if (getState(bucketStartUtc) == MinuteBucketState.Closed)
+        {
+            var et = TimeZoneInfo.ConvertTimeFromUtc(bucketStartUtc, EasternZone);
+            var lastOfDay = TimeZoneInfo.ConvertTimeToUtc(et.Date.AddHours(16), EasternZone).AddMinutes(-15);
+            var steps = (int)Math.Floor((getClockUtc() - bucketStartUtc).TotalMinutes / 15);
+            latest = bucketStartUtc.AddMinutes(15 * Math.Max(steps, 0));
+            if (latest > lastOfDay) latest = lastOfDay;
+            if (latest < bucketStartUtc) latest = bucketStartUtc;
+        }
+        var extend = latest > bucketStartUtc;
+
         await EnsurePageAsync();
         await ClearPickAsync(); // a new target: the strikes picked on the previous one go away
 
@@ -479,7 +508,17 @@ internal sealed class CandleDetailForm : Form
         // Each 1-minute candle gets the SAME width in pixels as the 15-minute candle it belongs to (the
         // parent chart's bar width at its current zoom). Only without it (unknown) is a width derived from
         // this window's size.
-        await ConfigureViewAsync(priceMin, priceMax);
+        // Extended: the price axis follows what is on screen (the clicked candle's range would clip the later ones).
+        await ConfigureViewAsync(extend ? null : priceMin, extend ? null : priceMax);
+        _extendedMode = extend;
+        if (_btnNow != null) _btnNow.Visible = extend;
+        if (extend)
+        {
+            var starts = new List<long>();
+            for (var s = bucketStartUtc.AddMinutes(15); s <= latest; s = s.AddMinutes(15)) starts.Add(ChartPanel.FakeUtcEpochSeconds(s));
+            await _web.CoreWebView2.ExecuteScriptAsync($"detailExtendStarts({JsonSerializer.Serialize(starts)});");
+            _bucketStartUtc = latest; // followed like any candle that is now forming (or closed): the view stays on the clicked one
+        }
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetLines({(string.IsNullOrWhiteSpace(linesJson) ? "[]" : linesJson)});");
         _pendingViewReset = true;
 
@@ -833,7 +872,12 @@ internal sealed class CandleDetailForm : Form
             MinuteBucketState.Settling => "cerrando…",
             _ => "cerrada"
         };
-        var title = $"{_symbol} — {startEt:HH:mm}–{startEt.AddMinutes(15):HH:mm} · velas de 1 min · {_lastMinuteCount}/15 · {statusText}";
+        var firstEt = TimeZoneInfo.ConvertTimeFromUtc(_firstBucketStartUtc, EasternZone);
+        var rangeText = _extendedMode
+            ? $"{firstEt:HH:mm} → {(_lastState == MinuteBucketState.Forming ? TimeZoneInfo.ConvertTimeFromUtc(_getClockUtc(), EasternZone) : startEt.AddMinutes(15)):HH:mm}"
+            : $"{startEt:HH:mm}–{startEt.AddMinutes(15):HH:mm}";
+        var countText = _extendedMode ? _lastTotalCount.ToString() : $"{_lastMinuteCount}/15";
+        var title = $"{_symbol} — {rangeText} · velas de 1 min · {countText} · {statusText}";
         if (_lastState == MinuteBucketState.Forming)
         {
             var clock = _getClockUtc();
@@ -843,7 +887,7 @@ internal sealed class CandleDetailForm : Form
         if (Text != title) Text = title;
 
         // The same data inside the chart (bottom left, yellow), over two lines so it fits the narrow window.
-        var overlay = $"{_symbol} — {startEt:HH:mm}–{startEt.AddMinutes(15):HH:mm} · velas de 1 min · {_lastMinuteCount}/15\n{statusText}";
+        var overlay = $"{_symbol} — {rangeText} · velas de 1 min · {countText}\n{statusText}";
         if (_lastState == MinuteBucketState.Forming)
         {
             var clock = _getClockUtc();
@@ -876,6 +920,7 @@ internal sealed class CandleDetailForm : Form
 
         _lastState = state;
         _lastMinuteCount = minutes.Count(m => m.Time >= _bucketStartUtc); // minutes of the candle being followed
+        _lastTotalCount = minutes.Count;
         UpdateTitle();
 
         if (state == MinuteBucketState.Forming) _sawForming = true;
