@@ -72,6 +72,7 @@ internal sealed class CandleDetailForm : Form
 
     private void StartPnl(bool fromRight)
     {
+        ResetP3(); // a new reference: any previous P3 is dropped
         _pnlRange.Clear();
         _pnlEntry = null;
         if (!_estCache.TryGetValue(fromRight ? "forming" : "formed", out var c) || c.Quotes.Count == 0) return;
@@ -84,7 +85,65 @@ internal sealed class CandleDetailForm : Form
     private readonly Dictionary<decimal, decimal> _pnlNow = new();   // live PnL% of each strike (frozen when the target is crossed)
     private DateTime _formingClickMinute;                           // the candle of the 2nd click: where the '2' arrow stays
 
-    private void StopPnl() { _pnlEntry = null; _pnlRange.Clear(); _pnlNow.Clear(); }
+    private void StopPnl() { _pnlEntry = null; _pnlRange.Clear(); _pnlNow.Clear(); ResetP3(); }
+
+    // ---- P3: the point the user picks as the END of the PnL path (instead of the target line being crossed) ----
+    // A formed P3 candle: the path P2 -> P3 is calculated once from the saved data (the end of each minute) and kept.
+    // The candle still forming: the path runs live up to the newest forming candle, whatever the price does, while candles arrive.
+    private bool _p3Armed;
+    private DateTime? _p3Minute;
+    private bool _p3Live;
+    private string? _p3Note;
+    private readonly Dictionary<decimal, (decimal Min, decimal Max)> _p3Range = new();
+    private readonly Dictionary<decimal, decimal> _p3Final = new();
+    private bool P3Fixed => _p3Minute != null && !_p3Live;
+
+    private void ResetP3()
+    {
+        _p3Armed = false; _p3Minute = null; _p3Live = false; _p3Note = null;
+        _p3Range.Clear(); _p3Final.Clear();
+        SetButtonLit(_btnP3, false);
+        if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
+            _ = _web.CoreWebView2.ExecuteScriptAsync("detailSetP3(null);");
+    }
+
+    private async Task HandleP3ClickAsync(DateTime minute, bool forming, long seconds)
+    {
+        _p3Armed = false;
+        SetButtonLit(_btnP3, false);
+        if (_formingPick == null || _pnlEntry == null || _formingClickMinute == default || StrikeProvider == null)
+        { _p3Note = "P3: primero el 2.º click"; UpdateAnalysisStatus(); return; }
+        if (minute <= _formingClickMinute)
+        { _p3Note = "P3 debe ser posterior al 2.º click"; UpdateAnalysisStatus(); return; }
+        var bullish = _formedPick?.Bullish ?? _formingPick.Value.Bullish;
+        _p3Range.Clear(); _p3Final.Clear();
+        _p3Minute = minute;
+        _p3Live = forming;
+        _p3Note = null;
+        if (!forming)
+        {
+            var strikes = _pnlEntry.Keys.ToList();
+            var samples = 0;
+            for (var m = _formingClickMinute; m <= minute; m = m.AddMinutes(1))
+            {
+                var r = StrikeProvider(m, bullish, false, strikes);
+                if (r == null) continue;
+                foreach (var q in r.Quotes)
+                    if (_pnlEntry.TryGetValue(q.Strike, out var entryAsk) && q.Bid > 0)
+                    {
+                        var p = PnlPercent(entryAsk, q.Bid);
+                        _p3Range[q.Strike] = _p3Range.TryGetValue(q.Strike, out var cur) ? (Math.Min(cur.Min, p), Math.Max(cur.Max, p)) : (p, p);
+                        _p3Final[q.Strike] = p;
+                        samples++;
+                    }
+            }
+            if (samples == 0) { _p3Minute = null; _p3Note = "P3: sin datos entre el 2.º click y P3"; UpdateAnalysisStatus(); return; }
+        }
+        if (_web.CoreWebView2 != null && _pageReady?.Task.IsCompletedSuccessfully == true)
+            await _web.CoreWebView2.ExecuteScriptAsync($"detailSetP3({seconds}, {(bullish ? "true" : "false")});");
+        UpdateAnalysisStatus();
+        await RefreshPickAsync(right: true);
+    }
 
     private static decimal PnlPercent(decimal entryAsk, decimal bid) =>
         (100m * (bid - entryAsk) - TargetEstimator.CommissionPerContract) / (100m * entryAsk) * 100m;
@@ -174,7 +233,7 @@ internal sealed class CandleDetailForm : Form
 
     // ---- The analysis bar (Simulator only): P-Line + the quick .50 / 1.00 moves, in a strip above the chart ----
     private Panel? _analysisBar;
-    private Button? _btnPLine, _btnMove05, _btnMove10, _btnCls;
+    private Button? _btnPLine, _btnMove05, _btnMove10, _btnCls, _btnP3;
     private Label? _lblAnalysis;
     private const int AnalysisBarHeight = 30;
 
@@ -193,7 +252,8 @@ internal sealed class CandleDetailForm : Form
         _btnMove05 = MakeButton(".50", 70, 46);
         _btnMove10 = MakeButton("1.00", 120, 46);
         _btnCls = MakeButton("Cls", 170, 38);
-        _lblAnalysis = new Label { AutoSize = true, Location = new Point(214, 8), ForeColor = Color.Silver, Font = new Font("Segoe UI", 8F), Text = "Sin objetivo" };
+        _btnP3 = MakeButton("P3", 212, 38);
+        _lblAnalysis = new Label { AutoSize = true, Location = new Point(256, 8), ForeColor = Color.Silver, Font = new Font("Segoe UI", 8F), Text = "Sin objetivo" };
         _analysisBar.Controls.Add(_lblAnalysis);
 
         // P-Line: one price line on THIS chart = the price target. Above the last price -> CALL, below -> PUT.
@@ -207,6 +267,15 @@ internal sealed class CandleDetailForm : Form
         _btnMove05.Click += (s, e) => PressMove(0.50m);
         _btnMove10.Click += (s, e) => PressMove(1.00m);
         _btnCls.Click += async (s, e) => await ClearAllAsync();
+        // P3: the next click on a candle is the END of the PnL path that started at the 2nd click.
+        _btnP3.Click += (s, e) =>
+        {
+            if (_p3Armed) { _p3Armed = false; SetButtonLit(_btnP3, false); _p3Note = null; UpdateAnalysisStatus(); return; }
+            if (_pnlEntry == null) { _p3Note = "P3: primero el 2.º click"; UpdateAnalysisStatus(); return; }
+            _p3Armed = true; SetButtonLit(_btnP3, true);
+            _p3Note = "P3: click en la vela final";
+            UpdateAnalysisStatus();
+        };
     }
 
     private void SetButtonLit(Button? b, bool on)
@@ -232,9 +301,11 @@ internal sealed class CandleDetailForm : Form
     private void UpdateAnalysisStatus()
     {
         if (_lblAnalysis == null || IsDisposed) return;
-        _lblAnalysis.Text = _deltaSpot is { } move ? $"ΔS fijo +{move:0.00}"
+        _lblAnalysis.Text = (_deltaSpot is { } move ? $"ΔS fijo +{move:0.00}"
             : _targetPrice is { } target ? $"Objetivo {target:F2} · {(_targetBullish ? "CALL" : "PUT")}"
-            : "Sin objetivo";
+            : "Sin objetivo")
+            + (_p3Note != null ? " · " + _p3Note
+               : _p3Minute is { } p3 ? $" · P3 {TimeZoneInfo.ConvertTimeFromUtc(p3, EasternZone).ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture)}{(_p3Live ? " (en vivo)" : string.Empty)}" : string.Empty);
     }
 
     // Called by the Simulator when it opens this window: shows the bar (the window grows to hold it) and gives the position sizing
@@ -466,6 +537,7 @@ internal sealed class CandleDetailForm : Form
             if (StrikeProvider == null || !root.TryGetProperty("time", out var tEl) || !tEl.TryGetInt64(out var seconds)) return;
             var minute = ChartPanel.UtcFromFakeEpochSeconds(seconds);
             var forming = IsMinuteForming(minute);
+            if (_p3Armed) { await HandleP3ClickAsync(minute, forming, seconds); return; }
             _targetCrossed = _estFrozen = false; // a new selection: the calculation starts again
             StopPnl();
             _askPctFixed.Clear();
@@ -556,7 +628,7 @@ internal sealed class CandleDetailForm : Form
                         _askAtClick[q.Strike] = q.Ask;
                     }
             // PnL% path (right drawing only, while a target line exists): worst / best % reached so far; frozen once the target is crossed.
-            if (right && _pnlEntry != null && !_targetCrossed)
+            if (right && _pnlEntry != null && !P3Fixed && (!_targetCrossed || _p3Live))
                 foreach (var q in quotes)
                     if (_pnlEntry.TryGetValue(q.Strike, out var entryAsk) && q.Bid > 0)
                     {
@@ -564,6 +636,8 @@ internal sealed class CandleDetailForm : Form
                         _pnlNow[q.Strike] = p;
                         _pnlRange[q.Strike] = _pnlRange.TryGetValue(q.Strike, out var r) ? (Math.Min(r.Min, p), Math.Max(r.Max, p)) : (p, p);
                     }
+            var shownRange = P3Fixed ? _p3Range : _pnlRange;
+            var shownNow = P3Fixed ? _p3Final : _pnlNow;
             var payload = new
             {
                 slot = right ? "forming" : "formed",
@@ -577,9 +651,9 @@ internal sealed class CandleDetailForm : Form
                     strike = q.Strike, bid = q.Bid, ask = q.Ask,
                     askAtClick = right && _askAtClick.TryGetValue(q.Strike, out var aa) ? (decimal?)aa : null,
                     askPct = right && _askPctFixed.TryGetValue(q.Strike, out var ap) ? (decimal?)ap : null,
-                    pnlMin = right && _pnlEntry != null && _pnlRange.TryGetValue(q.Strike, out var pr) ? (decimal?)Math.Min(pr.Min, 0m) : null,
-                    pnlNow = right && _pnlEntry != null && _pnlNow.TryGetValue(q.Strike, out var pn) ? (decimal?)pn : null,
-                    pnlMax = right && _pnlEntry != null && _pnlRange.TryGetValue(q.Strike, out var pr2) ? (decimal?)Math.Max(pr2.Max, 0m) : null
+                    pnlMin = right && _pnlEntry != null && shownRange.TryGetValue(q.Strike, out var pr) ? (decimal?)Math.Min(pr.Min, 0m) : null,
+                    pnlNow = right && _pnlEntry != null && shownNow.TryGetValue(q.Strike, out var pn) ? (decimal?)pn : null,
+                    pnlMax = right && _pnlEntry != null && shownRange.TryGetValue(q.Strike, out var pr2) ? (decimal?)Math.Max(pr2.Max, 0m) : null
                 })
             };
             await _web.CoreWebView2.ExecuteScriptAsync($"detailSetStrikes({JsonSerializer.Serialize(payload)});");

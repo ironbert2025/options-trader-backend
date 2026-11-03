@@ -5780,6 +5780,15 @@
               target.useBitmapCoordinateSpace(scope => {
                 const ctx = scope.context;
                 const hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
+                if (detailP3) {
+                  let x3 = null;
+                  try { x3 = chart.timeScale().timeToCoordinate(detailP3.time); } catch { x3 = null; }
+                  if (x3 != null) {
+                    ctx.strokeStyle = 'rgba(186,104,200,0.8)'; ctx.lineWidth = 1 * hpr; ctx.setLineDash([2 * hpr, 3 * hpr]);
+                    ctx.beginPath(); ctx.moveTo(x3 * hpr, 0); ctx.lineTo(x3 * hpr, scope.bitmapSize.height); ctx.stroke();
+                    ctx.setLineDash([]);
+                  }
+                }
                 const drawSlot = (d, atRight) => {
                   if (!d) return;
                   const seg = (atRight ? DetailRightSegPx : DetailLeftSegPx) * hpr; // the line itself
@@ -5930,8 +5939,24 @@
       marks.push({ time: c.time, position: green ? 'aboveBar' : 'belowBar', color: d.bullish ? '#26a69a' : '#ef5350',
                    shape: green ? 'arrowDown' : 'arrowUp', text: number });
     });
+    if (detailP3) { // P3: the END of the PnL path
+      const c3 = allCandles.find(x => x.time === detailP3.time);
+      if (c3) {
+        const green3 = c3.close >= c3.open;
+        marks.push({ time: c3.time, position: green3 ? 'aboveBar' : 'belowBar', color: detailP3.bullish ? '#26a69a' : '#ef5350',
+                     shape: green3 ? 'arrowDown' : 'arrowUp', text: '3' });
+      }
+    }
     marks.sort((a, b) => a.time - b.time);
     candleSeries.setMarkers(marks);
+  }
+
+  // P3 (end of the PnL path): the '3' arrow and a thin vertical line on that candle; null removes both.
+  let detailP3 = null;
+  function detailSetP3(time, bullish) {
+    detailP3 = (time == null) ? null : { time, bullish: !!bullish };
+    detailApplyMarkers();
+    forceRepaint();
   }
 
   function detailSetStrikes(payload) {
