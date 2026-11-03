@@ -5841,7 +5841,7 @@
                     ctx.font = `${11 * vpr}px sans-serif`; ctx.textBaseline = 'bottom';
                     const wBid = ctx.measureText(bid).width, wSep = ctx.measureText(' / ').width, wAsk = ctx.measureText(ask).width;
                     const hasPnl = l.pnlMin != null && l.pnlMax != null;
-                    const pnlParts = hasPnl ? [[' (', '#9aa0aa'], [l.pnlMin.toFixed(1) + '%', '#ef5350'], [' ', '#9aa0aa'], ['+' + l.pnlMax.toFixed(1) + '%', '#4caf50'], [')', '#9aa0aa']].concat(l.pnlNow != null ? [['  ' + (l.pnlNow >= 0 ? '+' : '') + l.pnlNow.toFixed(1) + '%', l.pnlNow >= 0 ? '#4caf50' : '#ef5350']] : []) : [];
+                    const pnlParts = hasPnl ? [[' (', '#9aa0aa'], [(l.pnlMin > 0 ? '+' : '') + l.pnlMin.toFixed(1) + '%', l.pnlMin < 0 ? '#ef5350' : '#4caf50'], [' ', '#9aa0aa'], [(l.pnlMax > 0 ? '+' : '') + l.pnlMax.toFixed(1) + '%', l.pnlMax < 0 ? '#ef5350' : '#4caf50'], [')', '#9aa0aa']].concat(l.pnlNow != null ? [['  ' + (l.pnlNow >= 0 ? '+' : '') + l.pnlNow.toFixed(1) + '%', l.pnlNow >= 0 ? '#4caf50' : '#ef5350']] : []) : [];
                     const wPnl = pnlParts.reduce((a, p) => a + ctx.measureText(p[0]).width, 0);
                     // right drawing: the values sit to the LEFT of its (short) line, ending just before it; left drawing: centered over its line
                     let x = atRight ? left - 6 * hpr - (wBid + wSep + wAsk + wPnl) : (left + right) / 2 - (wBid + wSep + wAsk) / 2;

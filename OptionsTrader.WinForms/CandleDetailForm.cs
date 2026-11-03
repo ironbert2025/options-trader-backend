@@ -74,9 +74,19 @@ internal sealed class CandleDetailForm : Form
     {
         ResetP3(); // a new reference: any previous P3 is dropped
         _pnlRange.Clear();
+        _pnlStart.Clear();
         _pnlEntry = null;
         if (!_estCache.TryGetValue(fromRight ? "forming" : "formed", out var c) || c.Quotes.Count == 0) return;
         _pnlEntry = c.Quotes.Where(q => q.Ask > 0).ToDictionary(q => q.Strike, q => q.Ask);
+        // The path starts at the click itself: bought at the ask, the position is worth the bid (spread + commission = negative).
+        foreach (var q in c.Quotes)
+            if (_pnlEntry.TryGetValue(q.Strike, out var ea) && q.Bid > 0)
+            {
+                var p0 = PnlPercent(ea, q.Bid);
+                _pnlRange[q.Strike] = (p0, p0);
+                _pnlNow[q.Strike] = p0;
+                _pnlStart[q.Strike] = p0;
+            }
     }
 
     // The % under the right ask (vs the left drawing's ask of the same strike) is fixed the first time it is drawn after a click.
@@ -85,7 +95,7 @@ internal sealed class CandleDetailForm : Form
     private readonly Dictionary<decimal, decimal> _pnlNow = new();   // live PnL% of each strike (frozen when the target is crossed)
     private DateTime _formingClickMinute;                           // the candle of the 2nd click: where the '2' arrow stays
 
-    private void StopPnl() { _pnlEntry = null; _pnlRange.Clear(); _pnlNow.Clear(); ResetP3(); }
+    private void StopPnl() { _pnlEntry = null; _pnlRange.Clear(); _pnlNow.Clear(); _pnlStart.Clear(); ResetP3(); }
 
     // ---- P3: the point the user picks as the END of the PnL path (instead of the target line being crossed) ----
     // A formed P3 candle: the path P2 -> P3 is calculated once from the saved data (the end of each minute) and kept.
@@ -96,6 +106,7 @@ internal sealed class CandleDetailForm : Form
     private string? _p3Note;
     private readonly Dictionary<decimal, (decimal Min, decimal Max)> _p3Range = new();
     private readonly Dictionary<decimal, decimal> _p3Final = new();
+    private readonly Dictionary<decimal, decimal> _pnlStart = new();   // PnL% at the very moment of the 2nd click
     private bool P3Fixed => _p3Minute != null && !_p3Live;
 
     private void ResetP3()
@@ -117,6 +128,7 @@ internal sealed class CandleDetailForm : Form
         { _p3Note = "P3 debe ser posterior al 2.º click"; UpdateAnalysisStatus(); return; }
         var bullish = _formedPick?.Bullish ?? _formingPick.Value.Bullish;
         _p3Range.Clear(); _p3Final.Clear();
+        foreach (var (k, v) in _pnlStart) _p3Range[k] = (v, v); // the path begins at the click
         _p3Minute = minute;
         _p3Live = forming;
         _p3Note = null;
@@ -651,9 +663,9 @@ internal sealed class CandleDetailForm : Form
                     strike = q.Strike, bid = q.Bid, ask = q.Ask,
                     askAtClick = right && _askAtClick.TryGetValue(q.Strike, out var aa) ? (decimal?)aa : null,
                     askPct = right && _askPctFixed.TryGetValue(q.Strike, out var ap) ? (decimal?)ap : null,
-                    pnlMin = right && _pnlEntry != null && shownRange.TryGetValue(q.Strike, out var pr) ? (decimal?)Math.Min(pr.Min, 0m) : null,
+                    pnlMin = right && _pnlEntry != null && shownRange.TryGetValue(q.Strike, out var pr) ? (decimal?)pr.Min : null,
                     pnlNow = right && _pnlEntry != null && shownNow.TryGetValue(q.Strike, out var pn) ? (decimal?)pn : null,
-                    pnlMax = right && _pnlEntry != null && shownRange.TryGetValue(q.Strike, out var pr2) ? (decimal?)Math.Max(pr2.Max, 0m) : null
+                    pnlMax = right && _pnlEntry != null && shownRange.TryGetValue(q.Strike, out var pr2) ? (decimal?)pr2.Max : null
                 })
             };
             await _web.CoreWebView2.ExecuteScriptAsync($"detailSetStrikes({JsonSerializer.Serialize(payload)});");
