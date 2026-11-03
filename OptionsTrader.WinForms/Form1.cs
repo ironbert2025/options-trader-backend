@@ -2671,6 +2671,8 @@ public partial class Form1 : Form
                 var separatorRow = grid.Rows[grid.Rows.Count - 1];
                 separatorRow.Tag = "SEPARATOR";
                 separatorRow.Height = Math.Max(1, grid.RowTemplate.Height / 4);
+                separatorRow.DefaultCellStyle.BackColor = Color.LightGray; // the line that tells Calls from Puts
+                separatorRow.DefaultCellStyle.SelectionBackColor = Color.LightGray;
             }
             previousWasCall = isCall;
 
