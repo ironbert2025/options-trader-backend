@@ -882,7 +882,7 @@ public class SimulatorForm : Form
 
         var balance = BalanceStore.Load(BalanceMode.Demo); // the replay practices with the demo balance and never changes it
         decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct);
-        return CalcSimContracts(balance * pct / 100m, ask);
+        return CalcSimContracts(BalanceStore.PositionAmount(BalanceMode.Demo, balance, pct), ask);
     }
 
     // Cross-SMA (20/40/100/200) + T-Line/Clear on the 1h simulated chart — same toggle mechanics

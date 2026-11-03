@@ -57,6 +57,50 @@ public static class BalanceStore
         return result;
     }
 
+    // ---- Reinvestment fund (Premium mode): net results of Demo trades that are NOT added to the balance but to the position amount ----
+    public const string PremiumFileName = "premium_demo.json";
+    private static string PremiumPath => Path.Combine(Folder, PremiumFileName);
+
+    public static decimal LoadPremiumFund() => ReadFile(PremiumPath);
+
+    // fund = max(0, fund + net): gains build it, losses and commissions eat it, never below zero (the balance is not touched).
+    public static decimal AddToPremiumFund(decimal net)
+    {
+        Directory.CreateDirectory(Folder);
+        decimal result = 0m;
+        WithDemoLock(() =>
+        {
+            result = Math.Max(0m, ReadFile(PremiumPath) + net);
+            File.WriteAllText(PremiumPath, JsonSerializer.Serialize(result));
+        });
+        return result;
+    }
+
+    public static void ResetPremiumFund()
+    {
+        Directory.CreateDirectory(Folder);
+        WithDemoLock(() => File.WriteAllText(PremiumPath, JsonSerializer.Serialize(0m)));
+    }
+
+    // The fund goes into the demo balance and is emptied. Returns the new balance.
+    public static decimal MovePremiumFundToBalance()
+    {
+        Directory.CreateDirectory(Folder);
+        decimal balance = 0m;
+        WithDemoLock(() =>
+        {
+            EnsureSeeded(BalanceMode.Demo);
+            balance = ReadFile(PathFor(BalanceMode.Demo)) + ReadFile(PremiumPath);
+            File.WriteAllText(PathFor(BalanceMode.Demo), JsonSerializer.Serialize(balance));
+            File.WriteAllText(PremiumPath, JsonSerializer.Serialize(0m));
+        });
+        return balance;
+    }
+
+    // Money a position may use: balance x Position Size %, plus the reinvestment fund in Premium mode (Demo only).
+    public static decimal PositionAmount(BalanceMode mode, decimal balance, decimal pct) =>
+        balance * pct / 100m + (mode == BalanceMode.Demo && ReinvestModeStore.Load() == ReinvestMode.Premium ? LoadPremiumFund() : 0m);
+
     private static void EnsureSeeded(BalanceMode mode)
     {
         var path = PathFor(mode);

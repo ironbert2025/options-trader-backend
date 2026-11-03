@@ -190,6 +190,7 @@ public partial class Form1 : Form
             LoadSchwabCredentials();
         LoadAwsSettings();
         LoadCoordsButtons();
+        BuildReinvestGroup();
         LoadBalance();
         StartBalanceWatcher();
         LoadTickerButtons();
@@ -1295,7 +1296,7 @@ public partial class Form1 : Form
                 if (CurrentBalanceMode == BalanceMode.Demo) LoadBalance();
             };
 
-            _balanceWatcher = new FileSystemWatcher(BalanceStore.DirectoryPath, BalanceStore.DemoFileName)
+            _balanceWatcher = new FileSystemWatcher(BalanceStore.DirectoryPath, "*_demo.json") // balance_demo.json and premium_demo.json
             {
                 NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
                 EnableRaisingEvents = true
@@ -1323,6 +1324,45 @@ public partial class Form1 : Form
             BalanceStore.Save(CurrentBalanceMode, balance);
     }
 
+    // ---- Settings: where the result of a closed Demo trade goes (balance or reinvestment fund) ----
+    private RadioButton? _rbReinvestBalance, _rbReinvestPremium;
+    private Label? _lblPremiumFund;
+    private bool _loadingReinvest;
+
+    private void BuildReinvestGroup()
+    {
+        var grp = new GroupBox { Text = "Resultado de trades Demo", Location = new Point(525, 345), Size = new Size(265, 125) };
+        _rbReinvestBalance = new RadioButton { Text = "Se suma al balance", Location = new Point(10, 20), AutoSize = true };
+        _rbReinvestPremium = new RadioButton { Text = "Se suma al premium (reinvertir)", Location = new Point(10, 42), AutoSize = true };
+        _lblPremiumFund = new Label { Location = new Point(10, 66), AutoSize = true };
+        var btnReset = new Button { Text = "Reiniciar fondo", Location = new Point(10, 90), Size = new Size(110, 24) };
+        var btnMove = new Button { Text = "Pasar al balance", Location = new Point(126, 90), Size = new Size(120, 24) };
+        grp.Controls.AddRange(new Control[] { _rbReinvestBalance, _rbReinvestPremium, _lblPremiumFund, btnReset, btnMove });
+        tabSettings.Controls.Add(grp);
+
+        _loadingReinvest = true;
+        _rbReinvestPremium.Checked = ReinvestModeStore.Load() == ReinvestMode.Premium;
+        _rbReinvestBalance.Checked = !_rbReinvestPremium.Checked;
+        _loadingReinvest = false;
+
+        EventHandler onMode = (s, e) =>
+        {
+            if (_loadingReinvest || s is not RadioButton { Checked: true }) return;
+            ReinvestModeStore.Save(_rbReinvestPremium!.Checked ? ReinvestMode.Premium : ReinvestMode.Balance);
+            UpdatePositionAmount();
+        };
+        _rbReinvestBalance.CheckedChanged += onMode;
+        _rbReinvestPremium.CheckedChanged += onMode;
+        btnReset.Click += (s, e) => { BalanceStore.ResetPremiumFund(); UpdatePositionAmount(); };
+        btnMove.Click += (s, e) => { BalanceStore.MovePremiumFundToBalance(); LoadBalance(); };
+    }
+
+    private void RefreshReinvestUi()
+    {
+        if (_lblPremiumFund == null) return;
+        _lblPremiumFund.Text = $"Fondo reinvertido: {BalanceStore.LoadPremiumFund():N2}";
+    }
+
     private void UpdatePositionAmount()
     {
         var positionSizeStr = PositionSizeSettingsStore.Load();
@@ -1333,8 +1373,9 @@ public partial class Form1 : Form
             return;
         }
 
-        var amount = balance * positionPct / 100m;
+        var amount = BalanceStore.PositionAmount(CurrentBalanceMode, balance, positionPct);
         lblPositionAmount.Text = $"{positionPct}% : {amount:F0}";
+        RefreshReinvestUi();
     }
 
     private void LoadSchwabCredentials()
@@ -4324,7 +4365,12 @@ public partial class Form1 : Form
                 commission = Math.Round(BrokerCommissionPerContract * commissionContracts, 2);
                 netPnl = pnlVal - commission;
             }
-            try { BalanceStore.AddToDemo(pnlVal - commission); }
+            try
+            {
+                // Net result: into the balance, or (Premium mode) into the reinvestment fund that grows the position amount.
+                if (ReinvestModeStore.Load() == ReinvestMode.Premium) BalanceStore.AddToPremiumFund(pnlVal - commission);
+                else BalanceStore.AddToDemo(pnlVal - commission);
+            }
             catch { /* balance bookkeeping must never get in the way of closing a trade */ }
         }
         row.Cells["colTradeExitTime"].Value   = nowStr;
@@ -5166,7 +5212,7 @@ public partial class Form1 : Form
     {
         var balance = BalanceStore.Load(CurrentBalanceMode);
         if (!decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct)) return 0;
-        return balance * pct / 100m;
+        return BalanceStore.PositionAmount(CurrentBalanceMode, balance, pct);
     }
 
     /// Formats spread: removes "0." prefix and leading zeros.
