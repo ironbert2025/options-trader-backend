@@ -5582,10 +5582,10 @@
                   if (xc == null) return;
                   ctx.save();
                   ctx.setLineDash([]);
-                  ctx.fillStyle = '#7a8394';
+                  ctx.fillStyle = '#ffd54f';
                   ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
                   ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-                  ctx.fillText(hm(s) + '–' + hm(s + 900), xc * scope.horizontalPixelRatio, scope.bitmapSize.height - 28 * scope.verticalPixelRatio);
+                  ctx.fillText(hm(s) + '–' + hm(s + 900), xc * scope.horizontalPixelRatio, scope.bitmapSize.height - 5 * scope.verticalPixelRatio);
                   ctx.restore();
                 });
                 self._starts.forEach((s, i) => {
