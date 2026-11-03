@@ -962,6 +962,8 @@ public class DailyChartForm : Form
     // ever show fully-CLOSED days/hours/15-min bars, so you couldn't see the in-progress one
     // visually approaching a Piso/Techo level in real time). No-op once this window is
     // closed/disposed.
+    private static readonly TimeZoneInfo EasternZoneForDaily = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
     public async Task UpdateLivePrice(decimal price)
     {
         if (IsDisposed) return;
@@ -975,10 +977,21 @@ public class DailyChartForm : Form
 
         var nowUtc = DateTime.UtcNow;
 
-        // Daily: the bucket itself never changes mid-session (a new day only starts if this
-        // window is left open across midnight, not worth handling), so just extend the existing
-        // bar's High/Low/Close in place.
-        if (_lastDailyCandle != null && _webView.CoreWebView2 != null)
+        // Daily: the last bar must be TODAY's to be extended in place. Before today's session opens it is still the previous
+        // day's closed bar (yesterday's bar must not be rewritten with premarket prices): only the blue price line moves.
+        // From 9:30 ET on, today's bar is born with the first RTH tick (open = that tick), like the Hora / 15 Min tabs do.
+        var easternNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, EasternZoneForDaily);
+        if (_lastDailyCandle != null && _webView.CoreWebView2 != null
+            && DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(_lastDailyCandle.Time, EasternZoneForDaily)) < DateOnly.FromDateTime(easternNow))
+        {
+            if (easternNow.TimeOfDay >= new TimeSpan(9, 30, 0) && easternNow.TimeOfDay < new TimeSpan(16, 0, 0))
+            {
+                var open = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(easternNow.Date.AddHours(9).AddMinutes(30), DateTimeKind.Unspecified), EasternZoneForDaily);
+                _lastDailyCandle = new CandleData { Time = open, Open = price, High = price, Low = price, Close = price };
+                await _webView.CoreWebView2.ExecuteScriptAsync($"updateLastCandle({ChartPanel.ToChartJsonPublic(_lastDailyCandle)});");
+            }
+        }
+        else if (_lastDailyCandle != null && _webView.CoreWebView2 != null)
         {
             _lastDailyCandle.High  = Math.Max(_lastDailyCandle.High, price);
             _lastDailyCandle.Low   = Math.Min(_lastDailyCandle.Low, price);
