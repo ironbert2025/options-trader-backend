@@ -5574,6 +5574,20 @@
                   ctx.lineTo(x * scope.horizontalPixelRatio, scope.bitmapSize.height);
                   ctx.stroke();
                 };
+                // which 15-minute candle each interval belongs to ("9:30–9:45"), centered between its boundary lines, near the bottom
+                const hm = sec => { const d = new Date(sec * 1000); const h = d.getUTCHours() % 12 || 12; return h + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+                self._starts.forEach(s => {
+                  let xc = null;
+                  try { xc = chart.timeScale().logicalToCoordinate(detailLogicalOf(s) + 7); } catch { xc = null; }
+                  if (xc == null) return;
+                  ctx.save();
+                  ctx.setLineDash([]);
+                  ctx.fillStyle = '#7a8394';
+                  ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+                  ctx.fillText(hm(s) + '–' + hm(s + 900), xc * scope.horizontalPixelRatio, scope.bitmapSize.height - 28 * scope.verticalPixelRatio);
+                  ctx.restore();
+                });
                 self._starts.forEach((s, i) => {
                   self._minutes.forEach(m => vline(chart.timeScale().logicalToCoordinate(detailLogicalOf(s + (m - 1) * 60))));
                   // the boundary where the window moved on to the next 15-minute candle: between its last and first minute
