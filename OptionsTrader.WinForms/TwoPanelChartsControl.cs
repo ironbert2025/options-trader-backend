@@ -1834,6 +1834,13 @@ public class TwoPanelChartsControl : UserControl
             {
                 if (e.RowIndex < 0) return;
                 var row = grid.Rows[e.RowIndex];
+                if (row.Tag as string == "SEPARATOR")
+                {
+                    // the thin Calls/Puts divider: one light-gray band across every cell (Bid / Range would otherwise repaint it white)
+                    e.CellStyle.BackColor = Color.LightGray;
+                    e.CellStyle.SelectionBackColor = Color.LightGray;
+                    return;
+                }
                 var strikeCol = grid.Columns["colStrikeLive"]!.Index;
                 var sprdCol  = grid.Columns["colSprdLive"]!.Index;
                 var bidCol   = grid.Columns["colBidLive"]!.Index;
