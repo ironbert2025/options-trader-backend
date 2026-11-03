@@ -5894,7 +5894,7 @@
     if (!el) {
       el = document.createElement('div');
       el.id = 'detailEstimate';
-      el.style.cssText = 'position:absolute; left:6px; top:34px; pointer-events:none; z-index:7; font:10px sans-serif; line-height:13px; ' +
+      el.style.cssText = 'position:absolute; left:6px; pointer-events:none; z-index:7; font:10px sans-serif; line-height:13px; ' +
                          'background:rgba(19,23,34,0.82); padding:3px 5px; border:1px solid #2a2e39; border-radius:3px; white-space:pre;';
       document.body.appendChild(el);
     }
@@ -5908,6 +5908,9 @@
       });
     });
     el.innerHTML = html;
+    // CALL: strikes above the price -> the box goes at the BOTTOM (above the title / time axis, growing upward); PUT: at the top.
+    if (payload.leg === 'call') { el.style.top = 'auto'; el.style.bottom = '60px'; }
+    else { el.style.bottom = 'auto'; el.style.top = '34px'; }
     el.style.display = 'block';
   }
 

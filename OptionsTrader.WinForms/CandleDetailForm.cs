@@ -650,7 +650,8 @@ internal sealed class CandleDetailForm : Form
         var headerLead = _deltaSpot is { } fixedMove
             ? $"ΔS fijo +{fixedMove:0.00} · objetivo {_moveLinePrice:F2} (2.º click)"
             : $"Objetivo {_targetPrice!.Value:F2} · {(_targetBullish ? "CALL" : "PUT")}";
-        var payload = new { header = $"{headerLead} · neto tras comisión 1.30/contr.", blocks };
+        var bullishLeg = _formedPick?.Bullish ?? _formingPick?.Bullish ?? true; // both drawings share the side: a CALL box goes to the bottom, a PUT one to the top
+        var payload = new { header = $"{headerLead} · neto tras comisión 1.30/contr.", leg = bullishLeg ? "call" : "put", blocks };
         await _web.CoreWebView2.ExecuteScriptAsync($"detailSetEstimates({JsonSerializer.Serialize(payload)});");
     }
 
