@@ -25,14 +25,16 @@ file record TradeRowTag(int TradeId, DateTime EntryTime, bool SuppressAutoClose 
     string? AccountHash = null, string? OccSymbol = null, int Quantity = 0, long? ExitOrderId = null,
     DateOnly ExpirationDate = default, decimal EntrySpotPrice = 0m,
     int? ReinforcementGroupId = null, bool IsReinforcementResult = false,
-    string EntrySpotColor = "#ffffff", Guid? LocalId = null, string? EntryImagePath = null);
+    string EntrySpotColor = "#ffffff", Guid? LocalId = null, string? EntryImagePath = null,
+    string? EntryExtImagePath = null);
 
 public partial class Form1 : Form
 {
     private readonly SchwabAuthService _schwabAuth = new(new HttpClient());
     private readonly HttpClient _marketHttpClient = new();
     private readonly HttpClient _apiHttpClient    = new();
-    private const string ApiBaseUrl = "http://3.133.58.172:5000/api";
+    // API address and the anchored login come from environment variables (nothing deployed is hardcoded in the repo).
+    private static readonly string ApiBaseUrl = Environment.GetEnvironmentVariable("OPTIONS_TRADER_API_URL") ?? "http://localhost:5000/api";
     private System.Windows.Forms.Timer? _pollingTimer;
     private System.Windows.Forms.Timer? _tokenKeepAliveTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
@@ -50,7 +52,16 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _ivHistorialTimer;
     private bool _isPolling;
     private bool _autoCaptureSession; // true when polling was started by the 3:55 PM scheduler
-    private bool _throttledAfter11;   // true once the 6s poll has downshifted to 1-minute after 11 AM
+    private bool _throttledAfter11;   // true while the poll sits at 1-minute: after 11 AM with no open trade (see UpdatePollingCadence)
+
+    // Screen coordinates capture state
+    private TextBox? _coordsTarget1;
+    private TextBox? _coordsTarget2;
+    private int      _coordsClickCount;
+    private System.Windows.Forms.Timer? _coordsCaptureTimer;
+    // One row per Tickers-table symbol, rebuilt by LoadCoordsButtons() whenever tickers change.
+    private readonly Dictionary<string, (TextBox T1, TextBox T2)> _coordsTextboxes = new();
+    private readonly List<Button> _coordsButtons = new();
 
     private TickerEntry? _selectedTicker;
 
@@ -97,6 +108,9 @@ public partial class Form1 : Form
     // price: T_Bid = Round(Ask * (1 + Target%/100) + this, 2)). Added ONCE per target, not per contract
     // count — T_Bid is a per-contract price. Also used by the Simulator.
     internal const decimal TargetCommissionPerContract = 0.02m;
+    // Broker commission per contract of a Demo trade (whole trade, charged once at the close): always taken off the
+    // demo balance, whether the trade won or lost.
+    internal const decimal BrokerCommissionPerContract = 1.30m;
 
     private string NextEntrySpotColor() => (++_entrySpotColorCounter % 2 == 1) ? "#ffffff" : "#ffeb3b";
     private CsvLogger? _csvLogger;
@@ -129,7 +143,9 @@ public partial class Form1 : Form
     // itself (which keeps its normal Call/Put color) — even after the trade closes. Separate from
     // _forcedStrikes above since that one only affects dgvQuotes (Options Quotes tab), and this
     // coloring must NOT appear there. Cleared on ticker switch, same lifecycle as _forcedStrikes.
-    private readonly HashSet<(string Type, decimal Strike)> _chartsTabHighlightedStrikes = new();
+    // Keyed by the trade's expiration too: the "Hoy" and "Próxima" grids are different products, so a strike
+    // opened on one expiration is highlighted only in the grid of THAT expiration.
+    private readonly HashSet<(string Type, decimal Strike, DateOnly Expiration)> _chartsTabHighlightedStrikes = new();
 
     // Read-and-reset by RecordEntryAsync (same pattern as _pendingTradeSendToApi/
     // _chartsTabTradeOverride) — set in DgvQuotes_CellClick right before calling into whichever
@@ -151,6 +167,7 @@ public partial class Form1 : Form
         {
             _csvLogger?.Dispose(); _csvLoggerNext?.Dispose(); _autoCaptureTimer?.Dispose(); _ivHistorialTimer?.Dispose();
             _tokenKeepAliveTimer?.Dispose();
+            _balanceWatcher?.Dispose(); _balanceReloadTimer?.Dispose();
             if (_historyClient != null) await _historyClient.DisposeAsync();
             if (_candleHubClient != null) await _candleHubClient.DisposeAsync();
             _candleHubServer?.Dispose();
@@ -173,7 +190,10 @@ public partial class Form1 : Form
         if (BrokerSettingsStore.Load() == BrokerName.Schwab)
             LoadSchwabCredentials();
         LoadAwsSettings();
+        LoadCoordsButtons();
+        BuildReinvestGroup();
         LoadBalance();
+        StartBalanceWatcher();
         LoadTickerButtons();
         LoadCachedAccounts();
         Load += Form1_Load;
@@ -290,7 +310,7 @@ public partial class Form1 : Form
     // Anchored user — logs straight in against the API on startup, no LoginForm prompt.
     // Change these two constants to switch which of the 5 fixed app users this instance runs as.
     private const string AnchoredUsername = "user1";
-    private const string AnchoredPassword = "Pass1234!";
+    private static readonly string AnchoredPassword = Environment.GetEnvironmentVariable("OPTIONS_TRADER_ANCHORED_PASSWORD") ?? string.Empty;
 
     private async void Form1_Load(object? sender, EventArgs e)
     {
@@ -795,13 +815,14 @@ public partial class Form1 : Form
 
     // Used by TwoPanelChartsControl's _dgvOptions CellFormatting to know whether a row's strike
     // needs the gray/light-green highlight — see _chartsTabHighlightedStrikes' own comment.
-    internal bool IsChartsTabStrikeHighlighted(string rowType, decimal strike) =>
-        _chartsTabHighlightedStrikes.Contains((rowType.ToUpperInvariant(), strike));
+    internal bool IsChartsTabStrikeHighlighted(string rowType, decimal strike, DateOnly expiration) =>
+        _chartsTabHighlightedStrikes.Contains((rowType.ToUpperInvariant(), strike, expiration));
 
     // Used by TwoPanelChartsControl.RefreshOptionsGrid to force-include a highlighted strike's row
     // even once it's gone ITM (and would otherwise be filtered out of otmCalls/otmPuts) — see
     // PopulateSingleSideOptionsGrid's own comment.
-    internal HashSet<(string Type, decimal Strike)> GetChartsTabHighlightedStrikes() => _chartsTabHighlightedStrikes;
+    internal HashSet<(string Type, decimal Strike)> GetChartsTabHighlightedStrikes(DateOnly expiration) =>
+        _chartsTabHighlightedStrikes.Where(h => h.Expiration == expiration).Select(h => (h.Type, h.Strike)).ToHashSet();
 
     // Per-ticker polling cadence (seconds), default 6 — per explicit request, so certain symbols
     // can be polled more/less often than others instead of the one-size-fits-all fixed interval.
@@ -917,8 +938,34 @@ public partial class Form1 : Form
     // takes effect on the next natural StartPollingTimer, e.g. tomorrow's session).
     internal void ApplyLivePollingInterval(string symbol, int seconds)
     {
-        if (_pollingTimer == null || _selectedTicker?.Symbol != symbol || _throttledAfter11) return;
-        _pollingTimer.Interval = Math.Max(1, seconds) * 1000;
+        if (_pollingTimer == null || _selectedTicker?.Symbol != symbol) return;
+        if (!_throttledAfter11) _pollingTimer.Interval = Math.Max(1, seconds) * 1000;
+        UpdatePollingCadence(); // at 1/min with a trade open (or the reverse) the textbox value is applied by this
+    }
+
+    // After 11 AM the poll used to drop to 1/min for good. Now it depends on the trades: with at least one open trade
+    // (any kind: Demo, Real, Simulation, with or without target) the poll runs at the textbox rhythm so its PnL
+    // keeps refreshing at that pace; with none it sits at 1/min. Before 11 AM, and in the 3:55 PM auto-capture
+    // session, nothing changes. Called on every tick and when a trade opens or closes.
+    private void UpdatePollingCadence()
+    {
+        if (_pollingTimer == null || _autoCaptureSession || !MarketHours.IsPastStopTime) return;
+        var hasOpenTrade = dgvTrades.Rows.Cast<DataGridViewRow>().Any(r =>
+            r.Tag is TradeRowTag && string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString()));
+        var seconds = Math.Max(1, _selectedTicker != null ? GetPollingIntervalFor(_selectedTicker.Symbol) : 6);
+
+        if (hasOpenTrade && _throttledAfter11)
+        {
+            _throttledAfter11 = false;
+            _pollingTimer.Interval = seconds * 1000;
+            LogLine($"{DateTime.Now:HH:mm:ss} [Polling] Trade abierto: polling a {seconds} s", Color.Gray);
+        }
+        else if (!hasOpenTrade && !_throttledAfter11)
+        {
+            _throttledAfter11 = true;
+            _pollingTimer.Interval = 60000;
+            LogLine($"{DateTime.Now:HH:mm:ss} [Polling] Sin trades abiertos: polling a 60 s", Color.Gray);
+        }
     }
 
     // True only for the VERY FIRST ticker selection of this run — the auto-select
@@ -1100,17 +1147,19 @@ public partial class Form1 : Form
             {
                 // Still valid — restore as open trade
                 decimal.TryParse(TargetSettingsStore.Load(), out var targetPct);
-                var tBid = Math.Round(t.EntryPrice * (1 + targetPct / 100m) + TargetCommissionPerContract, 2);
+                // Empty PnlTarget = the user deleted this trade's target (RemoveTradeTarget): back without T_Bid / auto-close.
+                var targetDeleted = string.IsNullOrEmpty(t.PnlTarget);
+                var tBid = targetDeleted ? string.Empty : Math.Round(t.EntryPrice * (1 + targetPct / 100m) + TargetCommissionPerContract, 2).ToString("F2");
 
                 dgvTrades.Rows.Add(
                     t.EntryTime.ToString("HH:mm:ss"), t.OptionType, t.StrikePrice,
                     string.Empty, t.EntryPrice.ToString("F2"), t.Contracts,
-                    t.EntryPrice.ToString("F2"), t.EntryPrice.ToString("F2"), tBid.ToString("F2"),
+                    t.EntryPrice.ToString("F2"), t.EntryPrice.ToString("F2"), tBid,
                     "0.00", "0.00", t.PnlTarget,
                     string.Empty, "Close");
 
                 var restoredRow = dgvTrades.Rows[dgvTrades.Rows.Count - 1];
-                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor);
+                restoredRow.Tag = new TradeRowTag(t.TradeId, t.EntryTime, SuppressAutoClose: targetDeleted, ExpirationDate: t.ExpirationDate, EntrySpotPrice: t.EntrySpotPrice, EntrySpotColor: t.EntrySpotColor, EntryExtImagePath: t.EntryExtImagePath);
                 restoredRow.Cells["colTradeEntryPrice"].Style.ForeColor = Color.DodgerBlue;
                 restoredRow.Cells["colTradeCBid"].Style.ForeColor       = Color.Orange;
                 restoredRow.Cells["colTradeCBid"].Style.Font            = new Font(dgvTrades.Font, FontStyle.Bold);
@@ -1208,18 +1257,111 @@ public partial class Form1 : Form
         rbNoTradeTarget.Font = new Font(rbNoTradeTarget.Font, rbNoTradeTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
     }
 
+    // Which balance this instance works with: Demo or Real, set by the Charts tab's trade radios (Demo-Target
+    // and Simulation = Demo, Real-Target = Real). Per process, so static. Demo until a radio says otherwise.
+    internal static BalanceMode CurrentBalanceMode { get; private set; } = BalanceMode.Demo;
+
+    // True while the box is being filled from the file — the TextChanged that follows must not write it back.
+    private bool _loadingBalance;
+    private FileSystemWatcher? _balanceWatcher;
+    private System.Windows.Forms.Timer? _balanceReloadTimer;
+
     private void LoadBalance()
     {
-        var balance = BalanceStore.Load();
-        txtBalance.Text = balance > 0 ? balance.ToString("F0") : string.Empty;
+        var balance = BalanceStore.Load(CurrentBalanceMode);
+        _loadingBalance = true;
+        try { txtBalance.Text = balance > 0 ? balance.ToString("F0") : string.Empty; }
+        finally { _loadingBalance = false; }
         UpdatePositionAmount();
+    }
+
+    // The trade radios picked Demo or Real: the balance box shows that mode's balance from now on.
+    internal void SetBalanceMode(BalanceMode mode)
+    {
+        if (CurrentBalanceMode == mode) return;
+        CurrentBalanceMode = mode;
+        LoadBalance();
+    }
+
+    // Other instances (and this one, when a demo trade closes) rewrite balance_demo.json: an instance that
+    // works in Demo mode picks the new value up; one in Real mode ignores it.
+    private void StartBalanceWatcher()
+    {
+        try
+        {
+            Directory.CreateDirectory(BalanceStore.DirectoryPath);
+            _balanceReloadTimer = new System.Windows.Forms.Timer { Interval = 250 };
+            _balanceReloadTimer.Tick += (s, e) =>
+            {
+                _balanceReloadTimer!.Stop();
+                if (CurrentBalanceMode == BalanceMode.Demo) LoadBalance();
+            };
+
+            _balanceWatcher = new FileSystemWatcher(BalanceStore.DirectoryPath, "*_demo.json") // balance_demo.json and premium_demo.json
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+                EnableRaisingEvents = true
+            };
+            FileSystemEventHandler onChange = (s, e) =>
+            {
+                // Several events per write — debounce on the UI thread.
+                if (IsHandleCreated && !IsDisposed) BeginInvoke(() => { _balanceReloadTimer?.Stop(); _balanceReloadTimer?.Start(); });
+            };
+            _balanceWatcher.Changed += onChange;
+            _balanceWatcher.Created += onChange;
+            _balanceWatcher.Renamed += (s, e) => onChange(s, e);
+        }
+        catch
+        {
+            // No live sync if the watcher cannot start — the balance still loads at startup and on mode change.
+        }
     }
 
     private void TxtBalance_TextChanged(object? sender, EventArgs e)
     {
         UpdatePositionAmount();
+        if (_loadingBalance) return; // filled from the file, not typed
         if (decimal.TryParse(txtBalance.Text, out var balance))
-            BalanceStore.Save(balance);
+            BalanceStore.Save(CurrentBalanceMode, balance);
+    }
+
+    // ---- Settings: where the result of a closed Demo trade goes (balance or reinvestment fund) ----
+    private RadioButton? _rbReinvestBalance, _rbReinvestPremium;
+    private Label? _lblPremiumFund;
+    private bool _loadingReinvest;
+
+    private void BuildReinvestGroup()
+    {
+        var grp = new GroupBox { Text = "Demo trade result", Location = new Point(525, 345), Size = new Size(265, 125) };
+        _rbReinvestBalance = new RadioButton { Text = "Add to balance", Location = new Point(10, 20), AutoSize = true };
+        _rbReinvestPremium = new RadioButton { Text = "Add to premium (reinvest)", Location = new Point(10, 42), AutoSize = true };
+        _lblPremiumFund = new Label { Location = new Point(10, 66), AutoSize = true };
+        var btnReset = new Button { Text = "Reset fund", Location = new Point(10, 90), Size = new Size(110, 24) };
+        var btnMove = new Button { Text = "Move to balance", Location = new Point(126, 90), Size = new Size(120, 24) };
+        grp.Controls.AddRange(new Control[] { _rbReinvestBalance, _rbReinvestPremium, _lblPremiumFund, btnReset, btnMove });
+        tabSettings.Controls.Add(grp);
+
+        _loadingReinvest = true;
+        _rbReinvestPremium.Checked = ReinvestModeStore.Load() == ReinvestMode.Premium;
+        _rbReinvestBalance.Checked = !_rbReinvestPremium.Checked;
+        _loadingReinvest = false;
+
+        EventHandler onMode = (s, e) =>
+        {
+            if (_loadingReinvest || s is not RadioButton { Checked: true }) return;
+            ReinvestModeStore.Save(_rbReinvestPremium!.Checked ? ReinvestMode.Premium : ReinvestMode.Balance);
+            UpdatePositionAmount();
+        };
+        _rbReinvestBalance.CheckedChanged += onMode;
+        _rbReinvestPremium.CheckedChanged += onMode;
+        btnReset.Click += (s, e) => { BalanceStore.ResetPremiumFund(); UpdatePositionAmount(); };
+        btnMove.Click += (s, e) => { BalanceStore.MovePremiumFundToBalance(); LoadBalance(); };
+    }
+
+    private void RefreshReinvestUi()
+    {
+        if (_lblPremiumFund == null) return;
+        _lblPremiumFund.Text = $"Reinvested fund: {BalanceStore.LoadPremiumFund():N2}";
     }
 
     private void UpdatePositionAmount()
@@ -1232,8 +1374,9 @@ public partial class Form1 : Form
             return;
         }
 
-        var amount = balance * positionPct / 100m;
+        var amount = BalanceStore.PositionAmount(CurrentBalanceMode, balance, positionPct);
         lblPositionAmount.Text = $"{positionPct}% : {amount:F0}";
+        RefreshReinvestUi();
     }
 
     private void LoadSchwabCredentials()
@@ -1607,12 +1750,7 @@ public partial class Form1 : Form
             // After 11 AM, downshift from 6s to 1-minute polling (still saving to CSV) instead of
             // stopping — applies whether "Stop at 11:00 AM" is checked or not. The 3:55 PM
             // auto-capture session is exempt so it keeps running at full cadence to close.
-            if (!_autoCaptureSession && !_throttledAfter11 && MarketHours.IsPastStopTime)
-            {
-                _pollingTimer!.Interval = 60000;
-                _throttledAfter11 = true;
-                // LogLine($"{DateTime.Now:HH:mm:ss} [Auto] 11:00 AM reached — polling throttled to 1/min", Color.Yellow);
-            }
+            UpdatePollingCadence();
 
             await FetchAndUpdateQuotesAsync();
         };
@@ -1658,7 +1796,32 @@ public partial class Form1 : Form
         return result;
     }
 
+    // One chain request at a time: a polling tick that finds a request in flight (or a manual fetch under way)
+    // is skipped, so two responses never write the CSV / grids at the same instant.
+    private readonly SemaphoreSlim _fetchGate = new(1, 1);
+
     private async Task FetchAndUpdateQuotesAsync()
+    {
+        if (!await _fetchGate.WaitAsync(0)) return;
+        try { await FetchAndUpdateQuotesCoreAsync(); }
+        finally { _fetchGate.Release(); }
+    }
+
+    // "Fetch Quotes" button of the Charts tab: one extra chain request right now (outside the polling cadence),
+    // so a trade is entered with a fresher ask. Same path as a polling cycle — CSV row (own timestamp), grids,
+    // PnL, Charts grid, polling-time label — but the polling timer is left alone and the grids are not cleared.
+    // Returns false when it did nothing (no ticker/credentials, or a request was already in flight).
+    internal async Task<bool> FetchQuotesNowAsync()
+    {
+        if (_selectedTicker == null) return false;
+        var creds = SchwabCredentialsStore.Load();
+        if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return false;
+        if (!await _fetchGate.WaitAsync(0)) return false;
+        try { await FetchAndUpdateQuotesCoreAsync(); return true; }
+        finally { _fetchGate.Release(); }
+    }
+
+    private async Task FetchAndUpdateQuotesCoreAsync()
     {
         if (_selectedTicker == null) return;
 
@@ -1687,6 +1850,9 @@ public partial class Form1 : Form
             var strikeCount = GetStrikeCountFor(_selectedTicker.Symbol);
             var fullChain = (await service.GetOptionsChainAsync(_selectedTicker.Symbol, fromDate, nextExpDate, strikeCount)).ToList();
             _hubTokenWaitCycles = 0; // got data — any earlier wait for the hub's token is over
+            // The time shown is the one of this response (the label was first set when the request left).
+            lblLastUpdate.Text = DateTime.Now.ToString("hh:mm:ss tt");
+            ObserveChainFreshness(fullChain);
 
             var allQuotes     = fullChain.Where(q => q.ExpirationDate == expDate).ToList();
             var allQuotesNext = fullChain.Where(q => q.ExpirationDate == nextExpDate).ToList();
@@ -1802,6 +1968,129 @@ public partial class Form1 : Form
     // GetAccessTokenAsync + the 5 s pause above); 60 of them is ~15 minutes.
     private int _hubTokenWaitCycles;
     private const int MaxHubTokenWaitCycles = 60;
+
+    // ---- Frozen option chain (Schwab keeps serving stale quotes while the underlying moves) ----
+    // See OptionChainFreshnessMonitor for how it is detected. While the alarm is on: red marker in the polling-time
+    // labels, no new trades (IsRowTradeBlocked), no target auto-close, the raw response saved as evidence, a
+    // Telegram note (first alarm of the day per ticker) and — from the token authority — a forced access-token
+    // renewal every 5 minutes, to find out whether a fresh token brings live quotes back.
+    internal static bool ChainStale { get; private set; }
+    private readonly OptionChainFreshnessMonitor _chainFreshness = new();
+    private DateTime _lastStaleRawSaveUtc = DateTime.MinValue;
+    private DateTime _lastForcedRenewUtc = DateTime.MinValue;
+    private (DateOnly Day, int Files) _staleRawFiles;
+    private DateOnly _staleTelegramDay;
+    private Color? _lastUpdateNormalColor;
+
+    private void ObserveChainFreshness(List<OptionQuoteDto> chain)
+    {
+        var change = _chainFreshness.Observe(chain, MarketHours.NowEst);
+        ChainStale = _chainFreshness.IsStale;
+        var symbol = _selectedTicker?.Symbol ?? "UNK";
+
+        if (change == OptionChainFreshnessMonitor.Change.Raised)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Stale] CADENA DE OPCIONES CONGELADA ({symbol}): {_chainFreshness.Reason}. Trades nuevos y cierre por target en pausa.", Color.Red);
+            NotifyStaleChainOnTelegram(symbol);
+        }
+        else if (change == OptionChainFreshnessMonitor.Change.Cleared)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Stale] La cadena de opciones volvió a actualizarse ({symbol}). Trades y cierre por target reanudados.", Color.LimeGreen);
+        }
+
+        if (ChainStale)
+        {
+            SaveStaleChainEvidence(symbol);
+            _ = ForceTokenRenewalAsync();
+        }
+        ApplyChainStaleVisual();
+    }
+
+    private void ApplyChainStaleVisual()
+    {
+        _lastUpdateNormalColor ??= lblLastUpdate.ForeColor;
+        if (ChainStale)
+        {
+            lblLastUpdate.ForeColor = Color.Red;
+            lblLastUpdate.Text += "  ⚠ CADENA CONGELADA";
+        }
+        else
+        {
+            lblLastUpdate.ForeColor = _lastUpdateNormalColor.Value;
+        }
+        if (_lblChartsPollingTime != null)
+        {
+            _lblChartsPollingTime.ForeColor = ChainStale ? Color.Red : Color.DarkGoldenrod;
+            _lblChartsPollingTime.Text = lblLastUpdate.Text;
+        }
+    }
+
+    // The raw JSON of the frozen response, at most one a minute and 30 per ticker per day.
+    private void SaveStaleChainEvidence(string symbol)
+    {
+        try
+        {
+            if ((DateTime.UtcNow - _lastStaleRawSaveUtc) < TimeSpan.FromMinutes(1)) return;
+            var day = DateOnly.FromDateTime(DateTime.Now);
+            if (_staleRawFiles.Day != day) _staleRawFiles = (day, 0);
+            if (_staleRawFiles.Files >= 30) return;
+
+            var json = SchwabMarketDataService.GetLastRawResponse(symbol);
+            if (string.IsNullOrEmpty(json)) return;
+
+            var folder = @"C:\OptionsData\EventLog\stale_chain";
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, $"{symbol}_{DateTime.Now:yyyyMMdd_HHmmss}.json"), json);
+            _lastStaleRawSaveUtc = DateTime.UtcNow;
+            _staleRawFiles = (day, _staleRawFiles.Files + 1);
+        }
+        catch { /* evidence is best-effort */ }
+    }
+
+    private void NotifyStaleChainOnTelegram(string symbol)
+    {
+        try
+        {
+            var day = DateOnly.FromDateTime(DateTime.Now);
+            if (_staleTelegramDay == day || !IsTelegramEnabledFor(symbol)) return;
+            _staleTelegramDay = day;
+            var (botToken, chatId) = TelegramSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(botToken) || string.IsNullOrWhiteSpace(chatId)) return;
+            var text = $"{symbol}: la cadena de opciones de Schwab está congelada ({_chainFreshness.Reason}). " +
+                       $"Los trades nuevos y el cierre por target están en pausa hasta que se recupere.";
+            _ = Task.Run(async () =>
+            {
+                var (ok, _, messageId) = await TelegramNotifier.SendAsync(botToken, chatId, text, symbol);
+                if (ok && messageId.HasValue)
+                    TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, symbol, "ChainStale", DateTime.Now));
+            });
+        }
+        catch { /* a failed note must not matter */ }
+    }
+
+    // Experiment: does a brand-new access token make Schwab serve live quotes again? Only the token authority
+    // (the hub) may renew; at most once every 5 minutes while the alarm lasts.
+    private async Task ForceTokenRenewalAsync()
+    {
+        if (!IsTokenAuthority() || (DateTime.UtcNow - _lastForcedRenewUtc) < TimeSpan.FromMinutes(5)) return;
+        _lastForcedRenewUtc = DateTime.UtcNow;
+        try
+        {
+            var creds = SchwabCredentialsStore.Load();
+            var tokens = SchwabTokenStore.Load();
+            if (string.IsNullOrEmpty(creds.ApiKey) || string.IsNullOrEmpty(creds.ApiSecret)) return;
+            await _schwabAuth.GetAccessTokenAsync(
+                creds.ApiKey, creds.ApiSecret,
+                tokens?.AccessToken ?? string.Empty, DateTime.MinValue, // MinValue = "expired": forces the refresh
+                tokens?.RefreshToken ?? string.Empty,
+                OnSchwabTokenRenewed, allowRefresh: true, ReloadTokenFromDisk);
+            LogLine($"{DateTime.Now:HH:mm:ss} [Stale] Access token renovado a la fuerza (cadena congelada). Si la cadena se recupera ahora, el token era el motivo.", Color.Orange);
+        }
+        catch (Exception ex)
+        {
+            LogLine($"{DateTime.Now:HH:mm:ss} [Stale] No se pudo renovar el token a la fuerza: {ex.Message}", Color.Orange);
+        }
+    }
 
     private static readonly string PollingExceptionLogPath = @"C:\OptionsData\EventLog\polling_exceptions.log";
     private static readonly object PollingExceptionLogLock = new();
@@ -2043,7 +2332,7 @@ public partial class Form1 : Form
             var row = dgvQuotesNext.Rows[i];
             if (row.Tag?.ToString() != rowType) continue;
             if (row.Cells["colStrikePriceNext"].Value?.ToString() != strikeText) continue;
-            if (IsRowTradeBlocked(row, "colCallBidNext", "colPutBidNext")) return;
+            if (IsRowTradeBlocked(row, "colCallBidNext", "colPutBidNext", "colContractsNext")) return;
 
             var nextExpDate = ExpirationDateResolver.ResolveNext(_selectedTicker.ExpDate);
             if (isSimulation)
@@ -2059,6 +2348,14 @@ public partial class Form1 : Form
     // Fires (symbol) every time dgvTrades changes — a trade opens, closes, or its PnL is refreshed
     // on the regular poll cycle — so MultiChartForm's mirrored trades grid can stay in sync.
     public event Action<string>? OnTradesUpdatedEvent;
+
+    // Fires (symbol, PnL line, its color, Duration line) when a trade closes, with the two log lines exactly as
+    // written to this window's log — the Charts tab repeats them, same colors, in the log of panel 2.
+    public event Action<string, string, Color, string>? OnTradeCloseLogged;
+
+    // Fires (symbol, commission text, net text, net color) after OnTradeCloseLogged for a closed DEMO trade: the broker
+    // commission taken off the balance and the net PnL — shown on one line, the commission in orange, the net in its color.
+    public event Action<string, string, string, Color>? OnTradeCommissionLogged;
 
     // Read-only access to dgvTrades for MultiChartForm's mirror grid to copy values/colors from.
     // Same one-instance-per-ticker restriction as the methods above.
@@ -2076,6 +2373,41 @@ public partial class Form1 : Form
         if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return;
         if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return;
         DgvTrades_CellClick(this, new DataGridViewCellEventArgs(dgvTrades.Columns["colTradeClose"].Index, rowIndex));
+    }
+
+    // Charts tab: Delete on the T_Bid or PnL_Target cell of an open Demo trade removes its target — both cells are
+    // emptied and the trade no longer closes by target (it runs until closed by hand, like a trade opened without
+    // target). Persisted, so the trade comes back the same after a restart. Real trades (their LIMIT order rests at
+    // the broker), Simulation trades, closed ones and ones without target are left alone. Returns true if it applied.
+    internal bool RemoveTradeTarget(string symbol, int rowIndex)
+    {
+        if (_selectedTicker == null || _selectedTicker.Symbol != symbol) return false;
+        if (rowIndex < 0 || rowIndex >= dgvTrades.Rows.Count) return false;
+        var row = dgvTrades.Rows[rowIndex];
+        if (row.Tag is not TradeRowTag tag || tag.SuppressAutoClose) return false;
+        if (!string.IsNullOrEmpty(row.Cells["colTradeExitTime"].Value?.ToString())) return false;
+        if (!string.Equals(row.Cells["colTradeDemoReal"].Value?.ToString(), "Demo", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrEmpty(row.Cells["colTradeTBid"].Value?.ToString())) return false;
+
+        row.Tag = tag with { SuppressAutoClose = true };
+        row.Cells["colTradeTBid"].Value = string.Empty;
+        row.Cells["colTradePnLTarget"].Value = string.Empty;
+
+        if (tag.TradeId != 0)
+        {
+            try
+            {
+                var saved = OpenTradesStore.Load().FirstOrDefault(t => t.TradeId == tag.TradeId);
+                if (saved != null) OpenTradesStore.Add(saved with { PnlTarget = string.Empty });
+            }
+            catch { /* the in-memory change already applies; persistence is best-effort */ }
+        }
+
+        var type = row.Cells["colTradeType"].Value?.ToString() ?? string.Empty;
+        var strike = row.Cells["colTradeStrike"].Value?.ToString() ?? string.Empty;
+        LogLine($"{DateTime.Now:HH:mm:ss} [Target] Cierre por target eliminado: {type} {strike}", Color.Orange);
+        OnTradesUpdatedEvent?.Invoke(symbol);
+        return true;
     }
 
     // Same idea as TriggerTradeCloseClick — lets the Charts tab's own mirrored trades grid forward
@@ -2143,6 +2475,29 @@ public partial class Form1 : Form
     // cell except Strike. Optional and defaults to null so every EXISTING caller (Form1's own
     // dgvQuotes/dgvQuotesNext — the Options Quotes tab) is unaffected; only the Simulator's
     // _dgvChain passes it, reusing its own _forcedStrikes set for both purposes.
+    // "+1C" / "+1P" buttons (Charts tab options column + Simulator): while armed, the FIRST in-the-money
+    // strike of that side is shown in the grid with the usual ITM highlight, whichever strike that is
+    // as the spot moves. First ITM Call = the highest strike below spot; first ITM Put = the lowest
+    // strike above spot. Looked up in the FULL chain so it exists even when the OTM filter dropped it.
+    internal static decimal? FirstItmStrike(IEnumerable<OptionQuoteDto> allQuotes, bool isCall)
+    {
+        var side = isCall ? OptionsTrader.Domain.Enums.OptionType.Call : OptionsTrader.Domain.Enums.OptionType.Put;
+        var itm = allQuotes.Where(q => q.OptionType == side && q.InTheMoney).Select(q => (decimal?)q.StrikePrice);
+        return isCall ? itm.Max() : itm.Min();
+    }
+
+    // Looks of the two toggles: green "+1C" / red "+1P" like the Strike buttons; armed = thick gold border.
+    internal static void StyleFirstItmToggle(Button button, bool isCall, bool armed)
+    {
+        button.FlatStyle = FlatStyle.Flat;
+        button.BackColor = isCall ? Color.DarkGreen : Color.Red;
+        button.ForeColor = Color.White;
+        button.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+        button.UseVisualStyleBackColor = false;
+        button.FlatAppearance.BorderColor = armed ? Color.Gold : Color.DimGray;
+        button.FlatAppearance.BorderSize = armed ? 3 : 1;
+    }
+
     internal static (List<OptionQuoteDto> otmCalls, List<OptionQuoteDto> otmPuts) PopulateQuotesGrid(
         DataGridView grid, List<OptionQuoteDto> allQuotes, TickerEntry ticker, bool applyCountsFilter = false,
         string? selectedCounts = null, bool callOnly = false, bool putOnly = false,
@@ -2358,6 +2713,8 @@ public partial class Form1 : Form
                 var separatorRow = grid.Rows[grid.Rows.Count - 1];
                 separatorRow.Tag = "SEPARATOR";
                 separatorRow.Height = Math.Max(1, grid.RowTemplate.Height / 4);
+                separatorRow.DefaultCellStyle.BackColor = Color.LightGray; // the line that tells Calls from Puts
+                separatorRow.DefaultCellStyle.SelectionBackColor = Color.LightGray;
             }
             previousWasCall = isCall;
 
@@ -2502,11 +2859,14 @@ public partial class Form1 : Form
     // the option is illiquid (bid = 0), or there's no room for even 1 contract at the current
     // Position Size (Conts = 0) — either makes clicking Strike a guaranteed-bad trade. The
     // spread-too-wide (Sprd >= 6) check was removed per explicit request.
-    private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName)
+    private static bool IsRowTradeBlocked(DataGridViewRow row, string callBidColName, string putBidColName, string contractsColName = "colContracts")
     {
+        // A frozen chain would price the trade with a stale ask — no new trades until it recovers.
+        if (ChainStale) return true;
+
         if (IsRowBidZero(row, callBidColName, putBidColName)) return true;
 
-        if (!decimal.TryParse(row.Cells["colContracts"].Value?.ToString(), out var contracts) || contracts == 0) return true;
+        if (!decimal.TryParse(row.Cells[contractsColName].Value?.ToString(), out var contracts) || contracts == 0) return true;
 
         return false;
     }
@@ -2561,6 +2921,7 @@ public partial class Form1 : Form
         _lastTradeOpenFromChartsTab = chartsIsSimulation || chartsOverride.HasValue;
 
         // Block clicks on illiquid/unsafe options (bid = 0, spread too wide, or 0 contracts)
+        if (ChainStale) LogLine($"{DateTime.Now:HH:mm:ss} [Stale] Trade bloqueado: la cadena de opciones está congelada.", Color.Red);
         if (IsRowTradeBlocked(dgvQuotes.Rows[e.RowIndex], "colCallBid", "colPutBid")) return;
 
         // A click coming from the Charts tab's own Simulation/Demo+Target/Real+Target radios always
@@ -2815,7 +3176,10 @@ public partial class Form1 : Form
         // trade closes — see _chartsTabHighlightedStrikes' own comment. Read-and-reset, same
         // pattern as the other Charts-tab-origin flags above.
         if (_lastTradeOpenFromChartsTab && strikeForMoneyness > 0)
-            _chartsTabHighlightedStrikes.Add((rowType.ToUpperInvariant(), strikeForMoneyness));
+        {
+            var highlightExpiration = expDateOverride ?? ExpirationDateResolver.Resolve(_selectedTicker?.ExpDate ?? string.Empty);
+            _chartsTabHighlightedStrikes.Add((rowType.ToUpperInvariant(), strikeForMoneyness, highlightExpiration));
+        }
         _lastTradeOpenFromChartsTab = false;
 
         // Premium = riesgo máximo de la posición = precio de entrada * 100 (por contrato) *
@@ -2853,9 +3217,11 @@ public partial class Form1 : Form
         // simulation trade, so it can't identify one in SimulationTradesStore) — see that store's
         // own comment.
         var simulationLocalId = isSimulation ? Guid.NewGuid() : (Guid?)null;
+        // Screenshot of the symbol's external screen region at the moment of the Open (null without saved coordinates).
+        var openExtPath = ExternalScreenCapture.CaptureForTrade(symbol, rowType, "OpenExt");
         newRow.Tag = new TradeRowTag(tradeId, entryTime, suppressAutoClose, accountHash, occSymbol, quantity,
             ExpirationDate: expDate, EntrySpotPrice: entrySpot, EntrySpotColor: entrySpotColor,
-            LocalId: simulationLocalId);
+            LocalId: simulationLocalId, EntryExtImagePath: openExtPath);
         PadWithBlankRows(dgvTrades, 4);
 
         if (!isSimulation)
@@ -2872,7 +3238,8 @@ public partial class Form1 : Form
                 PnlTarget:      targetPct.ToString("F0"),
                 EntrySpotPrice: entrySpot,
                 IsDemo:         isDemo,
-                EntrySpotColor: entrySpotColor));
+                EntrySpotColor: entrySpotColor,
+                EntryExtImagePath: openExtPath));
         else
             // Per explicit request: unlike Real/Demo trades, "Trade Simulation" trades still
             // don't touch TradeHistoryStore/the API/screenshots — but DO persist locally now, so
@@ -2909,9 +3276,12 @@ public partial class Form1 : Form
         // marker into before (only the popup Live Chart window got one, above).
         if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol)
         {
+            await _chartsTabForm.ClearClosedTradeMarksOnRthChartAsync(); // before the new marks: panel 2 loses the closed trades' ones
             if (decimal.TryParse(strike, out var strikeValForChartsTab))
                 await _chartsTabForm.MarkStrikeOnRthChartAsync(strikeValForChartsTab);
             await _chartsTabForm.MarkEntrySpotOnRthChartAsync(entrySpot, entrySpotColor, pairId: entryTime.Ticks.ToString(), strike: tradeStrike);
+            // RTH_PriceAction note: the Open of this trade (a Refuerzo's combined row is not a new open — its 2nd leg already was).
+            if (entryLabel != "Trade Refuerzo") _chartsTabForm.RecordTradeInPriceAction(isOpen: true, entryTime);
         }
 
         if (!isSimulation)
@@ -2928,6 +3298,7 @@ public partial class Form1 : Form
         }
 
         OnTradesUpdatedEvent?.Invoke(symbol);
+        UpdatePollingCadence(); // a trade opened after 11 AM: poll at the textbox rhythm again
         return (tradeId, newRow);
     }
 
@@ -3977,10 +4348,37 @@ public partial class Form1 : Form
         // Closing PnL% (real fill price, or target price for TARGET closes) can be a new
         // low/high the live ticks never saw.
         UpdatePnLMinMax(row, pnlPctVal, nowStr);
+
+        // A DEMO (or Simulation) trade closing moves the demo balance by its PnL — every instance working in
+        // Demo mode picks the new value up through the file watcher. Real trades leave the balances alone.
+        // Demo trades also pay the broker commission (1.30 x contracts, win or lose); Simulation ones do not. A Refuerzo's
+        // combined result row is bookkeeping only — its two legs already moved the balance by the same PnL — so it moves nothing.
+        var tradeKind = row.Cells["colTradeDemoReal"].Value?.ToString();
+        decimal commission = 0m;
+        int commissionContracts = 0;
+        decimal? netPnl = null;
+        if (!string.Equals(tradeKind, "Real", StringComparison.OrdinalIgnoreCase)
+            && !(row.Tag is TradeRowTag { IsReinforcementResult: true }))
+        {
+            if (string.Equals(tradeKind, "Demo", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(row.Cells["colTradeContracts"].Value?.ToString(), out commissionContracts))
+            {
+                commission = Math.Round(BrokerCommissionPerContract * commissionContracts, 2);
+                netPnl = pnlVal - commission;
+            }
+            try
+            {
+                // Net result: into the balance, or (Premium mode) into the reinvestment fund that grows the position amount.
+                if (ReinvestModeStore.Load() == ReinvestMode.Premium) BalanceStore.AddToPremiumFund(pnlVal - commission);
+                else BalanceStore.AddToDemo(pnlVal - commission);
+            }
+            catch { /* balance bookkeeping must never get in the way of closing a trade */ }
+        }
         row.Cells["colTradeExitTime"].Value   = nowStr;
         row.Cells["colTradeClose"].Value      = "Closed";
         row.DefaultCellStyle.ForeColor        = Color.Gray;
         OnTradesUpdatedEvent?.Invoke(symbol);
+        UpdatePollingCadence(); // the last open trade closed after 11 AM: back to 1/min
 
         var pnlColor = pnlVal >= 0 ? Color.LimeGreen : Color.Red;
 
@@ -3989,8 +4387,15 @@ public partial class Form1 : Form
             : string.Empty;
         LogLine(string.Empty, Color.White);
         LogLine($"{nowStr} Close {closeType} ({type})  SpotPrice: {spotPrice}  Strike: {strike}  C_Bid: {cBid}{realCloseLog}", Color.White);
-        LogLine($"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}", pnlColor);
-        LogLine($"{nowStr} Duration: {duration:hh\\:mm\\:ss}", Color.White);
+        var pnlLine = $"{nowStr} PnL: {pnl}  PnL_Percent: {pnlPct}";
+        var durationLine = $"{nowStr} Duration: {duration:hh\\:mm\\:ss}";
+        LogLine(pnlLine, pnlColor);
+        LogLine(durationLine, Color.White);
+        OnTradeCloseLogged?.Invoke(symbol, pnlLine, pnlColor, durationLine); // the Charts tab shows the same two lines, same colors
+        // Demo only: the breakdown (gross PnL is the line above) — commission and the net that reached the balance.
+        if (netPnl is { } net)
+            OnTradeCommissionLogged?.Invoke(symbol, $"{nowStr} Comisión: -{commission:F2} ({commissionContracts} × {BrokerCommissionPerContract:F2})  →  ",
+                $"Neto: {net:F2}", net >= 0 ? Color.LimeGreen : Color.Red);
         System.Windows.Forms.Application.DoEvents();
 
         // Remove from local persistence
@@ -4060,6 +4465,8 @@ public partial class Form1 : Form
         // get this far too (per explicit request, they now DO push to Telegram on close) even
         // though they skip everything after the isSimulation gate further down.
         var closeChartPath = await SaveTradeChartSnapshotAsync(symbol, type, "Close");
+        // Same moment, the symbol's external screen region (null without saved coordinates).
+        var closeExtPath = ExternalScreenCapture.CaptureForTrade(symbol, type, "CloseExt");
 
         // Telegram push: the 3-chart snapshot + a caption describing the close (symbol, PnL%, etc).
         // Was gated on tradeId > 0 ("this trade reached the API") — but SendTradeCloseTelegramPushAsync
@@ -4101,6 +4508,13 @@ public partial class Form1 : Form
         }
         await Task.Delay(100); // let UI settle
         var tradeLogPath = CaptureTradeLogScreenshot(symbol, type);
+
+        // RTH_PriceAction note: the Close of this trade, labeled with the moment it closed, with the TradeLog screenshot
+        // (taken just above) under the charts. A Refuerzo group closes 3 rows together — only the combined result row
+        // writes the entry, not its 2 source legs.
+        if (_chartsTabForm != null && _chartsTabForm.Symbol == symbol
+            && !(tag is { ReinforcementGroupId: not null, IsReinforcementResult: false }))
+            _chartsTabForm.RecordTradeInPriceAction(isOpen: false, now, tradeLogPath);
         // LogLine($"{nowStr} Screenshot: {tradeLogPath}", Color.DimGray);
 
         // Simulation trades stop here for S3/TradeHistoryStore — the Telegram push above is one
@@ -4110,18 +4524,19 @@ public partial class Form1 : Form
         // stays real/demo-only — see RecordEntryAsync's matching isSimulation skip on the entry side.
         if (isSimulation)
         {
-            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath, tradeLogPath);
+            DailyTradeLogWriter.AppendSimTrade(symbol, type, tag?.EntryTime ?? now, tag?.EntryImagePath, closeChartPath, tradeLogPath,
+                tag?.EntryExtImagePath, closeExtPath);
             return;
         }
 
         // Uploads Close + TradeLog (fire-and-forget, doesn't block the row from showing "Closed"),
         // then appends today's Obsidian daily-trade-log entry once both S3 URLs are actually known
         // — EntryImageUrl is already set from when the trade opened.
-        _ = UploadCloseTradeLogAndAppendDailyAsync(closeChartPath, tradeLogPath, symbol, type, tradeId, nowStr);
+        _ = UploadCloseTradeLogAndAppendDailyAsync(closeChartPath, tradeLogPath, symbol, type, tradeId, nowStr, tag?.EntryExtImagePath, closeExtPath);
     }
 
     private async Task UploadCloseTradeLogAndAppendDailyAsync(string? closeChartPath, string tradeLogPath,
-        string symbol, string type, int tradeId, string nowStr)
+        string symbol, string type, int tradeId, string nowStr, string? openExtPath = null, string? closeExtPath = null)
     {
         if (closeChartPath != null)
             await UploadScreenshotAsync(closeChartPath, symbol, type, tradeId, nowStr, TradeImageKind.Close);
@@ -4129,7 +4544,7 @@ public partial class Form1 : Form
 
         if (tradeId == 0) return;
         var trade = TradeHistoryStore.Load().FirstOrDefault(t => t.Id == tradeId);
-        if (trade != null) DailyTradeLogWriter.AppendTrade(trade);
+        if (trade != null) DailyTradeLogWriter.AppendTrade(trade, openExtPath, closeExtPath);
     }
 
     // Combined snapshot of the 3 live charts (1h / 15m RTH / 15m RTH+Overnight) rendered via the
@@ -4321,6 +4736,144 @@ public partial class Form1 : Form
         bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
 
         LogLine($"{DateTime.Now:HH:mm:ss} [Screenshot] Whole UI saved: {filePath}", Color.Cyan);
+    }
+
+    // (Re)builds one row (button + 2 coord textboxes) per symbol currently in the Tickers table,
+    // preloading whatever coordinates were already saved for that symbol. Called at startup and
+    // whenever the Tickers table is saved, so adding/removing a ticker keeps this in sync.
+    private void LoadCoordsButtons()
+    {
+        pnlCoordsRows.Controls.Clear();
+        _coordsTextboxes.Clear();
+        _coordsButtons.Clear();
+
+        var saved = ScreenCoordsStore.Load();
+        var symbols = TickerSettingsStore.Load()
+            .Select(t => t.Symbol.ToUpperInvariant())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct()
+            .ToList();
+
+        var y = 2;
+        foreach (var symbol in symbols)
+        {
+            var btn = new Button
+            {
+                Text     = symbol,
+                Location = new Point(5, y),
+                Size     = new Size(60, 23),
+                Tag      = symbol
+            };
+            btn.Click += BtnCoords_Click;
+
+            var t1 = new TextBox { Location = new Point(73, y),  Size = new Size(80, 23), ReadOnly = true };
+            var t2 = new TextBox { Location = new Point(161, y), Size = new Size(80, 23), ReadOnly = true };
+            if (saved.TryGetValue(symbol, out var tc))
+            {
+                t1.Text = tc.Coords1;
+                t2.Text = tc.Coords2;
+            }
+
+            pnlCoordsRows.Controls.Add(btn);
+            pnlCoordsRows.Controls.Add(t1);
+            pnlCoordsRows.Controls.Add(t2);
+
+            _coordsTextboxes[symbol] = (t1, t2);
+            _coordsButtons.Add(btn);
+
+            y += 32;
+        }
+    }
+
+    private void BtnSaveCoords_Click(object? sender, EventArgs e)
+    {
+        var coords = _coordsTextboxes.ToDictionary(
+            kv => kv.Key,
+            kv => new TickerCoords(kv.Value.T1.Text, kv.Value.T2.Text));
+        ScreenCoordsStore.Save(coords);
+
+        MessageBox.Show("Coordinates saved.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void BtnResetCoords_Click(object? sender, EventArgs e)
+    {
+        foreach (var (t1, t2) in _coordsTextboxes.Values)
+            t1.Text = t2.Text = string.Empty;
+
+        var current = ScreenCoordsStore.Load();
+        foreach (var symbol in _coordsTextboxes.Keys)
+            current[symbol] = new TickerCoords(string.Empty, string.Empty);
+        ScreenCoordsStore.Save(current);
+    }
+
+    private void BtnCoords_Click(object? sender, EventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not string symbol) return;
+        if (!_coordsTextboxes.TryGetValue(symbol, out var targets)) return;
+
+        _coordsTarget1    = targets.T1;
+        _coordsTarget2    = targets.T2;
+        _coordsClickCount = 0;
+        _coordsLeftWasDown = IsPrimaryMouseButtonDown(); // a press already in progress is not a capture click
+
+        // Change cursor to crosshair to indicate capture mode
+        this.Cursor = Cursors.Cross;
+
+        // Poll mouse clicks via timer every 50ms
+        _coordsCaptureTimer?.Stop();
+        _coordsCaptureTimer = new System.Windows.Forms.Timer { Interval = 50 };
+        _coordsCaptureTimer.Tick += CoordsCaptureTick;
+        _coordsCaptureTimer.Start();
+
+        btn.BackColor = Color.Yellow;
+        btn.Text = btn.Text + " ...";
+    }
+
+    // One click = one press EDGE (up -> down), read from the global async key state, so a click anywhere on the screen
+    // counts (also on another program's window) and a press that is still held on the next 50 ms tick is not a second
+    // click. The old version waited for the release with DoEvents inside the tick, which let the timer fire again
+    // during the same press and filled BOTH textboxes with the first click.
+    private bool _coordsLeftWasDown;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    private static bool IsPrimaryMouseButtonDown() =>
+        (GetAsyncKeyState(SystemInformation.MouseButtonsSwapped ? 0x02 : 0x01) & 0x8000) != 0; // VK_RBUTTON when buttons are swapped
+
+    private void CoordsCaptureTick(object? sender, EventArgs e)
+    {
+        var down = IsPrimaryMouseButtonDown();
+        var pressedNow = down && !_coordsLeftWasDown;
+        _coordsLeftWasDown = down;
+        if (!pressedNow) return;
+
+        var pos = Control.MousePosition;
+
+        if (_coordsClickCount == 0)
+        {
+            _coordsTarget1!.Text = $"{pos.X},{pos.Y}";
+            _coordsClickCount = 1;
+        }
+        else
+        {
+            _coordsTarget2!.Text = $"{pos.X},{pos.Y}";
+            StopCoordsCapture();
+        }
+    }
+
+    private void StopCoordsCapture()
+    {
+        _coordsCaptureTimer?.Stop();
+        _coordsCaptureTimer = null;
+        this.Cursor = Cursors.Default;
+
+        // Reset every dynamically-generated coords button's appearance.
+        foreach (var b in _coordsButtons)
+        {
+            b.BackColor = SystemColors.Control;
+            b.Text = b.Text.Replace(" ...", string.Empty);
+        }
     }
 
     // Dual-writes every trade to TradeHistoryStore alongside the API call — first step toward
@@ -4582,6 +5135,7 @@ public partial class Form1 : Form
             // auto-close here to mirror the real LIMIT order closing on the server.
             var suppressAutoClose = row.Tag is TradeRowTag { SuppressAutoClose: true };
             if (!suppressAutoClose
+                && !ChainStale // a frozen chain must not close trades at the first fresh poll (seen 19-oct 10:18:19)
                 && decimal.TryParse(row.Cells["colTradeTBid"].Value?.ToString(), out var targetBid)
                 && targetBid > 0 && currentBid >= targetBid)
             {
@@ -4657,9 +5211,9 @@ public partial class Form1 : Form
 
     private static decimal GetPositionSize()
     {
-        var balance = BalanceStore.Load();
+        var balance = BalanceStore.Load(CurrentBalanceMode);
         if (!decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct)) return 0;
-        return balance * pct / 100m;
+        return BalanceStore.PositionAmount(CurrentBalanceMode, balance, pct);
     }
 
     /// Formats spread: removes "0." prefix and leading zeros.
@@ -4685,7 +5239,7 @@ public partial class Form1 : Form
         return contracts.ToString("F0");
     }
 
-    private static string GetContractsValue(decimal ask)
+    internal static string GetContractsValue(decimal ask)
     {
         var selected = ContractsSettingsStore.Load();
         if (selected != "PositionSize" && int.TryParse(selected, out var fixedCount))
@@ -4706,5 +5260,6 @@ public partial class Form1 : Form
 
         TickerSettingsStore.Save(tickers);
         LoadTickerButtons();
+        LoadCoordsButtons();
     }
 }

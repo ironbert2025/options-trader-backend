@@ -1,6 +1,6 @@
-# Narration Script — TFM General Video
+# Narration Script — General Video
 
-Narration script in English for the general presentation video of the system, intended for evaluation as a **Master's Thesis (TFM)** by an instructor from a programming school. The focus is technical/academic (architecture, use value, real-world operation), not commercial.
+Narration script in English for the general presentation video of the system, intended for technical reviewers. The focus is technical/academic (architecture, use value, real-world operation), not commercial.
 
 Based on 6 topical videos already recorded. They are listed here in the order they are used within the overall sequence (not the order in which they were recorded) — each one validates an independent functional unit of the complete system:
 

@@ -15,7 +15,8 @@ public record PersistedTrade(
     string   PnlTarget,
     decimal  EntrySpotPrice = 0m,
     bool     IsDemo = true,
-    string   EntrySpotColor = "#ffffff");
+    string   EntrySpotColor = "#ffffff",
+    string?  EntryExtImagePath = null); // screenshot of the symbol's external screen region taken at the Open (see ExternalScreenCapture)
 
 // One instance runs per ticker (SPY, QQQ, DIA, ...) as a SEPARATE PROCESS, and they all share this
 // one file — Add/Remove used to be a plain Load-then-Save with no cross-process locking, so two

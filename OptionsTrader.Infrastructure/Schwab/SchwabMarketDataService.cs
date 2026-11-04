@@ -16,6 +16,11 @@ public class SchwabMarketDataService : IMarketDataService
 
     private static readonly string DumpFolder = @"C:\Dumps";
 
+    // The raw JSON of the latest chain response per symbol — the stale-chain alarm (Form1) saves it as
+    // evidence when Schwab serves a frozen chain; nothing else reads it.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> LastRawResponse = new();
+    public static string? GetLastRawResponse(string symbol) => LastRawResponse.TryGetValue(symbol, out var json) ? json : null;
+
     private readonly HttpClient _httpClient;
     private readonly SchwabAuthService _authService;
     private readonly string _apiKey;
@@ -89,6 +94,7 @@ public class SchwabMarketDataService : IMarketDataService
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync();
+        LastRawResponse[symbol] = json;
 
         // Debug dump
         if (_enableDumps)

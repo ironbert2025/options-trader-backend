@@ -12,7 +12,16 @@ internal static class DailyTradeLogWriter
 {
     private const string VaultFolder = @"C:\ObsidianVault\RobertVault\0010-Options\12-DailyTrades";
 
-    public static void AppendTrade(TradeRecord trade)
+    // An entry's image, with the external-screen screenshot (when there is one) in a second column to its right: a
+    // two-column table, so the row is as tall as the taller image and whatever follows starts below it.
+    private static string WithExternal(string leftMarkdown, string? externalPath, string name)
+    {
+        if (externalPath == null) return leftMarkdown;
+        var nl = Environment.NewLine;
+        return $"| | |{nl}|---|---|{nl}| {leftMarkdown} | ![{name}]({new Uri(externalPath).AbsoluteUri}) |";
+    }
+
+    public static void AppendTrade(TradeRecord trade, string? openExtPath = null, string? closeExtPath = null)
     {
         var suffix = trade.IsDemo ? "Trades" : "Real_Trades";
         var time = trade.EntryTime.ToString("HH:mm:ss");
@@ -24,8 +33,8 @@ internal static class DailyTradeLogWriter
         var entry =
             $"### {trade.Symbol} ({trade.OptionType}, {time}){nl}{nl}" +
             reinforcementNote +
-            $"**Open**{nl}![Open]({trade.EntryImageUrl}){nl}{nl}" +
-            $"**Close**{nl}![Close]({trade.CloseImageUrl}){nl}{nl}" +
+            $"**Open**{nl}{WithExternal($"![Open]({trade.EntryImageUrl})", openExtPath, "Open externo")}{nl}{nl}" +
+            $"**Close**{nl}{WithExternal($"![Close]({trade.CloseImageUrl})", closeExtPath, "Close externo")}{nl}{nl}" +
             $"**TradeLog**{nl}![TradeLog]({trade.TradeLogImageUrl}){nl}{nl}" +
             $"---{nl}{nl}";
 
@@ -42,12 +51,13 @@ internal static class DailyTradeLogWriter
     // already saved for the entry/close snapshots — embedded via file:// like EventLogMarkdownWriter
     // does, instead of an S3 URL.
     public static void AppendSimTrade(string symbol, string optionType, DateTime entryTime,
-        string? entryImagePath, string? closeImagePath, string? tradeLogImagePath = null)
+        string? entryImagePath, string? closeImagePath, string? tradeLogImagePath = null,
+        string? openExtPath = null, string? closeExtPath = null)
     {
         var time = entryTime.ToString("HH:mm:ss");
         var nl   = Environment.NewLine;
-        var openLine     = entryImagePath != null ? $"**Open**{nl}![Open]({new Uri(entryImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
-        var closeLine    = closeImagePath != null ? $"**Close**{nl}![Close]({new Uri(closeImagePath).AbsoluteUri}){nl}{nl}" : string.Empty;
+        var openLine     = entryImagePath != null ? $"**Open**{nl}{WithExternal($"![Open]({new Uri(entryImagePath).AbsoluteUri})", openExtPath, "Open externo")}{nl}{nl}" : string.Empty;
+        var closeLine    = closeImagePath != null ? $"**Close**{nl}{WithExternal($"![Close]({new Uri(closeImagePath).AbsoluteUri})", closeExtPath, "Close externo")}{nl}{nl}" : string.Empty;
         // Trade Log (Trades + Logger section screenshot) — per explicit request, saved locally
         // same as Real/Demo trades already do (see Form1.CaptureTradeLogScreenshot), just embedded
         // via file:// like everything else here instead of an S3 URL (Simulation never uploads).

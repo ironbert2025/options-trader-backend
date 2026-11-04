@@ -23,23 +23,18 @@ public class SimulatorForm : Form
     // Second pair of ◀/▶, independent of the grid-driven ones above — per explicit request, these
     // step the candle-clock (see StepTick) one raw tick at a time, with the options grid following
     // along to whichever step is closest to that tick's own time.
-    // Directly below the "Vela: HH:mm:ss" label (_lblTickClock at (590,234), size (180,20)).
+    // Below the DZ/SZ button row.
     private readonly Button _btnTickAtras    = new() { Text = "◀ Vela", Location = new Point(590, 256), Size = new Size(70, 26), Enabled = false };
     private readonly Button _btnTickAdelante = new() { Text = "Vela ▶", Location = new Point(664, 256), Size = new Size(70, 26), Enabled = false };
+    // "+1C" / "+1P": show the first ITM strike of that side (see Form1.FirstItmStrike). Toggles; they stay
+    // armed across "Cargar" (a view preference), and the strike is recomputed on every step.
+    private bool _showFirstItmCall, _showFirstItmPut;
+    private readonly Button _btnFirstItmCall = new() { Text = "+1C", Location = new Point(590, 74), Size = new Size(60, 24) };
+    private readonly Button _btnFirstItmPut  = new() { Text = "+1P", Location = new Point(656, 74), Size = new Size(60, 24) };
+    // Window with the 1-minute candles of a 15-minute candle (double click on panel 2) — see OpenCandleDetail.
+    private CandleDetailForm? _candleDetail;
     private readonly Button _btnPlus1Min = new() { Text = "+1 Min", Location = new Point(470, 40), Size = new Size(70, 26), Enabled = false };
     private readonly Label _lblStep      = new() { Location = new Point(200, 46), Size = new Size(260, 20), Text = "Sin datos cargados" };
-
-    // Shows the actual tick time currently rendered on the charts — per explicit request, so the
-    // independent Real Time candle clock (_tickPlayTimer) is visibly moving even though it isn't
-    // tied to the options grid's own (coarser) step advance, which otherwise looks like nothing is
-    // happening between grid updates. Updated by both the normal step-driven render and the
-    // Real Time tick clock (see RenderChartsUpToTime), so it's accurate outside Real Time too.
-    // Directly below the DZ/SZ button (_pnlDzSz at (590,202), size (440,30) -> bottom=232).
-    private readonly Label _lblTickClock = new()
-    {
-        Location = new Point(590, 234), Size = new Size(180, 20),
-        Font = new Font("Segoe UI", 9F, FontStyle.Bold), ForeColor = Color.Orange
-    };
 
     // "Play" auto-advances through _steps at the selected cadence, same effect as clicking ▶
     // repeatedly (each tick goes through RenderCurrentStep — PnL, Min/Max, auto-close, chart/grid
@@ -217,8 +212,9 @@ public class SimulatorForm : Form
         Controls.Add(_btnTickAtras);
         Controls.Add(_btnTickAdelante);
         Controls.Add(_btnPlus1Min);
+        Controls.Add(_btnFirstItmCall);
+        Controls.Add(_btnFirstItmPut);
         Controls.Add(_lblStep);
-        Controls.Add(_lblTickClock);
         Controls.Add(_dgvChain);
         Controls.Add(_grpCounts);
         Controls.Add(_grpContracts);
@@ -245,6 +241,25 @@ public class SimulatorForm : Form
         _btnTickAtras.Click    += (s, e) => StepTick(-1);
         _btnTickAdelante.Click += (s, e) => StepTick(1);
         _btnPlus1Min.Click  += (s, e) => StepOneMinute();
+        _rthChart.OnOpenRevisitDeleted += () => _openRevisit?.AllowOppositeAfterDelete();
+        _rthChart.OnCandleDetailRequested += (bucketStartUtc, priceMin, priceMax, barSpacing, linesJson) =>
+        {
+            if (!IsDisposed) BeginInvoke(() => _ = OpenCandleDetailAsync(bucketStartUtc, priceMin, priceMax, barSpacing, linesJson));
+        };
+        Form1.StyleFirstItmToggle(_btnFirstItmCall, isCall: true, armed: false);
+        Form1.StyleFirstItmToggle(_btnFirstItmPut, isCall: false, armed: false);
+        _btnFirstItmCall.Click += (s, e) =>
+        {
+            _showFirstItmCall = !_showFirstItmCall;
+            Form1.StyleFirstItmToggle(_btnFirstItmCall, isCall: true, armed: _showFirstItmCall);
+            if (_currentIndex >= 0) RenderGridForStep();
+        };
+        _btnFirstItmPut.Click += (s, e) =>
+        {
+            _showFirstItmPut = !_showFirstItmPut;
+            Form1.StyleFirstItmToggle(_btnFirstItmPut, isCall: false, armed: _showFirstItmPut);
+            if (_currentIndex >= 0) RenderGridForStep();
+        };
         _playTimer.Tick     += PlayTimer_Tick;
         _tickPlayTimer.Tick += TickPlayTimer_Tick;
         _dgvChain.CellClick     += DgvChain_CellClick;
@@ -282,6 +297,13 @@ public class SimulatorForm : Form
         };
 
         _pnlDzSz.Controls.Add(btnDzSz);
+
+        // "1 Min Chart": the 1-minute candles window of the candle forming at the replay clock (a double click
+        // on any candle of panel 2 opens it too).
+        var btnOneMinChart = new Button { Text = "1 Min Chart", Location = new Point(88, 0), Size = new Size(100, 26) };
+        btnOneMinChart.Click += (s, e) => { _ = _rthChart.RequestLastCandleDetailAsync(); };
+        _pnlDzSz.Controls.Add(btnOneMinChart);
+
     }
 
     // "Arrow" (diagonal, RTH chart only) + "Stk Call"/"Stk Put" — ported from the live app's
@@ -858,9 +880,9 @@ public class SimulatorForm : Form
         if (_selectedContracts != "PositionSize" && int.TryParse(_selectedContracts, out var fixedCount))
             return fixedCount.ToString();
 
-        var balance = BalanceStore.Load();
+        var balance = BalanceStore.Load(BalanceMode.Demo); // the replay practices with the demo balance and never changes it
         decimal.TryParse(PositionSizeSettingsStore.Load(), out var pct);
-        return CalcSimContracts(balance * pct / 100m, ask);
+        return CalcSimContracts(BalanceStore.PositionAmount(BalanceMode.Demo, balance, pct), ask);
     }
 
     // Cross-SMA (20/40/100/200) + T-Line/Clear on the 1h simulated chart — same toggle mechanics
@@ -902,7 +924,7 @@ public class SimulatorForm : Form
 
         // Shows/hides the white Bollinger-band edge markers on the 15m RTH panel — checked by
         // default (matches the always-on behavior before this toggle existed).
-        var chkBollingerEdges = new CheckBox { Text = "BB edges", Location = new Point(320, 4), AutoSize = true, Checked = true };
+        var chkBollingerEdges = new CheckBox { Text = "BB edges", Location = new Point(320, 4), AutoSize = true, Checked = false };
         chkBollingerEdges.CheckedChanged += async (s, e) =>
             await _rthChart.SetBollingerEdgeMarkersVisibleAsync(chkBollingerEdges.Checked);
         _pnlSmaEvents.Controls.Add(chkBollingerEdges);
@@ -1057,7 +1079,8 @@ public class SimulatorForm : Form
     private int _bbFirstIdx = -1;            // index in _intradayCandles of today's first RTH tick
     private int _bbCursor = -1;              // last tick index fed to _bbDetector
     private int _bbLoggedHighWater = -1;     // highest tick index whose events were already logged
-    private readonly Panel _pnlBb = new() { Location = new Point(1040, 160), Size = new Size(130, 68) };
+    private readonly Panel _pnlBb = new() { Location = new Point(1040, 126), Size = new Size(130, 94) }; // up from y=160: the arrow/Stk panel (y>=232) covers whatever sits lower
+    private readonly CheckBox _chkSetup = new() { Text = "Señal PUT/CALL", Checked = true, AutoSize = true, Location = new Point(0, 72), Font = new Font("Segoe UI", 8F) };
     private readonly Label _lblBbRearm = new() { Text = "BB re-armado:", AutoSize = true, Location = new Point(0, 0), Font = new Font("Segoe UI", 8F) };
     private readonly ComboBox _cmbBbRearm = new() { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(0, 15), Size = new Size(128, 24) };
     private readonly Button _btnBbScan = new() { Text = "Escaneo rápido BB", Location = new Point(0, 42), Size = new Size(128, 26), Enabled = false };
@@ -1080,6 +1103,16 @@ public class SimulatorForm : Form
         _pnlBb.Controls.Add(_lblBbRearm);
         _pnlBb.Controls.Add(_cmbBbRearm);
         _pnlBb.Controls.Add(_btnBbScan);
+        _pnlBb.Controls.Add(_chkSetup);
+        new ToolTip().SetToolTip(_chkSetup, "PUT/CALL: spot dentro de las bandas, moviéndose en esa dirección, punto medio inclinado en esa dirección y al menos una banda abriéndose.");
+        _chkSetup.CheckedChanged += (s, e) =>
+        {
+            if (!_chkSetup.Checked) { _rthChart.ClearBbSetupMarkers(); return; }
+            if (!_bbAvailable) return;
+            var keep = _bbCursor;       // resync silently; already-logged signals stay as they were
+            ResetBbDetector();
+            AdvanceBbDetector(keep);
+        };
     }
 
     // Completed closes of the prior days' RTH 15m candles (the "previous candle" for the first bucket
@@ -1095,12 +1128,112 @@ public class SimulatorForm : Form
     {
         _bbDetector = new BollingerMomentumDetector(BuildBbContextCloses(), _bbRearm, BbMovingWindow);
         _bbCursor = _bbFirstIdx - 1;
+        _setupDetector = new BbDirectionalSetupDetector(BuildBbContextCloses(), BbMovingWindow);
+        _rthChart.ClearBbSetupMarkers();
+        ResetOpenRevisit();
+    }
+
+    // ===== PUT / CALL setup (BbDirectionalSetupDetector), fed by the same tick walk as the BB momentum detector =====
+    private BbDirectionalSetupDetector? _setupDetector;
+    private int _setupLoggedHighWater = -1;
+
+    // The bands that are opening, as text: "banda inferior abriéndose (216.60 → 216.30)" / both bands.
+    private static string BandsOpeningText(BbSetupEvent ev)
+    {
+        var upper = $"superior {ev.UpPrev:F2} → {ev.Up:F2}";
+        var lower = $"inferior {ev.LoPrev:F2} → {ev.Lo:F2}";
+        if (ev.UpperOpening && ev.LowerOpening) return $"ambas bandas abriéndose ({upper}; {lower})";
+        return ev.UpperOpening ? $"banda {upper} abriéndose" : $"banda {lower} abriéndose";
+    }
+
+    // One line for the log: what held, with the numbers.
+    private static string SetupText(BbSetupEvent ev, DateTime easternTime) =>
+        $"[Señal {(ev.Bullish ? "CALL" : "PUT")}] {easternTime:HH:mm:ss.fff} — spot {ev.Spot:F2} dentro de las bandas, " +
+        $"{(ev.Bullish ? "subiendo" : "bajando")} ({ev.SpotAgo:F2} → {ev.Spot:F2}); medio {ev.Mid:F2} {(ev.Bullish ? "↑" : "↓")} ({ev.MidPrev:F2} en la vela anterior); {BandsOpeningText(ev)}";
+
+    // The note entry: the four conditions as a checked list.
+    private string SetupDetails(BbSetupEvent ev)
+    {
+        var dir = ev.Bullish ? "arriba" : "abajo";
+        var midDelta = ev.Mid - ev.MidPrev;
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"Spot {ev.Spot:F2}, dentro de las bandas ({ev.Lo:F2} – {ev.Up:F2}), {(ev.SpotAboveMid ? "por encima" : "por debajo")} del punto medio.\n");
+        sb.Append($"- ✔ Dentro de las bandas: {ev.Lo:F2} < {ev.Spot:F2} < {ev.Up:F2}\n");
+        sb.Append($"- ✔ Moviéndose {dir}: {ev.SpotAgo:F2} hace 5 s → {ev.Spot:F2} ahora\n");
+        sb.Append($"- ✔ Punto medio hacia {dir}: {ev.Mid:F2} (vela anterior {ev.MidPrev:F2}, {midDelta:+0.00;-0.00})\n");
+        sb.Append($"- ✔ {char.ToUpper(BandsOpeningText(ev)[0])}{BandsOpeningText(ev)[1..]}");
+        if (!(ev.UpperOpening && ev.LowerOpening))
+            sb.Append(ev.UpperOpening ? $" (la inferior {ev.LoPrev:F2} → {ev.Lo:F2} no)" : $" (la superior {ev.UpPrev:F2} → {ev.Up:F2} no)");
+        return sb.ToString();
+    }
+
+    private void HandleSetup(BbSetupEvent ev, int tickIndex)
+    {
+        _rthChart.MarkBbSetup(CandleAggregation.FifteenMinRthBucketStartUtc(ev.TimeUtc), ev.Bullish);
+        if (tickIndex <= _setupLoggedHighWater) return;
+        _setupLoggedHighWater = tickIndex;
+        var message = SetupText(ev, EasternTime(ev.TimeUtc));
+        var color = ev.Bullish ? Color.LimeGreen : Color.Tomato;
+        LogSimEvent(message, new List<(string Text, Color? Color)> { (message, color), (Environment.NewLine, null) }, ev.TimeUtc);
+        RecordSetupNote(ev);
+    }
+
+    // BBSetup note: one entry per signal (candle + direction) with its description and the combined panel 1 + 2 image.
+    private SimPriceActionRun? _setupRun;
+    private readonly HashSet<(int Bucket, bool Bullish)> _setupNoted = new();
+
+    private void RecordSetupNote(BbSetupEvent ev)
+    {
+        if (_setupRun == null) return;
+        var bucket = PrBucketOf(ev.TimeUtc);
+        if (bucket < 0 || bucket > 25 || !_setupNoted.Add((bucket, ev.Bullish))) return; // once per candle and direction
+        var eastern = EasternTime(ev.TimeUtc);
+        var startOfCandle = PrRthStart + TimeSpan.FromMinutes(15 * bucket);
+        var heading = $"{eastern:HH:mm:ss.fff} — Señal {(ev.Bullish ? "CALL" : "PUT")} · vela {startOfCandle:hh\\:mm}–{startOfCandle + TimeSpan.FromMinutes(15):hh\\:mm} ({bucket + 1} de 26)";
+        var details = SetupDetails(ev);
+        if (!_prContinuous)
+        {
+            SimPriceActionMarkdownWriter.AppendSetup(_setupRun, heading, details, null, "sin imagen: salto de reproducción");
+            LogSimEvent("[Señales PUT/CALL] Sin imagen: salto de reproducción (entrada de texto en la nota)");
+            return;
+        }
+        var fileName = $"{eastern:HHmmssfff}_{(ev.Bullish ? "call" : "put")}.png";
+        EnqueuePrCapture(new PrCaptureRequest(_setupRun, heading, fileName, IsEvent: false, details));
+    }
+
+    // ===== Open revisit (first 15m candle) — same detector as the live panel 2, fed by the same tick walk =====
+    // Floor from the first 15m candle of the previous days; the line on the chart is redrawn whenever the replay
+    // re-reaches the event (a rewind clears it), the log line only once (its own high-water mark).
+    private OpenRevisitDetector? _openRevisit;
+    private int _openRevisitLoggedHighWater = -1;
+
+    private void ResetOpenRevisit()
+    {
+        _rthChart.ClearOpenRevisit();
+        // the Simulator only loads 3 context days, so the floor comes from the saved tick files (up to 20 days)
+        var median = TickFileMinuteCandles.MedianFirstCandleRange(_symbol, _simDate);
+        _openRevisit = median == null ? null : new OpenRevisitDetector(median.Value);
+    }
+
+    private void FeedOpenRevisit(int tickIndex, CandleData tick)
+    {
+        var ev = _openRevisit?.OnTick(tick.Time, tick.Close);
+        if (ev == null) return;
+        var arrow = ev.BodyUp ? "▲" : "▼";
+        _rthChart.MarkOpenRevisit(ev.Open, $"OPEN {arrow} {EasternTime(ev.TimeUtc):HH:mm:ss}");
+        if (tickIndex <= _openRevisitLoggedHighWater) return;
+        _openRevisitLoggedHighWater = tickIndex;
+        var message = $"[Open] Open revisitado {arrow} — wick {ev.Wick:F2}, body {ev.Body:F2} ({ev.Body / ev.Wick:P0}), precio {ev.Price:F2}, open {ev.Open:F2}";
+        LogSimEvent(message, null, ev.TimeUtc);
     }
 
     // Called from LoadSelectedDay once _intradayCandles for the new day is in memory.
     private void InitBbForLoadedDay()
     {
         _bbLoggedHighWater = -1;
+        _candleDetail?.ResetAnalysis(); // a new day: the 1-minute window forgets its target / fixed move
+        _setupLoggedHighWater = -1;
+        _openRevisitLoggedHighWater = -1;
         _bbFirstIdx = _intradayCandles.FindIndex(c =>
         {
             var e = EasternTime(c.Time);
@@ -1150,6 +1283,8 @@ public class SimulatorForm : Form
         for (var i = Math.Max(_bbCursor + 1, _bbFirstIdx); i <= last; i++)
         {
             var tick = _intradayCandles[i];
+            FeedOpenRevisit(i, tick);
+            if (_chkSetup.Checked && _setupDetector?.OnTick(tick.Time, tick.Close) is { } setupEvent) HandleSetup(setupEvent, i);
             var events = _bbDetector.OnTick(tick.Time, tick.Close);
             if (i > _bbLoggedHighWater)
             {
@@ -1165,7 +1300,12 @@ public class SimulatorForm : Form
         var (text, color) = BbMomentumText.For(ev);
         var message = prefix + text;
         LogSimEvent(message, new List<(string Text, Color? Color)> { (message, color), (Environment.NewLine, null) }, ev.TimeUtc);
-        if (recordPriceAction) RecordPriceActionEvent(ev, text); // never from the quick scan: no chart playing there
+        // WORKAROUND (disabled on purpose): the Bollinger momentum events (Validación / Toque) used to be
+        // recorded in the RTH_PriceAction note as indented entries with their own screenshot. Only the
+        // 15-minute candle-close images are kept for now. To bring the indented entries back, uncomment the
+        // line below (the Simulator has its twin in SimulatorForm.LogBbEvent); the writer, the queue and
+        // RecordPriceActionEvent are untouched.
+        // if (recordPriceAction) RecordPriceActionEvent(ev, text); // never from the quick scan: no chart playing there
     }
 
     // Walks the WHOLE day's RTH ticks instantly with a fresh detector (independent of the play clock,
@@ -1188,6 +1328,22 @@ public class SimulatorForm : Form
                     $"Alcista: {Count(BbMomentumEventKind.Validation, true)} validaciones / {Count(BbMomentumEventKind.Touch, true)} toques / {Count(BbMomentumEventKind.Lost, true)} perdidas · " +
                     $"Bajista: {Count(BbMomentumEventKind.Validation, false)} validaciones / {Count(BbMomentumEventKind.Touch, false)} toques / {Count(BbMomentumEventKind.Lost, false)} perdidas");
         foreach (var ev in all) LogBbEvent(ev, prefix: "[Escaneo] ");
+
+        // The PUT / CALL setup over the same day, with a fresh detector.
+        var setupDet = new BbDirectionalSetupDetector(BuildBbContextCloses(), BbMovingWindow);
+        var setups = new List<BbSetupEvent>();
+        for (var i = _bbFirstIdx; i < _intradayCandles.Count; i++)
+        {
+            var tick = _intradayCandles[i];
+            if (DateOnly.FromDateTime(EasternTime(tick.Time)) != _simDate) break;
+            if (setupDet.OnTick(tick.Time, tick.Close) is { } se) setups.Add(se);
+        }
+        LogSimEvent($"[Escaneo rápido BB] Señales PUT/CALL: {setups.Count(s => !s.Bullish)} PUT / {setups.Count(s => s.Bullish)} CALL");
+        foreach (var se in setups)
+        {
+            var text = "[Escaneo] " + SetupText(se, EasternTime(se.TimeUtc));
+            LogSimEvent(text, new List<(string Text, Color? Color)> { (text, se.Bullish ? Color.LimeGreen : Color.Tomato), (Environment.NewLine, null) }, se.TimeUtc);
+        }
     }
 
     // ===== RTH Price Action note (Simulator) =====
@@ -1212,7 +1368,7 @@ public class SimulatorForm : Form
     private readonly Queue<PrCaptureRequest> _prQueue = new();
     private bool _prWorking;
 
-    private sealed record PrCaptureRequest(SimPriceActionRun Run, string Label, string FileName, bool IsEvent);
+    private sealed record PrCaptureRequest(SimPriceActionRun Run, string Label, string FileName, bool IsEvent, string? SetupDetails = null);
 
     // Called from LoadSelectedDay once _intradayCandles / _bbFirstIdx for the new day are set.
     private void InitPriceActionForLoadedDay()
@@ -1227,6 +1383,8 @@ public class SimulatorForm : Form
             return DateOnly.FromDateTime(e) == _simDate && e.TimeOfDay >= PrRthStart && e.TimeOfDay < PrRthEnd;
         });
         _prRun = _bbFirstIdx >= 0 ? SimPriceActionMarkdownWriter.CreateRun(_symbol, _simDate, _simExp) : null;
+        _setupRun = _bbFirstIdx >= 0 ? SimPriceActionMarkdownWriter.CreateSetupRun(_symbol, _simDate, _simExp) : null;
+        _setupNoted.Clear();
     }
 
     // -1 before 9:30, 0..25 for the 26 RTH candles, 26 from 16:00 on.
@@ -1318,13 +1476,19 @@ public class SimulatorForm : Form
                             img.Save(imagePath, System.Drawing.Imaging.ImageFormat.Png);
                         }
                     }
-                    if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(req.Run, req.Label, imagePath, "sin imagen: captura no disponible");
+                    if (req.SetupDetails != null)
+                    {
+                        SimPriceActionMarkdownWriter.AppendSetup(req.Run, req.Label, req.SetupDetails, imagePath, "sin imagen: captura no disponible");
+                        LogSimEvent(imagePath != null ? $"[Señales PUT/CALL] Imagen guardada: {Path.GetFileName(imagePath)}" : "[Señales PUT/CALL] Sin imagen: captura no disponible");
+                    }
+                    else if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(req.Run, req.Label, imagePath, "sin imagen: captura no disponible");
                     else SimPriceActionMarkdownWriter.AppendCandleClose(req.Run, req.Label, imagePath);
                 }
                 catch
                 {
                     // A failed screenshot must never break playback — note it and move on.
-                    if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(req.Run, req.Label, null, "sin imagen: captura no disponible");
+                    if (req.SetupDetails != null) SimPriceActionMarkdownWriter.AppendSetup(req.Run, req.Label, req.SetupDetails, null, "sin imagen: captura no disponible");
+                    else if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(req.Run, req.Label, null, "sin imagen: captura no disponible");
                     else SimPriceActionMarkdownWriter.AppendCandleClose(req.Run, req.Label, null);
                 }
             }
@@ -1332,7 +1496,7 @@ public class SimulatorForm : Form
         finally { _prWorking = false; }
     }
 
-    // Panel 1 (1h) + panel 2 (15m RTH) side by side, same layout/labels as the live app's combined image.
+    // Panel 1 (1h) + panel 2 (15m RTH) side by side, same layout and header strips as the live app's combined image.
     private async Task<Bitmap?> CaptureCombinedPanels12Async()
     {
         Bitmap? hourly = null, rth = null;
@@ -1343,19 +1507,16 @@ public class SimulatorForm : Form
             if (hourly == null || rth == null) return null;
 
             const int gap = 4;
-            var combined = new Bitmap(hourly.Width + gap + rth.Width, Math.Max(hourly.Height, rth.Height));
+            var scale = CombinedChartHeader.ScaleFor(hourly, _hourlyChart);
+            var stripH = CombinedChartHeader.StripHeight(scale);
+            var combined = new Bitmap(hourly.Width + gap + rth.Width, Math.Max(hourly.Height, rth.Height) + stripH);
             using var g = Graphics.FromImage(combined);
-            using var font = new Font("Segoe UI", 11f, FontStyle.Bold);
-            using var brush = new SolidBrush(Color.White);
             g.Clear(Color.Black);
-            void Place(Bitmap img, int x, string label)
-            {
-                g.DrawImage(img, x, 0);
-                var size = g.MeasureString(label, font);
-                g.DrawString(label, font, brush, x + (img.Width - size.Width) / 2f, 8f);
-            }
-            Place(hourly, 0, "1 Hour");
-            Place(rth, hourly.Width + gap, "15Min RTH");
+            CombinedChartHeader.Draw(g, 0, hourly.Width, scale, _hourlyChart.HeaderTitle, _hourlyChart.TrendHeaderSegments());
+            g.DrawImage(hourly, 0, stripH);
+            var rthX = hourly.Width + gap;
+            CombinedChartHeader.Draw(g, rthX, rth.Width, scale, _rthChart.HeaderTitle, _rthChart.TrendHeaderSegments());
+            g.DrawImage(rth, rthX, stripH);
             return combined;
         }
         catch
@@ -1983,7 +2144,7 @@ public class SimulatorForm : Form
         _lblStep.Text = $"Paso {_currentIndex + 1}/{_steps.Count} — {EasternTime(step.Time):HH:mm:ss} — Spot {step.UnderlyingPrice:F2}";
 
         (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, step.Quotes, _ticker, applyCountsFilter: true, selectedCounts: _selectedCounts,
-            forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
+            forcedStrikes: ShownStrikes(step.Quotes), highlightedStrikes: ShownStrikes(step.Quotes));
         _ = UpdateTriggerStkLabelsAsync();
         _ = UpdateStkMinMaxAsync();
 
@@ -2031,13 +2192,62 @@ public class SimulatorForm : Form
         RenderGridForStep();
     }
 
+    // Double click on a panel-2 candle: the window shows that candle's 1-minute candles up to the replay
+    // clock (_lastChartClockUtc). It follows the clock — redrawn from RenderChartsUpToTime — so a candle in
+    // formation fills in minute by minute and stops changing once the clock passes its end.
+    private async Task OpenCandleDetailAsync(DateTime bucketStartUtc, double? priceMin, double? priceMax, double? barSpacing, string? linesJson)
+    {
+        if (_candleDetail == null || _candleDetail.IsDisposed)
+        {
+            var window = new CandleDetailForm(_symbol, _rthChart.Height);
+            // Double click on a 1-minute candle: the 4 nearest OTM strikes of its side, from the replayed chain — the step at/before
+            // the last second of that minute (or the one the clock is on, for the minute still forming).
+            window.StrikeProvider = (minuteUtc, bullish, forming, fixedStrikes) =>
+            {
+                var cutoff = forming ? _lastChartClockUtc : minuteUtc.AddSeconds(59);
+                SimulationStep? step = null;
+                for (var i = _steps.Count - 1; i >= 0; i--)
+                    if (_steps[i].Time <= cutoff) { step = _steps[i]; break; }
+                if (step == null || step.Quotes.Count == 0)
+                    return new StrikeQuoteResult(Array.Empty<StrikeQuote>(), "sin datos de opciones en ese minuto");
+                var picked = fixedStrikes != null
+                    ? StrikeQuotePicker.ForStrikes(step.Quotes, bullish, fixedStrikes)
+                    : StrikeQuotePicker.Nearest(step.Quotes, bullish, step.UnderlyingPrice);
+                return new StrikeQuoteResult(picked, picked.Count == 0 ? "sin datos de opciones en ese minuto" : null, step.UnderlyingPrice);
+            };
+            // P-Line / .50 / 1.00 live in the 1-minute window itself; they need the contracts the position budget buys.
+            window.EnableAnalysisBar(ask => int.TryParse(GetSimContractsValue(ask), out var n) ? n : 0);
+            _candleDetail = window;
+            // a trade opened/closed while the window is open gets its rayita too
+            Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);
+            _rthChart.OnEntrySpotMarked += onMark;
+            window.FormClosed += (s2, e2) => _rthChart.OnEntrySpotMarked -= onMark;
+            window.DockToRightOf(this, () => _rthChart.PointToScreen(Point.Empty).Y); // to the right of this window, level with panel 2
+            _candleDetail.Show(this);
+        }
+        _candleDetail.DockIfStillDocked();
+        try
+        {
+            await _candleDetail.ShowBucketAsync(bucketStartUtc,
+                (start, end) => MinuteCandleStore.FromTicks(_intradayCandles, start, end, _lastChartClockUtc),
+                start => _lastChartClockUtc < start.AddMinutes(15) ? MinuteBucketState.Forming : MinuteBucketState.Closed,
+                freezeWhenClosed: false, priceMin, priceMax, barSpacing, () => _lastChartClockUtc, linesJson);
+        }
+        catch { /* diagnostics window — never disturb the playback */ }
+    }
+
     // Extracted from RenderCurrentStep so the independent tick-driven Real Time chart clock
     // (_tickPlayTimer) can push chart updates without touching the options grid/PnL at all.
     private void RenderChartsUpToTime(DateTime uptoUtc)
     {
-        _lblTickClock.Text = $"Vela: {EasternTime(uptoUtc):HH:mm:ss}";
         _lastChartClockUtc = uptoUtc;
+        _candleDetail?.MarkDirty(); // the candle-detail window follows the replay clock
         var targetIdx = LastIntradayIndexAtOrBefore(uptoUtc);
+
+        // Time of the tick clock and the price of the last tick, bottom-right of panel 2 — same overlay
+        // and format as the live Charts tab. Replaces the "Vela: HH:mm:ss" label that sat above the ◀/▶ Vela buttons.
+        if (targetIdx >= 0)
+            _rthChart.SetLastTickTime($"{EasternTime(uptoUtc):HH:mm:ss}    {_intradayCandles[targetIdx].Close:F2}");
         TrackPriceActionClock(uptoUtc, targetIdx);
         AdvanceBbDetector(targetIdx);
 
@@ -2328,8 +2538,8 @@ public class SimulatorForm : Form
         // (MultiChartForm.MarkEntrySpotOnOvernightChartAsync — originally panel 3 only, panel 2
         // added later; the simulator hadn't been kept in sync).
         var entrySpot = CurrentTickSpot(step);
-        _ = _rthChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
-        _ = _fullChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike);
+        _ = _rthChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike, eventTimeUtc: _lastChartClockUtc);
+        _ = _fullChart.MarkEntrySpotAsync(entrySpot, entrySpotColor, pairId: _entrySpotColorCounter.ToString(), strike: strike, eventTimeUtc: _lastChartClockUtc);
 
         // Same log message shape as Form1.RecordEntryAsync's live log lines.
         var nowStr = EasternTime(step.Time).ToString("HH:mm:ss");
@@ -2410,8 +2620,8 @@ public class SimulatorForm : Form
         // for a Call, below for a Put), per explicit request.
         var closeIsCall = trade.OptionType.Equals("CALL", StringComparison.OrdinalIgnoreCase);
         var closeSpot = CurrentTickSpot(step);
-        _ = _rthChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
-        _ = _fullChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice);
+        _ = _rthChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice, eventTimeUtc: _lastChartClockUtc);
+        _ = _fullChart.MarkEntrySpotAsync(closeSpot, trade.SpotColor, isClose: true, isCall: closeIsCall, pairId: trade.PairId, strike: trade.StrikePrice, eventTimeUtc: _lastChartClockUtc);
 
         // Same log message shape as Form1.CloseTradeRowAsync's live log lines.
         var nowStr      = EasternTime(step.Time).ToString("HH:mm:ss");
@@ -2492,6 +2702,16 @@ public class SimulatorForm : Form
 
         if (_currentIndex >= 0)
             (_lastOtmCalls, _lastOtmPuts) = Form1.PopulateQuotesGrid(_dgvChain, _steps[_currentIndex].Quotes, _ticker!, applyCountsFilter: true,
-                selectedCounts: _selectedCounts, forcedStrikes: _forcedStrikes, highlightedStrikes: _forcedStrikes);
+                selectedCounts: _selectedCounts, forcedStrikes: ShownStrikes(_steps[_currentIndex].Quotes), highlightedStrikes: ShownStrikes(_steps[_currentIndex].Quotes));
+    }
+
+    // The pinned (trade) strikes plus, for each armed +1C/+1P, the current first ITM strike of that side. A fresh
+    // set each time — _forcedStrikes itself is never touched, other code depends on its lifetime.
+    private HashSet<(string Type, decimal Strike)> ShownStrikes(List<OptionQuoteDto> quotes)
+    {
+        var shown = new HashSet<(string Type, decimal Strike)>(_forcedStrikes);
+        if (_showFirstItmCall && Form1.FirstItmStrike(quotes, isCall: true) is { } call) shown.Add(("CALL", call));
+        if (_showFirstItmPut && Form1.FirstItmStrike(quotes, isCall: false) is { } put) shown.Add(("PUT", put));
+        return shown;
     }
 }
