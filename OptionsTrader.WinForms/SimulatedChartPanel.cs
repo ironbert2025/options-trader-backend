@@ -98,6 +98,7 @@ public class SimulatedChartPanel : Panel
 
                 // Light gray fill between the bands — per explicit request, panel 2 (15m RTH) only.
                 await _webView.CoreWebView2.ExecuteScriptAsync("enableBollingerFill();");
+                await _webView.CoreWebView2.ExecuteScriptAsync("configureCandleDetail(true);"); // double click on a candle -> its 1-minute candles
 
                 // Needed for "dzsz_delete" — this chart only ever shows MIRRORED zones (never
                 // arms DZ/SZ itself), but the mirrored copy is still independently selectable/
@@ -252,6 +253,44 @@ public class SimulatedChartPanel : Panel
         return new Bitmap(decoded); // independent copy — a Bitmap decoded from a stream needs that stream alive
     }
 
+    // Bottom-right "HH:mm:ss    price" overlay, same one the live Charts tab shows (chart.html
+    // setLastTickTime). Skips identical text so a render that changes nothing doesn't repaint.
+    private string _lastTickText = string.Empty;
+    public void SetLastTickTime(string text)
+    {
+        if (text == _lastTickText || _webView.CoreWebView2 == null) return;
+        _lastTickText = text;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync($"setLastTickTime('{text}');");
+    }
+
+    // Open revisit (first 15m candle): dotted line at the open, titled with the direction and moment; cleared when the
+    // replay is rewound or another day is loaded.
+    public void MarkOpenRevisit(decimal open, string title)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var openStr = open.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _ = _webView.CoreWebView2.ExecuteScriptAsync($"markOpenRevisit({openStr}, {System.Text.Json.JsonSerializer.Serialize(title)});");
+    }
+
+    // PUT / CALL setup arrow on the 15m candle (bucketStartUtc) where the setup fired.
+    public void MarkBbSetup(DateTime bucketStartUtc, bool isCall)
+    {
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync($"markBbSetup({ToFakeUtcEpochSeconds(bucketStartUtc)}, {(isCall ? "true" : "false")});");
+    }
+
+    public void ClearBbSetupMarkers()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync("clearBbSetupMarkers();");
+    }
+
+    public void ClearOpenRevisit()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        _ = _webView.CoreWebView2.ExecuteScriptAsync("clearOpenRevisit();");
+    }
+
     public async Task MarkStrikeAsync(decimal strike)
     {
         if (_webView.CoreWebView2 == null) return;
@@ -267,15 +306,21 @@ public class SimulatedChartPanel : Panel
     // Accumulates, one segment per trade, never auto-removed.
     // isClose/isCall: per explicit request, only the CLOSE line gets a "C" label (above for a
     // Call, below for a Put) — omitted for the open call.
-    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
+    public async Task MarkEntrySpotAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null, DateTime? eventTimeUtc = null)
     {
         if (_webView.CoreWebView2 == null) return;
         var priceStr = price.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var strikeArg = strike.HasValue ? strike.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "null";
         var isCloseStr = isClose ? "true" : "false";
         var isCallStr = isCall ? "true" : "false";
-        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg});");
+        var eventSeconds = eventTimeUtc.HasValue ? ToFakeUtcEpochSeconds(eventTimeUtc.Value) : (long?)null;
+        var eventArg = eventSeconds.HasValue ? eventSeconds.Value.ToString() : "null";
+        await _webView.CoreWebView2.ExecuteScriptAsync($"markEntrySpot({priceStr}, undefined, {JsonSerializer.Serialize(color)}, {isCloseStr}, {isCallStr}, {JsonSerializer.Serialize(pairId)}, {strikeArg}, {eventArg});");
+        if (eventSeconds.HasValue) OnEntrySpotMarked?.Invoke(price, eventSeconds.Value, isClose);
     }
+
+    // Fired when a trade open/close rayita is marked (price, chart seconds, isClose) — see the candle-detail window.
+    public event Action<decimal, long, bool>? OnEntrySpotMarked;
 
     // Fires (pairId, strike) when a trade's open/close rayitas are deleted on this chart — SimulatorForm
     // relays it to the other chart's RemoveTradeMarksAsync (same idea as ChartPanel's own event).
@@ -894,6 +939,27 @@ public class SimulatedChartPanel : Panel
     // SMA20/40 + SMA100/200 trend ("up"/"down"/null each) — see ChartPanel.OnTrendStateChanged.
     public event Action<string?, string?>? OnTrendStateChanged;
 
+    // The "1 Min Chart" button: same as a double click on the newest candle shown — the one forming at the
+    // replay clock — through the same OnCandleDetailRequested path.
+    public async Task RequestLastCandleDetailAsync()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        await _webView.CoreWebView2.ExecuteScriptAsync("openCandleDetailForLast();");
+    }
+
+    // Double click on a candle of the 15m RTH chart -> the 15-minute bucket's start (UTC); see SimulatorForm.OpenCandleDetail.
+    public event Action<DateTime, double?, double?, double?, string?>? OnCandleDetailRequested;
+
+    // The user deleted the "open revisit" line (click + Delete) — the Simulator re-arms the opposite direction.
+    public event Action? OnOpenRevisitDeleted;
+
+    // Last trend state seen from the page + the header title, for the combined images' header strip
+    // (CombinedChartHeader) — this panel's own header shows only the title, the trend words reach the log.
+    private string? _trendShortDir, _trendLongDir;
+    internal string HeaderTitle => _header.Text;
+    internal IReadOnlyList<(string Text, Color Color)>? TrendHeaderSegments() =>
+        CombinedChartHeader.TrendSegments(_trendShortDir, _trendLongDir);
+
     // Same as ChartPanel.OnSaltoSetupChanged — relayed to the 15m chart by SimulatorForm.
     public event Action<bool?, long[]>? OnSaltoSetupChanged;
 
@@ -1102,10 +1168,27 @@ public class SimulatedChartPanel : Panel
                 return;
             }
 
+            if (type == "open_revisit_deleted")
+            {
+                OnOpenRevisitDeleted?.Invoke();
+                return;
+            }
+
+            if (type == "candle_detail")
+            {
+                if (root.TryGetProperty("time", out var cdTime) && cdTime.TryGetInt64(out var cdSeconds))
+                    OnCandleDetailRequested?.Invoke(CandleAggregation.FifteenMinRthBucketStartUtc(ChartPanel.UtcFromFakeEpochSeconds(cdSeconds)),
+                        ChartPanel.ReadNullableDouble(root, "priceMin"), ChartPanel.ReadNullableDouble(root, "priceMax"), ChartPanel.ReadNullableDouble(root, "barSpacing"),
+                        root.TryGetProperty("lines", out var cdLines) && cdLines.ValueKind == JsonValueKind.Array ? cdLines.GetRawText() : null);
+                return;
+            }
+
             if (type == "trend_state")
             {
                 var shortDir = root.TryGetProperty("shortDir", out var sd) && sd.ValueKind == JsonValueKind.String ? sd.GetString() : null;
                 var longDir = root.TryGetProperty("longDir", out var ld) && ld.ValueKind == JsonValueKind.String ? ld.GetString() : null;
+                _trendShortDir = shortDir;
+                _trendLongDir = longDir;
                 OnTrendStateChanged?.Invoke(shortDir, longDir);
                 return;
             }

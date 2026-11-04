@@ -1637,7 +1637,9 @@
     if (pLineArmed) {
       const refPrice = currentReferencePrice();
       const direction = refPrice != null && price < refPrice ? 'below' : 'above';
+      if (pLineSingle) pLinePrimitive._segments = [];
       pLinePrimitive._segments.push({ time: clickTime, price, direction, selected: false });
+      pLinePlacedAt = performance.now();
       // Reported to C# (ChartPanel.CoreWebView2_WebMessageReceived) — owns the actual live-tick
       // cross-detection and Telegram push, no mirroring (panel 2 only, per explicit request).
       if (window.chrome && window.chrome.webview) {
@@ -1981,6 +1983,27 @@
   const pLinePrimitive = new PLinePrimitive();
   let pLineAttached = false;
   let pLineArmed = false;
+
+  // Simulator: ONE P-Line at a time (the price target being analysed) — placing a new one replaces the previous.
+  let pLineSingle = false;
+  let pLinePlacedAt = -1e9; // when the last P-Line was placed (the 1-minute window ignores that click as a candle click)
+  function setPLineSingle(on) { pLineSingle = !!on; }
+  function clearPLines() { pLinePrimitive._segments = []; forceRepaint(); }
+
+  // 1-minute window: the P-Line the fixed spot move (.50 / 1.00) draws by itself — the price the spot has to reach, from the clicked candle
+  // to the right. It is the single P-Line (replaces another) and sends no "placed" message to C#; flagged so it can be removed on its own.
+  function detailDrawMovePLine(time, price, bullish) {
+    if (!pLineAttached) { candleSeries.attachPrimitive(pLinePrimitive); pLineAttached = true; }
+    pLinePrimitive._segments = [{ time, price, direction: bullish ? 'above' : 'below', selected: false, fromMove: true }];
+    candleSeries.priceScale().applyOptions({ autoScale: true }); // the axis holds the line
+    forceRepaint();
+  }
+  function detailClearMovePLine() {
+    if (!pLinePrimitive._segments.some(s => s.fromMove)) return;
+    pLinePrimitive._segments = pLinePrimitive._segments.filter(s => !s.fromMove);
+    candleSeries.priceScale().applyOptions({ autoScale: true });
+    forceRepaint();
+  }
 
   function togglePLine() {
     if (!pLineAttached) { candleSeries.attachPrimitive(pLinePrimitive); pLineAttached = true; }
@@ -2707,7 +2730,7 @@
   // pairId: identifies the trade this line belongs to, shared by its open and close lines, so
   // selecting + deleting one removes the whole pair (null for anything without one).
   // strike: the trade's strike, so deleting the pair can also take its green Stk line + ΔS label.
-  function markEntrySpot(price, time, color, isClose, isCall, pairId, strike) {
+  function markEntrySpot(price, time, color, isClose, isCall, pairId, strike, eventTime) {
     if (!entrySpotLineAttached) { candleSeries.attachPrimitive(entrySpotLinePrimitive); entrySpotLineAttached = true; }
     if (allCandles.length === 0) return;
     let anchorTime = allCandles[allCandles.length - 1].time;
@@ -2724,7 +2747,7 @@
     // part of the key so an open and a close landing on the same candle/price (rare, but possible)
     // don't get treated as the same line and silently drop the close's "C" label.
     const alreadyMarked = entrySpotLinePrimitive._lines.some(l => l.time === anchorTime && l.price === price && !!l.isClose === !!isClose);
-    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall, pairId: pairId ?? null, strike: strike ?? null });
+    if (!alreadyMarked) entrySpotLinePrimitive._lines.push({ time: anchorTime, price, color: color || '#ffffff', isClose: !!isClose, isCall: !!isCall, pairId: pairId ?? null, strike: strike ?? null, eventTime: eventTime ?? null });
     forceRepaint();
   }
 
@@ -4592,7 +4615,7 @@
   // computed at all (set once, per panel, at load); this one is the user-facing show/hide toggle
   // (a checkbox in the toolbar), checked only in draw() so calculation keeps running underneath
   // even while hidden (cheap, and means it's already up to date the moment it's shown again).
-  let bollingerEdgeMarkersVisible = true;
+  let bollingerEdgeMarkersVisible = false; // matches the unchecked "BB edges" box
   function setBollingerEdgeMarkersVisible(show) { bollingerEdgeMarkersVisible = show; forceRepaint(); }
 
   // Panel 2 (15m RTH) only, both Simulator and Live Chart, per explicit request: a light gray fill
@@ -5307,7 +5330,59 @@
   // such a large gap, visually "stretching" it. A full candleSeries.setData() (via renderCandles)
   // forces Lightweight Charts to rebuild layout from scratch instead, which doesn't have that
   // issue — more expensive than update(), but this only runs once per day, not per tick.
+  // "Open revisit" (first 15m candle): thin dotted line at the open price, titled with the direction of the body
+  // and the moment it fired. One per day — the next one replaces it.
+  let openRevisitLine = null;
+  function markOpenRevisit(price, title) {
+    if (openRevisitLine) candleSeries.removePriceLine(openRevisitLine);
+    openRevisitSelected = false;
+    openRevisitLine = candleSeries.createPriceLine({
+      price, color: '#ffd400', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted,
+      axisLabelVisible: true, lineVisible: true, title
+    });
+  }
+  // PUT / CALL setup arrows (Simulator, panel 2): one marker per 15m candle and direction, on the candle where the setup
+  // fired — red arrow down above the bar (PUT), green arrow up below it (CALL). Dedup by candle + direction.
+  let bbSetupMarkers = [];
+  function applyBbSetupMarkers() {
+    const ms = bbSetupMarkers.slice().sort((a, b) => a.time - b.time).map(m => ({ time: m.time, position: m.position, color: m.color, shape: m.shape, text: m.text }));
+    candleSeries.setMarkers(ms);
+  }
+  function markBbSetup(time, isCall) {
+    if (bbSetupMarkers.some(m => m.time === time && m.isCall === !!isCall)) return;
+    bbSetupMarkers.push({ time, isCall: !!isCall, position: isCall ? 'belowBar' : 'aboveBar', color: isCall ? '#26a69a' : '#ef5350',
+                          shape: isCall ? 'arrowUp' : 'arrowDown', text: isCall ? 'CALL' : 'PUT' });
+    applyBbSetupMarkers();
+  }
+  function clearBbSetupMarkers() { bbSetupMarkers = []; candleSeries.setMarkers([]); }
+
+  function clearOpenRevisit() {
+    if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; }
+    openRevisitSelected = false;
+  }
+  // Click on the line selects it (thicker, white), Delete removes it — same gesture as the drawn lines. A click
+  // anywhere else deselects. Ignored while a drawing tool is armed (those clicks place things).
+  let openRevisitSelected = false;
+  function setOpenRevisitSelected(on) {
+    openRevisitSelected = on;
+    if (openRevisitLine) openRevisitLine.applyOptions({ lineWidth: on ? 2 : 1, color: on ? '#ffffff' : '#ffd400' });
+  }
+  container.addEventListener('click', ev => {
+    if (!openRevisitLine) return;
+    if (dzSzArmed || rectArmed || circleArmed || colorRectArmed || grayRectArmed || tLineArmed || pLineArmed ||
+        hLineArmed || arrowArmed || greenArrowArmed || redArrowArmed || textArmed) return;
+    const y = candleSeries.priceToCoordinate(openRevisitLine.options().price);
+    const py = ev.clientY - container.getBoundingClientRect().top;
+    setOpenRevisitSelected(y != null && Math.abs(y - py) <= 6);
+  });
+  window.addEventListener('keydown', ev => {
+    if (ev.key !== 'Delete' || !openRevisitSelected) return;
+    clearOpenRevisit();
+    // tell C#: the next cross the other way is reported again
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'open_revisit_deleted' });
+  });
   function resetToNewDayCandle(candle) {
+    if (openRevisitLine) { candleSeries.removePriceLine(openRevisitLine); openRevisitLine = null; } // yesterday's open
     upsertCandle(candle);
     renderCandles();
     recalculateSmas();
@@ -5316,6 +5391,697 @@
     recalculateDayDividers();
     reapplyVisibleRangeIfLive();
   }
+  // ---- Candle detail: double click on a candle asks C# for the 1-minute candles inside it ----
+  // Enabled only on the 15m RTH charts (C# calls configureCandleDetail(true)). Ignored while any drawing
+  // tool is armed — every tool uses single clicks, a double click would otherwise open the window by
+  // accident in the middle of drawing.
+  let candleDetailEnabled = false;
+  function configureCandleDetail(on) { candleDetailEnabled = !!on; }
+
+  container.addEventListener('dblclick', ev => {
+    if (!candleDetailEnabled) return;
+    if (dzSzArmed || rectArmed || circleArmed || colorRectArmed || grayRectArmed || tLineArmed || pLineArmed ||
+        hLineArmed || arrowArmed || greenArrowArmed || redArrowArmed || textArmed) return;
+    const rect = container.getBoundingClientRect();
+    const time = chart.timeScale().coordinateToTime(ev.clientX - rect.left);
+    if (time == null) return; // not over a candle
+    // the candle whose slot the pointer is in (allCandles is sorted by time)
+    let hit = null;
+    for (let i = allCandles.length - 1; i >= 0; i--) {
+      if (allCandles[i].time <= time) { hit = allCandles[i]; break; }
+    }
+    if (!hit) return;
+    postCandleDetail(hit.time);
+  });
+
+  // Asks C# to open the 1-minute window for the candle starting at candleTime: this chart's visible price
+  // range, bar width and reference lines go along. Used by the double click above and by the "1 Min Chart"
+  // button (which targets the newest candle — the one still forming during the session).
+  function postCandleDetail(candleTime) {
+    // The price range this chart shows right now (top and bottom of the plot area), so the detail window can
+    // draw its 1-minute candles over the SAME price span and the two charts line up.
+    let priceMax = null, priceMin = null, barSpacing = null;
+    try {
+      barSpacing = chart.timeScale().options().barSpacing; // CSS px per bar at this chart's current zoom
+      const paneH = chart.paneSize().height;
+      priceMax = candleSeries.coordinateToPrice(0);
+      priceMin = candleSeries.coordinateToPrice(paneH);
+    } catch (e) { /* range unknown — the window falls back to its own autoscale */ }
+    // The reference lines this chart shows (blue premarket price, yellow previous-day close, Piso/Techo
+    // levels in their SMA colors) as they are right now — the detail window repeats them as price lines.
+    const lines = [];
+    try {
+      if (preMarketLinePrimitive._armed && preMarketLinePrimitive._price != null)
+        lines.push({ price: preMarketLinePrimitive._price, color: '#2196f3', width: 2, title: '' });
+      if (prevDayCloseLinePrimitive._price != null)
+        lines.push({ price: prevDayCloseLinePrimitive._price, color: '#ffeb3b', width: 1, title: 'C' });
+      pisoTechoRefLinePrimitive._lines.forEach(l => lines.push({ price: l.price, color: l.color, width: 2, title: '' }));
+      // trade open/close rayitas (exact event time, so the detail window can put each on its 1-minute candle)
+      entrySpotLinePrimitive._lines.forEach(l => {
+        if (l.eventTime != null) lines.push({ kind: 'trade', price: l.price, eventTime: l.eventTime, isClose: !!l.isClose });
+      });
+    } catch (e) { /* a primitive not available on this chart — send what we have */ }
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage({ type: 'candle_detail', time: candleTime, priceMin, priceMax, barSpacing, lines });
+    }
+  }
+
+  function openCandleDetailForLast() {
+    if (!candleDetailEnabled || allCandles.length === 0) return;
+    postCandleDetail(allCandles[allCandles.length - 1].time);
+  }
+
+  // ---- Detail window view (used only by CandleDetailForm's own page) ----
+  // The view is laid out ONCE per target candle — a fixed bar width, the first candle at 20 % of the width with room
+  // to grow to the right, the price axis spanning the main chart's range — and left alone after that, so
+  // new candles just add to the right and the user's own zoom / pan / axis scaling is not undone.
+  let detailView = null; // { barSpacing, priceMin, priceMax, userMoved }
+  let detailApplying = false;
+
+  function configureDetailView(opts) {
+    // starts: every 15-minute candle the window has followed (the first one, then each next one it moved on to);
+    // bucketStart is the latest — the one now forming — and the one the view is laid out for.
+    detailView = { barSpacing: opts.barSpacing, priceMin: opts.priceMin, priceMax: opts.priceMax, bucketStart: opts.bucketStart, starts: [opts.bucketStart], firstCandlePx: opts.firstCandlePx, userMoved: false };
+    detailMarkersPrimitive._starts = detailView.starts;
+    if (!detailMarkersAttached) { candleSeries.attachPrimitive(detailMarkersPrimitive); detailMarkersAttached = true; }
+    if (!detailTradesAttached) { candleSeries.attachPrimitive(detailTradesPrimitive); detailTradesAttached = true; }
+    // The X axis shows the minute's position inside the 15-minute candle (1..15), not the clock time.
+    const minuteIndex = t => { const i = detailMinuteIndex(t); return i > 0 ? String(i) : ''; };
+    chart.applyOptions({
+      timeScale: { tickMarkFormatter: () => '' }, // the native ticks are replaced by detailRenderIndexLabels (one label per candle)
+      localization: { timeFormatter: time => (typeof time === 'number' ? minuteIndex(time) : '') }
+    });
+    chart.timeScale().applyOptions({ barSpacing: opts.barSpacing, rightOffset: 0, fixLeftEdge: false });
+    // Same price span as the 15m chart, widened if the data ever leaves it (never clips a candle).
+    candleSeries.applyOptions({
+      autoscaleInfoProvider: original => {
+        const res = original();
+        const ex = detailExtraRange();
+        const sMin = ex ? ex.min : null, sMax = ex ? ex.max : null;
+        if (detailView.priceMin == null || detailView.priceMax == null) {
+          if (res && res.priceRange && sMin != null)
+            return { ...res, priceRange: { minValue: Math.min(res.priceRange.minValue, sMin), maxValue: Math.max(res.priceRange.maxValue, sMax) } };
+          return res;
+        }
+        const lo = sMin != null ? Math.min(detailView.priceMin, sMin) : detailView.priceMin;
+        const hi = sMax != null ? Math.max(detailView.priceMax, sMax) : detailView.priceMax;
+        if (!res || !res.priceRange) return { priceRange: { minValue: lo, maxValue: hi } };
+        return {
+          ...res,
+          priceRange: {
+            minValue: Math.min(res.priceRange.minValue, lo),
+            maxValue: Math.max(res.priceRange.maxValue, hi)
+          }
+        };
+      }
+    });
+    // No extra margins: the span handed over IS what the main chart shows (margins included), so adding
+    // the autoscale margins again would draw this axis wider than the main chart's.
+    candleSeries.priceScale().applyOptions({ autoScale: true, scaleMargins: { top: 0, bottom: 0 } });
+  }
+
+  // Position (1..15) of a minute inside the 15-minute candle it belongs to (the latest followed candle that starts
+  // at or before it), or 0 when it is outside any.
+  function detailMinuteIndex(t) {
+    if (!detailView) return 0;
+    let s = null;
+    for (const st of detailView.starts) { if (st <= t) s = st; }
+    if (s == null) return 0;
+    const i = Math.round((t - s) / 60) + 1;
+    return i >= 1 && i <= 15 ? i : 0;
+  }
+
+  // 1..15 under each candle of the detail window, positioned from the time scale (the native axis only
+  // labels some ticks and picks them by time). Thinned out only when candles are too narrow for two digits.
+  function detailRenderIndexLabels() {
+    if (!detailView) return;
+    let host = document.getElementById('detailIdx');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'detailIdx';
+      host.style.cssText = 'position:absolute; left:0; bottom:3px; height:14px; pointer-events:none; z-index:5; font:11px sans-serif; color:#9aa0aa;';
+      document.body.appendChild(host);
+    }
+    const spacing = chart.timeScale().options().barSpacing;
+    const step = spacing >= 16 ? 1 : (spacing >= 8 ? 2 : 5);
+    let html = '';
+    for (const c of allCandles) {
+      const idx = detailMinuteIndex(c.time);
+      if (idx < 1) continue;
+      if (idx !== 1 && idx % step !== 0) continue;
+      const x = chart.timeScale().timeToCoordinate(c.time);
+      if (x == null) continue;
+      html += '<span style="position:absolute; left:' + x + 'px; transform:translateX(-50%);">' + idx + '</span>';
+    }
+    host.innerHTML = html;
+  }
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => detailRenderIndexLabels());
+  window.addEventListener('resize', () => detailRenderIndexLabels());
+
+  // Vertical dashed gray lines through minutes 5 and 10 of the 15-minute candle (the 5th and 10th candle
+  // of the window), so it is easy to tell which candle sits at those marks. Positioned from the minute's
+  // time, not from the candle itself, so they are also there while that minute has not formed yet.
+  // Logical (bar-index) position of a time inside the detail window: the index of the last candle at or
+  // before it plus the minutes between them — valid also for a minute that has not formed yet.
+  function detailLogicalOf(t) {
+    let anchor = 0;
+    for (let i = 0; i < allCandles.length; i++) { if (allCandles[i].time <= t) anchor = i; else break; }
+    return anchor + (t - allCandles[anchor].time) / 60;
+  }
+
+  class DetailMarkersPrimitive {
+    constructor() { this._starts = null; this._minutes = [5, 10]; }
+    attached() {}
+    updateAllViews() {}
+    paneViews() {
+      const self = this;
+      return [{
+        zOrder() { return 'bottom'; }, // behind the candles
+        renderer() {
+          return {
+            draw(target) {
+              if (self._starts == null || allCandles.length === 0) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                ctx.strokeStyle = '#1f2530'; // same color and thickness (1 px) as the chart's horizontal gray grid lines
+                ctx.lineWidth = 1 * scope.horizontalPixelRatio;
+                ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                const vline = (x, color) => {
+                  if (x == null) return;
+                  ctx.strokeStyle = color || '#1f2530';
+                  ctx.beginPath();
+                  ctx.moveTo(x * scope.horizontalPixelRatio, 0);
+                  ctx.lineTo(x * scope.horizontalPixelRatio, scope.bitmapSize.height);
+                  ctx.stroke();
+                };
+                // which 15-minute candle each interval belongs to ("9:30–9:45"), centered between its boundary lines, near the bottom
+                const hm = sec => { const d = new Date(sec * 1000); const h = d.getUTCHours() % 12 || 12; return h + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+                self._starts.forEach(s => {
+                  let xc = null;
+                  try { xc = chart.timeScale().logicalToCoordinate(detailLogicalOf(s) + 7); } catch { xc = null; }
+                  if (xc == null) return;
+                  ctx.save();
+                  ctx.setLineDash([]);
+                  ctx.fillStyle = '#ffd54f';
+                  ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
+                  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+                  ctx.fillText(hm(s) + '–' + hm(s + 900), xc * scope.horizontalPixelRatio, scope.bitmapSize.height - 5 * scope.verticalPixelRatio);
+                  ctx.restore();
+                });
+                self._starts.forEach((s, i) => {
+                  self._minutes.forEach(m => vline(chart.timeScale().logicalToCoordinate(detailLogicalOf(s + (m - 1) * 60))));
+                  // the boundary where the window moved on to the next 15-minute candle: between its last and first minute
+                  if (i > 0) {
+                    // midway between the two candles around it (logicalToCoordinate does not take fractions)
+                    const l = detailLogicalOf(s), xa = chart.timeScale().logicalToCoordinate(l - 1), xb = chart.timeScale().logicalToCoordinate(l);
+                    if (xa != null && xb != null) vline((xa + xb) / 2, '#7a8394'); // lighter than the minute 5/10 lines: it must be easy to see
+                  }
+                });
+                ctx.setLineDash([]);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const detailMarkersPrimitive = new DetailMarkersPrimitive();
+  let detailMarkersAttached = false;
+
+  // White rayitas: where a trade was opened / closed, drawn inside the 1-minute candle of that moment
+  // (one candle wide) at the spot price of the event. Nothing else — no label, no colors.
+  let detailTrades = []; // [{ price, eventTime (chart seconds), isClose }]
+  class DetailTradesPrimitive {
+    attached() {}
+    updateAllViews() {}
+    paneViews() {
+      return [{
+        zOrder() { return 'top'; },
+        renderer() {
+          return {
+            draw(target) {
+              if (!detailView || allCandles.length === 0) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const spacing = chart.timeScale().options().barSpacing;
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2 * scope.horizontalPixelRatio;
+                detailTrades.forEach(t => {
+                  const first = detailView.starts[0], last = detailView.starts[detailView.starts.length - 1];
+                  if (t.eventTime < first || t.eventTime >= last + 900) return; // outside the candles this window followed
+                  const minuteStart = first + Math.floor((t.eventTime - first) / 60) * 60;
+                  const x = chart.timeScale().logicalToCoordinate(detailLogicalOf(minuteStart));
+                  const y = candleSeries.priceToCoordinate(t.price);
+                  if (x == null || y == null) return;
+                  ctx.beginPath();
+                  ctx.moveTo((x - spacing * 0.45) * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.lineTo((x + spacing * 0.45) * scope.horizontalPixelRatio, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const detailTradesPrimitive = new DetailTradesPrimitive();
+  let detailTradesAttached = false;
+
+  // A trade opened or closed while the window is open (live or replay): added to the rayitas.
+  function detailAddTrade(price, eventTime, isClose) {
+    if (detailTrades.some(t => t.price === price && t.eventTime === eventTime && !!t.isClose === !!isClose)) return;
+    detailTrades.push({ price, eventTime, isClose: !!isClose });
+    forceRepaint();
+  }
+
+  // Reference lines copied from the main chart at the moment of the double click (see dblclick above):
+  // dashed horizontal lines that start at the FIRST 1-minute candle (minute 1) and run to the right edge —
+  // not across the empty space before it. No axis labels; the previous-day close keeps its "C".
+  let detailRefLines = []; // [{ price, color, width, title }]
+  class DetailRefLinesPrimitive {
+    attached() {}
+    updateAllViews() {}
+    paneViews() {
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!detailView || allCandles.length === 0) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const xStart = chart.timeScale().logicalToCoordinate(detailLogicalOf(detailView.starts[0]));
+                if (xStart == null) return;
+                const x1 = Math.max(0, xStart * scope.horizontalPixelRatio);
+                const x2 = scope.bitmapSize.width;
+                detailRefLines.forEach(l => {
+                  const y = candleSeries.priceToCoordinate(l.price);
+                  if (y == null) return;
+                  ctx.strokeStyle = l.color;
+                  ctx.lineWidth = (l.width || 1) * scope.horizontalPixelRatio;
+                  ctx.setLineDash([6 * scope.horizontalPixelRatio, 4 * scope.horizontalPixelRatio]);
+                  ctx.beginPath();
+                  ctx.moveTo(x1, y * scope.verticalPixelRatio);
+                  ctx.lineTo(x2, y * scope.verticalPixelRatio);
+                  ctx.stroke();
+                  ctx.setLineDash([]);
+                  if (l.title) {
+                    ctx.fillStyle = l.color;
+                    ctx.font = `${11 * scope.verticalPixelRatio}px sans-serif`;
+                    ctx.textAlign = 'right';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(l.title, x2 - 4 * scope.horizontalPixelRatio, y * scope.verticalPixelRatio - 2 * scope.verticalPixelRatio);
+                  }
+                });
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const detailRefLinesPrimitive = new DetailRefLinesPrimitive();
+  let detailRefLinesAttached = false;
+
+  function detailSetLines(lines) {
+    if (!detailRefLinesAttached) { candleSeries.attachPrimitive(detailRefLinesPrimitive); detailRefLinesAttached = true; }
+    detailTrades = (lines || []).filter(l => l.kind === 'trade').map(l => ({ price: l.price, eventTime: l.eventTime, isClose: !!l.isClose }));
+    detailRefLines = (lines || []).filter(l => l.kind !== 'trade').map(l => ({ price: l.price, color: l.color, width: l.width || 1, title: l.title || '' }));
+    forceRepaint();
+  }
+
+  // The window's header data (time range, candle count, state, minute and seconds) written INSIDE the chart,
+  // bottom left, in yellow — the title bar text is easy to miss. Two lines; set from C# (CandleDetailForm).
+  function detailSetHeaderText(text) {
+    let el = document.getElementById('detailHeaderText');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'detailHeaderText';
+      el.style.cssText = 'position:absolute; left:6px; bottom:34px; max-width:calc(100% - 80px); pointer-events:none; z-index:6; ' +
+                         'font:bold 11px sans-serif; color:#ffeb3b; white-space:pre-line; line-height:14px;';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+  }
+
+  function detailApplyView() {
+    if (!detailView) return;
+    detailApplying = true;
+    const paneWidth = chart.paneSize().width;
+    // The first candle of the LATEST 15-minute candle sits at a fixed pixel offset from the left edge (or 20 % of the
+    // plot if none was given); the rest go to its right. With a single candle that is logical index 0; after the window
+    // moved on, the formed candle(s) sit to the left of it.
+    const slots = paneWidth / detailView.barSpacing;
+    const latestFirst = allCandles.length > 0 ? detailLogicalOf(detailView.bucketStart) : 0;
+    const from = latestFirst + (detailView.firstCandlePx != null ? -detailView.firstCandlePx / detailView.barSpacing : -0.2 * slots);
+    chart.timeScale().setVisibleLogicalRange({ from, to: from + slots });
+    setTimeout(() => { detailApplying = false; detailRenderIndexLabels(); }, 0);
+  }
+
+  // Replaces the candles; the view is only (re)applied for a new target or while the user has not touched it.
+  function detailSetCandles(candles, resetView) {
+    allCandles = candles.slice().sort((a, b) => a.time - b.time);
+    renderCandles();
+    if (resetView && detailView) detailView.userMoved = false;
+    if (detailView && !detailView.userMoved) detailApplyView();
+    detailRenderIndexLabels();
+    detailApplyMarkers(); // setData does not keep what the markers pointed at
+  }
+
+  // The 15-minute candle being followed ended: the window moves on to the next one. The candles already drawn stay
+  // (now formed, to the left); the view scrolls so the new candle starts at the usual place.
+  // Extended mode (double click on a formed 15-minute candle): every later 15-minute candle up to now is already in the
+  // data; the view stays on the clicked one until the user moves on ("Ahora" jumps to the newest).
+  function detailExtendStarts(arr) {
+    if (!detailView) return;
+    arr.forEach(s => detailView.starts.push(s));
+    detailView.extended = true;
+    detailRenderIndexLabels();
+    forceRepaint();
+  }
+  function detailGoLatest() {
+    if (!detailView) return;
+    detailView.bucketStart = detailView.starts[detailView.starts.length - 1];
+    detailView.userMoved = false;
+    detailApplyView();
+  }
+  function detailAdvanceBucket(newStart) {
+    if (!detailView) return;
+    detailView.starts.push(newStart);
+    if (detailView.extended) { detailRenderIndexLabels(); forceRepaint(); return; } // the view is the user's
+    detailView.bucketStart = newStart;
+    detailView.userMoved = false;
+    detailApplyView();
+    detailRenderIndexLabels();
+    forceRepaint();
+  }
+
+  // ---- Click on a 1-minute candle (detail window only): its 4 nearest OTM strikes ----
+  // C# gets the minute and its color (green -> calls, red -> puts; a doji sends up = null and nothing is drawn) and answers with
+  // detailSetStrikes: 4 short segments at the LEFT edge for a formed candle, at the RIGHT edge for the one still forming; the strike
+  // under each segment (left), "bid / ask" over it. The price axis widens to hold the strikes so they are on screen.
+  // A plain CLICK (not a drag: panning the chart must not draw anything) on a 1-minute candle posts its minute and color to C#.
+  let detailDownX = null, detailDownY = null;
+  container.addEventListener('mousedown', ev => { detailDownX = ev.clientX; detailDownY = ev.clientY; });
+  function detailClickWasDrag(ev) {
+    return detailDownX != null && (Math.abs(ev.clientX - detailDownX) > 4 || Math.abs(ev.clientY - detailDownY) > 4);
+  }
+
+  const DetailStrikeSegmentPx = 100;
+  // Two independent drawings that can be on screen at the same time: slot "formed" = the LEFT edge, slot "forming" = the RIGHT edge (the right
+  // one holds the live drawing of the candle still forming, or a second formed candle). Each is { bullish, lines, note, label }.
+  let detailStrikes = { formed: null, forming: null };
+  let detailStrikeExtent = null; // { min, max } over both drawings, so the autoscale holds the strikes
+  let detailStrikesAttached = false;
+  // a drawing that carries the PnL% path (right one, after the 2nd click) is longer to hold "bid / ask (min max)" at its start
+  const DetailLeftSegPx = 75, DetailRightSegPx = 50; // line lengths (75% / 50% of the original 100)
+  // width of the clickable area: the line plus, for the right drawing, the bid / ask (path) text that sits to the left of its line
+  function detailSegPx(d, atRight) { return atRight ? DetailRightSegPx + (d && d.lines && d.lines.some(l => l.pnlMin != null) ? 290 : 110) : DetailLeftSegPx; }
+  class DetailStrikesPrimitive {
+    attached() {}
+    updateAllViews() {}
+    paneViews() {
+      return [{
+        zOrder() { return 'top'; },
+        renderer() {
+          return {
+            draw(target) {
+              if (!detailStrikes.formed && !detailStrikes.forming) return;
+              target.useBitmapCoordinateSpace(scope => {
+                const ctx = scope.context;
+                const hpr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
+                if (detailP3) {
+                  let x3 = null;
+                  try { x3 = chart.timeScale().timeToCoordinate(detailP3.time); } catch { x3 = null; }
+                  if (x3 != null) {
+                    if (detailP3.selected) { ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5 * hpr; ctx.beginPath(); ctx.moveTo(x3 * hpr, 0); ctx.lineTo(x3 * hpr, scope.bitmapSize.height); ctx.stroke(); }
+                    ctx.strokeStyle = 'rgba(186,104,200,0.8)'; ctx.lineWidth = 1 * hpr; ctx.setLineDash([2 * hpr, 3 * hpr]);
+                    ctx.beginPath(); ctx.moveTo(x3 * hpr, 0); ctx.lineTo(x3 * hpr, scope.bitmapSize.height); ctx.stroke();
+                    ctx.setLineDash([]);
+                  }
+                }
+                const drawSlot = (d, atRight) => {
+                  if (!d) return;
+                  const seg = (atRight ? DetailRightSegPx : DetailLeftSegPx) * hpr; // the line itself
+                  const right = atRight ? scope.bitmapSize.width : seg + 6 * hpr;
+                  const left = right - seg;
+                  const color = d.bullish ? '#26a69a' : '#ef5350';
+                  if (d.note) {
+                    ctx.fillStyle = '#9aa0aa';
+                    ctx.font = `${11 * vpr}px sans-serif`;
+                    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                    ctx.fillText(d.note, left, (atRight ? 54 : 36) * vpr);
+                    return;
+                  }
+                  if (d.selected) {
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 6 * hpr;
+                    d.lines.forEach(l => {
+                      const y = candleSeries.priceToCoordinate(l.strike);
+                      if (y == null) return;
+                      ctx.beginPath(); ctx.moveTo(left, y * vpr); ctx.lineTo(right, y * vpr); ctx.stroke();
+                    });
+                  }
+                  // which candle this drawing belongs to (HH:mm), small and gray over its top line
+                  if (d.label) {
+                    const ys = d.lines.map(l => candleSeries.priceToCoordinate(l.strike)).filter(y => y != null);
+                    if (ys.length) {
+                      ctx.font = `${10 * vpr}px sans-serif`;
+                      ctx.fillStyle = '#9aa0aa'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+                      ctx.fillText(d.label, left, Math.min(...ys) * vpr - 19 * vpr);
+                    }
+                  }
+                  ctx.strokeStyle = color;
+                  ctx.lineWidth = 2 * hpr;
+                  ctx.setLineDash([5 * hpr, 3 * hpr]);
+                  d.lines.forEach(l => {
+                    const y = candleSeries.priceToCoordinate(l.strike);
+                    if (y == null) return;
+                    ctx.beginPath(); ctx.moveTo(left, y * vpr); ctx.lineTo(right, y * vpr); ctx.stroke();
+                  });
+                  ctx.setLineDash([]);
+                  d.lines.forEach(l => {
+                    const y = candleSeries.priceToCoordinate(l.strike);
+                    if (y == null) return;
+                    // strike under the segment, at its left end (no trailing ".00" for whole numbers)
+                    ctx.font = `${10 * vpr}px sans-serif`;
+                    ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                    ctx.fillText(Number.isInteger(l.strike) ? String(l.strike) : l.strike.toFixed(2), left, y * vpr + 3 * vpr);
+                    // bid / ask over the segment, centered: bid orange, ask green
+                    const bid = l.bid.toFixed(2), ask = l.ask.toFixed(2);
+                    ctx.font = `${11 * vpr}px sans-serif`; ctx.textBaseline = 'bottom';
+                    const wBid = ctx.measureText(bid).width, wSep = ctx.measureText(' / ').width, wAsk = ctx.measureText(ask).width;
+                    const hasPnl = l.pnlMin != null && l.pnlMax != null;
+                    const pnlParts = hasPnl ? [[' (', '#9aa0aa'], [(l.pnlMin > 0 ? '+' : '') + l.pnlMin.toFixed(1) + '%', l.pnlMin < 0 ? '#ef5350' : '#4caf50'], [' ', '#9aa0aa'], [(l.pnlMax > 0 ? '+' : '') + l.pnlMax.toFixed(1) + '%', l.pnlMax < 0 ? '#ef5350' : '#4caf50'], [')', '#9aa0aa']].concat(l.pnlNow != null ? [['  ' + (l.pnlNow >= 0 ? '+' : '') + l.pnlNow.toFixed(1) + '%', l.pnlNow >= 0 ? '#4caf50' : '#ef5350']] : []) : [];
+                    const wPnl = pnlParts.reduce((a, p) => a + ctx.measureText(p[0]).width, 0);
+                    // right drawing: the values sit to the LEFT of its (short) line, ending just before it; left drawing: centered over its line
+                    let x = atRight ? left - 6 * hpr - (wBid + wSep + wAsk + wPnl) : (left + right) / 2 - (wBid + wSep + wAsk) / 2;
+                    const ty = y * vpr - 4 * vpr;
+                    ctx.fillStyle = '#ffa726'; ctx.fillText(bid, x, ty); x += wBid;
+                    ctx.fillStyle = '#9aa0aa'; ctx.fillText(' / ', x, ty); x += wSep;
+                    ctx.fillStyle = '#4caf50'; ctx.fillText(ask, x, ty);
+                    if (hasPnl) {
+                      // (worst % in red, best % in green): the path of the PnL of this strike since the 2nd click
+                      let px2 = x + wAsk;
+                      pnlParts.forEach(p => { ctx.fillStyle = p[1]; ctx.fillText(p[0], px2, ty); px2 += ctx.measureText(p[0]).width; });
+                    }
+                    // RIGHT drawing only: how much higher (green) or lower (red) this ask is than the ask of the same strike on the LEFT drawing,
+                    // under the ask value (below the line, aligned with the ask).
+                    // fixed by C# the first time it is drawn after the click (it does not follow the live ask)
+                    if (atRight && l.askPct != null) {
+                      const pct = l.askPct;
+                      ctx.font = `${10 * vpr}px sans-serif`; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+                      ctx.fillStyle = pct > 0 ? '#4caf50' : (pct < 0 ? '#ef5350' : '#9aa0aa');
+                      const pctTxt = (pct > 0 ? '+' : '') + pct.toFixed(1) + '%';
+                      ctx.fillText(pctTxt, x, y * vpr + 3 * vpr);
+                      // next to it, frozen: the ask at the moment of the 2nd click (the price it would have been bought at)
+                      if (l.askAtClick != null) {
+                        ctx.fillStyle = '#4caf50';
+                        ctx.fillText(' @ ' + l.askAtClick.toFixed(2), x + ctx.measureText(pctTxt).width, y * vpr + 3 * vpr);
+                      }
+                    }
+                  });
+                };
+                drawSlot(detailStrikes.formed, false);
+                drawSlot(detailStrikes.forming, true);
+              });
+            }
+          };
+        }
+      }];
+    }
+  }
+  const detailStrikesPrimitive = new DetailStrikesPrimitive();
+
+  // the price span the detail axis must hold beyond the candles: the strikes drawn and the target line
+  function detailExtraRange() {
+    const ks = detailStrikeExtent ? [detailStrikeExtent.min, detailStrikeExtent.max] : [];
+    pLinePrimitive._segments.forEach(s => ks.push(s.price)); // the P-Line (the price target) must stay on screen
+    return ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
+  }
+  function detailStrikeExtentKey() { const e = detailExtraRange(); return e ? e.min + '|' + e.max : ''; }
+  function detailRecomputeStrikeExtent() {
+    const ks = [];
+    [detailStrikes.formed, detailStrikes.forming].forEach(d => { if (d) d.lines.forEach(l => ks.push(l.strike)); });
+    detailStrikeExtent = ks.length ? { min: Math.min(...ks), max: Math.max(...ks) } : null;
+  }
+
+  // Estimates of each strike if the spot reaches the target — a small box at the top left of the window.
+  // payload: { header, blocks: [{ label, rows: [{ strike, exitText, contracts, netText, beText, best, ok }] }] }; null clears it.
+  function detailSetEstimates(payload) {
+    let el = document.getElementById('detailEstimate');
+    if (!payload || !payload.blocks || payload.blocks.length === 0) { if (el) el.style.display = 'none'; return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'detailEstimate';
+      el.style.cssText = 'position:absolute; left:6px; pointer-events:none; z-index:7; font:10px sans-serif; line-height:13px; ' +
+                         'background:rgba(19,23,34,0.82); padding:3px 5px; border:1px solid #2a2e39; border-radius:3px; white-space:pre;';
+      document.body.appendChild(el);
+    }
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    let html = '<span style="color:#ba68c8">' + esc(payload.header) + '</span>';
+    payload.blocks.forEach(b => {
+      html += '\n<span style="color:#9aa0aa">' + esc(b.label) + '</span>';
+      b.rows.forEach(r => {
+        const color = r.best ? '#4caf50' : (r.ok ? '#d1d4dc' : '#6b7280');
+        html += '\n<span style="color:' + color + '">' + (r.best ? '★ ' : '  ') + esc(r.strike) + '  sal ' + esc(r.exitText) + '  ' + esc(r.contracts) + '×  ' + esc(r.netText) + '  BE ' + esc(r.beText) + '</span>';
+      });
+    });
+    el.innerHTML = html;
+    // CALL: strikes above the price -> the box goes at the BOTTOM (above the title / time axis, growing upward); PUT: at the top.
+    if (payload.leg === 'call') { el.style.top = 'auto'; el.style.bottom = '60px'; }
+    else { el.style.bottom = 'auto'; el.style.top = '34px'; }
+    el.style.display = 'block';
+  }
+
+  // slot: 'formed' | 'forming'. A drawing stays until it is replaced (another double click in that slot), toggled off
+  // (double click on the same candle) or the window is pointed at another 15-minute candle.
+  // A small arrow on each candle that has a drawing: ABOVE a green candle (pointing down at it), BELOW a red one (pointing up), in the
+  // color of the drawing's leg (green call / red put), numbered 1 (left drawing) and 2 (right drawing). A doji counts as green.
+  function detailApplyMarkers() {
+    if (!detailView) return;
+    const marks = [];
+    [['formed', '1'], ['forming', '2']].forEach(([slot, number]) => {
+      const d = detailStrikes[slot];
+      if (!d || d.minute == null) return;
+      const c = allCandles.find(x => x.time === (d.markerMinute || d.minute)); // the arrow stays on the clicked candle even if the drawing follows the forming one
+      if (!c) return; // that minute has no candle (yet)
+      const green = c.close >= c.open;
+      marks.push({ time: c.time, position: green ? 'aboveBar' : 'belowBar', color: d.bullish ? '#26a69a' : '#ef5350',
+                   shape: green ? 'arrowDown' : 'arrowUp', text: number });
+    });
+    if (detailP3) { // P3: the END of the PnL path
+      const c3 = allCandles.find(x => x.time === detailP3.time);
+      if (c3) {
+        const green3 = c3.close >= c3.open;
+        marks.push({ time: c3.time, position: green3 ? 'aboveBar' : 'belowBar', color: detailP3.bullish ? '#26a69a' : '#ef5350',
+                     shape: green3 ? 'arrowDown' : 'arrowUp', text: '3' });
+      }
+    }
+    marks.sort((a, b) => a.time - b.time);
+    candleSeries.setMarkers(marks);
+  }
+
+  // P3 (end of the PnL path): the '3' arrow and a thin vertical line on that candle; null removes both.
+  let detailP3 = null;
+  function detailSetP3(time, bullish) {
+    detailP3 = (time == null) ? null : { time, bullish: !!bullish };
+    detailApplyMarkers();
+    forceRepaint();
+  }
+
+  function detailSetStrikes(payload) {
+    if (!detailView) return;
+    if (!detailStrikesAttached) { candleSeries.attachPrimitive(detailStrikesPrimitive); detailStrikesAttached = true; }
+    const before = detailStrikeExtentKey();
+    const slotKey = payload.slot === 'forming' ? 'forming' : 'formed';
+    const wasSelected = !!(detailStrikes[slotKey] && detailStrikes[slotKey].selected); // a live refresh keeps the selection
+    detailStrikes[slotKey] = { bullish: !!payload.bullish, lines: payload.lines || [], note: payload.note || null, label: payload.label || null, minute: payload.minute || null, markerMinute: payload.markerMinute || payload.minute || null, selected: wasSelected };
+    detailApplyMarkers();
+    detailRecomputeStrikeExtent();
+    if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true }); // re-fit the axis to hold the strikes
+    forceRepaint();
+  }
+
+  // Click on a drawing selects it (white halo); Delete removes the selected one. Both drawings can be selected / deleted, one at a time.
+  function detailStrikeHit(slot, px, py) {
+    const d = detailStrikes[slot];
+    if (!d || d.note) return false;
+    const w = chart.paneSize().width;
+    const xMin = slot === 'forming' ? w - detailSegPx(d, true) : 0;
+    const xMax = slot === 'forming' ? w : detailSegPx(d, false) + 6;
+    if (px < xMin || px > xMax) return false;
+    return d.lines.some(l => { const y = candleSeries.priceToCoordinate(l.strike); return y != null && Math.abs(y - py) <= 6; });
+  }
+  container.addEventListener('click', ev => {
+    if (!detailView || detailClickWasDrag(ev)) return;
+    if (pLineArmed || performance.now() - pLinePlacedAt < 400) return; // placing the P-Line: this click is not a candle click
+    const rect = container.getBoundingClientRect();
+    const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+    // 1) on a drawing's segments: select it (white halo); Delete removes it
+    // P3's line: click selects it (thicker white line); Delete removes it
+    if (detailP3) {
+      let x3 = null;
+      try { x3 = chart.timeScale().timeToCoordinate(detailP3.time); } catch { x3 = null; }
+      const onP3 = x3 != null && Math.abs(px - x3) <= 8;
+      detailP3.selected = onP3;
+      if (onP3) {
+        if (detailStrikes.formed) detailStrikes.formed.selected = false;
+        if (detailStrikes.forming) detailStrikes.forming.selected = false;
+        forceRepaint();
+        return;
+      }
+    }
+    const hitForming = detailStrikeHit('forming', px, py);
+    const hitFormed = !hitForming && detailStrikeHit('formed', px, py);
+    if (detailStrikes.formed) detailStrikes.formed.selected = hitFormed;
+    if (detailStrikes.forming) detailStrikes.forming.selected = hitForming;
+    forceRepaint();
+    if (hitForming || hitFormed) return;
+    // 2) on a candle: ask C# for its strikes (green -> calls, red -> puts; a doji sends up = null and nothing is drawn)
+    const time = chart.timeScale().coordinateToTime(px);
+    if (time == null) return;
+    let hit = null;
+    for (let i = allCandles.length - 1; i >= 0; i--) { if (allCandles[i].time <= time) { hit = allCandles[i]; break; } }
+    if (!hit) return;
+    const up = hit.close > hit.open ? true : (hit.close < hit.open ? false : null);
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'detail_minute_click', time: hit.time, up });
+  });
+  window.addEventListener('keydown', ev => {
+    if (ev.key !== 'Delete' || !detailView) return;
+    if (detailP3 && detailP3.selected) {
+      detailSetP3(null);
+      if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'detail_p3_deleted' });
+      return;
+    }
+    ['forming', 'formed'].forEach(slot => {
+      if (detailStrikes[slot] && detailStrikes[slot].selected) {
+        detailClearStrikes(slot);
+        if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'detail_strikes_deleted', slot });
+      }
+    });
+  });
+
+  function detailClearStrikes(slot) {
+    const before = detailStrikeExtentKey();
+    if (slot === 'formed' || slot === 'forming') detailStrikes[slot] = null; else detailStrikes = { formed: null, forming: null };
+    detailApplyMarkers();
+    detailRecomputeStrikeExtent();
+    if (before !== detailStrikeExtentKey()) candleSeries.priceScale().applyOptions({ autoScale: true });
+    forceRepaint();
+  }
+
+  // "Restablecer vista" button: back to the initial layout and the automatic (main-chart) price range.
+  function detailResetView() {
+    if (!detailView) return;
+    detailView.userMoved = false;
+    candleSeries.priceScale().applyOptions({ autoScale: true });
+    detailApplyView();
+  }
+
+  // The user took over the view: wheel zoom, dragging the chart, or dragging the price axis.
+  container.addEventListener('wheel', () => { if (detailView) detailView.userMoved = true; }, { passive: true });
+  container.addEventListener('mousemove', ev => { if (detailView && (ev.buttons & 1)) detailView.userMoved = true; });
 </script>
 </body>
 </html>

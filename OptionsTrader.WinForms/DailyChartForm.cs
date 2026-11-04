@@ -513,6 +513,7 @@ public class DailyChartForm : Form
         await InitChartTabAsync(_fifteenWebView, fifteenCandles, 8, showSmas: false, bollingerMiddleSolid: true);
         _lastFifteenCandle = fifteenCandles.Count > 0 ? fifteenCandles[^1] : null;
         await LoadAndWireTLinesAsync(_fifteenWebView, "Daily15Min");
+        await WireCandleDetailAsync();
 
         // Blue "current price" line, per explicit request — same session-open anchor as the Hora
         // tab's own line (ChartPanel.GetTodaySessionOpenFakeEpoch convention), since this tab also
@@ -528,6 +529,59 @@ public class DailyChartForm : Form
         await LoadAndWireDzSzAsync(_webView, "Daily");
         await LoadAndWireDzSzAsync(_hourlyWebView, "DailyHora");
         await LoadAndWireDzSzAsync(_fifteenWebView, "Daily15Min");
+    }
+
+    // ---- Double click on a 15 Min candle -> its 1-minute candles, rebuilt from the saved Level 1 tick files
+    // (no REST), in a window docked to the right of this form. ----
+    private CandleDetailForm? _candleDetail;
+    private System.Windows.Forms.Timer? _candleDetailTimer;
+
+    private async Task WireCandleDetailAsync()
+    {
+        if (_fifteenWebView.CoreWebView2 == null) return;
+        await _fifteenWebView.CoreWebView2.ExecuteScriptAsync("configureCandleDetail(true);");
+        _fifteenWebView.CoreWebView2.WebMessageReceived += async (s, e) =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var type) || type.GetString() != "candle_detail") return;
+                if (!root.TryGetProperty("time", out var t) || !t.TryGetInt64(out var seconds)) return;
+                var bucketStart = CandleAggregation.FifteenMinRthBucketStartUtc(ChartPanel.UtcFromFakeEpochSeconds(seconds));
+                await OpenCandleDetailAsync(bucketStart, ChartPanel.ReadNullableDouble(root, "priceMin"),
+                    ChartPanel.ReadNullableDouble(root, "priceMax"), ChartPanel.ReadNullableDouble(root, "barSpacing"));
+            }
+            catch { /* diagnostics window — never disturb the chart */ }
+        };
+    }
+
+    private async Task OpenCandleDetailAsync(DateTime bucketStartUtc, double? priceMin, double? priceMax, double? barSpacing)
+    {
+        if (IsDisposed) return;
+        if (_candleDetail == null || _candleDetail.IsDisposed)
+        {
+            var window = new CandleDetailForm(_symbol, _fifteenWebView.Height);
+            _candleDetail = window;
+            window.DockToRightOf(this, () => _fifteenWebView.PointToScreen(Point.Empty).Y);
+            // A forming candle (today) grows in the file: ask for a redraw once a second while the window lives.
+            _candleDetailTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _candleDetailTimer.Tick += (s, e) => window.MarkDirty();
+            _candleDetailTimer.Start();
+            window.FormClosed += (s, e) => { _candleDetailTimer?.Stop(); _candleDetailTimer?.Dispose(); _candleDetailTimer = null; };
+            window.Show(this);
+        }
+        _candleDetail.DockIfStillDocked();
+
+        var symbol = _symbol;
+        MinuteBucketState StateOf(DateTime start)
+        {
+            var now = DateTime.UtcNow;
+            return now < start.AddMinutes(15) ? MinuteBucketState.Forming : MinuteBucketState.Closed;
+        }
+        await _candleDetail.ShowBucketAsync(bucketStartUtc,
+            (start, end) => TickFileMinuteCandles.Get(symbol, start, end),
+            StateOf, freezeWhenClosed: true, priceMin, priceMax, barSpacing, () => DateTime.UtcNow, linesJson: null);
     }
 
     // "DZ/SZ" tool persistence (ZoneStore) for one tab — replay whatever was drawn in a previous
@@ -908,6 +962,8 @@ public class DailyChartForm : Form
     // ever show fully-CLOSED days/hours/15-min bars, so you couldn't see the in-progress one
     // visually approaching a Piso/Techo level in real time). No-op once this window is
     // closed/disposed.
+    private static readonly TimeZoneInfo EasternZoneForDaily = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
     public async Task UpdateLivePrice(decimal price)
     {
         if (IsDisposed) return;
@@ -921,10 +977,21 @@ public class DailyChartForm : Form
 
         var nowUtc = DateTime.UtcNow;
 
-        // Daily: the bucket itself never changes mid-session (a new day only starts if this
-        // window is left open across midnight, not worth handling), so just extend the existing
-        // bar's High/Low/Close in place.
-        if (_lastDailyCandle != null && _webView.CoreWebView2 != null)
+        // Daily: the last bar must be TODAY's to be extended in place. Before today's session opens it is still the previous
+        // day's closed bar (yesterday's bar must not be rewritten with premarket prices): only the blue price line moves.
+        // From 9:30 ET on, today's bar is born with the first RTH tick (open = that tick), like the Hora / 15 Min tabs do.
+        var easternNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, EasternZoneForDaily);
+        if (_lastDailyCandle != null && _webView.CoreWebView2 != null
+            && DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(_lastDailyCandle.Time, EasternZoneForDaily)) < DateOnly.FromDateTime(easternNow))
+        {
+            if (easternNow.TimeOfDay >= new TimeSpan(9, 30, 0) && easternNow.TimeOfDay < new TimeSpan(16, 0, 0))
+            {
+                var open = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(easternNow.Date.AddHours(9).AddMinutes(30), DateTimeKind.Unspecified), EasternZoneForDaily);
+                _lastDailyCandle = new CandleData { Time = open, Open = price, High = price, Low = price, Close = price };
+                await _webView.CoreWebView2.ExecuteScriptAsync($"updateLastCandle({ChartPanel.ToChartJsonPublic(_lastDailyCandle)});");
+            }
+        }
+        else if (_lastDailyCandle != null && _webView.CoreWebView2 != null)
         {
             _lastDailyCandle.High  = Math.Max(_lastDailyCandle.High, price);
             _lastDailyCandle.Low   = Math.Min(_lastDailyCandle.Low, price);

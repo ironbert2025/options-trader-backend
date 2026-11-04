@@ -295,6 +295,21 @@ public class TwoPanelChartsControl : UserControl
     // Live options grid mirrored from Form1's own quotes (see Form1.OnQuotesUpdatedEvent /
     // GetQuoteSnapshot) — clicking Strike forwards into Form1.TriggerQuoteStrikeClick, which runs
     // the exact same click handler Form1's own grid would (same currently-selected trade mode).
+    // +1C / +1P state and the strikes they currently show (per grid: Hoy and Próxima have their own chain).
+    private bool _showFirstItmCall, _showFirstItmPut;
+    private HashSet<(string Type, decimal Strike)> _firstItmToday = new();
+    private HashSet<(string Type, decimal Strike)> _firstItmNext = new();
+    // Expiration of each options grid (from its latest snapshot) — the strike highlight is per expiration.
+    private DateOnly? _todayExpiration, _nextExpiration;
+
+    private HashSet<(string Type, decimal Strike)> FirstItmStrikes(IEnumerable<OptionQuoteDto> allQuotes)
+    {
+        var shown = new HashSet<(string Type, decimal Strike)>();
+        if (_showFirstItmCall && Form1.FirstItmStrike(allQuotes, isCall: true) is { } call) shown.Add(("CALL", call));
+        if (_showFirstItmPut && Form1.FirstItmStrike(allQuotes, isCall: false) is { } put) shown.Add(("PUT", put));
+        return shown;
+    }
+
     private readonly DataGridView _dgvOptions = new()
     {
         Dock = DockStyle.Fill,
@@ -380,7 +395,33 @@ public class TwoPanelChartsControl : UserControl
     // persistence (OpenTradesStore) as the popup, just reached through this control directly.
     public async Task MarkEntrySpotOnRthChartAsync(decimal price, string color = "#ffffff", bool isClose = false, bool isCall = false, string? pairId = null, decimal? strike = null)
     {
+        // A closing line: remember the trade, so the marks of closed trades can be cleared when the next one opens.
+        if (isClose && pairId != null) _closedTradeMarks.Add((pairId, strike));
         if (_rthPanel != null) await _rthPanel.MarkEntrySpotAsync(price, color: color, isClose: isClose, isCall: isCall, pairId: pairId, strike: strike);
+    }
+
+    // Trades closed since the last cleaning (their open/close rayitas, Stk line and ΔS label are still on panel 2).
+    private readonly List<(string PairId, decimal? Strike)> _closedTradeMarks = new();
+
+    // A trade is about to open: panel 2 drops what is left of the trades closed before it — rayitas, green Stk line and
+    // ΔS label (the "Expired!!!" marker stays). Only panel 2, nothing is echoed to other panels. A strike still used by
+    // an open trade keeps its Stk line.
+    public async Task ClearClosedTradeMarksOnRthChartAsync()
+    {
+        if (_rthPanel == null || _closedTradeMarks.Count == 0) return;
+        var openStrikes = new HashSet<decimal>();
+        if (_form1.GetTradesGrid(_symbol) is { } trades)
+        {
+            foreach (DataGridViewRow r in trades.Rows)
+            {
+                if (r.Tag == null || !string.IsNullOrEmpty(r.Cells["colTradeExitTime"].Value?.ToString())) continue;
+                if (decimal.TryParse(r.Cells["colTradeStrike"].Value?.ToString(), out var s)) openStrikes.Add(s);
+            }
+        }
+        var closed = _closedTradeMarks.ToList();
+        _closedTradeMarks.Clear();
+        foreach (var (pairId, strike) in closed)
+            await _rthPanel.RemoveTradeMarksAsync(pairId, strike is { } sv && !openStrikes.Contains(sv) ? sv : null);
     }
 
     // "R" on the Stk line at a Refuerzo — panel 2 (15m RTH) only, mirrors MarkStrikeOnRthChartAsync.
@@ -434,7 +475,7 @@ public class TwoPanelChartsControl : UserControl
     private readonly Queue<PrLiveRequest> _prQueue = new();
     private bool _prWorking;
 
-    private sealed record PrLiveRequest(DateOnly Day, string Label, string FileName, bool IsEvent);
+    private sealed record PrLiveRequest(DateOnly Day, string Label, string FileName, bool IsEvent, string? TradeLogPath = null);
 
     private void ClaimPriceAction()
     {
@@ -469,6 +510,35 @@ public class TwoPanelChartsControl : UserControl
 
     private bool IsPriceActionVisible() =>
         IsHandleCreated && Visible && FindForm() is { Visible: true, WindowState: not FormWindowState.Minimized };
+
+    // A trade opened or closed: one entry in the RTH_PriceAction note at that moment — the same combined panel 1 + 2
+    // image as the 15m candle closes, same left margin, labeled with the trade's own time and "Open" / "Close".
+    // (The 3 images of the _Trades note are saved separately, untouched.) Local clock time -> Eastern.
+    // tradeLogImagePath: the TradeLog screenshot of a trade's Close (taken just after the close), written under the images.
+    public void RecordTradeInPriceAction(bool isOpen, DateTime localTime, string? tradeLogImagePath = null)
+    {
+        if (IsDisposed || !EnsurePriceActionClaim()) return;
+        var eastern = TimeZoneInfo.ConvertTime(localTime, EasternZone);
+        var what = isOpen ? "Open" : "Close";
+        var fileName = $"{eastern:HHmmssfff}_{what.ToLowerInvariant()}.png";
+        EnqueuePriceAction(new PrLiveRequest(DateOnly.FromDateTime(eastern), $"{eastern:HH:mm:ss} — {what}", fileName, IsEvent: false, tradeLogImagePath));
+    }
+
+    // The 9:30 open of the session: first entry of the symbol's note (combined panel 1 + 2 image and the external one),
+    // once a day. Skipped when the app only started well after 9:30 (the chart no longer looks like the open).
+    private DateOnly _prOpenDay;
+
+    private void OnLiveSessionOpened(DateTime tickUtc)
+    {
+        if (IsDisposed || !EnsurePriceActionClaim()) return;
+        var tickEastern = TimeZoneInfo.ConvertTimeFromUtc(tickUtc, EasternZone);
+        var day = DateOnly.FromDateTime(tickEastern);
+        if (_prOpenDay == day) return;
+        _prOpenDay = day;
+        var openEastern = day.ToDateTime(new TimeOnly(9, 30));
+        if (tickEastern - openEastern > LateCandleTolerance) return;
+        EnqueuePriceAction(new PrLiveRequest(day, "09:30:00 — Open", "093000_open.png", IsEvent: false));
+    }
 
     private void OnLiveCandleClosed(int bucket, DateTime tickUtc)
     {
@@ -516,10 +586,14 @@ public class TwoPanelChartsControl : UserControl
                 var run = GetPriceActionRun(req.Day);
                 string? imagePath = null;
                 string? note = null;
+                string? externalPath = null;
                 try
                 {
                     await Task.Delay(PriceActionPaintDelay); // let the charts paint the tick that triggered this
                     if (IsDisposed) break;
+                    // The symbol's external screen region (ThinkOrSwim charts), same instant — nothing without saved coordinates.
+                    externalPath = ExternalScreenCapture.CaptureToFile(_symbol,
+                        Path.Combine(run.ImageFolder, Path.GetFileNameWithoutExtension(req.FileName) + "_ext.png"));
                     if (!IsPriceActionVisible())
                     {
                         note = "sin imagen: chart no visible";
@@ -540,7 +614,7 @@ public class TwoPanelChartsControl : UserControl
                     imagePath = null; // a failed screenshot never disturbs the charts — noted in the md
                 }
                 if (req.IsEvent) SimPriceActionMarkdownWriter.AppendEvent(run, req.Label, imagePath, note ?? "sin imagen: captura no disponible");
-                else SimPriceActionMarkdownWriter.AppendCandleClose(run, req.Label, imagePath, note);
+                else SimPriceActionMarkdownWriter.AppendCandleClose(run, req.Label, imagePath, note, externalPath, req.TradeLogPath);
             }
         }
         finally { _prWorking = false; }
@@ -553,7 +627,8 @@ public class TwoPanelChartsControl : UserControl
     // accumulates; cleared when the trading day changes). Redrawing the whole box each time is what lets
     // a new set replace the top without wiping the history underneath.
     private string _log2Set = string.Empty;
-    private readonly List<(string Text, Color Color)> _log2Bb = new();
+    // Text (+ an optional second segment on the same line, e.g. commission in orange then the net in its own color).
+    private readonly List<(string Text, Color Color, string? Tail, Color TailColor)> _log2Bb = new();
     private DateOnly _log2BbDay;
     private const int Log2BbMaxLines = 400;
 
@@ -568,7 +643,17 @@ public class TwoPanelChartsControl : UserControl
         var eastern = TimeZoneInfo.ConvertTimeFromUtc(eventUtc, EasternZone);
         var day = DateOnly.FromDateTime(eastern);
         if (day != _log2BbDay) { _log2Bb.Clear(); _log2BbDay = day; }
-        _log2Bb.Add(($"{eastern:HH:mm:ss.fff}  {text}", color));
+        _log2Bb.Add(($"{eastern:HH:mm:ss.fff}  {text}", color, null, color));
+        if (_log2Bb.Count > Log2BbMaxLines) _log2Bb.RemoveAt(0);
+        RenderLog2(scrollToEnd: true);
+    }
+
+    // A line already formatted by its source (no event-time prefix), kept in the same day history as the Bollinger events.
+    private void AddLog2Raw(string text, Color color, string? tail = null, Color? tailColor = null)
+    {
+        var day = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone));
+        if (day != _log2BbDay) { _log2Bb.Clear(); _log2BbDay = day; }
+        _log2Bb.Add((text, color, tail, tailColor ?? color));
         if (_log2Bb.Count > Log2BbMaxLines) _log2Bb.RemoveAt(0);
         RenderLog2(scrollToEnd: true);
     }
@@ -578,8 +663,11 @@ public class TwoPanelChartsControl : UserControl
         _crossLog2.Clear();
         if (_log2Set.Length > 0) _crossLog2.AppendText(_log2Set);
         if (_log2Set.Length > 0 && _log2Bb.Count > 0) _crossLog2.AppendText(Environment.NewLine);
-        foreach (var (text, color) in _log2Bb)
-            ChartPanel.AppendColored(_crossLog2, new[] { (text + Environment.NewLine, (Color?)color) });
+        foreach (var (text, color, tail, tailColor) in _log2Bb)
+        {
+            if (tail == null) ChartPanel.AppendColored(_crossLog2, new[] { (text + Environment.NewLine, (Color?)color) });
+            else ChartPanel.AppendColored(_crossLog2, new (string, Color?)[] { (text, color), (tail + Environment.NewLine, tailColor) });
+        }
         _crossLog2.SelectionStart = scrollToEnd ? _crossLog2.TextLength : 0; // a new event shows the newest line; a new set shows its top
         _crossLog2.ScrollToCaret();
     }
@@ -857,9 +945,12 @@ public class TwoPanelChartsControl : UserControl
                 });
             };
 
-            hourlyPanel.OnPisoTechoLevelRemovedEvent += period =>
+            hourlyPanel.OnPisoTechoLevelRemovedEvent += (period, duringRth) =>
             {
                 if (IsDisposed) return;
+                // A level crossed by the regular session's price keeps its dashed line on panel 2 (it can be deleted by
+                // hand: click it, then Delete). A premarket cross or the open gap still removes it.
+                if (duringRth) return;
                 BeginInvoke(() => _ = rthPanel.RemovePisoTechoRefLineAsync(period));
             };
 
@@ -1276,18 +1367,85 @@ public class TwoPanelChartsControl : UserControl
             // the user typed) so the [Estimación] is computed from the very first Trigger.
             // Bollinger momentum (Validación / Toque / perdida), fed by panel 2's Level 1 ticks — see
             // ChartPanel.FeedBbMomentum. Goes to the history zone of log 2, below the Trigger set.
+            // Double click on a candle of the 15m RTH chart -> window with that candle's 1-minute candles.
+            // One window per symbol, re-targeted by each double click; it hooks the panel's minute updates
+            // only while it is open.
+            CandleDetailForm? candleDetail = null;
+            Action? minutesChanged = null;
+            rthPanel.OnCandleDetailRequested += async (bucketStartUtc, priceMin, priceMax, barSpacing, linesJson) =>
+            {
+                if (IsDisposed) return;
+                if (candleDetail == null || candleDetail.IsDisposed)
+                {
+                    var window = new CandleDetailForm(_symbol, rthPanel.Height);
+                    // Double click on a 1-minute candle: the 4 nearest OTM strikes of its side. Forming minute: the live chain;
+                    // a formed one: the last poll saved at or before its last second (needs "Save to CSV" on at that time).
+                    window.StrikeProvider = (minuteUtc, bullish, forming, fixedStrikes) =>
+                    {
+                        var snapshot = _form1.GetQuoteSnapshot(_symbol);
+                        if (snapshot == null || snapshot.Value.AllQuotes.Count == 0)
+                            return new StrikeQuoteResult(Array.Empty<StrikeQuote>(), "sin cadena de opciones");
+                        if (forming)
+                        {
+                            var spot = snapshot.Value.AllQuotes[0].SpotPrice;
+                            var live = fixedStrikes != null
+                                ? StrikeQuotePicker.ForStrikes(snapshot.Value.AllQuotes, bullish, fixedStrikes)
+                                : StrikeQuotePicker.Nearest(snapshot.Value.AllQuotes, bullish, spot);
+                            return new StrikeQuoteResult(live, live.Count == 0 ? "sin datos de opciones ahora" : null, spot);
+                        }
+                        return OptionChainHistory.GetAtEndOfMinute(_symbol, snapshot.Value.AllQuotes[0].ExpirationDate, bullish, minuteUtc, fixedStrikes);
+                    };
+                    // P-Line / .50 / 1.00 and the PnL path, like in the Simulator; the estimate sizes the position with the live settings.
+                    window.EnableAnalysisBar(ask => int.TryParse(Form1.GetContractsValue(ask), out var n) ? n : 0);
+                    candleDetail = window;
+                    minutesChanged = () => window.MarkDirty();
+                    rthPanel.OnMinuteCandlesChanged += minutesChanged;
+                    Action<decimal, long, bool> onMark = (price, seconds, isClose) => window.AddTrade(price, seconds, isClose);
+                    rthPanel.OnEntrySpotMarked += onMark; // a trade opened/closed while the window is open gets its rayita too
+                    window.FormClosed += (s2, e2) => { rthPanel.OnMinuteCandlesChanged -= minutesChanged; rthPanel.OnEntrySpotMarked -= onMark; };
+                    if (FindForm() is { } owner)
+                        window.DockToRightOf(owner, () => rthPanel.PointToScreen(Point.Empty).Y); // to the right of the main window, level with panel 2
+                    window.Show(FindForm());
+                }
+                candleDetail.DockIfStillDocked();
+                try
+                {
+                    await candleDetail.ShowBucketAsync(bucketStartUtc, rthPanel.GetMinuteCandles, rthPanel.GetMinuteBucketState, freezeWhenClosed: true, priceMin, priceMax, barSpacing, () => rthPanel.LastTickUtc, linesJson);
+                }
+                catch { /* diagnostics window — never disturb the charts */ }
+            };
+
+            // Open revisit (first 15m candle): the price left the open, came back through it and the body is now >= 40 %
+            // of the wick. Log line and taskbar flash (no Telegram). The chart line is drawn by the
+            // panel itself (ChartPanel.FeedOpenRevisit -> markOpenRevisit).
+            rthPanel.OnOpenRevisitEvent += ev =>
+            {
+                if (IsDisposed) return;
+                var arrow = ev.BodyUp ? "▲" : "▼";
+                var message = $"{_symbol}: Open revisitado {arrow} — wick {ev.Wick:F2}, body {ev.Body:F2} ({ev.Body / ev.Wick:P0}), precio {ev.Price:F2}, open {ev.Open:F2}";
+                AppendLog($"{DateTime.Now:HH:mm:ss}  [Open] {message}{Environment.NewLine}");
+                WindowFlasher.FlashUntilForeground(FindForm());
+                // No Telegram for this alert (per explicit request): line on the chart, log and taskbar flash only.
+            };
+
             rthPanel.OnBbMomentumEvent += ev =>
             {
                 if (IsDisposed) return;
                 var (text, color) = BbMomentumText.For(ev);
                 AddLog2Bb(ev.TimeUtc, text, color);
-                RecordPriceActionEvent(ev, text);
+                // WORKAROUND (disabled on purpose): the Bollinger momentum events (Validación / Toque) used to be
+                // recorded in the RTH_PriceAction note as indented entries with their own screenshot. Only the
+                // 15-minute candle-close images are kept for now. To bring the indented entries back, uncomment the
+                // line below (the Simulator has its twin in SimulatorForm.LogBbEvent); the writer, the queue and
+                // RecordPriceActionEvent are untouched.
+                // RecordPriceActionEvent(ev, text);
             };
             // 15m candle closes (from the same Level 1 ticks) -> RTH Price Action screenshots. The first
             // control opened for this symbol is the one that records.
             ClaimPriceAction();
             Disposed += (s, e) => ReleasePriceAction();
             rthPanel.OnRthCandleClosedEvent += OnLiveCandleClosed;
+            rthPanel.OnRthOpenEvent += OnLiveSessionOpened;
             rthPanel.OnWickAnalysisArmedEvent += () =>
             {
                 if (_txtDeltaSpot != null && string.IsNullOrWhiteSpace(_txtDeltaSpot.Text)) _txtDeltaSpot.Text = "1";
@@ -1370,7 +1528,7 @@ public class TwoPanelChartsControl : UserControl
 
         // Shows/hides the white Bollinger-band edge markers on this panel — checked by default
         // (matches the always-on behavior before this toggle existed).
-        var chkBollingerEdges = new CheckBox { Text = "BB edges", AutoSize = true, Checked = true, Margin = new Padding(3, 4, 3, 3) };
+        var chkBollingerEdges = new CheckBox { Text = "BB edges", AutoSize = true, Checked = false, Margin = new Padding(3, 4, 3, 3) };
         chkBollingerEdges.CheckedChanged += async (s, e) =>
         {
             if (rthPanel == null) return;
@@ -1586,7 +1744,7 @@ public class TwoPanelChartsControl : UserControl
             rthPanel.OnLiveTick += (eastern, price) =>
             {
                 if (eastern.TimeOfDay < new TimeSpan(9, 30, 0) || eastern.TimeOfDay > new TimeSpan(16, 0, 0)) return;
-                hourlyPanel.ValidatePisoTechoAgainstLivePrice(price);
+                hourlyPanel.ValidatePisoTechoAgainstLivePrice(price, rthPrice: true);
             };
         }
         if (rthPanel != null)
@@ -1676,6 +1834,13 @@ public class TwoPanelChartsControl : UserControl
             {
                 if (e.RowIndex < 0) return;
                 var row = grid.Rows[e.RowIndex];
+                if (row.Tag as string == "SEPARATOR")
+                {
+                    // the thin Calls/Puts divider: one light-gray band across every cell (Bid / Range would otherwise repaint it white)
+                    e.CellStyle.BackColor = Color.LightGray;
+                    e.CellStyle.SelectionBackColor = Color.LightGray;
+                    return;
+                }
                 var strikeCol = grid.Columns["colStrikeLive"]!.Index;
                 var sprdCol  = grid.Columns["colSprdLive"]!.Index;
                 var bidCol   = grid.Columns["colBidLive"]!.Index;
@@ -1691,7 +1856,9 @@ public class TwoPanelChartsControl : UserControl
                 // cell (not e.Value) since it isn't tied to whichever column is currently painting.
                 if (e.ColumnIndex != strikeCol && row.Tag is string rowType &&
                     decimal.TryParse(row.Cells["colStrikeLive"].Value?.ToString(), out var rowStrike) &&
-                    _form1.IsChartsTabStrikeHighlighted(rowType, rowStrike))
+                    ((grid == _dgvOptions ? _todayExpiration : _nextExpiration) is { } gridExpiration
+                         && _form1.IsChartsTabStrikeHighlighted(rowType, rowStrike, gridExpiration)
+                     || (grid == _dgvOptions ? _firstItmToday : _firstItmNext).Contains((rowType.ToUpperInvariant(), rowStrike))))
                 {
                     var inTheMoney = row.Cells["colStrikeLive"].Tag is true;
                     e.CellStyle.BackColor = inTheMoney ? Color.LightGreen : Color.LightGray;
@@ -1749,7 +1916,8 @@ public class TwoPanelChartsControl : UserControl
 
                 var disabled =
                     !decimal.TryParse(row.Cells["colBidLive"].Value?.ToString(), out var bid) || bid == 0m
-                    || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0;
+                    || !int.TryParse(row.Cells["colContsLive"].Value?.ToString(), out var conts) || conts == 0
+                    || Form1.ChainStale; // frozen chain (see Form1.ObserveChainFreshness)
 
                 var btnColor  = disabled ? Color.LightGray : (rowType == "PUT" ? Color.Red : Color.DarkGreen);
                 var textColor = disabled ? Color.Gray : Color.White;
@@ -1821,7 +1989,42 @@ public class TwoPanelChartsControl : UserControl
         // Grid fills the rest of this column — the Text-tool note box (ChartTextTextBox) moved out
         // of here entirely, per explicit request: it now sits next to the crossLog, below the
         // trades grid (see bottomSection further down), not stacked inside the options column.
+        // "+1C" / "+1P" — on the "Next: ..." row, at its right: show the first ITM strike of that side
+        // (Form1.FirstItmStrike) in the Hoy / Próxima grids with the ITM highlight, recomputed every refresh.
+        var btnFirstItmCall = new Button { Text = "+1C", Dock = DockStyle.Right, Width = 40, Margin = Padding.Empty };
+        var btnFirstItmPut  = new Button { Text = "+1P", Dock = DockStyle.Right, Width = 40, Margin = Padding.Empty };
+        Form1.StyleFirstItmToggle(btnFirstItmCall, isCall: true, armed: false);
+        Form1.StyleFirstItmToggle(btnFirstItmPut, isCall: false, armed: false);
+        // Own row under "Next: ...", with 8 px of top padding: the Connect/Disconnect button and the polling time
+        // label float over this column's top-right corner (see Form1.SetupChartsTab) and reach ~50 px down, so
+        // buttons on the Next row itself sat under that label.
+        var buttonsRow = new Panel { Dock = DockStyle.Top, Height = 36, Padding = new Padding(0, 8, 0, 4) }; // buttons come out 24 px tall
+        // Right-docked controls stack from the last one added: Put is the rightmost, then the gap, then Call.
+        buttonsRow.Controls.Add(btnFirstItmCall);
+        buttonsRow.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 14 }); // gap between the two buttons
+        buttonsRow.Controls.Add(btnFirstItmPut);
+
+        // "1 Min Chart": opens the 1-minute candles window of the candle now forming (another way in besides the
+        // double click on a candle, which also works for candles already formed). Left side of the same row.
+        var btnOneMinChart = new Button { Text = "1 Min Chart", Dock = DockStyle.Left, Width = 100 };
+        btnOneMinChart.Click += (s, e) => { _ = _rthPanel?.RequestLastCandleDetailAsync(); };
+        // "Fetch Quotes": a fresh chain request right now, next to "1 Min Chart" (the polling cadence can leave the
+        // grid a few seconds old when entering a trade). Fills the grid, the CSV and the polling-time label.
+        var btnFetchNow = new Button { Text = "Fetch Quotes", Dock = DockStyle.Left, Width = 100 };
+        btnFetchNow.Click += async (s, e) =>
+        {
+            btnFetchNow.Enabled = false;
+            try { await _form1.FetchQuotesNowAsync(); }
+            catch { /* the cycle reports its own errors */ }
+            finally { if (!btnFetchNow.IsDisposed) btnFetchNow.Enabled = true; }
+        };
+        buttonsRow.Controls.Add(btnFetchNow);
+        buttonsRow.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 8 }); // gap after "1 Min Chart"
+        buttonsRow.Controls.Add(btnOneMinChart); // left-docked controls stack from the last one added: "1 Min Chart" is the leftmost
+        lblExpDateNext.Dock = DockStyle.Top;
+
         optionsGridHost.Controls.Add(tabOptions);
+        optionsGridHost.Controls.Add(buttonsRow);
         optionsGridHost.Controls.Add(lblExpDateNext);
         optionsGridHost.Controls.Add(lblExpDate);
 
@@ -1857,9 +2060,15 @@ public class TwoPanelChartsControl : UserControl
             // (which is what made the "Próxima" tab render its headers but never any rows/data).
             _dgvOptions.BeginInvoke(() =>
             {
+                _firstItmToday = FirstItmStrikes(snapshot.Value.AllQuotes);
+                _todayExpiration = snapshot.Value.AllQuotes.Count > 0 ? snapshot.Value.AllQuotes[0].ExpirationDate : null;
+                var shownToday = _todayExpiration is { } todayExp
+                    ? new HashSet<(string Type, decimal Strike)>(_form1.GetChartsTabHighlightedStrikes(todayExp))
+                    : new HashSet<(string Type, decimal Strike)>();
+                shownToday.UnionWith(_firstItmToday);
                 Form1.PopulateSingleSideOptionsGrid(
                     _dgvOptions, snapshot.Value.AllQuotes, snapshot.Value.OtmCalls, snapshot.Value.OtmPuts, snapshot.Value.Ticker,
-                    _form1.GetChartsTabHighlightedStrikes());
+                    shownToday);
 
                 // "Próxima" tab: only present while Form1 itself shows the next-expiration chain
                 // (mirrors chkHideNextExpDate) — added/removed here instead of once at startup so
@@ -1872,11 +2081,31 @@ public class TwoPanelChartsControl : UserControl
 
                 if (shouldShowNext && snapshotNext != null)
                 {
+                    _firstItmNext = FirstItmStrikes(snapshotNext.Value.AllQuotes);
+                    _nextExpiration = snapshotNext.Value.AllQuotes.Count > 0 ? snapshotNext.Value.AllQuotes[0].ExpirationDate : null;
+                    var shownNext = _nextExpiration is { } nextExp
+                        ? new HashSet<(string Type, decimal Strike)>(_form1.GetChartsTabHighlightedStrikes(nextExp))
+                        : new HashSet<(string Type, decimal Strike)>();
+                    shownNext.UnionWith(_firstItmNext);
                     Form1.PopulateSingleSideOptionsGrid(
-                        _dgvOptionsNext, snapshotNext.Value.AllQuotes, snapshotNext.Value.OtmCalls, snapshotNext.Value.OtmPuts, snapshotNext.Value.Ticker);
+                        _dgvOptionsNext, snapshotNext.Value.AllQuotes, snapshotNext.Value.OtmCalls, snapshotNext.Value.OtmPuts, snapshotNext.Value.Ticker,
+                        shownNext);
                 }
             });
         }
+
+        btnFirstItmCall.Click += (s, e) =>
+        {
+            _showFirstItmCall = !_showFirstItmCall;
+            Form1.StyleFirstItmToggle(btnFirstItmCall, isCall: true, armed: _showFirstItmCall);
+            RefreshOptionsGrid();
+        };
+        btnFirstItmPut.Click += (s, e) =>
+        {
+            _showFirstItmPut = !_showFirstItmPut;
+            Form1.StyleFirstItmToggle(btnFirstItmPut, isCall: false, armed: _showFirstItmPut);
+            RefreshOptionsGrid();
+        };
 
         // Strike click: forwards into Form1's own click handler — opens a trade using whatever
         // radio mode (No Trade / No Trade-Target / Trade / Trade-Target) is currently selected on
@@ -1994,17 +2223,17 @@ public class TwoPanelChartsControl : UserControl
         _rbChartsSimulation.CheckedChanged += (s, e) =>
         {
             _rbChartsSimulation.Font = new Font(_rbChartsSimulation.Font, _rbChartsSimulation.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsSimulation.Checked) _useSimulation = true;
+            if (_rbChartsSimulation.Checked) { _useSimulation = true; _form1.SetBalanceMode(BalanceMode.Demo); }
         };
         _rbChartsDemoTarget.CheckedChanged += (s, e) =>
         {
             _rbChartsDemoTarget.Font = new Font(_rbChartsDemoTarget.Font, _rbChartsDemoTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsDemoTarget.Checked) { _useRealTrade = false; _useSimulation = false; }
+            if (_rbChartsDemoTarget.Checked) { _useRealTrade = false; _useSimulation = false; _form1.SetBalanceMode(BalanceMode.Demo); }
         };
         _rbChartsRealTarget.CheckedChanged += (s, e) =>
         {
             _rbChartsRealTarget.Font = new Font(_rbChartsRealTarget.Font, _rbChartsRealTarget.Checked ? FontStyle.Bold : FontStyle.Regular);
-            if (_rbChartsRealTarget.Checked) { _useRealTrade = true; _useSimulation = false; }
+            if (_rbChartsRealTarget.Checked) { _useRealTrade = true; _useSimulation = false; _form1.SetBalanceMode(BalanceMode.Real); }
         };
         ResizeTradesGrid();
 
@@ -2012,6 +2241,54 @@ public class TwoPanelChartsControl : UserControl
         // dgvTrades) — simplest way to stay pixel-identical to whatever coloring Form1 applies
         // (lavender automatic-trade rows, gray-on-close, PnL colors, etc.) without re-deriving
         // those rules here. Source column order matches this grid's column order 1:1.
+        // ---- Delete on the T_Bid / PnL_Target cell of an open Demo trade removes its target (see Form1.RemoveTradeTarget).
+        // The mirror is rebuilt on every poll and never shows a selection, so the picked cell is remembered by the
+        // trade's own (time, type, strike) and drawn with a light fill after each rebuild.
+        (string Key, string Column)? targetCellPick = null;
+        string RowKey(DataGridViewRow r) =>
+            $"{r.Cells["colTradeTimeLive"].Value}|{r.Cells["colTradeTypeLive"].Value}|{r.Cells["colTradeStrikeLive"].Value}";
+        bool IsRemovableTarget(DataGridViewRow r) =>
+            string.IsNullOrEmpty(r.Cells["colTradeExitTimeLive"].Value?.ToString())
+            && string.Equals(r.Cells["colTradeDemoRealLive"].Value?.ToString(), "Demo", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(r.Cells["colTradeTBidLive"].Value?.ToString());
+        void ReapplyTargetCellSelection()
+        {
+            if (targetCellPick is not { } pick) return;
+            foreach (DataGridViewRow r in _dgvTrades.Rows)
+            {
+                if (RowKey(r) != pick.Key) continue;
+                if (!IsRemovableTarget(r)) break; // closed, or the target is already gone
+                r.Cells[pick.Column].Style.BackColor = Color.FromArgb(70, 90, 130);
+                return;
+            }
+            targetCellPick = null;
+        }
+        _dgvTrades.CellClick += (s, e) =>
+        {
+            targetCellPick = null;
+            if (e.RowIndex < 0) return;
+            var colName = _dgvTrades.Columns[e.ColumnIndex].Name;
+            if (colName != "colTradeTBidLive" && colName != "colTradePnLTargetLive") return;
+            var row = _dgvTrades.Rows[e.RowIndex];
+            if (!IsRemovableTarget(row)) return;
+            targetCellPick = (RowKey(row), colName);
+            RefreshTradesGrid(); // redraws the grid with the pick highlighted (and clears any older one)
+            _dgvTrades.Focus();
+        };
+        _dgvTrades.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode != Keys.Delete || targetCellPick is not { } pick) return;
+            foreach (DataGridViewRow r in _dgvTrades.Rows)
+            {
+                if (RowKey(r) != pick.Key) continue;
+                targetCellPick = null;
+                _form1.RemoveTradeTarget(_symbol, r.Index);
+                e.Handled = true;
+                return;
+            }
+            targetCellPick = null;
+        };
+
         void RefreshTradesGrid()
         {
             var sourceGrid = _form1.GetTradesGrid(_symbol);
@@ -2062,8 +2339,27 @@ public class TwoPanelChartsControl : UserControl
                 // copied above. This is a read-only mirror, nothing should ever look "selected".
                 _dgvTrades.ClearSelection();
                 _dgvTrades.CurrentCell = null;
+                ReapplyTargetCellSelection();
             });
         }
+
+        // The two closing lines of a trade (PnL / Duration) go to the history zone of log 2, in the log's own colors.
+        _form1.OnTradeCloseLogged += OnForm1TradeCloseLogged;
+        void OnForm1TradeCloseLogged(string closedSymbol, string pnlLine, Color pnlColor, string durationLine)
+        {
+            if (closedSymbol != _symbol || IsDisposed) return;
+            AddLog2Raw(pnlLine, pnlColor);
+            AddLog2Raw(durationLine, Color.White);
+        }
+        Disposed += (s, e) => _form1.OnTradeCloseLogged -= OnForm1TradeCloseLogged;
+        // Demo trade: the commission and the net PnL on one more line (commission in orange, net in its own color).
+        _form1.OnTradeCommissionLogged += OnForm1TradeCommissionLogged;
+        void OnForm1TradeCommissionLogged(string closedSymbol, string commissionText, string netText, Color netColor)
+        {
+            if (closedSymbol != _symbol || IsDisposed) return;
+            AddLog2Raw(commissionText, Color.Orange, netText, netColor);
+        }
+        Disposed += (s, e) => _form1.OnTradeCommissionLogged -= OnForm1TradeCommissionLogged;
 
         _form1.OnTradesUpdatedEvent += OnForm1TradesUpdated;
         void OnForm1TradesUpdated(string updatedSymbol)
@@ -2383,7 +2679,7 @@ public class TwoPanelChartsControl : UserControl
     // Pushes the combined (panel 1 + 2) snapshot when a P-Line (panel 2 price alert) gets
     // crossed — same pattern as SendTLineSignalTelegramPushAsync above, minus the CT-record
     // attachment (P-Line isn't tied to a CT signal).
-    private async Task SendPLineCrossedTelegramPushAsync(string caption)
+    private async Task SendPLineCrossedTelegramPushAsync(string caption, string kind = "PLineCrossed")
     {
         if (!Form1.IsTelegramEnabledFor(_symbol)) return;
         try
@@ -2404,12 +2700,12 @@ public class TwoPanelChartsControl : UserControl
 
             var folder = @"C:\OptionsTraderPush";
             Directory.CreateDirectory(folder);
-            var path = Path.Combine(folder, $"{_symbol}_PLineCrossed_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            var path = Path.Combine(folder, $"{_symbol}_{kind}_{DateTime.Now:yyyyMMdd_HHmmss}.png");
             combined.Save(path, System.Drawing.Imaging.ImageFormat.Png);
 
             var (ok, detail, messageId) = await TelegramNotifier.SendPhotoAsync(botToken, chatId, path, $"{_symbol} — {caption}");
             if (ok && messageId.HasValue)
-                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, "PLineCrossed", DateTime.Now));
+                TelegramPushStore.Append(new TelegramPush(messageId.Value, chatId, _symbol, kind, DateTime.Now));
             if (ok)
                 EventLogMarkdownWriter.AppendEvent(_symbol, caption, path);
             else
@@ -2500,10 +2796,8 @@ public class TwoPanelChartsControl : UserControl
         }
     }
 
-    private static readonly string[] PanelLabels = { "1 Hour", "15Min RTH" };
     private const int PanelGap = 4;
     private static readonly Color PanelGapColor = Color.Black;
-    private static readonly Color PanelLabelColor = Color.White;
 
     // Same combined-image logic as MultiChartForm.CaptureCombinedChartImageAsync, but for just
     // this control's own 2 panels — used as the trade Entry/Close (and market Open/Close) chart
@@ -2522,23 +2816,19 @@ public class TwoPanelChartsControl : UserControl
             if (images.Any(img => img == null)) return null;
 
             var width = images.Sum(img => img!.Width) + PanelGap * (images.Length - 1);
-            var height = images.Max(img => img!.Height);
+            var scale = CombinedChartHeader.ScaleFor(images[0]!, panels[0]);
+            var stripH = CombinedChartHeader.StripHeight(scale);
+            var height = images.Max(img => img!.Height) + stripH;
             var combined = new Bitmap(width, height);
             using (var g = Graphics.FromImage(combined))
-            using (var labelFont = new Font("Segoe UI", 11f, FontStyle.Bold))
-            using (var labelBrush = new SolidBrush(PanelLabelColor))
             {
                 g.Clear(PanelGapColor);
                 var x = 0;
                 for (int i = 0; i < images.Length; i++)
                 {
                     var img = images[i]!;
-                    g.DrawImage(img, x, 0);
-
-                    var labelSize = g.MeasureString(PanelLabels[i], labelFont);
-                    var labelX = x + (img.Width - labelSize.Width) / 2f;
-                    g.DrawString(PanelLabels[i], labelFont, labelBrush, labelX, 8f);
-
+                    CombinedChartHeader.Draw(g, x, img.Width, scale, panels[i].HeaderTitle, panels[i].TrendHeaderSegments());
+                    g.DrawImage(img, x, stripH);
                     x += img.Width + PanelGap;
                 }
             }

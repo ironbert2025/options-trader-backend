@@ -28,8 +28,6 @@ The WinForms app talks **directly to the Schwab API** for market data and order 
 
 ![Architecture diagram](docs/images/architecture-diagram.svg)
 
-> **Note on evaluation scope (TFM/master's thesis):** regardless of the fact that a complete options trading platform has been built — backend, frontend, API, and Cloud resources on AWS (EC2, SQL Server, S3) — it is proposed that **BigSchool evaluate as the TFM only the Windows desktop application (WinForms)**, since reviewing the entire platform would be excessively laborious and time-consuming. The complete system can equally be tested (see section f for credentials), but the evaluation should focus on the Windows App.
-
 ---
 
 ## b. Technology stack used
@@ -50,7 +48,7 @@ The WinForms app talks **directly to the Schwab API** for market data and order 
 
 ## c. Installation and running instructions
 
-Requirements: **.NET 8 SDK**, accessible SQL Server (connection string in `appsettings.json` of `OptionsTrader.API`), and Schwab credentials (configured from the app, Settings tab).
+Requirements: **.NET 8 SDK**, accessible SQL Server (connection string and JWT key: copy `OptionsTrader.API/appsettings.example.json` to the gitignored `appsettings.Local.json`, or set the environment variables `ConnectionStrings__DefaultConnection`, `Jwt__Key`, `AWS__AccessKey`, `AWS__SecretKey`; the desktop app reads `OPTIONS_TRADER_API_URL` for the API address), and Schwab credentials (configured from the app, Settings tab).
 
 ```bash
 # Build the entire solution
@@ -68,7 +66,7 @@ dotnet run --project OptionsTrader.WinForms
 
 When the WinForms app opens, a **login** window is shown first (see section f); then, on the **Settings** tab, you configure Schwab credentials, broker accounts, tickers, and other settings (see [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)).
 
-> **Note on API credentials:** to run the app with real data and orders, 4 sensitive values are needed that are **not included in this repository** (Schwab API Key, Schwab API Secret, AWS Access Key, and AWS Secret Key). The linked Schwab accounts operate with **real money**, so these credentials are only shared upon direct request and are not published anywhere. If it is strictly necessary to run the application end-to-end during the evaluation, **please request them by email** and they will be sent privately (not via chat or any public channel). Without these credentials, the code, architecture, and the rest of the documentation (including the demo videos) can still be reviewed without restriction.
+> **Note on API credentials:** to run the app with real data and orders, 4 sensitive values are needed that are **not included in this repository** (Schwab API Key, Schwab API Secret, AWS Access Key, and AWS Secret Key). The linked Schwab accounts operate with **real money**, so these credentials are only shared upon direct request and are not published anywhere. Without these credentials, the code, architecture, and the rest of the documentation (including the demo videos) can still be reviewed without restriction.
 
 ---
 
@@ -108,16 +106,7 @@ See [`docs/FEATURES.md`](docs/FEATURES.md) for the complete detail of each one.
 
 ## f. Test username and password
 
-The Angular frontend (read-only, trade traceability) is deployed at: **http://3.133.58.172/**
-
-The system has 5 fixed users seeded in the database (`user1` through `user5`), all with the same role and the same test password:
-
-| User | Password | Use |
-|---|---|---|
-| `user1` | `Pass1234!` | Developer's test user — the frontend shows their trades and activity. |
-| `user2` | `Pass1234!` | Test user for BigSchool to use the application and inject test data into the database. |
-
-*(`user2`–`user5` use the same password; they exist to distinguish simultaneous sessions, not different roles.)*
+Test credentials (and the address of the deployed read-only frontend) are provided on request.
 
 ---
 
@@ -141,15 +130,11 @@ The system has 5 fixed users seeded in the database (`user1` through `user5`), a
    ```bash
    dotnet run --project OptionsTrader.WinForms
    ```
-4. In the **login** window, enter:
-   - User: `user2`
-   - Password: `Pass1234!`
-
-   (This is the test user specifically intended for the evaluation — see section f.)
+4. In the **login** window, enter the test credentials (provided on request — see section f).
 5. The app connects automatically to the API already deployed on AWS — nothing else needs to be run locally.
 
-**Important note:** to see real-time quotes and test order submission (Quotes tab, trade execution), the app needs Schwab API credentials loaded in the **Settings** tab. Those credentials correspond to an account with real money and are **not included in the repository** (see section c) — if it is necessary to test that full flow, they must be requested by email. Without those credentials, the UI, configuration, login, and the rest of the documentation and demo videos can still be reviewed without restriction.
+**Important note:** to see real-time quotes and test order submission (Quotes tab, trade execution), the app needs Schwab API credentials loaded in the **Settings** tab. Those credentials correspond to an account with real money and are **not included in the repository** (see section c). Without those credentials, the UI, configuration, login, and the rest of the documentation and demo videos can still be reviewed without restriction.
 
 **Note on market hours:** the application queries real-time data from the Schwab API, which only responds with valid quotes during US market hours (**Monday to Friday, 9:30 AM – 4:00 PM ET**). If run outside those hours (weekends or after hours on business days), the Quotes tab may show a `400 Bad Request` error when trying to fetch quotes — this is expected and does not indicate an application failure. To test the full quotes and trades flow, it is recommended to do so during market hours.
 
-Outside those hours it can still be reviewed without restriction: the build and code structure, the Settings tab and its configuration, the login, the frontend with the trade history (section f), all the documentation (`docs/FEATURES.md`, `docs/USER_GUIDE.md`), and the demo videos ([`docs/VIDEO_SCRIPT_TFM.md`](docs/VIDEO_SCRIPT_TFM.md)), which already show the complete flow recorded during market hours.
+Outside those hours it can still be reviewed without restriction: the build and code structure, the Settings tab and its configuration, the login, the frontend with the trade history (section f), all the documentation (`docs/FEATURES.md`, `docs/USER_GUIDE.md`), and the demo videos ([`docs/VIDEO_SCRIPT.md`](docs/VIDEO_SCRIPT.md)), which already show the complete flow recorded during market hours.
