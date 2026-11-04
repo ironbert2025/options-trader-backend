@@ -48,7 +48,7 @@ The WinForms app talks **directly to the Schwab API** for market data and order 
 
 ## c. Installation and running instructions
 
-Requirements: **.NET 8 SDK**, accessible SQL Server (connection string in `appsettings.json` of `OptionsTrader.API`), and Schwab credentials (configured from the app, Settings tab).
+Requirements: **.NET 8 SDK**, accessible SQL Server (connection string and JWT key: copy `OptionsTrader.API/appsettings.example.json` to the gitignored `appsettings.Local.json`, or set the environment variables `ConnectionStrings__DefaultConnection`, `Jwt__Key`, `AWS__AccessKey`, `AWS__SecretKey`; the desktop app reads `OPTIONS_TRADER_API_URL` for the API address), and Schwab credentials (configured from the app, Settings tab).
 
 ```bash
 # Build the entire solution
