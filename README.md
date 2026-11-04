@@ -108,12 +108,9 @@ See [`docs/FEATURES.md`](docs/FEATURES.md) for the complete detail of each one.
 
 ## f. Test username and password
 
-The Angular frontend (read-only, trade traceability) is deployed at: **http://3.133.58.172/**
+Test credentials (and the address of the deployed read-only frontend) are provided on request.
 
-The system has 5 fixed users seeded in the database (`user1` through `user5`), all with the same role and the same test password:
-
-| User | Password | Use |
-|---|---|---|
+---|---|---|
 | `user1` | `Pass1234!` | Developer's test user — the frontend shows their trades and activity. |
 | `user2` | `Pass1234!` | Test user for BigSchool to use the application and inject test data into the database. |
 
