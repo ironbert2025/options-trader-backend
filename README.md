@@ -28,8 +28,6 @@ The WinForms app talks **directly to the Schwab API** for market data and order 
 
 ![Architecture diagram](docs/images/architecture-diagram.svg)
 
-> **Note on evaluation scope (TFM/master's thesis):** regardless of the fact that a complete options trading platform has been built — backend, frontend, API, and Cloud resources on AWS (EC2, SQL Server, S3) — it is proposed that **BigSchool evaluate as the TFM only the Windows desktop application (WinForms)**, since reviewing the entire platform would be excessively laborious and time-consuming. The complete system can equally be tested (see section f for credentials), but the evaluation should focus on the Windows App.
-
 ---
 
 ## b. Technology stack used
