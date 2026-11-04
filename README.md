@@ -138,11 +138,7 @@ Test credentials (and the address of the deployed read-only frontend) are provid
    ```bash
    dotnet run --project OptionsTrader.WinForms
    ```
-4. In the **login** window, enter:
-   - User: `user2`
-   - Password: `Pass1234!`
-
-   (This is the test user specifically intended for the evaluation — see section f.)
+4. In the **login** window, enter the test credentials (provided on request — see section f).
 5. The app connects automatically to the API already deployed on AWS — nothing else needs to be run locally.
 
 **Important note:** to see real-time quotes and test order submission (Quotes tab, trade execution), the app needs Schwab API credentials loaded in the **Settings** tab. Those credentials correspond to an account with real money and are **not included in the repository** (see section c) — if it is necessary to test that full flow, they must be requested by email. Without those credentials, the UI, configuration, login, and the rest of the documentation and demo videos can still be reviewed without restriction.
