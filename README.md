@@ -108,12 +108,6 @@ See [`docs/FEATURES.md`](docs/FEATURES.md) for the complete detail of each one.
 
 Test credentials (and the address of the deployed read-only frontend) are provided on request.
 
----|---|---|
-| `user1` | `Pass1234!` | Developer's test user — the frontend shows their trades and activity. |
-| `user2` | `Pass1234!` | Test user for BigSchool to use the application and inject test data into the database. |
-
-*(`user2`–`user5` use the same password; they exist to distinguish simultaneous sessions, not different roles.)*
-
 ---
 
 ## g. Steps for the evaluator — running the Windows App on their PC
