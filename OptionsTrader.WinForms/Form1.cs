@@ -33,7 +33,8 @@ public partial class Form1 : Form
     private readonly SchwabAuthService _schwabAuth = new(new HttpClient());
     private readonly HttpClient _marketHttpClient = new();
     private readonly HttpClient _apiHttpClient    = new();
-    private const string ApiBaseUrl = "http://3.133.58.172:5000/api";
+    // API address and the anchored login come from environment variables (nothing deployed is hardcoded in the repo).
+    private static readonly string ApiBaseUrl = Environment.GetEnvironmentVariable("OPTIONS_TRADER_API_URL") ?? "http://localhost:5000/api";
     private System.Windows.Forms.Timer? _pollingTimer;
     private System.Windows.Forms.Timer? _tokenKeepAliveTimer;
     private System.Windows.Forms.Timer? _marketOpenTimer;
@@ -309,7 +310,7 @@ public partial class Form1 : Form
     // Anchored user — logs straight in against the API on startup, no LoginForm prompt.
     // Change these two constants to switch which of the 5 fixed app users this instance runs as.
     private const string AnchoredUsername = "user1";
-    private const string AnchoredPassword = "Pass1234!";
+    private static readonly string AnchoredPassword = Environment.GetEnvironmentVariable("OPTIONS_TRADER_ANCHORED_PASSWORD") ?? string.Empty;
 
     private async void Form1_Load(object? sender, EventArgs e)
     {
